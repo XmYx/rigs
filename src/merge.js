@@ -95,6 +95,8 @@ export async function cleanupWork(dir, branch) {
   if (!dir || !fs.existsSync(dir)) return { removed: false };
   const common = (await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
   const repo = common ? path.dirname(common) : APP_DIR;
+  // The shared-deps link is RIGS's own (startWork); anything else untracked is someone's work.
+  try { if (fs.lstatSync(path.join(dir, 'node_modules')).isSymbolicLink()) fs.unlinkSync(path.join(dir, 'node_modules')); } catch {}
   const dirty = (await git(['status', '--porcelain'], dir)).stdout.trim();
   if (dirty) return { removed: false, reason: 'worktree has uncommitted changes — left alone' };
   const ahead = (await git(['rev-list', '--count', 'origin/main..HEAD'], dir)).stdout.trim();
