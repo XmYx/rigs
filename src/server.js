@@ -82,6 +82,7 @@ async function selfInfo() {
   const [sys, st, tools, tsStatus, ver, capabilities] = await Promise.all([systemInfo(), stats(), detectTools(), ts.status(), appVersion(), caps.capabilities()]);
   const ip = tsStatus?.self?.ips?.find((x) => x.includes('.'));
   return {
+    pinnedProjects: cfg.pinnedProjects || [],
     id: cfg.nodeId, name: cfg.name, version: ver.short, versionInfo: ver, port: cfg.port,
     url: `http://${ip || '127.0.0.1'}:${cfg.port}`,
     ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
@@ -403,6 +404,19 @@ export async function startServer() {
       cfg.capabilities = all;
       saveConfig(cfg);
       return { tools: await caps.capabilities(true) };
+    }
+    if (sub === 'pins' && method === 'GET') return { pinnedProjects: config().pinnedProjects || [] };
+    if (sub === 'pins' && method === 'POST') {
+      // Pin / unpin a project folder on this machine ({ path, name?, remove? }).
+      const b = await body();
+      const p = String(b.path || '').trim().replace(/(.)[\\/]+$/, '$1');
+      if (!p) throw new HttpError(400, 'path required');
+      const cfg = config();
+      const rest = (cfg.pinnedProjects || []).filter((x) => x.path !== p);
+      if (!b.remove) rest.push({ name: String(b.name || '').trim() || p.split(/[\\/]/).filter(Boolean).pop() || p, path: p });
+      cfg.pinnedProjects = rest;
+      saveConfig(cfg);
+      return { pinnedProjects: rest };
     }
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
     if ((mm = m(/^app-start\/([^/]+)$/)) && method === 'POST') {

@@ -68,6 +68,11 @@ const TOOLS = [
     run: async (a) => { const { node, ...app } = a; const r = await api(`/api/nodes/${n(node)}/apps`, { method: 'POST', body: app }); return { apps: r.apps.map((x) => ({ id: x.id, name: x.name, target: x.target })), errors: r.errors }; },
   },
   {
+    name: 'mesh_pin_project', description: 'Pin a project folder (it stays on its machine) in JARVIS\'s Top hubs on every UI: shows live sessions inside it and opens a project window to start Claude / a terminal there. remove:true unpins.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine that holds the project; "self" for this one' }, path: { type: 'string' }, name: { type: 'string' }, remove: { type: 'boolean' } }, required: ['node', 'path'] },
+    run: async (a) => (await api(`/api/nodes/${n(a.node)}/pins`, { method: 'POST', body: { path: a.path, name: a.name, remove: a.remove } })),
+  },
+  {
     name: 'mesh_app_start', description: 'Spin up an App Cloud app on its machine (its launch recipe: systemd unit or command) and wait until it is healthy. Opening an app in JARVIS does this automatically.',
     inputSchema: { type: 'object', properties: { node: { type: 'string' }, id: { type: 'string' } }, required: ['node', 'id'] },
     run: async (a) => { const r = await api(`/api/nodes/${n(a.node)}/app-start/${encodeURIComponent(a.id)}`, { method: 'POST', body: {}, timeout: 90000 }); return { started: r.started, status: r.health?.status, path: `/api/nodes/${encodeURIComponent(a.node)}/apps/${a.id}/` }; },

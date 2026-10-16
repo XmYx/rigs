@@ -49,6 +49,8 @@ function defaults() {
     capabilities: {},
     // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
     apps: [],
+    // Projects pinned in JARVIS's Top hubs: [{ name, path }]. They stay on this machine; every UI sees them.
+    pinnedProjects: [],
     // Extra model ids per provider, appended to the built-in catalog (src/models.js).
     models: { claude: [], codex: [] },
     // How the planner assigns each task kind to a provider/model/effort. First match wins;
@@ -148,6 +150,6 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects,
   };
 }
