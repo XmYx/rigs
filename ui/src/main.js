@@ -4,6 +4,7 @@ import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { renderReply } from './visual.js';
 import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -617,7 +618,9 @@ function showSubtitle(text, cls = 'jarvis') {
   const m = text.match(SEPARATOR);
   el.replaceChildren();
   if (m) {
-    el.append(h('div', { class: 'spoken' }, text.slice(0, m.index).trim()), h('div', { class: 'written' }, text.slice(m.index + m[0].length).trim()));
+    const written = h('div', { class: 'written' });
+    renderReply(written, text.slice(m.index + m[0].length).trim());
+    el.append(h('div', { class: 'spoken' }, text.slice(0, m.index).trim()), written);
     el.classList.add('has-details');
   } else el.textContent = text;
   el.scrollTop = el.scrollHeight;
