@@ -312,3 +312,10 @@ a.link { color: var(--accent); cursor: pointer; }
 .win.app-win .win-body { padding: 0; }
 .app-overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; background: rgba(9, 14, 20, .88); color: var(--muted); font: 13px var(--mono); }
 .app-overlay.hidden { display: none; }
+
+/* JARVIS face (ui/src/face.js) */
+#face { width: 160px; height: 178px; cursor: pointer; }
+#orb-wrap:has(#face:not(.off)) { top: auto; bottom: 64px; transform: none; } /* taller with the face: clear the filters panel */
+#face.off { display: none; }
+#face.big { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%); width: min(60vh, 560px); height: min(66vh, 620px); z-index: 12;
+  background: radial-gradient(closest-side, rgba(45, 212, 191, .08), transparent); border-radius: 50%; }

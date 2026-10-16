@@ -208,6 +208,9 @@ export function aggregateApps(results) {
 /** Remember the latest aggregated catalog so resolveApp can find apps on peers. */
 export function setMeshCatalog(apps) { meshCatalog = Array.isArray(apps) ? apps : []; }
 
+/** The last aggregated mesh-wide catalog (empty until someone asked for /api/apps). */
+export function meshCatalogApps() { return meshCatalog; }
+
 /** True when a node reference (name, id, "self", "local" or empty) means this machine. */
 export function isSelfRef(node) {
   const cfg = config();

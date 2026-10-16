@@ -7,6 +7,7 @@ import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
 import { openProjects } from './projects.js';
+import { createFace } from './face.js';
 import { createOrb } from './orb.js';
 import { openSessions } from './sessions.js';
 import { openTerminal } from './terminal.js';
@@ -29,15 +30,23 @@ let busy = null;
 // ------------------------------------------------------------------ boot
 const graph = createGraph($('#graph'), { onSelect: (n) => select(n.id), onBackground: () => {} });
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
+// The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
+let face = null;
+try { face = createFace($('#face')); } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone
+if (localStorage.getItem('rigs.face') === '0') $('#face').classList.add('off');
+$('#face').onclick = () => $('#face').classList.toggle('big');
+function showFace(on) { $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
 const voice = createVoice({
+  onSpeech: (s) => { if (!face) return; if (s) face.speak(s); else face.stop(); },
   onTranscript: (t) => { $('#ask').value = ''; ask(t, { spoken: true }); },
   onInterim: (t) => { if (t) showSubtitle(t, 'user interim'); },
   onState: (s) => setOrb(s),
-  onLevel: (v) => orb.setLevel(v),
+  onLevel: (v) => { orb.setLevel(v); face?.setLevel(v); },
 });
 
 function setOrb(s) {
   orb.setState(s);
+  face?.setState(s);
   const label = { online: 'ONLINE', listening: 'LISTENING', thinking: 'THINKING', speaking: 'SPEAKING', error: 'ERROR', offline: 'OFFLINE' }[s] || s.toUpperCase();
   $('#orb-state').innerHTML = `<i class="dot s-${s}"></i>${label}`;
 }
@@ -650,6 +659,8 @@ async function intent(text) {
     const a = findApp(m[1]);
     if (a) { openApp(a); say(`${a.name}, ${persona.address}.`); return true; }
   }
+  if (/^(?:show|open)(?: me)? your face$/i.test(t)) { showFace(true); say(`At your service, ${persona.address}.`); return true; }
+  if (/^(?:hide|close) your face$/i.test(t)) { showFace(false); say('As you wish.'); return true; }
   if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); setOrb('online'); return true; }
   return false;
 }
