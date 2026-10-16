@@ -99,3 +99,12 @@ test('OpenRig: live seats waiting on input count; detached seats that failed to 
   assert.deepEqual(items.map((x) => x.key), ['rig:task-code@app-t2']);
   assert.equal(items[0].reason, 'selection_prompt');
 });
+
+test('approval screens on agent panes are recognised (Claude, Codex approvals, Codex trust + hook review)', () => {
+  const hit = (txt) => attention.CHROME.some((re) => re.test(txt));
+  assert.ok(hit(' Do you want to proceed?\n ❯ 1. Yes\n   4. No\n Esc to cancel · Tab to amend'));
+  assert.ok(hit('Would you like to run the following command?'));
+  assert.ok(hit('  Trust this folder? Codex can read, edit, and run files here'));
+  assert.ok(hit('  Hooks need review\n  1 hook is new or changed.'));
+  assert.ok(!hit('$ npm test\n# pass 43\n# fail 0'));
+});

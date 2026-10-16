@@ -68,9 +68,11 @@ export function rigNeeds(nodes) {
     }));
 }
 
-const CHROME = [
+export const CHROME = [
   /would you like to (run|make|apply)/i, /allow (this )?command\??/i, /approve (this|the)/i, /do you want to (proceed|make this edit|create|allow)/i,
   /\b(yes|y)\b.{0,30}\b(no|n)\b.{0,30}(esc|enter)/i, /\[y\/n\]|\(y\/n\)|\[Y\/n\]/, /press enter to (confirm|continue)/i,
+  // Codex: folder trust and hook review screens block a session before it even starts.
+  /trust this folder\?|do you trust the (contents|files)/i, /hooks? needs? review/i, /enter (confirm|continue) · esc/i,
 ];
 
 async function paneChrome(skip) {
@@ -125,7 +127,7 @@ async function compute({ projects } = {}) {
   // Claude's own report is the better one for a seat it runs in; OpenRig's only fills the gaps.
   const claudeSessions = new Set(claude.map((x) => x.session?.id));
   const rig = (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id));
-  const covered = new Set([...claude, ...rig].map((x) => x.session?.id).filter(Boolean));
+  const covered = new Set([...claude, ...rig, ...codexPending.values()].map((x) => x.session?.id).filter(Boolean));
   const panes = await paneChrome(covered);
   const tasks = projects.flatMap((p) => (p.tasks || []).filter((t) => t.status === 'blocked' || t.status === 'review').map((t) => ({
     key: `task:${p.id}:${t.id}`, agent: t.assign?.provider || 'agent', kind: t.status === 'blocked' ? 'blocked' : 'review',
