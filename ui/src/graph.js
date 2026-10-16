@@ -1,7 +1,7 @@
 import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import SpriteText from 'three-spritetext';
+import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
 // Node types — the legend on the right, like the "brain galaxy" in the reference video.
 export const TYPES = {
@@ -97,7 +97,10 @@ export function createGraph(el, { onSelect, onBackground }) {
     data: { nodes: [], links: [] }, hover: null,
   };
 
-  const Graph = new ForceGraph3D(el, { controlType: 'orbit' })
+  // Labels are HTML (CSS2D) so they stay crisp and aren't smeared by the bloom pass.
+  const labelRenderer = new CSS2DRenderer();
+  labelRenderer.domElement.style.pointerEvents = 'none';
+  const Graph = new ForceGraph3D(el, { controlType: 'orbit', extraRenderers: [labelRenderer] })
     .backgroundColor('#04060a')
     .showNavInfo(false)
     .nodeId('id')
@@ -163,13 +166,14 @@ export function createGraph(el, { onSelect, onBackground }) {
     const group = new THREE.Group();
     const label = state.labels ? labelFor(n) : null;
     if (label) {
-      const s = new SpriteText(label.length > 28 ? label.slice(0, 27) + '…' : label);
-      s.color = state.focus && !state.highlight.has(n.id) ? '#334155' : n.type === 'machine' ? '#ffffff' : '#cbd5e1';
-      s.textHeight = n.type === 'machine' || n.type === 'offline' ? 11 : n.type === 'mesh' ? 8 : n.type === 'project' ? 5.5 : 5;
-      s.fontFace = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
-      s.fontWeight = n.type === 'machine' ? '600' : '400';
-      s.position.y = -(Math.cbrt(n.val) * 2.6 * 1.15 + s.textHeight * 0.8);
-      group.add(s);
+      const div = document.createElement('div');
+      const dim = state.focus && !state.highlight.has(n.id);
+      div.className = `nlabel t-${n.type}${dim ? ' dim' : ''}${state.focus === n.id ? ' focus' : ''}`;
+      div.textContent = label.length > 30 ? label.slice(0, 29) + '…' : label;
+      const obj = new CSS2DObject(div);
+      obj.position.set(0, -(Math.cbrt(n.val) * 2.6 * 1.25 + 2), 0);
+      obj.center.set(0.5, 0);
+      group.add(obj);
     }
     if (n.type === 'machine' || n.type === 'offline') {
       const r = Math.cbrt(n.val) * 2.6;

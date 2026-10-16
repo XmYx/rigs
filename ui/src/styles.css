@@ -105,6 +105,17 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 .round.dim { opacity: .4; }
 #footer { position: fixed; right: 16px; bottom: 8px; color: #3b4b57; font: 10px var(--mono); z-index: 5; }
 
+/* graph labels (CSS2D overlay) */
+.nlabel { color: #cbd5e1; font: 500 11px var(--sans); text-shadow: 0 0 4px #000, 0 0 10px #000; white-space: nowrap; pointer-events: none; transition: opacity .3s; }
+.nlabel.t-machine, .nlabel.t-offline { color: #fff; font: 600 13px var(--sans); text-shadow: 0 0 10px rgba(45, 212, 191, .8), 0 0 3px #000; }
+.nlabel.t-offline { color: #64748b; text-shadow: 0 0 3px #000; }
+.nlabel.t-mesh { color: #e2e8f0; font: 700 11px var(--mono); letter-spacing: .2em; }
+.nlabel.t-agent { color: #fde68a; }
+.nlabel.t-skill { color: #e9d5ff; }
+.nlabel.t-project { color: #bfdbfe; }
+.nlabel.dim { opacity: .12; }
+.nlabel.focus { font-size: 14px; color: #fff; }
+
 /* 3d-force-graph tooltip */
 .scene-tooltip .tip { background: var(--panel-solid); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; display: flex; flex-direction: column; font: 12px var(--sans); }
 .scene-tooltip .tip span { color: var(--muted); font-size: 10px; }
