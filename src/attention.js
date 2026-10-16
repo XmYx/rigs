@@ -75,6 +75,17 @@ export const CHROME = [
   /trust this folder\?|do you trust the (contents|files)/i, /hooks? needs? review/i, /enter (confirm|continue) · esc/i,
 ];
 
+/** The approval/trust line a tmux session is showing, if any (used to explain what a seat is waiting for). */
+async function promptLine(session) {
+  const t = bin('tmux');
+  if (!t || isWin) return null;
+  const cap = await run(t, ['capture-pane', '-p', '-J', '-t', session, '-S', '-25'], { timeout: 3000 });
+  if (cap.code !== 0) return null;
+  const lines = cap.stdout.split('\n').filter((l) => l.trim()).slice(-14).reverse();
+  const hit = lines.find((l) => CHROME.some((re) => re.test(l)));
+  return hit ? 'prompt on screen: ' + hit.trim().slice(0, 100) : null;
+}
+
 async function paneChrome(skip) {
   const t = bin('tmux');
   if (!t || isWin) return [];
@@ -127,11 +138,13 @@ async function compute({ projects } = {}) {
   // Claude's own report is the better one for a seat it runs in; OpenRig's only fills the gaps.
   const claudeSessions = new Set(claude.map((x) => x.session?.id));
   const rig = (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id));
+  for (const x of rig) { const line = await promptLine(x.session.id); if (line) x.reason = line; }
   const covered = new Set([...claude, ...rig, ...codexPending.values()].map((x) => x.session?.id).filter(Boolean));
   const panes = await paneChrome(covered);
-  const tasks = projects.flatMap((p) => (p.tasks || []).filter((t) => t.status === 'blocked' || t.status === 'review').map((t) => ({
-    key: `task:${p.id}:${t.id}`, agent: t.assign?.provider || 'agent', kind: t.status === 'blocked' ? 'blocked' : 'review',
-    title: `${p.name}: ${t.title}`, reason: t.summary || (t.status === 'blocked' ? 'the agent is blocked' : 'session ended without reporting'),
+  const active = (p) => !['done', 'stopped', 'draft'].includes(p.status);
+  const tasks = projects.filter(active).flatMap((p) => (p.tasks || []).filter((t) => ['blocked', 'review', 'failed'].includes(t.status)).map((t) => ({
+    key: `task:${p.id}:${t.id}`, agent: t.assign?.provider || 'agent', kind: t.status,
+    title: `${p.name}: ${t.title}`, reason: t.summary || ({ blocked: 'the agent is blocked', failed: 'the task failed' }[t.status] || 'session ended without reporting'),
     since: p.updatedAt, session: t.run?.session || null, project: { id: p.id, task: t.id }, node: t.assign?.node,
   })));
   const seen = new Set();

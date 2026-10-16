@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
-import { CODEX_AUTO_PROFILE, codexAutoProfileReady } from './agentmodes.js';
+import { CODEX_AUTO_PROFILE, codexAutoProfileReady, wrapperTarget } from './agentmodes.js';
 import * as openrig from './openrig.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
@@ -34,7 +34,7 @@ function openrigAgentsDir() {
   const r = bin('rig');
   if (!r) return null;
   try {
-    const real = fs.realpathSync(r); // …/@openrig/cli/dist/bin-wrapper.js
+    const real = wrapperTarget(r) || fs.realpathSync(r); // …/@openrig/cli/dist/bin-wrapper.js
     const dir = path.join(path.dirname(path.dirname(real)), 'daemon', 'specs', 'agents');
     return fs.existsSync(dir) ? dir : null;
   } catch { return null; }
