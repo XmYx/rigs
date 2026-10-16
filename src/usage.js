@@ -223,7 +223,8 @@ export function projectProgress(projects) {
     const done = (p.tasks || []).filter((t) => t.status === 'done').length;
     return {
       id: p.id, name: p.name, status: p.status, done, total, pct: total ? Math.round((done / total) * 100) : 0,
-      running: (p.tasks || []).filter((t) => t.status === 'running').map((t) => ({ id: t.id, title: t.title, node: t.assign?.node, model: t.assign?.model || t.assign?.provider, effort: t.assign?.effort })),
+      main: !!p.main,
+      running: (p.tasks || []).filter((t) => t.status === 'running').map((t) => ({ id: t.id, title: t.title, node: t.assign?.node, model: t.assign?.model || t.assign?.provider, effort: t.assign?.effort, via: t.run?.mode === 'openrig' ? `OpenRig ${t.run.seat}` : t.run?.session ? `${t.run.session.kind} ${t.run.session.id}` : '', session: t.run?.session || null, startedAt: t.run?.startedAt || 0 })),
       blocked: (p.tasks || []).filter((t) => t.status === 'blocked' || t.status === 'failed').length,
     };
   });

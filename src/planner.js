@@ -24,7 +24,8 @@ export async function listProjects() {
   const all = (await Promise.all(files.map((f) => readJson(path.join(DIR, f))))).filter(Boolean);
   return all.map((p) => ({
     id: p.id, name: p.name, goal: truncate(p.goal, 200), status: p.status, owner: p.owner, updatedAt: p.updatedAt,
-    tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign })),
+    main: !!p.main,
+    tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign, run: t.run ? { mode: t.run.mode, seat: t.run.seat || '', rig: t.run.rig || '', session: t.run.session || null, startedAt: t.run.startedAt } : null })),
   })).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -301,13 +302,13 @@ function ready(p, t) {
 }
 
 /** Start every task whose dependencies are done. */
-export async function dispatchReady(id, ctx) {
+export async function dispatchReady(id, ctx, { only } = {}) {
   const p = await getProject(id);
   if (!p) throw new Error('project not found');
-  if (!['planned', 'running'].includes(p.status)) throw new Error(`project is ${p.status}`);
-  p.status = 'running';
+  if (!only && !['planned', 'running'].includes(p.status)) throw new Error(`project is ${p.status}`);
+  if (!only) p.status = 'running';
   const started = [];
-  for (const t of p.tasks.filter((x) => ready(p, x))) {
+  for (const t of p.tasks.filter((x) => ready(p, x) && (!only || x.id === only))) {
     t.status = 'starting';
     await saveProject(p);
     const workdir = t.assign.node === p.repo.node && p.repo.path ? p.repo.path : `~/rigs-work/${p.slug}`;
@@ -381,3 +382,73 @@ export async function stopProject(id, ctx) {
   event(p, 'stopped');
   return saveProject(p);
 }
+
+// ------------------------------------------------------------------ intake: every instruction lands in a project
+
+/** JARVIS's own standing project: the mesh, the JARVIS interface and whatever Sir asks for on the go. */
+export const MAIN_ID = 'rigs';
+
+export async function ensureMain() {
+  const have = await getProject(MAIN_ID);
+  if (have) return have;
+  const p = {
+    id: MAIN_ID, slug: 'rigs', name: 'RIGS · JARVIS', main: true,
+    goal: 'Run and evolve RIGS OS and JARVIS — the mesh, the JARVIS interface, App Cloud apps — and whatever Sir asks for on the go that belongs to no other project. Changes to RIGS itself go through rigs_dev_start → npm test → rigs_propose.',
+    owner: config().name, repo: { node: config().name, path: '' }, gitUrl: '',
+    dispatch: config().routing.dispatch || 'auto', policy: config().agents?.rigPolicy || 'builtin:auto',
+    planner: coreBrain(), status: 'running', tasks: [], log: [], createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  event(p, 'main project created');
+  return saveProject(p);
+}
+
+/** Append one task to a project (routed, not started). `spec` = { title, description, kind, size, deps, needs, assign }. */
+export async function addTask(id, spec, snapshot) {
+  const p = await getProject(id);
+  if (!p) throw new Error('project not found');
+  let tid = spec.id && /^[\w-]{1,12}$/.test(spec.id) && !p.tasks.some((t) => t.id === spec.id) ? spec.id : '';
+  for (let n = p.tasks.length + 1; !tid; n++) if (!p.tasks.some((t) => t.id === `t${n}`)) tid = `t${n}`;
+  const [t] = normalizeTasks({ tasks: [{ ...spec, id: tid }] });
+  t.deps = (spec.deps || []).filter((d) => p.tasks.some((x) => x.id === d));
+  if (spec.assign) { t.assign = { ...spec.assign, locked: true }; t.reason = 'set by hand'; }
+  p.tasks.push(t);
+  if (!spec.assign) routeProject(p, snapshot, { onlyUnassigned: true });
+  if (p.status === 'draft') p.status = 'planned';
+  event(p, `${t.id} added: ${t.title}`);
+  await saveProject(p);
+  return { project: p, task: t };
+}
+
+/**
+ * Sir gave an instruction that needs real work: file it under a project — the given one, the main
+ * RIGS · JARVIS project, or a new one — and cast an agent for it right away (OpenRig seat when the
+ * machine has OpenRig, else a direct agent session). Runs on the node that owns the project.
+ * body = { project?, newProject?: { name, goal, repoNode, repoPath, gitUrl }, title, instruction, kind?, size?, needs? }
+ */
+export async function intake(body, ctx) {
+  if (!String(body.instruction || body.title || '').trim()) throw new Error('nothing to do: give the instruction');
+  let p;
+  if (body.newProject?.goal || body.newProject?.name) {
+    const np = body.newProject;
+    p = await createProject({ name: np.name, goal: np.goal || np.name, repoNode: np.repoNode, repoPath: np.repoPath, gitUrl: np.gitUrl });
+    p.status = 'running';
+    event(p, 'created by JARVIS from an instruction');
+    await saveProject(p);
+  } else if (!body.project || body.project === MAIN_ID) p = await ensureMain();
+  else p = await getProject(body.project);
+  if (!p) throw new Error(`project ${body.project} not found`);
+  const title = truncate(String(body.title || body.instruction).replace(/\s+/g, ' '), 100);
+  const { task } = await addTask(p.id, {
+    title, description: String(body.instruction || title), kind: body.kind, size: body.size, needs: body.needs, deps: body.deps,
+  }, await ctx.snapshot());
+  if (!task.assign) return { project: brief(p), task, started: false, why: task.reason };
+  // The main project and projects already running stay "running" (the planner tick tracks them); a project
+  // Sir only planned keeps its other tasks waiting — just this one starts.
+  const cur = await getProject(p.id);
+  if (cur.main || cur.status === 'running' || cur.status === 'done') await saveProject(Object.assign(cur, { status: 'running' }));
+  const after = await dispatchReady(p.id, ctx, { only: task.id });
+  const t = after.tasks.find((x) => x.id === task.id);
+  return { project: brief(after), task: { id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign, reason: t.reason, run: t.run, summary: t.summary }, started: t.status === 'running' };
+}
+
+function brief(p) { return { id: p.id, name: p.name, owner: p.owner, main: !!p.main }; }

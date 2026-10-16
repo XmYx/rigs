@@ -914,7 +914,11 @@ function wire() {
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
   makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
   makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
-  const work = createWork($('#work'), { onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); } });
+  const work = createWork($('#work'), {
+    onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); },
+    onOpenTask: (t) => { const m = findMachine(t.node); if (m && t.session) sessionsWindow('', { node: m, s: { kind: t.session.kind, id: t.session.id, title: t.title, live: true } }); else toast('That agent has no session to show yet.'); },
+    onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
+  });
   makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });

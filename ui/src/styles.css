@@ -404,3 +404,7 @@ a.link { color: var(--accent); cursor: pointer; }
 .wk-rmeta { font: 10px var(--mono); color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wk-rnow { font-size: 11px; color: #b9c8d2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #work > .wk-head > .pctl { order: 2; }
+
+/* Work dashboard: agents cast by a project, indented under it */
+.wk-row.wk-agent { margin-left: 14px; padding-top: 4px; padding-bottom: 4px; border-left: 2px solid rgba(45, 212, 191, .25); }
+.wk-row.wk-agent .wk-rtitle { font-size: 12px; }
