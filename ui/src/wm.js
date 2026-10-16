@@ -24,7 +24,9 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const hh = Math.min(height, vh - 140);
   const off = (cascade++ % 6) * 28;
   Object.assign(win.style, { width: w + 'px', height: hh + 'px', left: Math.max(16, (vw - w) / 2 - 80 + off) + 'px', top: Math.max(16, (vh - hh) / 2 - 60 + off) + 'px', zIndex: ++z });
+  win.classList.add('win-enter');
   document.body.append(win);
+  requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove('win-enter'))); // fade/scale in
   windows.add(win);
 
   const raise = () => { win.style.zIndex = ++z; };
@@ -51,11 +53,16 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const ro = new ResizeObserver(() => win.dispatchEvent(new CustomEvent('winresize')));
   ro.observe(body);
 
+  let closing = false;
   function close() {
+    if (closing) return;
+    closing = true;
     ro.disconnect();
     windows.delete(win);
-    win.remove();
     onClose?.();
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { win.remove(); return; }
+    win.classList.add('win-leave'); // fade/scale out, then gone
+    setTimeout(() => win.remove(), 180);
   }
   return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }

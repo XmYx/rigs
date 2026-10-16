@@ -237,7 +237,15 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal) {
 }
 
 /** Send a user message and stream the reply through `emit`. Persists everything. */
-export async function sendMessage(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
+/** JARVIS conversations answering right now (for the work dashboard): id → { id, title, brain, model, startedAt, text }. */
+export const activeTurns = new Map();
+
+export async function sendMessage(id, { text, brain, model, effort }, emit, opts = {}) {
+  activeTurns.set(id, { id, title: '', brain: brain || '', model: model || '', startedAt: Date.now(), text: truncate(text, 120) });
+  try { return await sendMessageInner(id, { text, brain, model, effort }, emit, opts); } finally { activeTurns.delete(id); }
+}
+
+async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -248,6 +256,8 @@ export async function sendMessage(id, { text, brain, model, effort }, emit, { me
   if (!chat.messages.length && chat.title === 'New conversation') chat.title = truncate(text.replace(/\s+/g, ' '), 60);
   chat.messages.push({ role: 'user', text, ts: Date.now() });
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort });
+  const turn = activeTurns.get(id);
+  if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
   const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal);
   chat.seen = chat.seen || {};

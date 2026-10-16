@@ -1,7 +1,8 @@
 import { h } from './api.js';
 
-// Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, bottom
-// toolbar) can be dragged by its ⠿ grip and closed with ✕. Positions and closed state persist per
+// Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
+// bottom toolbar) can be dragged by its ⠿ grip, collapsed with ▾ to its header (elements marked .keep or
+// the `keep` option stay) and closed with ✕ — all animated. Position, collapsed and closed state persist per
 // browser. The ☰ corner button (never closable) lists the panels to bring them back or reset the layout.
 
 const KEY = 'rigs.panels';
@@ -19,22 +20,52 @@ function place(el, pos) {
   Object.assign(el.style, { left: left + 'px', top: top + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
 }
 
+const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** Animated show/hide: fade + scale out, then display:none; the reverse on the way back. */
+function animateClosed(el, closed) {
+  clearTimeout(el._panelTimer);
+  if (reduced()) { el.classList.toggle('panel-closed', closed); el.classList.remove('panel-out'); return; }
+  if (closed) {
+    el.classList.add('panel-out');
+    el._panelTimer = setTimeout(() => el.classList.add('panel-closed'), 190);
+  } else {
+    el.classList.add('panel-out');
+    el.classList.remove('panel-closed');
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('panel-out')));
+  }
+}
+
 function setClosed(id, closed) {
   const p = panels.get(id);
   if (!p) return;
-  p.el.classList.toggle('panel-closed', closed);
+  animateClosed(p.el, closed);
   state[id] = { ...state[id], closed };
   save();
   renderMenu();
+  p.onToggle?.({ closed, collapsed: !!state[id]?.collapsed });
+}
+
+function setCollapsed(id, collapsed) {
+  const p = panels.get(id);
+  if (!p) return;
+  p.el.classList.toggle('panel-collapsed', collapsed);
+  p.collapseBtn.textContent = collapsed ? '▸' : '▾';
+  p.collapseBtn.title = `${collapsed ? 'Expand' : 'Collapse'} ${p.title}`;
+  state[id] = { ...state[id], collapsed };
+  save();
+  p.onToggle?.({ closed: !!state[id]?.closed, collapsed });
 }
 
 /** Make a fixed element draggable and closable. The grip goes at the start of `into` (default: el). */
-export function makeFloating(el, { id, title, into = el }) {
+export function makeFloating(el, { id, title, into = el, keep = [], onToggle }) {
   if (!el) return;
-  panels.set(id, { el, title });
+  for (const k of keep) k?.classList.add('keep');
   const grip = h('span', { class: 'pgrip', title: `Drag to move ${title} · double-click to reset` }, '⠿');
   const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from ☰)`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
-  into.prepend(h('span', { class: 'pctl' }, grip, close));
+  const collapseBtn = h('button', { class: 'pclose pcollapse', title: `Collapse ${title}`, onclick: (e) => { e.stopPropagation(); setCollapsed(id, !el.classList.contains('panel-collapsed')); } }, '▾');
+  panels.set(id, { el, title, collapseBtn, onToggle });
+  into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
 
   grip.addEventListener('pointerdown', (e) => {
@@ -69,19 +100,24 @@ export function makeFloating(el, { id, title, into = el }) {
     place(el, s.pos);
   }
   if (s?.closed) el.classList.add('panel-closed');
+  if (s?.collapsed) setCollapsed(id, true);
 }
 
 function reset(id) {
   const p = panels.get(id);
   if (!p) return;
   for (const k of ['left', 'top', 'right', 'bottom', 'transform', 'width', 'height']) p.el.style[k] = '';
-  state[id] = { closed: false };
-  p.el.classList.remove('panel-closed');
+  state[id] = { closed: false, collapsed: false };
+  p.el.classList.remove('panel-collapsed');
+  p.collapseBtn.textContent = '▾';
+  animateClosed(p.el, false);
   save();
   renderMenu();
 }
 
-export function showPanel(id) { setClosed(id, false); }
+export function showPanel(id) { setClosed(id, false); if (state[id]?.collapsed) setCollapsed(id, false); }
+export function togglePanel(id) { if (state[id]?.closed) showPanel(id); else setClosed(id, true); }
+export function panelState(id) { return { closed: !!state[id]?.closed, collapsed: !!state[id]?.collapsed }; }
 export function isClosed(id) { return !!state[id]?.closed; }
 
 function renderMenu() {

@@ -3,7 +3,8 @@ import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
-import { makeFloating, panelMenu, showPanel } from './panels.js';
+import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -705,13 +706,44 @@ async function intent(text) {
   }
   if (/^(?:show|open)(?: me)? your face$/i.test(t)) { showFace(true); say(`At your service, ${persona.address}.`); return true; }
   if (/^(?:hide|close) your face$/i.test(t)) { showFace(false); say('As you wish.'); return true; }
-  if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); setOrb('online'); return true; }
+  if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); busy?.abort(); setOrb('online'); return true; }
   return false;
+}
+
+// New input while JARVIS is still answering never interrupts that work: it goes to the overseer (a
+// long-running agent session, persona.overseer, default tmux "jarvis-overseer" on this machine), which decides
+// who should hear it — answer itself, queue it for a running agent, or start one — and replies via a
+// notification. Typing into a busy Claude Code session queues the message instead of interrupting it.
+// Without a live overseer the message waits and runs after the current reply.
+const waiting = [];
+function overseerSession() {
+  const want = persona.overseer || { kind: 'tmux', id: 'jarvis-overseer' };
+  for (const e of snap) {
+    if (want.node && e.node.name !== want.node) continue;
+    const s = (e.sessions || []).find((x) => x.kind === want.kind && x.id === want.id && x.live);
+    if (s) return { node: e.node, s };
+  }
+  return null;
+}
+
+async function toOverseer(text) {
+  const o = overseerSession();
+  if (!o) {
+    waiting.push(text);
+    showSubtitle(`Noted — I'll take that up right after the current answer (${waiting.length} waiting).`, 'jarvis');
+    return;
+  }
+  const note = `[New message from the user, typed into JARVIS while it is busy. You are the overseer: decide who should handle it — answer it yourself, queue it for the agent or session already working on that topic, or start a new agent. Never interrupt or stop a running agent or subagent; queue for them instead. Reply to the user with mesh_notify.]\n${text}`;
+  try {
+    await api(`${node(o.node.id)}/sessions/send`, { method: 'POST', body: { kind: o.s.kind, id: o.s.id, text: note } });
+    showSubtitle(`Passed to the overseer on ${o.node.name} — it will route it without interrupting anyone.`, 'jarvis');
+  } catch (e) { waiting.push(text); toast(`Overseer unreachable (${e.message}); queued after the current answer.`, 'error', 8000); }
 }
 
 async function ask(text, { spoken = false } = {}) {
   text = text.trim();
   if (!text) return;
+  if (busy && !chatTarget && !/^(stop|quiet|silence|shut up|enough)$/i.test(text)) { showSubtitle(text, 'user'); await toOverseer(text); return; }
   voice.stop();
   showSubtitle(text, 'user');
   if (chatTarget && /^(?:detach|back to jarvis|talk to (?:jarvis|you)|stop chatting(?: here)?)\.?$/i.test(text.trim())) { detachChat(); return; }
@@ -719,7 +751,6 @@ async function ask(text, { spoken = false } = {}) {
   if (await intent(text)) return;
   const b = currentBrain();
   if (!b) { const s = 'I have no brain on any machine yet. Install Claude Code, Codex or Ollama.'; showSubtitle(s); voice.say(s); return; }
-  busy?.abort();
   const ac = new AbortController();
   busy = ac;
   setOrb('thinking');
@@ -759,7 +790,10 @@ async function ask(text, { spoken = false } = {}) {
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
     if (e.name !== 'AbortError') { toast(e.message, 'error'); showSubtitle(e.message, 'error'); setOrb('error'); setTimeout(() => setOrb('online'), 2500); }
-  } finally { if (busy === ac) busy = null; }
+  } finally {
+    if (busy === ac) busy = null;
+    if (!busy && waiting.length) setTimeout(() => ask(waiting.shift()), 400); // next queued message
+  }
 }
 
 async function continueChat(m, s) {
@@ -875,14 +909,18 @@ async function conversationWindow() {
 // ------------------------------------------------------------------ wiring
 function wire() {
   // Every panel floats: drag by ⠿, close with ✕, bring back from ☰ (see panels.js)
-  makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand') });
-  makeFloating($('#legend'), { id: 'legend', title: 'Filters' });
+  makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
+  makeFloating($('#legend'), { id: 'legend', title: 'Filters', keep: [$('#legend h4')] });
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
-  makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face' });
-  makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head') });
-  makeFloating($('#bar'), { id: 'bar', title: 'Toolbar' });
+  makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
+  makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
+  const work = createWork($('#work'), { onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); } });
+  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
+  { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
+  $('#btn-work').onclick = () => togglePanel('work');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();

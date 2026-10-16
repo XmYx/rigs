@@ -25,6 +25,7 @@ import * as planner from './planner.js';
 import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
 import * as pty from './pty.js';
 import * as senses from './senses.js';
+import * as usage from './usage.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
@@ -419,6 +420,14 @@ export async function startServer() {
 
     // projects (owned by this machine) and the work they dispatch to machines
     if (sub === 'projects' && method === 'GET') return planner.listProjects();
+    if (sub === 'work' && method === 'GET') {
+      // the work dashboard: live agent sessions, JARVIS replies in progress, projects in flight (+ plan limits)
+      const [sess, projects, codex] = await Promise.all([usage.liveSessions().catch(() => []), Promise.resolve(planner.listProjects()).catch(() => []), usage.codexLimits().catch(() => null)]);
+      return {
+        node: config().name, sessions: sess, jarvis: [...chat.activeTurns.values()], projects: usage.projectProgress(projects), codex,
+        plan: q.get('plan') === '1' ? await usage.planLimits({ force: q.get('force') === '1' }) : undefined,
+      };
+    }
     if (sub === 'projects' && method === 'POST') return planner.createProject(await body());
     if ((mm = m(/^projects\/([\w-]+)$/))) {
       if (method === 'DELETE') { await planner.stopProject(mm[1], plannerCtx).catch(() => {}); return { ok: await planner.deleteProject(mm[1]) }; }
@@ -603,6 +612,13 @@ export async function startServer() {
       const nodes = discovery.list().filter((n) => n.online && n.rigs);
       return Promise.all(nodes.map((n) => (n.self ? Promise.resolve(attention.list()) : peerJson(n, 'attention', { timeout: 5000 }))
         .then((items) => ({ node: n.name, nodeId: n.id, items })).catch(() => ({ node: n.name, nodeId: n.id, items: [] }))));
+    }
+    if (p === '/api/mesh/work') {
+      // every machine's work; plan limits once, from this machine's Claude account
+      const nodes = discovery.list().filter((n) => n.online && n.rigs);
+      const per = await Promise.all(nodes.map((n) => (n.self ? localCall('work') : peerJson(n, 'work', { timeout: 8000 }))
+        .then((w) => ({ ...w, node: n.name, nodeId: n.id })).catch((e) => ({ node: n.name, nodeId: n.id, error: e.message, sessions: [], jarvis: [], projects: [] }))));
+      return { nodes: per, plan: await usage.planLimits({ force: url.searchParams.get('force') === '1' }).catch((e) => ({ error: e.message })) };
     }
     if (p === '/api/mesh/projects') {
       const snap = await meshSnapshot();
