@@ -51,6 +51,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'mesh_apps', description: 'List the web apps hosted across the mesh (App Cloud): id, name, node, health (up/down/unknown, latency), and the proxy path JARVIS opens them at. Optional node filter.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'only apps hosted on this machine' } } },
+    run: async (a) => {
+      const { apps, errors } = await api('/api/apps', { timeout: 30000 });
+      const want = a.node && String(a.node).toLowerCase();
+      return {
+        apps: apps.filter((x) => !want || x.node.toLowerCase() === want).map((x) => ({ id: x.id, name: x.name, node: x.node, status: x.health?.status, latencyMs: x.health?.latencyMs, lastChecked: x.health?.lastChecked ? new Date(x.health.lastChecked).toISOString() : null, path: `/api/nodes/${encodeURIComponent(x.node)}/apps/${x.id}/` })),
+        errors: errors.filter((e) => !want || e.node.toLowerCase() === want),
+      };
+    },
+  },
+  {
     name: 'mesh_exec', description: 'Run a shell command on a machine in the mesh (bash/zsh login shell on mac/linux, PowerShell on Windows). Returns exit code, stdout, stderr.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine name (see mesh_status); "self" for this one' }, command: { type: 'string' }, cwd: { type: 'string' }, timeoutSec: { type: 'number' } }, required: ['node', 'command'] },
     run: (a) => api(`/api/nodes/${n(a.node)}/exec`, { method: 'POST', body: a, timeout: (Math.min(600, a.timeoutSec || 60) + 10) * 1000 }),
