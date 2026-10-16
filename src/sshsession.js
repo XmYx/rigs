@@ -55,10 +55,11 @@ export async function runSession() {
   const prefix = `ssh-${slug(from)}`;
   const list = spawnSync(tmux, ['list-sessions', '-F', '#{session_name}|~|#{session_attached}'], { encoding: 'utf8' });
   const existing = (list.stdout || '').split('\n').filter(Boolean).map((l) => { const [name, att] = l.split('|~|'); return { name, attached: Number(att) }; })
-    .filter((s) => s.name === prefix || s.name.startsWith(prefix + '-'));
+    .filter((s) => s.name === prefix || s.name.startsWith(prefix + '--'));
   // Re-attach a detached session from this client (dropped connection), else start a new one.
+  // Extra concurrent sessions get a "--N" suffix (a single dash could be part of the client name).
   let name = existing.find((s) => !s.attached)?.name;
-  if (!name) { let i = existing.length ? existing.length + 1 : 0; name = i ? `${prefix}-${i}` : prefix; while (existing.some((s) => s.name === name)) name = `${prefix}-${++i}`; }
+  if (!name) { let i = existing.length ? existing.length + 1 : 0; name = i ? `${prefix}--${i}` : prefix; while (existing.some((s) => s.name === name)) name = `${prefix}--${++i}`; }
   const resumed = existing.some((s) => s.name === name);
   fetch(base + '/api/local/notify', {
     method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(800),

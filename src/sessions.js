@@ -217,7 +217,7 @@ async function tmuxSessions() {
     const [name, created, activity, attached, cwd, cmd, windows] = l.split('|~|');
     const ssh = /^ssh-/.test(name);
     const agent = /claude/i.test(cmd) ? 'claude' : /codex/i.test(cmd) ? 'codex' : /ollama/i.test(cmd) ? 'ollama' : ssh ? 'ssh' : 'shell';
-    const sshFrom = ssh ? name.replace(/^ssh-/, '').replace(/-\d+$/, '') : undefined;
+    const sshFrom = ssh ? name.replace(/^ssh-/, '').replace(/--\d+$/, '') : undefined;
     return {
       kind: 'tmux', agent, id: name, title: ssh ? `SSH from ${sshFrom}${cmd && !/^(-?bash|-?zsh|sh)$/.test(cmd) ? ' · ' + cmd : ''}` : name, sshFrom, cwd, project: ssh ? '' : cwd ? path.basename(cwd) : '', command: cmd,
       updatedAt: Number(activity) * 1000, createdAt: Number(created) * 1000, live: true, attached: Number(attached) > 0, windows: Number(windows),

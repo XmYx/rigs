@@ -242,6 +242,8 @@ function sshTo(m) {
 
 function desktopState(d) {
   const di = d.desktopInstall;
+  const rs = d.rootSteps;
+  if (rs?.steps?.length) return h('div', { class: 'muted small' }, `🔑 needs your password once: ${rs.steps.map((x) => x.title.split(' (')[0].split(':')[0]).join(' · ')} · `, h('a', { class: 'link', onclick: () => runOn(d.id, rs.command, `Finish setup · ${d.name}`) }, 'finish setup'));
   if (!di) return null;
   const label = di.sunshine && di.moonlight ? 'Sunshine + Moonlight ready' : di.state === 'needs-sudo' ? 'Sunshine needs your password to finish' : di.state === 'installing' ? 'installing Sunshine + Moonlight…' : di.state === 'failed' ? 'remote desktop install failed' : di.moonlight && !di.sunshine ? 'Moonlight ready · no Sunshine host' : 'remote desktop not installed';
   return h('div', { class: 'muted small' }, '🖥 ' + label,

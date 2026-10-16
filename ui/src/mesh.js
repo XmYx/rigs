@@ -39,6 +39,8 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
 
   function desktopChip(n) {
     const d = n.desktopInstall;
+    const rs = n.rootSteps;
+    if (rs?.steps?.length) return h('button', { class: 'chip st-warn chip-btn', title: rs.steps.map((x) => x.title).join('\n'), onclick: () => onRun(n.id, rs.command, `Finish setup · ${n.name}`) }, `finish setup (password): ${rs.steps.length} step${rs.steps.length > 1 ? 's' : ''} ▸`);
     if (!d) return null;
     if (d.sunshine && d.moonlight) return h('span', { class: 'chip st-ok' }, 'desktop ready');
     if (d.state === 'needs-sudo') return h('button', { class: 'chip st-warn chip-btn', title: d.command, onclick: () => onRun(n.id, d.command, 'Finish Sunshine install') }, 'desktop: finish (password) ▸');

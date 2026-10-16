@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { RIGS_HOME } from './config.js';
 import * as desktopInstall from './desktop-install.js';
+import * as rootsteps from './rootsteps.js';
+import { tailscaleBin } from './tailscale.js';
 import * as sshSession from './sshsession.js';
 import { detectTools } from './tools.js';
 import { log, readJsonSync, writeJsonAtomic } from './util.js';
@@ -13,7 +15,11 @@ import { log, readJsonSync, writeJsonAtomic } from './util.js';
 const MIGRATIONS = [
   { id: '2026-10-16-ssh-session-hook', run: () => sshSession.installHook() },
   { id: '2026-10-16-desktop-sunshine-moonlight', run: async () => { const s = await desktopInstall.ensure(); await detectTools(true); return { state: s.state, steps: s.steps }; } },
+  { id: '2026-10-16-prefer-openssh', run: async () => { const r = await rootsteps.preferOpenSsh(tailscaleBin()); const u = await rootsteps.tryUnattended(); return { ...r, unattended: u.ran, pending: u.steps.map((x) => x.id) }; } },
 ];
+
+// Nodes that ran the first desktop migration before root steps were bundled re-register theirs.
+MIGRATIONS.push({ id: '2026-10-16-desktop-root-steps', run: async () => { const s = await desktopInstall.ensure(); await detectTools(true); return { state: s.state, steps: s.steps.slice(-2) }; } });
 
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 

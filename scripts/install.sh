@@ -76,12 +76,13 @@ if [ "$OS" = "Darwin" ]; then
   [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] && ok "Tailscale app installed — open it from Applications and sign in (same account on every machine)"
 else
   if ! tailscale status >/dev/null 2>&1; then
-    warn "Signing in to Tailscale (follow the link). --ssh enables Tailscale SSH as well."
-    $SUDO tailscale up --ssh || warn "run: sudo tailscale up --ssh"
+    warn "Signing in to Tailscale (follow the link)."
+    $SUDO tailscale up || warn "run: sudo tailscale up"
   else
-    $SUDO tailscale set --ssh >/dev/null 2>&1 || true
     ok "Tailscale up: $(tailscale ip -4 2>/dev/null | head -1)"
   fi
+  # Mesh SSH is OpenSSH with RIGS-managed keys; Tailscale SSH would take over port 22 on the tailnet.
+  $SUDO tailscale set --ssh=false >/dev/null 2>&1 || true
   $SUDO systemctl enable --now ssh >/dev/null 2>&1 || $SUDO systemctl enable --now sshd >/dev/null 2>&1 || true
 fi
 if [ "$OS" = "Darwin" ] && ! nc -z 127.0.0.1 22 >/dev/null 2>&1; then
@@ -124,9 +125,9 @@ ok "rigs CLI → ~/.local/bin/rigs"
 [ -n "${RIGS_NAME:-}" ] && RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --name $RIGS_NAME"
 # shellcheck disable=SC2086
 node bin/rigs.js setup ${RIGS_SETUP_ARGS:-}
-if [ "$RIGS_DESKTOP" = "1" ] && [ -f "$HOME/.rigs/desktop-finish.sh" ] && ! command -v sunshine >/dev/null 2>&1 && [ "$OS" != "Darwin" ]; then
-  c "Finishing the Sunshine install (needs sudo once)"
-  sh "$HOME/.rigs/desktop-finish.sh" || warn "Sunshine finish step failed — rerun: sh ~/.rigs/desktop-finish.sh"
+if [ -s "$HOME/.rigs/finish-root.sh" ] && grep -q '"title"' "$HOME/.rigs/root-steps.json" 2>/dev/null; then
+  c "Finishing root-only steps (Sunshine, SSH) — sudo once"
+  sh "$HOME/.rigs/finish-root.sh" || warn "finish step failed — rerun: sh ~/.rigs/finish-root.sh"
 fi
 [ "$OS" != "Darwin" ] && $SUDO loginctl enable-linger "$USER" >/dev/null 2>&1 || true
 

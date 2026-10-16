@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
+import * as rootsteps from './rootsteps.js';
 import { bin } from './tools.js';
 import { HOME, clearWhichCache, isMac, isWin, log, run } from './util.js';
 
@@ -10,9 +11,9 @@ import { HOME, clearWhichCache, isMac, isWin, log, run } from './util.js';
  * allows it: Sunshine (host: NVENC / VAAPI / QuickSync / VideoToolbox, KMS capture on Wayland) and
  * Moonlight (client). Everything comes from the projects' latest GitHub releases.
  *
- * Steps that need root (Linux .deb + setcap, Windows MSI) run directly when sudo needs no password;
- * otherwise they're written to ~/.rigs/desktop-finish.sh (.ps1) and the node reports "needs-sudo",
- * so JARVIS can open a terminal on that machine where you type the password once.
+ * Steps that need root (Linux .deb + setcap, Windows MSI) go into the machine's root-step bundle
+ * (rootsteps.js): run unattended when sudo needs no password, otherwise JARVIS offers "Finish setup",
+ * which opens a terminal on that machine where you type the password once.
  */
 
 const STATE = path.join(RIGS_HOME, 'desktop.json');
@@ -33,7 +34,11 @@ async function writeState(s) {
 
 export async function status() {
   const s = await readState();
-  return { ...s, sunshine: !!bin('sunshine'), moonlight: !!bin('moonlight') || fs.existsSync(path.join(HOME, '.local', 'bin', 'moonlight')) };
+  const sunshine = !!bin('sunshine');
+  const moonlight = !!bin('moonlight') || fs.existsSync(path.join(HOME, '.local', 'bin', 'moonlight'));
+  // The finish script ran (from JARVIS or by hand): settle the state without waiting for a re-run.
+  if (s.state === 'needs-sudo' && sunshine) { s.state = 'done'; s.command = ''; s.steps.push('Sunshine installed by the finish step'); await rootsteps.remove('sunshine'); await writeState(s); }
+  return { ...s, sunshine, moonlight };
 }
 
 async function latestAssets(repo) {
@@ -186,35 +191,28 @@ async function linux(st) {
   const file = await download(deb.url, deb.name);
   st.steps.push(`Sunshine ${deb.name} downloaded`);
   const { sunshineUser, sunshinePass } = config().desktop;
-  const finish = path.join(RIGS_HOME, 'desktop-finish.sh');
-  await fsp.writeFile(finish, `#!/bin/sh
-# Finishes the Sunshine install for RIGS (written by the RIGS node; safe to re-run).
-set -e
-echo "Installing Sunshine (hardware-accelerated remote desktop host)…"
-sudo apt-get install -y "${file}"
-# KMS screen capture on Wayland/X11 without a portal prompt:
-sudo setcap cap_sys_admin+p "$(readlink -f "$(command -v sunshine)")"
-sudo udevadm control --reload-rules && sudo udevadm trigger || true
-sunshine --creds '${sunshineUser}' '${sunshinePass}' >/dev/null 2>&1 || true
-systemctl --user daemon-reload
-systemctl --user enable --now app-dev.lizardbyte.app.Sunshine 2>/dev/null || systemctl --user enable --now sunshine 2>/dev/null || true
-echo "Sunshine is installed and running. RIGS pairs Moonlight with it automatically."
-`, { mode: 0o700 });
-  st.command = `sh ${finish}`;
-  if (await sudoOk()) {
-    const r = await run('sh', [finish], { timeout: 15 * 60 * 1000 });
-    st.steps.push(r.code === 0 ? 'Sunshine installed (passwordless sudo)' : `finish script failed: ${(r.stderr || r.stdout).trim().slice(-300)}`);
-    clearWhichCache();
-    if (r.code === 0) { st.command = ''; await afterSunshineLinux(st); return 'done'; }
-    return 'failed';
-  }
-  st.steps.push('Root step pending: run the finish command once (sudo password)');
+  await rootsteps.add('sunshine', 'Install Sunshine (hardware-accelerated remote desktop host)', [
+    `sudo apt-get install -y "${file}"`,
+    '# KMS screen capture on Wayland/X11 without a portal prompt',
+    'sudo setcap cap_sys_admin+p "$(readlink -f "$(command -v sunshine)")"',
+    'sudo udevadm control --reload-rules && sudo udevadm trigger || true',
+    `sunshine --creds '${sunshineUser}' '${sunshinePass}' >/dev/null 2>&1 || true`,
+    'systemctl --user daemon-reload',
+    'systemctl --user enable --now app-dev.lizardbyte.app.Sunshine 2>/dev/null || systemctl --user enable --now sunshine 2>/dev/null || true',
+  ]);
+  const u = await rootsteps.tryUnattended();
+  clearWhichCache();
+  if (u.ran && bin('sunshine')) { st.steps.push('Sunshine installed (passwordless sudo)'); await afterSunshineLinux(st); return 'done'; }
+  if (u.ran && !u.ok) { st.steps.push('root step failed: ' + (u.output || '').trim().slice(-200)); return 'failed'; }
+  st.command = rootsteps.pending().command;
+  st.steps.push('Root step pending: finish setup once with your sudo password');
   return 'needs-sudo';
 }
 
 async function afterSunshineLinux(st) {
   const s = bin('sunshine');
   if (!s) return;
+  await rootsteps.remove('sunshine');
   const c = credsCommand(s);
   await run(c[0], c.slice(1), { timeout: 30000 });
   await run('systemctl', ['--user', 'enable', '--now', 'app-dev.lizardbyte.app.Sunshine'], { timeout: 20000 });
@@ -233,17 +231,16 @@ async function windows(st) {
     if (r.code !== 0) throw new Error('unzip Moonlight failed: ' + r.stderr.trim());
     st.steps.push(`Moonlight portable → ${dest}`);
   } else st.steps.push('Moonlight already installed');
-  if (bin('sunshine')) { st.steps.push('Sunshine already installed'); return 'done'; }
-  const finish = path.join(RIGS_HOME, 'desktop-finish.ps1');
+  if (bin('sunshine')) { st.steps.push('Sunshine already installed'); await rootsteps.remove('sunshine'); return 'done'; }
   const { sunshineUser, sunshinePass } = config().desktop;
-  await fsp.writeFile(finish, `# Finishes the Sunshine install for RIGS (needs an administrator).
-winget install -e --id LizardByte.Sunshine --silent --accept-package-agreements --accept-source-agreements
-& "C:\\Program Files\\Sunshine\\sunshine.exe" --creds '${sunshineUser}' '${sunshinePass}'
-New-NetFirewallRule -DisplayName 'RIGS Sunshine (tailnet)' -Direction Inbound -Protocol TCP -LocalPort 47984,47989,47990,48010 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue | Out-Null
-New-NetFirewallRule -DisplayName 'RIGS Sunshine UDP (tailnet)' -Direction Inbound -Protocol UDP -LocalPort 47998-48000,48002,48010 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue | Out-Null
-`);
-  st.command = `Start-Process powershell -Verb RunAs -ArgumentList '-ExecutionPolicy Bypass -File "${finish}"'`;
-  st.steps.push('Sunshine needs administrator approval: run the finish command on that PC (UAC prompt)');
+  await rootsteps.add('sunshine', 'Install Sunshine (hardware-accelerated remote desktop host)', [
+    'winget install -e --id LizardByte.Sunshine --silent --accept-package-agreements --accept-source-agreements',
+    `& "C:\\Program Files\\Sunshine\\sunshine.exe" --creds '${sunshineUser}' '${sunshinePass}'`,
+    "New-NetFirewallRule -DisplayName 'RIGS Sunshine (tailnet)' -Direction Inbound -Protocol TCP -LocalPort 47984,47989,47990,48010 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue | Out-Null",
+    "New-NetFirewallRule -DisplayName 'RIGS Sunshine UDP (tailnet)' -Direction Inbound -Protocol UDP -LocalPort 47998-48000,48002,48010 -RemoteAddress 100.64.0.0/10 -Action Allow -ErrorAction SilentlyContinue | Out-Null",
+  ]);
+  st.command = rootsteps.pending().command;
+  st.steps.push('Sunshine needs administrator approval: finish setup on that PC (UAC prompt)');
   return 'needs-sudo';
 }
 

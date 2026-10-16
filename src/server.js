@@ -9,6 +9,7 @@ import { config, loadConfig, patchConfig, publicConfig, saveConfig } from './con
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
 import * as migrations from './migrations.js';
+import * as rootsteps from './rootsteps.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
 import * as models from './models.js';
@@ -78,6 +79,7 @@ async function selfInfo() {
     tailscale: tsStatus ? { ip, dnsName: tsStatus.self.dnsName, login: tsStatus.self.login, state: tsStatus.backendState } : null,
     sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name,
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
+    rootSteps: rootsteps.pending(),
   };
 }
 
@@ -357,6 +359,7 @@ export async function startServer() {
       return r;
     }
     if (sub === 'migrations') return migrations.status();
+    if (sub === 'root-steps') return rootsteps.pending();
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), server: await ssh.serverStatus(), alias: config().name };
@@ -533,16 +536,22 @@ export async function startServer() {
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });
+  function announceRoot() {
+    const p = rootsteps.pending();
+    if (!p.steps.length) return;
+    broadcastNotify({ text: `${config().name} needs your password once to finish: ${p.steps.map((x) => x.title.split(' (')[0].split(':')[0]).join(' · ')}.`, speak: false, level: 'action', from: config().name, action: { type: 'run', node: config().name, command: p.command, label: 'Finish setup', title: `Finish setup · ${config().name}` } }).catch(() => {});
+  }
+
   function announceDesktop(st) {
-    if (st.state === 'needs-sudo') broadcastNotify({ text: `${config().name}: Sunshine is downloaded — it needs your password once to finish installing.`, speak: false, level: 'action', from: config().name, action: { type: 'run', node: config().name, command: st.command, label: 'Finish install', title: 'Sunshine install' } }).catch(() => {});
+    if (st.state === 'needs-sudo') announceRoot();
     else if (st.state === 'done') broadcastNotify({ text: `${config().name}: Sunshine + Moonlight ready — hardware-accelerated remote desktop is available.`, speak: false, from: config().name }).catch(() => {});
     else if (st.state === 'failed') broadcastNotify({ text: `${config().name}: remote desktop install failed — ${st.steps.slice(-1)[0] || ''}`, speak: false, level: 'error', from: config().name }).catch(() => {});
   }
 
   // One-time steps shipped by updates (SSH session hook, Sunshine + Moonlight…), in the background.
   setTimeout(() => migrations.runPending((m, res) => {
-    if (m.id.includes('desktop') && res.ok) desktopInstall.status().then(announceDesktop).catch(() => {});
-  }).catch((e) => log('migrations:', e.message)), 4000).unref();
+    if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
+  }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();
