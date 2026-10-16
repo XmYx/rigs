@@ -108,3 +108,35 @@ test('approval screens on agent panes are recognised (Claude, Codex approvals, C
   assert.ok(hit('  Hooks need review\n  1 hook is new or changed.'));
   assert.ok(!hit('$ npm test\n# pass 43\n# fail 0'));
 });
+
+test('node CLI wrappers: run the tool with its own Node, leave foreign files alone, heal when the install moves', { skip: process.platform === 'win32' }, async () => {
+  const { ensureCliWrappers, wrapperTarget } = await import('../src/agentmodes.js');
+  const pkg = path.join(ROOT, 'npm', 'lib', 'node_modules', 'fakecli');
+  const npmBin = path.join(ROOT, 'npm', 'bin');
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.mkdirSync(npmBin, { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'cli.js'), '#!/usr/bin/env node\nconsole.log("fakecli " + process.version);\n');
+  fs.symlinkSync(path.join(pkg, 'cli.js'), path.join(npmBin, 'fakecli'));
+  fs.symlinkSync(process.execPath, path.join(npmBin, 'node'));
+  const local = path.join(ROOT, '.local', 'bin');
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${npmBin}${path.delimiter}${oldPath}`;
+  try {
+    const r = await ensureCliWrappers({ tools: ['fakecli'], dir: local });
+    assert.match(r.fakecli, /fakecli/, JSON.stringify(r));
+    const w = path.join(local, 'fakecli');
+    assert.equal(wrapperTarget(w), fs.realpathSync(path.join(pkg, 'cli.js')));
+    assert.match(fs.readFileSync(w, 'utf8'), /exec '.*node' '.*cli\.js' "\$@"/);
+    assert.equal((await ensureCliWrappers({ tools: ['fakecli'], dir: local })).fakecli, 'ok');
+    fs.writeFileSync(path.join(local, 'other'), '#!/bin/sh\necho mine\n');
+    assert.equal((await ensureCliWrappers({ tools: ['other'], dir: local })).other, 'left alone (not ours)');
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('failed tasks of active projects need the user; finished projects never blink', async () => {
+  const items = await attention.refresh({ projects: [
+    { id: 'pa', name: 'A', status: 'running', updatedAt: 1, tasks: [{ id: 't1', title: 'x', status: 'failed', summary: 'dispatch failed: rig up failed' }] },
+    { id: 'pb', name: 'B', status: 'done', updatedAt: 1, tasks: [{ id: 't1', title: 'y', status: 'failed' }] },
+  ] });
+  assert.deepEqual(keys(items), ['task:pa:t1']);
+});

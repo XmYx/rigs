@@ -62,6 +62,9 @@ MIGRATIONS.push({
   },
 });
 
+// `rig`/`codex` run with the Node they were installed for, so seats can always read their OpenRig queue.
+MIGRATIONS.push({ id: '2026-10-16-node-cli-wrappers', run: async () => (await import('./agentmodes.js')).ensureCliWrappers() });
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { APP_DIR, HOME, escapeRe } from './util.js';
+import { bin } from './tools.js';
+import { APP_DIR, HOME, clearWhichCache, escapeRe, isWin, run } from './util.js';
 
 /**
  * Codex side of "agents run in auto mode, and say when they need you":
@@ -60,5 +61,48 @@ export async function installCodex() {
     await fsp.writeFile(file, r.text);
     out.notify = file;
   }
+  return out;
+}
+
+// ---------------------------------------------------------------- node CLI wrappers
+// `rig` and `codex` are Node scripts (`#!/usr/bin/env node`). An agent's shell may find another `node`
+// first (an old Homebrew node with a missing ICU, an x64 nvm default…), and then `rig queue` fails inside
+// the seat and the task never arrives. A tiny wrapper in ~/.local/bin runs each with the Node it was
+// installed under. Only written where ~/.local/bin has nothing of that name; removed if its target goes.
+const MARK = '# Managed by RIGS';
+
+export function wrapperTarget(p) {
+  try {
+    const t = fs.readFileSync(p, 'utf8');
+    return t.includes(MARK) ? (t.match(/^# target: (.+)$/m) || [])[1] || null : null;
+  } catch { return null; }
+}
+
+export async function ensureCliWrappers({ tools = ['rig', 'codex'], dir = path.join(HOME, '.local', 'bin') } = {}) {
+  if (isWin) return { skipped: 'not needed on Windows (npm writes .cmd shims with an absolute node)' };
+  const out = {};
+  for (const tool of tools) {
+    const wrapper = path.join(dir, tool);
+    const mine = wrapperTarget(wrapper);
+    if (mine) {
+      if (fs.existsSync(mine)) { out[tool] = 'ok'; continue; }
+      fs.rmSync(wrapper, { force: true }); // its install moved — fall through and re-resolve
+      clearWhichCache();
+    } else if (fs.existsSync(wrapper)) { out[tool] = 'left alone (not ours)'; continue; }
+    const p = bin(tool);
+    if (!p) continue;
+    let script;
+    try { script = fs.realpathSync(p); } catch { continue; }
+    if (!/\.[cm]?js$/.test(script)) { out[tool] = 'native binary'; continue; }
+    const sibling = path.join(path.dirname(p), 'node');
+    const node = fs.existsSync(sibling) ? sibling : process.execPath;
+    const q = (x) => `'${x.replace(/'/g, `'\\''`)}'`;
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(wrapper, `#!/bin/sh\n${MARK}: run ${tool} with the Node it was installed for, whatever \`node\` PATH finds first.\n# target: ${script}\nexec ${q(node)} ${q(script)} "$@"\n`, { mode: 0o755 });
+    const v = await run(wrapper, ['--version'], { timeout: 20000 });
+    if (v.code !== 0) { fs.rmSync(wrapper, { force: true }); out[tool] = 'wrapper failed, removed: ' + (v.stderr || v.stdout).trim().slice(0, 120); continue; }
+    out[tool] = `${wrapper} → ${node}`;
+  }
+  clearWhichCache();
   return out;
 }
