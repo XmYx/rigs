@@ -76,11 +76,11 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop }) {
     const humor = h('input', { type: 'range', min: 0, max: 100, value: cfg.persona.humor });
     const auto = h('input', { type: 'checkbox', checked: cfg.update.auto });
     const voices = voice.voices();
-    const voiceSel = h('select', { class: 'mini' }, ...voices.map((v) => h('option', { value: v.name, selected: v.name === voice.voiceName }, `${v.name} (${v.lang})`)));
+    const voiceSel = h('select', { class: 'mini' }, ...voices.map((v) => h('option', { value: v.id, selected: v.id === voice.voiceId }, v.label)));
     const perm = h('select', { class: 'mini' }, ...['default', 'acceptEdits', 'bypassPermissions', 'plan'].map((m) => h('option', { value: m, selected: cfg.brain.claudePermissionMode === m }, m)));
     settings.replaceChildren(
       h('label', {}, 'Assistant name', name), h('label', {}, 'Calls you', address),
-      h('label', {}, `Humor (${cfg.persona.humor}%)`, humor), h('label', {}, 'Voice (this browser)', voiceSel),
+      h('label', {}, `Humor (${cfg.persona.humor}%)`, humor), h('label', {}, 'Voice', voiceSel),
       h('label', {}, 'Claude chat permission mode (this machine)', perm),
       h('label', { class: 'check' }, auto, ' Auto-update this machine from GitHub every ', String(cfg.update.intervalMin), ' min'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {

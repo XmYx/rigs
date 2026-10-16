@@ -33,7 +33,9 @@ function defaults() {
       claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
       codexSandbox: 'read-only',
     },
-    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '' },
+    // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
+    // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
+    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
     // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
     capabilities: {},
     // Extra model ids per provider, appended to the built-in catalog (src/models.js).

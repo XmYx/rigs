@@ -8,6 +8,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { speakable } from '../src/tts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-test-'));
@@ -152,4 +153,12 @@ test('projects: create, add task by hand, route, delete', async () => {
   assert.ok('reason' in routed.tasks[0]);
   const r = await fetch(`${BASE}/api/nodes/self/projects/${p.id}`, { method: 'DELETE' });
   assert.equal(r.status, 200);
+});
+
+test('tts: speakable text + engine info (engine-independent)', async () => {
+  assert.equal(speakable('## Done\n\nSee **[the docs](https://x.y/z)** and `rigs start`.\n```js\nconsole.log(1)\n```\nBye.'), 'Done See the docs and rigs start. Bye.');
+  assert.equal(speakable('   '), '');
+  assert.equal(speakable('a'.repeat(5000)).length, 4000);
+  const info = await get('/api/local/tts');
+  assert.ok('engine' in info && Array.isArray(info.voices));
 });

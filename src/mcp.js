@@ -137,8 +137,8 @@ const TOOLS = [
     run: () => api('/api/mesh/update', { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
-    name: 'mesh_notify', description: 'Show (and speak) a message in every open JARVIS UI across the mesh — use it to report finished work.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' } }, required: ['text'] },
+    name: 'mesh_notify', description: 'Show (and speak) a message in every open JARVIS UI across the mesh — use it to report finished work. When no UI is open anywhere, it is spoken aloud on this machine\'s speakers instead; aloud: true always speaks it here too.',
+    inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' }, aloud: { type: 'boolean', description: 'Also speak through this machine\'s speakers' } }, required: ['text'] },
     run: (a) => api('/api/mesh/notify', { method: 'POST', body: { ...a, from: `${config().name} agent` } }),
   },
 ];

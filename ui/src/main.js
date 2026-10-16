@@ -473,8 +473,8 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     voice.feed('', true);
-    if (!window.speechSynthesis?.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
-    else setTimeout(function wait() { if (window.speechSynthesis.speaking) setTimeout(wait, 300); else setOrb('online'); }, 300);
+    if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
+    else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
     if (e.name !== 'AbortError') { toast(e.message, 'error'); showSubtitle(e.message, 'error'); setOrb('error'); setTimeout(() => setOrb('online'), 2500); }
   } finally { if (busy === ac) busy = null; }

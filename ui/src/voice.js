@@ -1,8 +1,12 @@
-// Voice in (Web Speech recognition, wake word "Jarvis", barge-in) and voice out (speech synthesis,
-// sentence-by-sentence while the reply streams). Needs a secure context: localhost or
-// https://<machine>.<tailnet>.ts.net (rigs setup --https).
+// Voice in (Web Speech recognition, wake word "Jarvis", barge-in) and voice out, sentence-by-sentence
+// while the reply streams. Output prefers the server's TTS (/api/local/tts → WAV through one
+// AudioContext), because Safari and Chrome silently drop speechSynthesis started outside a user
+// gesture — and streamed replies and notifications always arrive later. The AudioContext is unlocked
+// on the first click/key; speechSynthesis stays as the fallback. Recognition needs a secure context:
+// localhost or https://<machine>.<tailnet>.ts.net (rigs setup --https).
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const AC = window.AudioContext || window.webkitAudioContext;
 
 export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWord = 'jarvis' }) {
   const supported = !!SR && window.isSecureContext;
@@ -10,29 +14,167 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
   let mode = 'off'; // off | ptt | handsfree
   let speaking = false;
   let muted = localStorage.getItem('rigs.muted') === '1';
-  let voiceName = localStorage.getItem('rigs.voice') || '';
+  let pref = parsePref(localStorage.getItem('rigs.voice') || '');
   let queue = '';
   let meter = null;
 
-  function pickVoice() {
+  // ---- output: server voice through Web Audio, browser speechSynthesis as fallback
+  let ctx = null;
+  let analyser = null;
+  let server = { engine: null, voice: '', voices: [] };
+  let gen = 0; // bumped by stop(): anything from an older generation is dropped
+  const pending = []; // [{ text, audio: Promise<AudioBuffer|null> }] in speaking order
+  let source = null;
+  let pumping = false;
+  let levelRaf = 0;
+  let abort = new AbortController(); // aborts in-flight TTS fetches on stop()
+  let finishCurrent = null; // resolves the sentence that is playing right now (stop() never fires onended)
+  const utterances = new Set(); // Safari garbage-collects utterances (and drops onend) unless referenced
+
+  function parsePref(v) {
+    if (v.startsWith('system:')) return { kind: 'system', name: v.slice(7) };
+    if (v.startsWith('browser:')) return { kind: 'browser', name: v.slice(8) };
+    return { kind: 'system', name: '' }; // legacy unprefixed values → default server voice
+  }
+
+  function ensureCtx() {
+    if (!AC) return null;
+    if (!ctx) {
+      try {
+        ctx = new AC();
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.connect(ctx.destination);
+      } catch { ctx = null; return null; }
+    }
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    return ctx;
+  }
+
+  let synthUnlocked = false;
+  function unlock() {
+    ensureCtx();
+    if (!synthUnlocked && window.speechSynthesis) {
+      synthUnlocked = true;
+      try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
+    }
+  }
+  for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, unlock, { capture: true, passive: true });
+
+  const ready = fetch('/api/local/tts').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j) server = j; }).catch(() => {});
+
+  const useServer = () => pref.kind === 'system' && !!server.engine && !!AC;
+
+  function setSpeaking(on) {
+    if (on === speaking) return;
+    speaking = on;
+    if (on) onState?.('speaking');
+    else { onLevel?.(0); onState?.(mode === 'handsfree' ? 'listening' : 'online'); }
+  }
+
+  function browserVoice() {
+    if (!window.speechSynthesis) return null;
     const voices = speechSynthesis.getVoices();
-    if (voiceName) { const v = voices.find((x) => x.name === voiceName); if (v) return v; }
+    if (pref.kind === 'browser' && pref.name) { const v = voices.find((x) => x.name === pref.name); if (v) return v; }
     const prefs = ['Daniel', 'Google UK English Male', 'Microsoft Ryan', 'Microsoft George', 'Arthur', 'Oliver', 'en-GB'];
     for (const p of prefs) { const v = voices.find((x) => x.name.includes(p) || x.lang === p); if (v) return v; }
     return voices.find((x) => x.lang?.startsWith('en')) || voices[0];
   }
 
+  function clean(text) { return text.replace(/[*_`#>]/g, '').replace(/\[(.*?)\]\(.*?\)/g, '$1'); }
+
+  function speakBrowser(text, g) {
+    if (!window.speechSynthesis || g !== gen) return Promise.resolve();
+    return new Promise((resolve) => {
+      const u = new SpeechSynthesisUtterance(clean(text));
+      const v = browserVoice();
+      if (v) { u.voice = v; u.lang = v.lang; }
+      u.rate = 1.04;
+      u.pitch = 0.95;
+      utterances.add(u);
+      const done = () => { utterances.delete(u); if (finishCurrent === done) finishCurrent = null; resolve(); };
+      finishCurrent = done;
+      u.onstart = () => setSpeaking(true);
+      u.onboundary = () => onLevel?.(0.4 + Math.random() * 0.6);
+      u.onend = done;
+      u.onerror = done;
+      speechSynthesis.speak(u);
+    });
+  }
+
+  function fetchAudio(text, g) {
+    return (async () => {
+      await ready;
+      if (!useServer() || g !== gen) return null;
+      const r = await fetch('/api/local/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: pref.name || undefined }), signal: abort.signal });
+      if (r.status === 204) return 'empty';
+      if (!r.ok) throw new Error('tts ' + r.status);
+      const data = await r.arrayBuffer();
+      if (g !== gen) return null;
+      const c = ensureCtx();
+      // Safari's webkitAudioContext only has the callback form of decodeAudioData.
+      return new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p?.then) p.then(res, rej); });
+    })().catch(() => null);
+  }
+
+  function meterLoop() {
+    cancelAnimationFrame(levelRaf);
+    const buf = new Uint8Array(analyser.fftSize);
+    const tick = () => {
+      if (!source) return;
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (const b of buf) sum += ((b - 128) / 128) ** 2;
+      onLevel?.(Math.min(1, Math.sqrt(sum / buf.length) * 5));
+      levelRaf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  function playBuffer(buffer, g) {
+    if (g !== gen) return Promise.resolve();
+    return new Promise((resolve) => {
+      const c = ensureCtx();
+      const s = c.createBufferSource();
+      s.buffer = buffer;
+      s.connect(analyser);
+      const done = () => { if (source === s) source = null; if (finishCurrent === done) finishCurrent = null; resolve(); };
+      s.onended = done;
+      finishCurrent = done;
+      source = s;
+      setSpeaking(true);
+      s.start();
+      meterLoop();
+    });
+  }
+
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    const g = gen;
+    try {
+      while (pending.length && g === gen) {
+        const item = pending[0];
+        // Prefetch: the next sentence renders on the server while this one plays.
+        if (pending[1] && !pending[1].audio && useServer()) pending[1].audio = fetchAudio(pending[1].text, g);
+        const audio = await (item.audio || (useServer() ? (item.audio = fetchAudio(item.text, g)) : null));
+        if (g !== gen) break;
+        if (audio && audio !== 'empty') await playBuffer(audio, g);
+        else if (!audio) await speakBrowser(item.text, g);
+        if (g === gen) pending.shift();
+      }
+    } finally {
+      pumping = false;
+      if (g === gen) setSpeaking(false);
+      else if (pending.length) pump();
+    }
+  }
+
   function speakNow(text) {
-    if (muted || !text.trim() || !window.speechSynthesis) return;
-    const u = new SpeechSynthesisUtterance(text.replace(/[*_`#>]/g, '').replace(/\[(.*?)\]\(.*?\)/g, '$1'));
-    const v = pickVoice();
-    if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = 1.04;
-    u.pitch = 0.95;
-    u.onstart = () => { speaking = true; onState?.('speaking'); };
-    u.onboundary = () => onLevel?.(0.4 + Math.random() * 0.6);
-    u.onend = () => { if (!speechSynthesis.speaking) { speaking = false; onLevel?.(0); onState?.(mode === 'handsfree' ? 'listening' : 'online'); } };
-    speechSynthesis.speak(u);
+    if (muted || !text.trim()) return;
+    pending.push({ text, audio: null });
+    if (useServer() && pending.length <= 2) pending[pending.length - 1].audio = fetchAudio(text, gen);
+    pump();
   }
 
   /** Feed streaming text; complete sentences are spoken as they arrive. */
@@ -49,7 +191,17 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
 
   function stopSpeaking() {
     queue = '';
+    gen++;
+    pending.length = 0;
+    abort.abort();
+    abort = new AbortController();
+    if (source) { try { source.onended = null; source.stop(); } catch {} source = null; }
+    cancelAnimationFrame(levelRaf);
     if (window.speechSynthesis) speechSynthesis.cancel();
+    utterances.clear();
+    const f = finishCurrent;
+    finishCurrent = null;
+    f?.();
     speaking = false;
   }
 
@@ -146,9 +298,22 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
     feed,
     say(text) { stopSpeaking(); feed(text, true); },
     stop: stopSpeaking,
+    get speaking() { return speaking || pending.length > 0 || !!window.speechSynthesis?.speaking; },
     setMuted(v) { muted = v; localStorage.setItem('rigs.muted', v ? '1' : '0'); if (v) stopSpeaking(); },
-    voices: () => (window.speechSynthesis ? speechSynthesis.getVoices().filter((v) => v.lang?.startsWith('en')) : []),
-    setVoice(name) { voiceName = name; localStorage.setItem('rigs.voice', name); },
-    get voiceName() { return pickVoice()?.name || ''; },
+    /** Server voices first (this machine's TTS), then this browser's voices: [{ id, label }]. */
+    voices() {
+      const out = [];
+      if (server.engine && AC) {
+        out.push({ id: 'system:', label: `System default${server.voice ? ` (${server.voice})` : ''} — ${server.engine}` });
+        for (const v of server.voices.filter((x) => !x.lang || x.lang.startsWith('en'))) out.push({ id: 'system:' + v.name, label: `${v.name} (${v.lang || server.engine}) — system` });
+      }
+      if (window.speechSynthesis) for (const v of speechSynthesis.getVoices().filter((x) => x.lang?.startsWith('en'))) out.push({ id: 'browser:' + v.name, label: `${v.name} (${v.lang}) — browser` });
+      return out;
+    },
+    get voiceId() {
+      if (pref.kind === 'browser') return 'browser:' + (browserVoice()?.name || pref.name);
+      return server.engine ? 'system:' + pref.name : 'browser:' + (browserVoice()?.name || '');
+    },
+    setVoice(id) { pref = parsePref(id || ''); localStorage.setItem('rigs.voice', id || ''); },
   };
 }

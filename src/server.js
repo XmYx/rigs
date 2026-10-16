@@ -18,6 +18,7 @@ import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
 import * as ts from './tailscale.js';
+import * as tts from './tts.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
 import { APP_DIR, isWin, log, run, truncate } from './util.js';
@@ -146,7 +147,14 @@ export async function startServer() {
 
   async function broadcastNotify(b) {
     const all = discovery.list().filter((n) => n.online && n.rigs);
-    return Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
+    const results = await Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
+    // Nobody is looking at a JARVIS UI (or the caller asked for it): say it through this machine's speakers.
+    const seen = results.some((r) => r.delivered > 0);
+    if (b.speak !== false && (b.aloud === true || (!seen && config().persona.speakAloud !== 'never'))) {
+      tts.speakAloud(String(b.text || '').slice(0, 2000)).catch((e) => log('tts', e.message));
+      results.push({ node: config().name, aloud: true });
+    }
+    return results;
   }
 
   // Local handlers are invoked directly for the self node so the gateway never loops over HTTP.
@@ -352,6 +360,19 @@ export async function startServer() {
       return r;
     }
     if (sub === 'restart' && method === 'POST') { setTimeout(() => process.exit(updater.RESTART_CODE), 500); return { ok: true }; }
+
+    // text-to-speech on this machine (the UI plays it; browsers block speechSynthesis outside gestures)
+    if (sub === 'tts' && method === 'GET') return tts.info();
+    if (sub === 'tts' && method === 'POST') {
+      const b = await body();
+      const wav = await tts.synthesize(b.text, b.voice);
+      if (!res) return { bytes: wav ? wav.length : 0 };
+      if (!wav) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
+      res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': wav.length, 'cache-control': 'no-store' });
+      res.end(wav);
+      return undefined;
+    }
+    if (sub === 'tts/say' && method === 'POST') { const b = await body(); return tts.speakAloud(b.text, b.voice); }
 
     // notifications to the JARVIS UI on this node
     if (sub === 'notify' && method === 'POST') {
