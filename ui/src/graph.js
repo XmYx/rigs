@@ -164,16 +164,18 @@ export function createGraph(el, { onSelect, onBackground }) {
 
   function decorate(n) {
     const group = new THREE.Group();
-    const label = state.labels ? labelFor(n) : null;
+    const label = labelFor(n);
+    n.__label?.remove();
+    n.__label = null;
     if (label) {
       const div = document.createElement('div');
-      const dim = state.focus && !state.highlight.has(n.id);
-      div.className = `nlabel t-${n.type}${dim ? ' dim' : ''}${state.focus === n.id ? ' focus' : ''}`;
       div.textContent = label.length > 30 ? label.slice(0, 29) + '…' : label;
       const obj = new CSS2DObject(div);
       obj.position.set(0, -(Math.cbrt(n.val) * 2.6 * 1.25 + 2), 0);
       obj.center.set(0.5, 0);
       group.add(obj);
+      n.__label = div;
+      styleLabel(n);
     }
     if (n.type === 'machine' || n.type === 'offline') {
       const r = Math.cbrt(n.val) * 2.6;
@@ -230,8 +232,19 @@ export function createGraph(el, { onSelect, onBackground }) {
     return seen;
   }
 
+  function styleLabel(n) {
+    const el = n.__label;
+    if (!el) return;
+    const dim = state.focus && !state.highlight.has(n.id);
+    // CSS2DRenderer owns style.display, so visibility is toggled with a class.
+    const hide = !state.labels || state.hidden.has(n.type);
+    el.className = `nlabel t-${n.type}${dim ? ' dim' : ''}${state.focus === n.id ? ' focus' : ''}${hide ? ' hide' : ''}`;
+  }
+
+  // Restyle in place (no object rebuilds, so no leaked label elements).
   function refreshStyles() {
-    Graph.nodeColor(Graph.nodeColor()).linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth()).nodeThreeObject(Graph.nodeThreeObject());
+    Graph.nodeColor(Graph.nodeColor()).linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth());
+    for (const n of state.data.nodes) styleLabel(n);
   }
 
   const api = {
@@ -247,6 +260,7 @@ export function createGraph(el, { onSelect, onBackground }) {
       const sig = (d) => d.nodes.map((n) => n.id + n.type + (n.session?.live ? 1 : 0)).join('|') + d.links.length;
       const changed = sig({ nodes, links: data.links }) !== state.sig;
       state.sig = sig({ nodes, links: data.links });
+      for (const old of state.data.nodes) if (!state.byId.has(old.id)) old.__label?.remove();
       state.data = { nodes, links: data.links };
       if (changed) Graph.graphData(state.data);
       if (state.focus && !state.byId.has(state.focus)) api.clearFocus();
@@ -262,10 +276,14 @@ export function createGraph(el, { onSelect, onBackground }) {
       state.depth = depth;
       state.highlight = neighbors(id, depth);
       refreshStyles();
-      const dist = n.type === 'machine' || n.type === 'offline' ? 320 : n.type === 'mesh' ? 380 : 170;
-      const r = Math.hypot(n.x || 1, n.y || 1, n.z || 1);
-      const k = 1 + dist / r;
-      Graph.cameraPosition({ x: (n.x || 1) * k, y: (n.y || 1) * k, z: (n.z || 1) * k }, n, 1400);
+      // Keep the current viewing direction and slide in until the node sits at a fixed distance.
+      const dist = n.type === 'machine' || n.type === 'offline' ? 260 : n.type === 'mesh' ? 320 : 150;
+      const cam = Graph.camera().position;
+      const dx = cam.x - (n.x || 0);
+      const dy = cam.y - (n.y || 0);
+      const dz = cam.z - (n.z || 0);
+      const len = Math.hypot(dx, dy, dz) || 1;
+      Graph.cameraPosition({ x: (n.x || 0) + (dx / len) * dist, y: (n.y || 0) + (dy / len) * dist, z: (n.z || 0) + (dz / len) * dist }, { x: n.x || 0, y: n.y || 0, z: n.z || 0 }, 1400);
     },
     setDepth(d) { if (state.focus) api.focus(state.focus, d); },
     clearFocus() {
@@ -286,7 +304,7 @@ export function createGraph(el, { onSelect, onBackground }) {
       Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
       refreshStyles();
     },
-    setHidden(types) { state.hidden = new Set(types); Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility()); },
+    setHidden(types) { state.hidden = new Set(types); Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility()); for (const n of state.data.nodes) styleLabel(n); },
     resize() { Graph.width(el.clientWidth).height(el.clientHeight); bloom.setSize(el.clientWidth, el.clientHeight); },
     get focused() { return state.focus; },
     get depth() { return state.depth; },

@@ -114,6 +114,7 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 .nlabel.t-skill { color: #e9d5ff; }
 .nlabel.t-project { color: #bfdbfe; }
 .nlabel.dim { opacity: .12; }
+.nlabel.hide { visibility: hidden; }
 .nlabel.focus { font-size: 14px; color: #fff; }
 
 /* 3d-force-graph tooltip */
