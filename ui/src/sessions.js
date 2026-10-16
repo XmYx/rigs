@@ -6,7 +6,7 @@ const KIND_ICON = { claude: '✳', codex: '◎', tmux: '▤', rig: '⛭', pty: '
 const KIND_LABEL = { claude: 'Claude Code', codex: 'Codex', tmux: 'tmux', rig: 'OpenRig seat', pty: 'RIGS terminal', chat: 'JARVIS chat' };
 
 /** Every coding & chat session on every machine — browse, read, attach, type into, resume. */
-export function openSessions({ snapshot, focus, onContinueChat, onAttachChat } = {}) {
+export function openSessions({ snapshot, focus, onContinueChat, onAttachChat, onAttached } = {}) {
   let filter = '';
   let kind = '';
   let active = null;
@@ -87,6 +87,7 @@ export function openSessions({ snapshot, focus, onContinueChat, onAttachChat } =
     if (s.kind === 'chat') { onContinueChat?.(n, s); return; }
     try {
       const r = await api(`${node(n.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id, cwd: s.cwd } });
+      onAttached?.(n.id, s.kind, s.id);
       openTerminal({ nodeId: n.id, nodeName: n.name, ptyId: r.ptyId, title: `${KIND_LABEL[s.kind]} · ${s.title}`.slice(0, 60) });
     } catch (e) { toast(e.message, 'error'); }
   }

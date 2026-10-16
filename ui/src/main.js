@@ -12,6 +12,7 @@ import { openProjects } from './projects.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
 import { openSessions } from './sessions.js';
+import { createPopups } from './popups.js';
 import { openTerminal } from './terminal.js';
 import { createVoice } from './voice.js';
 import { openWindow } from './wm.js';
@@ -23,6 +24,16 @@ const store = {
 };
 
 let snap = [];
+// Agent sessions started in the background pop up here as terminals (deduped per node:kind:id).
+const popups = createPopups({
+  enabled: () => store.get('autoOpenSessions', true),
+  open: async (s) => {
+    try {
+      const r = await api(`${node(s.nodeId)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id } });
+      openTerminal({ nodeId: s.nodeId, nodeName: s.nodeName, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+    } catch (e) { toast(e.message, 'error'); }
+  },
+});
 let selfId = null;
 let persona = { name: 'J.A.R.V.I.S.', address: 'sir' };
 if (store.get('brainv', 0) < 2) { store.set('brain', null); store.set('brainv', 2); } // JARVIS chat now defaults to Haiku
@@ -188,6 +199,7 @@ function connectEvents() {
     if (m.type === 'mesh') refresh();
     onAppsEvent(m);
     if (m.type === 'apps') refresh();
+    if (m.type === 'notify' && m.session) popups.handle(m);
     if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
@@ -408,7 +420,7 @@ function filesOn(m, path = '~') {
 
 let sessWin = null;
 function sessionsWindow(filter = '', show = null) {
-  sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat });
+  sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat, onAttached: popups.mark });
   if (filter) { const i = sessWin.window.body.querySelector('input'); i.value = filter; i.dispatchEvent(new Event('input')); }
   if (show) sessWin.showSession(show.node, show.s);
 }
@@ -416,13 +428,15 @@ function sessionsWindow(filter = '', show = null) {
 async function attachSession(m, s) {
   try {
     const r = await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id, cwd: s.cwd } });
+    popups.mark(m.id, s.kind, s.id);
     openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function startAgent(m, agent, cwd, prompt = '', model = '') {
   try {
-    const r = await api(`${node(m.id)}/agents/start`, { method: 'POST', body: { agent, cwd, prompt, model } });
+    const r = await api(`${node(m.id)}/agents/start`, { method: 'POST', body: { agent, cwd, prompt, model, surface: false } });
+    popups.mark(m.id, r.kind, r.id);
     const a = await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: r.kind, id: r.id } });
     openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: a.ptyId, title: `${agent} · ${r.id}` });
     setTimeout(refresh, 1500);
@@ -521,7 +535,7 @@ function desktopTo(m, { viewer } = {}) {
 }
 
 function projectsWindow(openId) {
-  const pw = openProjects({ snapshot: () => snap, voice, coreBrain: currentBrain, onFocus: (p) => select(`pj:${p.id}`) });
+  const pw = openProjects({ snapshot: () => snap, voice, coreBrain: currentBrain, onAttached: popups.mark, onFocus: (p) => select(`pj:${p.id}`) });
   if (openId) pw.open(openId.owner, openId.id);
   return pw;
 }
@@ -964,6 +978,9 @@ function wire() {
     graph.setDisplay({ [k]: el.checked });
     el.onchange = () => { store.set('d-' + k, el.checked); graph.setDisplay({ [k]: el.checked }); };
   }
+  const auto = $('#d-autosess');
+  auto.checked = store.get('autoOpenSessions', true);
+  auto.onchange = () => store.set('autoOpenSessions', auto.checked);
   const search = $('#search');
   const results = $('#search-results');
   search.addEventListener('input', () => {
