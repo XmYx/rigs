@@ -371,6 +371,23 @@ export async function startServer() {
       return { tools: await caps.capabilities(true) };
     }
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
+    if (sub === 'apps' && method === 'POST') {
+      // Register / update / remove one app in this node's config ({ ...app } or { id, remove: true }).
+      const b = await body();
+      const cfg = config();
+      const id = String(b.id || '').trim().toLowerCase();
+      const rest = (appsReg.declaredApps() || []).filter((a) => String(a.id || '').toLowerCase() !== id);
+      if (!b.remove) {
+        const { app, errors } = appsReg.validateApp(b);
+        if (!app) throw new HttpError(400, errors.join('; '));
+        const { remove, ...raw } = b;
+        rest.push({ ...raw, id });
+      }
+      cfg.apps = rest;
+      saveConfig(cfg);
+      appsReg.checkAll().catch(() => {});
+      return appsReg.localApps();
+    }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();
@@ -761,7 +778,8 @@ export async function startServer() {
 
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).
   setInterval(kickMerge, 30000).unref();
-  appsReg.startHealthChecks();
+  appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
+  appsReg.startHealthChecks({ intervalMs: 5000 });
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();

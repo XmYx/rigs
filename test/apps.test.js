@@ -130,3 +130,37 @@ test('resolveApp: local by name/self, peers from the mesh catalog, null when unk
   assert.equal(A.resolveApp('n2', 'szuf').node, 'magix');
   assert.equal(A.resolveApp('magix', 'nope'), null);
 });
+
+test('declaredApps: a hand edit of config.json is picked up without restarting', async () => {
+  const { CONFIG_FILE, config } = await import('../src/config.js');
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'one', port: 1 }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  assert.deepEqual(A.loadApps().apps.map((a) => a.id), ['one']);
+  const disk = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  disk.apps.push({ id: 'two', port: 2 });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(disk));
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(CONFIG_FILE, later, later);
+  assert.deepEqual(A.loadApps().apps.map((a) => a.id), ['one', 'two']);
+  assert.equal(config().apps.length, 2, 'in-memory config follows so saveConfig does not revert the edit');
+});
+
+test('onAppsChange: fires when an app is added or flips up/down, not on unchanged probes', async () => {
+  const srv = http.createServer((q, r) => r.end('ok'));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'live', port: srv.address().port }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const seen = [];
+  const off = A.onAppsChange((r) => seen.push(r.apps.map((a) => `${a.id}:${a.health.status}`).join(',')));
+  await A.checkAll();
+  await A.checkAll();
+  await new Promise((ok) => srv.close(ok));
+  await A.checkAll({ timeoutMs: 500 });
+  off();
+  assert.deepEqual(seen, ['live:up', 'live:down']);
+});
+
