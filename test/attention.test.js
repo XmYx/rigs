@@ -89,3 +89,13 @@ test('agents RIGS starts run in auto mode', () => {
   assert.deepEqual(cx.slice(0, 6), ['-m', 'gpt-6.1-sol', '-s', 'workspace-write', '-a', 'on-request']);
   assert.ok(cx.includes('sandbox_workspace_write.network_access=true'));
 });
+
+test('OpenRig: live seats waiting on input count; detached seats that failed to start do not', () => {
+  const items = attention.rigNeeds([
+    { session: 'task-code@app-t2', runtime: 'claude-code', status: 'running', activity: 'needs_input', reason: 'selection_prompt', startupStatus: 'ready', title: 't2' },
+    { session: 'task-code@app-t1', runtime: 'claude-code', status: 'running', activity: 'unknown', startupStatus: 'ready', title: 't1' },
+    { session: 'advisor-lead@kernel', runtime: 'codex', status: 'detached', activity: 'unknown', reason: 'no_runtime_hook', startupStatus: 'attention_required', title: 'k' },
+  ]);
+  assert.deepEqual(items.map((x) => x.key), ['rig:task-code@app-t2']);
+  assert.equal(items[0].reason, 'selection_prompt');
+});
