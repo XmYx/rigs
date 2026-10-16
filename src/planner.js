@@ -51,7 +51,7 @@ export async function createProject({ name, goal, repoNode, repoPath, gitUrl, di
   const p = {
     id, slug: slug(name || goal, 18), name: name || truncate(goal, 50), goal, owner: config().name,
     repo: { node: repoNode || config().name, path: repoPath || '' }, gitUrl: gitUrl || '',
-    dispatch: dispatch || config().routing.dispatch || 'auto', policy: policy || 'builtin:standard',
+    dispatch: dispatch || config().routing.dispatch || 'auto', policy: policy || config().agents?.rigPolicy || 'builtin:auto',
     planner: planner || coreBrain(), status: 'draft', tasks: [], log: [], createdAt: Date.now(), updatedAt: Date.now(),
   };
   return saveProject(p);

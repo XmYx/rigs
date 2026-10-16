@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { agentModes, claudeFlags, codexFlags } from './models.js';
 import { bin } from './tools.js';
 import * as openrig from './openrig.js';
 import { listPtys, ptyTranscript, getPty, createPty, shellWrap } from './pty.js';
@@ -312,8 +313,9 @@ export async function attach(kind, id, { cwd, cols, rows } = {}) {
 export async function startAgent({ agent = 'claude', cwd, prompt = '', model = '', name } = {}) {
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   let line;
-  if (agent === 'claude') line = ['claude', model ? `--model ${q(model)}` : '', prompt ? q(prompt) : ''].filter(Boolean).join(' ');
-  else if (agent === 'codex') line = ['codex', model ? `-m ${q(model)}` : '', prompt ? q(prompt) : ''].filter(Boolean).join(' ');
+  const modes = agentModes();
+  if (agent === 'claude') line = ['claude', ...claudeFlags({ model, ...modes.claude }).map(q), prompt ? q(prompt) : ''].filter(Boolean).join(' ');
+  else if (agent === 'codex') line = ['codex', ...codexFlags({ model, ...modes.codex }).map(q), prompt ? q(prompt) : ''].filter(Boolean).join(' ');
   else if (agent === 'ollama') line = `ollama run ${q(model || 'llama3.2')}`;
   else if (agent === 'rig') line = 'rig tui';
   else throw new Error('unknown agent ' + agent);

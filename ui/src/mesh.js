@@ -100,7 +100,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     const auto = h('input', { type: 'checkbox', checked: cfg.update.auto });
     const voices = voice.voices();
     const voiceSel = h('select', { class: 'mini' }, ...voices.map((v) => h('option', { value: v.id, selected: v.id === voice.voiceId }, v.label)));
-    const perm = h('select', { class: 'mini' }, ...['default', 'acceptEdits', 'bypassPermissions', 'plan'].map((m) => h('option', { value: m, selected: cfg.brain.claudePermissionMode === m }, m)));
+    const perm = h('select', { class: 'mini' }, ...['auto', 'acceptEdits', 'manual', 'dontAsk', 'bypassPermissions', 'plan'].map((m) => h('option', { value: m, selected: cfg.brain.claudePermissionMode === m }, m)));
     const sandbox = h('select', { class: 'mini' }, ...[['read-only', 'read-only'], ['workspace-write', 'workspace-write (home)'], ['danger-full-access', 'danger-full-access']].map(([v, l]) => h('option', { value: v, selected: cfg.brain.codexSandbox === v }, l)));
     const root = h('input', { class: 'path-input', value: cfg.brain.workRoot || '~' });
     settings.replaceChildren(

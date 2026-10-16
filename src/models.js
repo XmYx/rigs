@@ -27,18 +27,31 @@ export const PROVIDERS = {
   },
 };
 
-export function claudeFlags({ model, effort } = {}) {
+export function claudeFlags({ model, effort, permissionMode } = {}) {
   const a = [];
   if (model) a.push('--model', model);
   if (effort && PROVIDERS.claude.efforts.includes(effort)) a.push('--effort', effort);
+  if (permissionMode) a.push('--permission-mode', permissionMode);
   return a;
 }
 
-export function codexFlags({ model, effort } = {}) {
+export function codexFlags({ model, effort, sandbox, approval, network } = {}) {
   const a = [];
   if (model) a.push('-m', model);
   if (effort && PROVIDERS.codex.efforts.includes(effort)) a.push('-c', `model_reasoning_effort="${effort}"`);
+  if (sandbox) a.push('-s', sandbox);
+  if (approval) a.push('-a', approval);
+  if (network && sandbox === 'workspace-write') a.push('-c', 'sandbox_workspace_write.network_access=true');
   return a;
+}
+
+/** Permission flags for interactive agents RIGS starts (config.agents — "auto" by default). */
+export function agentModes() {
+  const g = config().agents || {};
+  return {
+    claude: { permissionMode: g.claudePermissionMode || 'auto' },
+    codex: { sandbox: g.codexSandbox || 'workspace-write', approval: g.codexApproval || 'on-request', network: g.codexNetwork !== false },
+  };
 }
 
 /** Value for Ollama's `think` request field, or undefined to leave it out. */

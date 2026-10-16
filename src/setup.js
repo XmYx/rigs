@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, CONFIG_FILE, loadConfig, saveConfig } from './config.js';
+import { installCodex } from './agentmodes.js';
 import * as desktopInstall from './desktop-install.js';
 import * as service from './service.js';
 import * as sshSession from './sshsession.js';
@@ -168,6 +169,9 @@ export async function setup(argv) {
   for (const t of ['claude', 'codex', 'ollama', 'rig', 'tmux']) (tools[t]?.installed ? ok : warn)(`${t}: ${tools[t]?.installed ? tools[t].version || 'installed' : 'not installed'}`);
   await registerClaudeMcp();
   await registerCodexMcp();
+  const cx = await installCodex().catch((e) => ({ skipped: e.message }));
+  if (cx.skipped) warn('Codex auto profile / notify hook: ' + cx.skipped);
+  else ok(`Codex: "${'rigs-auto'}" profile + approval notifications${cx.notify && !cx.notify.startsWith('/') ? ` (${cx.notify})` : ''}`);
   await writeInstructions();
   if (opts.rea) { step('REA (reverse engineer anything)'); await setupRea(opts); }
   if (opts.openrig) { step('OpenRig'); await setupOpenRig(opts); }

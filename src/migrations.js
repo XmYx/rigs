@@ -42,6 +42,26 @@ MIGRATIONS.push({ id: '2026-10-16-windows-controlled-folder-access', run: () => 
 // Nodes that ran the first desktop migration before root steps were bundled re-register theirs.
 MIGRATIONS.push({ id: '2026-10-16-desktop-root-steps', run: async () => { const s = await desktopInstall.ensure(); await detectTools(true); return { state: s.state, steps: s.steps.slice(-2) }; } });
 
+// Agents run in auto mode and announce when they need you (Claude auto mode, Codex rigs-auto profile + notify hook,
+// OpenRig builtin:auto). Only defaults RIGS itself set are moved; a choice the user made stays.
+MIGRATIONS.push({
+  id: '2026-10-16-agents-auto-mode',
+  run: async () => {
+    const { config, saveConfig } = await import('./config.js');
+    const { installCodex } = await import('./agentmodes.js');
+    const planner = await import('./planner.js');
+    const c = config();
+    const changed = [];
+    if (['acceptEdits', 'default'].includes(c.brain.claudePermissionMode)) { c.brain.claudePermissionMode = 'auto'; changed.push('jarvis claude: auto'); }
+    saveConfig(c);
+    for (const p of await planner.listProjects().catch(() => [])) {
+      if (p.policy === 'builtin:standard' && p.status !== 'done') { p.policy = 'builtin:auto'; await planner.saveProject(p); changed.push(`project ${p.name}: builtin:auto`); }
+    }
+    const codex = await installCodex().catch((e) => ({ error: e.message }));
+    return { changed, codex };
+  },
+});
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {

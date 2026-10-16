@@ -62,7 +62,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus }) {
     const repoPath = h('input', { class: 'path-input', placeholder: 'Repository path on that machine (optional)' });
     const gitUrl = h('input', { class: 'path-input', placeholder: 'Git URL — lets other machines work on the code too (optional)' });
     const dispatch = h('select', { class: 'mini' }, ...[['auto', 'auto (OpenRig when available)'], ['openrig', 'OpenRig seats + queue'], ['direct', 'direct agent sessions']].map(([v, l]) => h('option', { value: v }, l)));
-    const policy = h('select', { class: 'mini' }, ...['builtin:standard', 'builtin:auto', 'builtin:open', 'builtin:locked', 'floor', 'builtin:yolo'].map((v) => h('option', { value: v }, v)));
+    const policy = h('select', { class: 'mini' }, ...['builtin:auto', 'builtin:standard', 'builtin:open', 'builtin:locked', 'floor', 'builtin:yolo'].map((v) => h('option', { value: v }, v)));
     const cb = coreBrain();
     right.replaceChildren(h('div', { class: 'pad settings' },
       h('div', { class: 'pv-title' }, 'New project'),

@@ -97,6 +97,18 @@ const commands = {
     console.log(`steward: ${r.steward || 'none'}${r.note ? ' — ' + r.note : ''}`);
     for (const x of r.queue || []) console.log(`  ${x.id}  ${x.status.padEnd(14)} ${x.branch}  (${x.node})  ${x.sha || ''}  ${x.log?.slice(-1)[0]?.text || ''}`);
   },
+  /** Agent hooks → the local daemon's attention feed. Codex calls: rigs hook codex '<json>' */
+  async hook() {
+    const [source, ...rest] = argv;
+    let payload = {};
+    try { payload = JSON.parse(rest.join(' ') || '{}'); } catch {}
+    if (process.env.TMUX_PANE) {
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync('tmux', ['display', '-p', '-t', process.env.TMUX_PANE, '#S'], { encoding: 'utf8' });
+      if (r.stdout?.trim()) payload.tmux = r.stdout.trim();
+    }
+    if (source === 'codex') await daemonFetch('/api/local/attention/codex', { method: 'POST', body: JSON.stringify(payload), timeout: 3000 }).catch(() => {});
+  },
   async 'ssh-session'() {
     const { runSession } = await import('../src/sshsession.js');
     process.exit(await runSession());

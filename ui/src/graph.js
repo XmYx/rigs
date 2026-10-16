@@ -124,7 +124,7 @@ function labelFor(n) {
 export function createGraph(el, { onSelect, onBackground }) {
   const state = {
     byId: new Map(), focus: null, depth: 1, highlight: new Set(), hidden: new Set(), labels: true, particles: true, rotate: true,
-    data: { nodes: [], links: [] }, hover: null,
+    data: { nodes: [], links: [] }, hover: null, attention: new Set(),
   };
 
   // Labels are HTML (CSS2D) so they stay crisp and aren't smeared by the bloom pass.
@@ -231,14 +231,52 @@ export function createGraph(el, { onSelect, onBackground }) {
     return group;
   }
 
-  // Animate rings + pulse + slow auto-rotation.
+  // "Needs you": an amber halo that blinks around the planet (machine) and the waiting session/task.
+  const AMBER = 0xf59e0b;
+  function makeHalo(n) {
+    const r = Math.max(Math.cbrt(n.val) * 2.6, 4.5);
+    const halo = new THREE.Group();
+    halo.add(new THREE.Mesh(new THREE.SphereGeometry(r * 1.45, 24, 16), new THREE.MeshBasicMaterial({ color: AMBER, transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending })));
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 2.1, Math.max(0.5, r * 0.06), 8, 64), new THREE.MeshBasicMaterial({ color: AMBER, transparent: true, opacity: 0.9 }));
+    ring.rotation.x = Math.PI / 2.2;
+    halo.add(ring);
+    if (!n.__label) {
+      // Sessions and tasks have no label normally; a waiting one gets a tag.
+      const div = document.createElement('div');
+      div.className = 'nlabel attn-tag';
+      div.textContent = '⚠ ' + (n.name.length > 28 ? n.name.slice(0, 27) + '…' : n.name);
+      const tag = new CSS2DObject(div);
+      tag.position.set(0, -(r * 2.3 + 2), 0);
+      tag.center.set(0.5, 0);
+      halo.add(tag);
+      halo.userData.tag = tag;
+    }
+    return halo;
+  }
+
+  // Animate rings + pulse + attention halos + slow auto-rotation.
   (function loop() {
     const t = performance.now() / 1000;
+    const blink = 0.5 + 0.5 * Math.sin(t * 6.5);
     for (const n of state.data.nodes) {
       const g = n.__group;
       if (!g) continue;
       for (const c of g.children) if (c.userData.spin) c.rotation.z += 0.004;
       if (g.userData.pulse) { const s = 1 + Math.sin(t * 3 + (n.x || 0)) * 0.25; g.scale.set(s, s, s); }
+      const alert = state.attention.has(n.id) && !state.hidden.has(n.type);
+      if (alert && !g.userData.halo) g.add((g.userData.halo = makeHalo(n)));
+      const halo = g.userData.halo;
+      if (halo) {
+        halo.visible = alert;
+        if (halo.userData.tag) halo.userData.tag.visible = alert;
+        if (alert) {
+          halo.children[0].material.opacity = 0.08 + 0.55 * blink;
+          halo.children[1].material.opacity = 0.25 + 0.75 * blink;
+          halo.children[1].rotation.z += 0.03;
+          const s = 1 + 0.3 * blink;
+          halo.scale.set(s, s, s);
+        }
+      }
     }
     const controls = Graph.controls();
     if (controls) controls.autoRotate = state.rotate && !state.focus && !state.hover;
@@ -271,7 +309,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     const dim = state.focus && !state.highlight.has(n.id);
     // CSS2DRenderer owns style.display, so visibility is toggled with a class.
     const hide = !state.labels || state.hidden.has(n.type);
-    el.className = `nlabel t-${n.type}${dim ? ' dim' : ''}${state.focus === n.id ? ' focus' : ''}${hide ? ' hide' : ''}`;
+    el.className = `nlabel t-${n.type}${dim ? ' dim' : ''}${state.focus === n.id ? ' focus' : ''}${hide ? ' hide' : ''}${state.attention.has(n.id) ? ' attn' : ''}`;
   }
 
   // Restyle in place (no object rebuilds, so no leaked label elements).
@@ -300,6 +338,11 @@ export function createGraph(el, { onSelect, onBackground }) {
       else if (state.focus) { state.highlight = neighbors(state.focus, state.depth); refreshStyles(); }
     },
     get(id) { return state.byId.get(id); },
+    /** Graph node ids that need the user (machine planets, sessions, tasks) — they blink until resolved. */
+    setAttention(ids) {
+      state.attention = new Set(ids);
+      for (const n of state.data.nodes) styleLabel(n);
+    },
     nodes() { return state.data.nodes; },
     neighbors(id, depth = 1) { return [...neighbors(id, depth)].map((x) => state.byId.get(x)).filter(Boolean); },
     focus(id, depth = state.depth) {
