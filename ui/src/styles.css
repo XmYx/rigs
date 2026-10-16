@@ -247,6 +247,10 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 .ibtn.icon { padding: 4px 6px; }
 a.link { color: var(--accent); cursor: pointer; }
 .k-ssh { color: #22d3ee; }
+.desk-status { display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--line); }
+.okbox { padding: 8px 10px; border-radius: 7px; background: rgba(74, 222, 128, .1); border: 1px solid rgba(74, 222, 128, .35); }
+.warnbox { padding: 8px 10px; border-radius: 7px; background: rgba(251, 191, 36, .08); border: 1px solid rgba(251, 191, 36, .35); }
+.pin-in { flex: 0 0 70px; min-width: 70px; text-align: center; letter-spacing: .2em; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tool-row { flex-wrap: wrap; }
 .rule-table { display: flex; flex-direction: column; gap: 4px; }

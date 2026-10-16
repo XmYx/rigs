@@ -108,6 +108,24 @@ export async function startServer() {
     return rest;
   }
 
+  /** Stable address for streaming: the tailnet IP (MagicDNS name only as a fallback). */
+  function desktopAddress(t) {
+    return t.tailscale?.ip || t.tailscale?.dnsName || new URL(t.url || 'http://127.0.0.1').hostname;
+  }
+
+  /** Launch a viewer on THIS machine for `targetRef`, pairing Moonlight with its Sunshine if needed. */
+  async function connectDesktop(targetRef, method = 'auto') {
+    const target = discovery.get(targetRef);
+    if (!target) throw new HttpError(404, 'unknown machine ' + targetRef);
+    if (target.self) throw new HttpError(400, 'that is this machine — pick another one to view');
+    const host = target.rigs ? (await peerJson(target, 'desktop').catch(() => ({}))).host : null;
+    const myAddress = (await ts.selfIps()).find((x) => x.includes('.')) || '';
+    const r = await desktop.connect({ address: desktopAddress(target), platform: target.platform, method: method || 'auto', targetHost: host, myAddress },
+      (pin, addr) => peerJson(target, 'desktop/pin', { method: 'POST', body: { pin, name: config().name, clientAddress: addr }, timeout: 45000 }));
+    log(`desktop: ${config().name} → ${target.name}: ${r.ok ? 'ok' : 'failed'} (${[...r.steps, r.message].join('; ')})`);
+    return { ...r, viewer: config().name, target: target.name };
+  }
+
   function meshSummary() {
     return discovery.list().map((n) => `- ${n.name}${n.self ? ' (this machine)' : ''}: ${n.platform || '?'} ${n.online ? 'online' : 'offline'}${n.rigs ? '' : ' (no RIGS agent)'}${n.tools ? ` · agents: ${['claude', 'codex', 'ollama', 'rig', 'rea'].filter((k) => n.tools[k]).join(', ') || 'none'}` : ''}${n.capabilities && Object.keys(n.capabilities).length ? ` · tools: ${Object.keys(n.capabilities).join(', ')}` : ''}${n.stats ? ` · cpu ${n.stats.cpu}% mem ${Math.round((n.stats.memUsed / n.stats.memTotal) * 100)}%` : ''}`).join('\n');
   }
@@ -350,7 +368,12 @@ export async function startServer() {
 
     // remote desktop
     if (sub === 'desktop') return { host: await desktop.hostInfo(), client: desktop.clientInfo() };
-    if (sub === 'desktop/pin' && method === 'POST') { const b = await body(); return desktop.sunshinePin(b.pin, b.name); }
+    if (sub === 'desktop/pin' && method === 'POST') { const b = await body(); return desktop.sunshinePin(b.pin, b.name, b.clientAddress); }
+    if (sub === 'desktop/pairings' && method === 'GET') return desktop.pendingPairings();
+    if (sub === 'desktop/pairings' && method === 'POST') { const b = await body(); return desktop.acceptPairing(b.pairingId, b.pin, b.name || 'moonlight'); }
+    // Open a viewer ON THIS machine (e.g. from the phone: "show magix-system on the mac").
+    if (sub === 'desktop/connect' && method === 'POST') { const b = await body(); return connectDesktop(b.target, b.method); }
+    if (sub === 'desktop/quit' && method === 'POST') { const b = await body(); const t = discovery.get(b.target); return desktop.quit(t ? desktopAddress(t) : b.target); }
     if (sub === 'desktop/install' && method === 'GET') return desktopInstall.status();
     if (sub === 'desktop/install' && method === 'POST') {
       const b = await body();
@@ -425,12 +448,8 @@ export async function startServer() {
     if (p === '/api/desktop/connect' && req.method === 'POST') {
       // This node is where the person sits; launch the native viewer here, pointed at the target.
       const b = await readBody(req);
-      const target = discovery.get(b.target);
-      if (!target) throw new HttpError(404, 'unknown target');
-      if (!isLoopback(clientIp(req)) && !req.headers['tailscale-user-login']) throw new HttpError(400, 'open the UI from this machine (localhost) to launch a native viewer here');
-      const address = target.tailscale?.dnsName || target.tailscale?.ip || new URL(target.url || 'http://127.0.0.1').hostname;
-      const host = target.self ? await desktop.hostInfo() : target.rigs ? (await peerJson(target, 'desktop').catch(() => ({}))).host : null;
-      return desktop.connect({ address, platform: target.platform, method: b.method || 'auto', targetHost: host }, (pin) => (target.self ? desktop.sunshinePin(pin, config().name) : peerJson(target, 'desktop/pin', { method: 'POST', body: { pin, name: config().name } })));
+      if (!isLoopback(clientIp(req)) && !req.headers['tailscale-user-login']) throw new HttpError(400, 'open the UI from this machine (localhost) to launch a native viewer here — or use “view on” another machine');
+      return connectDesktop(b.target, b.method);
     }
     if ((mm = p.match(/^\/api\/nodes\/([^/]+)\/(.+)$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));

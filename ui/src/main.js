@@ -300,22 +300,74 @@ function newAgent(m, preset) {
     h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => { const r = await startAgent(m, agentSel.value, cwd.value, prompt.value, model.value); if (r) { w.close(); voice.say(`${agentSel.value} is up on ${m.name}, ${persona.address}.`); } } }, 'Start (in tmux)'))));
 }
 
-async function desktopTo(m) {
-  toast(`Connecting to ${m.name}'s desktop…`);
-  try {
-    const r = await api('/api/desktop/connect', { method: 'POST', body: { target: m.id } });
-    toast(r.message, r.ok ? 'ok' : 'error', 9000);
-    if (!r.ok) desktopHelp(m, r);
-  } catch (e) { toast(e.message, 'error'); desktopHelp(m, { message: e.message }); }
-}
+/**
+ * Remote desktop window for a target machine: connect (viewer = this machine, or any other machine),
+ * live steps, the target's pending Moonlight pairings with PIN entry, and install/finish hints.
+ */
+function desktopTo(m, { viewer } = {}) {
+  const self = snap.find((e) => e.node.self)?.node;
+  const viewers = machines().filter((x) => x.id !== m.id && x.tools?.moonlight);
+  const w = openWindow({ title: `Remote desktop — ${m.name}`, icon: '🖥', width: 680, height: 470 });
+  const status = h('div', { class: 'pad desk-status' });
+  const pairList = h('div', { class: 'pad' });
+  const viewerSel = h('select', { class: 'mini' }, ...viewers.map((x) => h('option', { value: x.id, selected: x.id === (viewer || self?.id) }, `${x.name}${x.self ? ' (this machine)' : ''}`)));
+  const tgt = snap.find((e) => e.node.id === m.id)?.node || m;
+  const di = tgt.desktopInstall;
+  const hostReady = di?.sunshine || tgt.tools?.sunshine;
+  w.body.append(
+    h('div', { class: 'toolbar' },
+      h('span', { class: 'muted small' }, 'Show on'), viewerSel,
+      h('button', { class: 'btn primary', onclick: () => go() }, '▶ Connect'),
+      h('button', { class: 'btn', title: 'End the stream on the viewing machine', onclick: async () => { try { await api(`${node(viewerSel.value)}/desktop/quit`, { method: 'POST', body: { target: m.id } }); toast('Stream ended'); } catch (e) { toast(e.message, 'error'); } } }, '■ Quit stream')),
+    status,
+    h('div', { class: 'pad' }, h('div', { class: 'pv-title' }, `Pending pairing requests on ${m.name}`),
+      h('div', { class: 'muted small' }, 'Started pairing from Moonlight yourself? It shows a 4-digit PIN — enter it here and RIGS hands it to Sunshine on the target.')),
+    pairList);
+  if (!hostReady) {
+    const rs = tgt.rootSteps;
+    status.append(h('div', { class: 'warnbox' }, `${m.name} has no Sunshine host yet. `,
+      rs?.steps?.length ? h('a', { class: 'link', onclick: () => runOn(m.id, rs.command, `Finish setup · ${m.name}`) }, 'Finish setup (password)') : h('a', { class: 'link', onclick: () => installDesktop(m) }, 'Install Sunshine + Moonlight')));
+  }
+  if (!viewers.length) status.append(h('div', { class: 'warnbox' }, 'No machine with Moonlight is online to view from.'));
 
-function desktopHelp(m, r) {
-  const w = openWindow({ title: `Remote desktop — ${m.name}`, icon: '🖥', width: 620, height: 380 });
-  const addr = m.tailscale?.dnsName || m.tailscale?.ip || m.name;
-  w.body.append(h('div', { class: 'pad' },
-    h('p', {}, r.message || ''),
-    h('p', { class: 'muted' }, 'Hardware-accelerated path: Sunshine on the target (NVENC / VAAPI / VideoToolbox, KMS capture on Wayland) and Moonlight here. Pairing is automatic once both are installed — rerun the installer with the desktop option.'),
-    h('pre', { class: 'pv-text' }, `Target ${m.name} (${m.platform}):\n  ${m.platform === 'windows' ? 'winget install LizardByte.Sunshine' : m.platform === 'mac' ? 'brew install --cask moonlight && brew tap LizardByte/homebrew && brew install sunshine' : 'sudo apt install ./sunshine-ubuntu-24.04-amd64.deb   (from github.com/LizardByte/Sunshine/releases)'}\nThis machine:\n  Moonlight from moonlight-stream.org (or: winget install MoonlightGameStreamingProject.Moonlight / brew install --cask moonlight / flatpak install flathub com.moonlight_stream.Moonlight)\n\nManual: moonlight stream ${addr} Desktop\nMac↔Mac: open vnc://${addr}  (Screen Sharing → High Performance)`)));
+  async function loadPairings() {
+    try {
+      const r = await api(`${node(m.id)}/desktop/pairings`);
+      if (!r.ok) { pairList.replaceChildren(h('div', { class: 'muted small' }, r.error || 'Sunshine not reachable on the target')); return; }
+      if (!r.pairings.length) { pairList.replaceChildren(h('div', { class: 'muted small' }, 'None waiting.')); return; }
+      pairList.replaceChildren(...r.pairings.map((p) => {
+        const pin = h('input', { class: 'path-input pin-in', maxlength: 4, placeholder: 'PIN', inputmode: 'numeric' });
+        const name = h('input', { class: 'path-input', placeholder: 'device name', value: p.name || '' });
+        const ok = async () => {
+          try { const r2 = await api(`${node(m.id)}/desktop/pairings`, { method: 'POST', body: { pairingId: p.id, pin: pin.value.trim(), name: name.value.trim() || 'moonlight' } }); toast(r2.ok ? `Paired ${p.address} with ${m.name}` : `Pairing failed: ${r2.error || 'wrong PIN?'}`, r2.ok ? 'ok' : 'error'); loadPairings(); }
+          catch (e) { toast(e.message, 'error'); }
+        };
+        pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
+        return h('div', { class: 'upd-row' }, h('b', {}, p.address), name, pin, h('button', { class: 'btn primary', onclick: ok }, 'Pair'));
+      }));
+    } catch (e) { pairList.replaceChildren(h('div', { class: 'muted small' }, e.message)); }
+  }
+
+  async function go() {
+    const v = machines().find((x) => x.id === viewerSel.value) || self;
+    status.replaceChildren(h('div', {}, `⏳ ${v.name}: checking pairing with ${m.name}…`));
+    try {
+      const path = v.self ? '/api/desktop/connect' : `${node(v.id)}/desktop/connect`;
+      const r = await api(path, { method: 'POST', body: { target: m.id } });
+      status.replaceChildren(
+        h('div', { class: r.ok ? 'okbox' : 'warnbox' }, `${r.ok ? '✓' : '✗'} ${r.message}`),
+        ...(r.steps || []).map((x) => h('div', { class: 'muted small' }, '· ' + x)),
+        r.detail ? h('pre', { class: 'pv-text' }, r.detail) : null,
+        r.ok && m.platform === 'mac' ? h('div', { class: 'muted small' }, 'Black screen? Allow Sunshine in System Settings → Privacy & Security → Screen Recording (and Accessibility for input) on the Mac.') : null);
+      toast(`${m.name} → ${v.name}: ${r.ok ? 'streaming' : 'failed'}`, r.ok ? 'ok' : 'error');
+    } catch (e) { status.replaceChildren(h('div', { class: 'warnbox' }, '✗ ' + e.message)); }
+    loadPairings();
+  }
+
+  loadPairings();
+  const t = setInterval(loadPairings, 3000);
+  w.el.querySelector('.win-btn.close').addEventListener('click', () => clearInterval(t));
+  if (hostReady && viewers.some((x) => x.id === (viewer || self?.id))) go();
 }
 
 function projectsWindow(openId) {
