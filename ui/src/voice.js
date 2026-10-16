@@ -8,7 +8,7 @@
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AC = window.AudioContext || window.webkitAudioContext;
 
-export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWord = 'jarvis' }) {
+export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeech, wakeWord = 'jarvis' }) {
   const supported = !!SR && window.isSecureContext;
   let rec = null;
   let mode = 'off'; // off | ptt | handsfree
@@ -109,11 +109,14 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
       const r = await fetch('/api/local/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: pref.name || undefined }), signal: abort.signal });
       if (r.status === 204) return 'empty';
       if (!r.ok) throw new Error('tts ' + r.status);
+      let cues = null; // lipsync timeline from the neural voice: [[start, end, viseme], …]
+      try { const v = r.headers.get('x-visemes'); if (v) cues = JSON.parse(atob(v)).cues || null; } catch { cues = null; }
       const data = await r.arrayBuffer();
       if (g !== gen) return null;
       const c = ensureCtx();
       // Safari's webkitAudioContext only has the callback form of decodeAudioData.
-      return new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p?.then) p.then(res, rej); });
+      const buffer = await new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p?.then) p.then(res, rej); });
+      return { buffer, cues };
     })().catch(() => null);
   }
 
@@ -131,7 +134,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
     tick();
   }
 
-  function playBuffer(buffer, g) {
+  function playBuffer({ buffer, cues }, g) {
     if (g !== gen) return Promise.resolve();
     return new Promise((resolve) => {
       const c = ensureCtx();
@@ -143,7 +146,9 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
       finishCurrent = done;
       source = s;
       setSpeaking(true);
-      s.start();
+      const startAt = c.currentTime + 0.02; // scheduled, so the face and the sound share one clock
+      s.start(startAt);
+      onSpeech?.({ cues, startAt, ctx: c, analyser, duration: buffer.duration });
       meterLoop();
     });
   }
@@ -196,6 +201,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, wakeWor
     abort.abort();
     abort = new AbortController();
     if (source) { try { source.onended = null; source.stop(); } catch {} source = null; }
+    onSpeech?.(null);
     cancelAnimationFrame(levelRaf);
     if (window.speechSynthesis) speechSynthesis.cancel();
     utterances.clear();

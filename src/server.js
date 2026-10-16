@@ -541,11 +541,12 @@ export async function startServer() {
     if (sub === 'tts' && method === 'GET') return tts.info();
     if (sub === 'tts' && method === 'POST') {
       const b = await body();
-      const wav = await tts.synthesize(b.text, b.voice);
-      if (!res) return { bytes: wav ? wav.length : 0 };
-      if (!wav) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
-      res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': wav.length, 'cache-control': 'no-store' });
-      res.end(wav);
+      const r = await tts.synthesize(b.text, b.voice);
+      if (!res) return { bytes: r ? r.audio.length : 0, engine: r?.engine };
+      if (!r) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
+      // x-visemes: base64 JSON lipsync timeline from the neural voice (empty for local engines)
+      res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': r.audio.length, 'cache-control': 'no-store', 'x-tts-engine': r.engine, ...(r.visemes ? { 'x-visemes': r.visemes } : {}) });
+      res.end(r.audio);
       return undefined;
     }
     if (sub === 'tts/say' && method === 'POST') { const b = await body(); return tts.speakAloud(b.text, b.voice); }
