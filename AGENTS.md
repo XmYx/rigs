@@ -10,6 +10,7 @@ treat `main` as production.
 | --- | --- |
 | `bin/rigs.js` | CLI + supervisor (`rigs start` restarts the server on exit code 75 and rolls back a crash-looping update) |
 | `src/server.js` | HTTP/WebSocket API. `/api/local/*` acts on this machine; `/api/nodes/<id>/*` proxies to any peer |
+| `src/proxy.js` | Peer forwarding (`/api/nodes/<id>/*` → peer `/api/local/*`) and the App Cloud proxy `/api/nodes/<node>/apps/<id>/*`: local forward with Location/cookie/HTML/CSS rewriting + runtime shim, peer relay, raw WebSocket piping |
 | `src/discovery.js` | Finds peers: online Tailscale devices probed on port 4719, plus static `peers` from config |
 | `src/auth.js` | Who may call: loopback, same-owner tailnet devices (`tailscale whois`), or the mesh token |
 | `src/sessions.js` | Claude Code / Codex / tmux / OpenRig / terminal session discovery, transcripts, attach, send |

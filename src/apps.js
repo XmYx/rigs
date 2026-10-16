@@ -174,6 +174,13 @@ export function aggregateApps(results) {
 /** Remember the latest aggregated catalog so resolveApp can find apps on peers. */
 export function setMeshCatalog(apps) { meshCatalog = Array.isArray(apps) ? apps : []; }
 
+/** True when a node reference (name, id, "self", "local" or empty) means this machine. */
+export function isSelfRef(node) {
+  const cfg = config();
+  const key = String(node || '').toLowerCase();
+  return !key || key === 'self' || key === 'local' || key === String(cfg.name).toLowerCase() || key === String(cfg.nodeId).toLowerCase();
+}
+
 /**
  * resolveApp(node, id) — lookup contract for the proxy (src/proxy.js).
  *  - node: node name (case-insensitive) or id; "self"/"local"/"" means this machine.
@@ -192,8 +199,7 @@ export function resolveApp(node, id) {
   const cfg = config();
   const key = String(node || '').toLowerCase();
   const appId = String(id || '').toLowerCase();
-  const isSelf = !key || key === 'self' || key === 'local' || key === cfg.name.toLowerCase() || key === String(cfg.nodeId).toLowerCase();
-  if (isSelf) {
+  if (isSelfRef(node)) {
     const a = localApps().apps.find((x) => x.id === appId);
     return a ? { local: true, node: cfg.name, nodeId: cfg.nodeId, app: a } : null;
   }
