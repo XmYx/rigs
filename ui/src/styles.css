@@ -482,3 +482,9 @@ a.link { color: var(--accent); cursor: pointer; }
 .hub.materialise, .app-row.materialise { animation: hub-materialise .9s cubic-bezier(.2,.9,.2,1) both; }
 @keyframes hub-materialise { 0% { opacity: 0; transform: translateX(-14px); background: rgba(45,212,191,.22); } 100% { opacity: 1; transform: none; background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .win, .win::after, .hub.materialise, .act-chip { animation: none !important; transition: none !important; } }
+
+/* Visuals stage (stage.js): JARVIS's animated cards in one window */
+.stage-feed { display: flex; flex-direction: column; gap: 6px; padding: 10px; overflow: auto; }
+.stage-card { border-top: 1px solid var(--line); padding-top: 8px; }
+.stage-card:first-child { border-top: 0; }
+.stage-title { font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
