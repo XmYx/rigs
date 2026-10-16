@@ -22,7 +22,7 @@ import * as files from './files.js';
 import * as models from './models.js';
 import * as openrig from './openrig.js';
 import * as planner from './planner.js';
-import { forwardApp, forwardAppUpgrade, forwardHttp, forwardWs, peerJson } from './proxy.js';
+import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
 import * as pty from './pty.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
@@ -375,7 +375,7 @@ export async function startServer() {
       const b = await body();
       const cfg = config();
       const id = String(b.id || '').trim().toLowerCase();
-      const rest = (cfg.apps || []).filter((a) => String(a.id || '').toLowerCase() !== id);
+      const rest = (appsReg.declaredApps() || []).filter((a) => String(a.id || '').toLowerCase() !== id);
       if (!b.remove) {
         const { app, errors } = appsReg.validateApp(b);
         if (!app) throw new HttpError(400, errors.join('; '));
@@ -386,16 +386,6 @@ export async function startServer() {
       saveConfig(cfg);
       appsReg.checkAll().catch(() => {});
       return appsReg.localApps();
-    }
-    if ((mm = m(/^apps\/([^/]+)(?:\/(.*))?$/))) {
-      // App Cloud proxy: /api/local/apps/<id>/<path> → the app's own server on this machine.
-      const r = appsReg.resolveApp('self', decodeURIComponent(mm[1]));
-      if (!r) throw new HttpError(404, 'unknown app ' + mm[1]);
-      const search = new URL(req.url, 'http://x').search;
-      if (mm[2] === undefined) { res.writeHead(308, { location: `${mm[1]}/${search}` }); res.end(); return undefined; }
-      const base = String(req.headers['x-rigs-app-base'] || `/api/local/apps/${mm[1]}`);
-      forwardApp(r.app, req, res, mm[2] + search, base);
-      return undefined;
     }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
@@ -601,27 +591,57 @@ export async function startServer() {
       if (!isLoopback(clientIp(req)) && !req.headers['tailscale-user-login']) throw new HttpError(400, 'open the UI from this machine (localhost) to launch a native viewer here — or use “view on” another machine');
       return connectDesktop(b.target, b.method);
     }
+    const route = appRoute(p);
+    if (route) { await appHttp(req, res, url, route); return undefined; }
     if ((mm = p.match(/^\/api\/nodes\/([^/]+)\/(.+)$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));
       if (!node) throw new HttpError(404, 'unknown node ' + mm[1]);
       const rest = mm[2] + url.search;
-      if (node.self) {
-        const am = mm[2].match(/^apps\/([^/]+)/);
-        if (am) req.headers['x-rigs-app-base'] = `/api/nodes/${mm[1]}/apps/${am[1]}`;
-        return localApi(req, res, mm[2], url.searchParams);
-      }
+      if (node.self) return localApi(req, res, mm[2], url.searchParams);
       if (!node.rigs || !node.online) throw new HttpError(503, `${node.name} is not running RIGS`);
-      const am = mm[2].match(/^apps\/([^/]+)/);
-      if (am) req.headers['x-rigs-app-base'] = `/api/nodes/${mm[1]}/apps/${am[1]}`;
       forwardHttp(node, req, res, rest);
       return undefined;
     }
     throw new HttpError(404, 'not found');
   }
 
+  /**
+   * App Cloud: /api/nodes/<node>/apps/<id>/* (src/proxy.js). Local apps are forwarded to their port;
+   * apps on a peer are relayed to that peer's daemon, which authorizes the hop again.
+   * Returns { app } for a local app, { peer } for a remote one; throws 404/502 HttpErrors.
+   */
+  async function appTarget(route) {
+    const ref = decodeURIComponent(route.nodeRef);
+    // This node is known from config alone, so apps answer while the first discovery scan still runs.
+    let node = appsReg.isSelfRef(ref) ? { self: true, name: config().name } : discovery.get(ref);
+    if (!node && !discovery.list().some((n) => n.self)) { await discovery.tick(); node = discovery.get(ref); }
+    if (!node) throw new HttpError(404, `unknown node ${ref}`);
+    if (!node.self) {
+      if (!node.rigs || !node.online) throw new HttpError(502, `${node.name} is not reachable (offline or not running RIGS)`);
+      return { peer: node };
+    }
+    const r = appsReg.resolveApp('self', decodeURIComponent(route.appId));
+    if (!r) throw new HttpError(404, `unknown app ${decodeURIComponent(route.appId)} on ${node.name}`);
+    return { app: r.app };
+  }
+
+  async function appHttp(req, res, url, route) {
+    if (route.rest === undefined) {
+      // Relative URLs in the app only resolve inside the prefix with a trailing slash.
+      res.writeHead(308, { location: url.pathname + '/' + url.search, 'cache-control': 'no-store' });
+      res.end();
+      return;
+    }
+    const t = await appTarget(route);
+    if (t.peer) relayApp(t.peer, req, res, route, url.search);
+    else proxyApp(req, res, t.app, route, url.search);
+  }
+
   async function handler(req, res) {
     const url = new URL(req.url, 'http://localhost');
     try {
+      const back = appRefererRedirect(req);
+      if (back) { res.writeHead(307, { location: back, 'cache-control': 'no-store' }); res.end(); return; }
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
@@ -675,21 +695,21 @@ export async function startServer() {
       wss.handleUpgrade(req, socket, head, (ws) => pty.attachWs(mm[1], ws));
       return;
     }
+    const appR = appRoute(url.pathname);
+    if (appR) {
+      const route = { ...appR, rest: appR.rest ?? '/' };
+      try {
+        const t = await appTarget(route);
+        if (t.peer) relayAppWs(t.peer, req, socket, head, route, url.search);
+        else proxyAppWs(req, socket, head, t.app, route, url.search);
+      } catch (e) { rejectUpgrade(socket, e.status || 500, e.message); }
+      return;
+    }
     if ((mm = url.pathname.match(/^\/api\/nodes\/([^/]+)\/pty\/(\w+)\/ws$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));
       if (!node) { socket.destroy(); return; }
       if (node.self) wss.handleUpgrade(req, socket, head, (ws) => pty.attachWs(mm[2], ws));
       else forwardWs(node, req, socket, head, `pty/${mm[2]}/ws`);
-      return;
-    }
-    if ((mm = url.pathname.match(/^\/api\/(?:local|nodes\/([^/]+))\/apps\/([^/]+)\/(.*)$/))) {
-      const node = mm[1] ? discovery.get(decodeURIComponent(mm[1])) : { self: true };
-      const base = mm[1] ? `/api/nodes/${mm[1]}/apps/${mm[2]}` : String(req.headers['x-rigs-app-base'] || `/api/local/apps/${mm[2]}`);
-      if (!node) { socket.destroy(); return; }
-      if (!node.self) { req.headers['x-rigs-app-base'] = base; forwardWs(node, req, socket, head, `apps/${mm[2]}/${mm[3]}${url.search}`); return; }
-      const r = appsReg.resolveApp('self', decodeURIComponent(mm[2]));
-      if (!r) { socket.destroy(); return; }
-      forwardAppUpgrade(r.app, req, socket, head, mm[3] + url.search, base);
       return;
     }
     socket.destroy();
