@@ -63,9 +63,9 @@ Same Tailscale account on every machine. Then, per machine:
 
 | OS | Command |
 | --- | --- |
-| macOS | `curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh \| bash` |
-| Ubuntu (Wayland or X11) | `curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh \| bash` |
-| Windows (admin PowerShell) | `irm https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.ps1 \| iex` |
+| macOS | `curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh \| bash` |
+| Ubuntu (Wayland or X11) | `curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh \| bash` |
+| Windows (admin PowerShell) | `irm https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.ps1 \| iex` |
 
 To add hardware-accelerated remote desktop, prefix the command with `RIGS_DESKTOP=1` (on Windows it's
 on by default). The full step-by-step guide is [docs/INSTALL.md](docs/INSTALL.md).

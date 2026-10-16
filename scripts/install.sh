@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # RIGS OS installer for macOS and Linux (Ubuntu, incl. Wayland).
-#   curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh | bash
 # Options (env vars):
 #   RIGS_DIR=~/.rigs/app       where to clone the repo
-#   RIGS_REPO=https://github.com/XmXx/rigs.git
+#   RIGS_REPO=https://github.com/XmYx/rigs.git
 #   RIGS_NAME=<machine name>   defaults to the short hostname
 #   RIGS_AGENTS=1              install missing Claude Code / Codex / Ollama (0 to skip)
 #   RIGS_DESKTOP=1             install Sunshine (host) + Moonlight (client) for HW-accelerated remote desktop
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 RIGS_DIR="${RIGS_DIR:-$HOME/.rigs/app}"
-RIGS_REPO="${RIGS_REPO:-https://github.com/XmXx/rigs.git}"
+RIGS_REPO="${RIGS_REPO:-https://github.com/XmYx/rigs.git}"
 RIGS_AGENTS="${RIGS_AGENTS:-1}"
 RIGS_DESKTOP="${RIGS_DESKTOP:-0}"
 RIGS_HTTPS="${RIGS_HTTPS:-0}"

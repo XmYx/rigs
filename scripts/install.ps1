@@ -1,10 +1,10 @@
 # RIGS OS installer for Windows 10/11. Run in an *elevated* PowerShell:
-#   irm https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.ps1 | iex
 # Options via environment variables before running:
 #   $env:RIGS_DIR="$HOME\.rigs\app"; $env:RIGS_NAME="gaming-pc"; $env:RIGS_AGENTS="1"; $env:RIGS_DESKTOP="1"; $env:RIGS_WSL="1"
 $ErrorActionPreference = 'Stop'
 $RigsDir = if ($env:RIGS_DIR) { $env:RIGS_DIR } else { Join-Path $HOME '.rigs\app' }
-$Repo = if ($env:RIGS_REPO) { $env:RIGS_REPO } else { 'https://github.com/XmXx/rigs.git' }
+$Repo = if ($env:RIGS_REPO) { $env:RIGS_REPO } else { 'https://github.com/XmYx/rigs.git' }
 $Agents = if ($env:RIGS_AGENTS) { $env:RIGS_AGENTS } else { '1' }
 $Desktop = if ($env:RIGS_DESKTOP) { $env:RIGS_DESKTOP } else { '1' }
 

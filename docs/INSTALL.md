@@ -9,12 +9,12 @@ soon as they share a tailnet.
    [admin console](https://login.tailscale.com/admin/dns), turn on **MagicDNS** and
    **HTTPS certificates**. HTTPS is only needed if you want voice from other machines.
 2. **GitHub.** The repo is public, so installing needs no login. To let a machine push changes
-   back, run `gh auth login` on it (as XmXx) once.
+   back, run `gh auth login` on it (as XmYx) once.
 
 ## 1. macOS (Apple silicon or Intel)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh | bash
 ```
 
 The script installs any missing Homebrew, git, tmux and Node 22, plus the Tailscale app. It also
@@ -41,9 +41,9 @@ installs Claude Code, Codex and Ollama (skip that with `RIGS_AGENTS=0`). Then it
 ## 2. Ubuntu 22.04 / 24.04 (Wayland or X11)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh | bash
 # with hardware-accelerated remote desktop hosting:
-RIGS_DESKTOP=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.sh)"
+RIGS_DESKTOP=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh)"
 ```
 
 The script uses sudo for apt, Tailscale and Sunshine. It installs:
@@ -63,7 +63,7 @@ The script uses sudo for apt, Tailscale and Sunshine. It installs:
 Open **PowerShell as Administrator**:
 
 ```powershell
-irm https://raw.githubusercontent.com/XmXx/rigs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.ps1 | iex
 ```
 
 It uses winget to install Git, Node 22, Tailscale, Claude Code, Codex, Ollama, **Sunshine**
