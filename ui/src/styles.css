@@ -461,3 +461,24 @@ a.link { color: var(--accent); cursor: pointer; }
 /* Work dashboard: agents cast by a project, indented under it */
 .wk-row.wk-agent { margin-left: 14px; padding-top: 4px; padding-bottom: 4px; border-left: 2px solid rgba(45, 212, 191, .25); }
 .wk-row.wk-agent .wk-rtitle { font-size: 12px; }
+
+/* Agentic-OS layer (os.js): activity tray, windows and new items materialise */
+#activity { position: fixed; top: 64px; right: 16px; z-index: 40; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; pointer-events: none; }
+.act-chip { display: flex; align-items: center; gap: 8px; max-width: 360px; padding: 6px 12px 6px 9px; border-radius: 999px; background: var(--panel-solid, #0b141c); border: 1px solid var(--line-strong, rgba(45,212,191,.35)); font: 11.5px var(--mono); color: #cfe6ea; box-shadow: 0 8px 24px rgba(0,0,0,.45); opacity: 0; transform: translateX(24px) scale(.94); transition: opacity .35s ease, transform .45s cubic-bezier(.2,.9,.2,1), border-color .3s; }
+.act-chip.in { opacity: 1; transform: none; }
+.act-chip.out { opacity: 0; transform: translateX(18px); }
+.act-chip.ok { border-color: rgba(74,222,128,.5); }
+.act-chip.bad { border-color: rgba(248,113,113,.6); }
+.act-ring { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #2dd4bf; border-top-color: transparent; flex: none; }
+.act-chip.running .act-ring { animation: vz-spin .8s linear infinite; }
+.act-chip.ok .act-ring { border: 0; background: #4ade80; box-shadow: 0 0 10px #4ade80; }
+.act-chip.bad .act-ring { border: 0; background: #f87171; box-shadow: 0 0 10px #f87171; }
+.act-name { font-weight: 600; white-space: nowrap; text-transform: lowercase; letter-spacing: .02em; }
+.act-detail { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.win { animation: win-materialise .55s cubic-bezier(.2,.9,.2,1) both; }
+@keyframes win-materialise { 0% { opacity: 0; transform: scale(.92) translateY(10px); filter: blur(6px) brightness(1.6); } 60% { filter: blur(0) brightness(1.1); } 100% { opacity: 1; transform: none; filter: none; } }
+.win::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, transparent 0%, rgba(45,212,191,.18) 50%, transparent 100%); transform: translateY(-100%); animation: win-scan .9s ease-out .05s both; }
+@keyframes win-scan { to { transform: translateY(100%); } }
+.hub.materialise, .app-row.materialise { animation: hub-materialise .9s cubic-bezier(.2,.9,.2,1) both; }
+@keyframes hub-materialise { 0% { opacity: 0; transform: translateX(-14px); background: rgba(45,212,191,.22); } 100% { opacity: 1; transform: none; background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .win, .win::after, .hub.materialise, .act-chip { animation: none !important; transition: none !important; } }
