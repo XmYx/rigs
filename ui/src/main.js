@@ -5,6 +5,7 @@ import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js'
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
 import { renderReply } from './visual.js';
+import { activity, freshIds } from './os.js';
 import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -216,9 +217,10 @@ function renderCounts() {
 /** Left panel: every app on the mesh, one click to open (and spin up) it. */
 function renderAppList() {
   const apps = snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id })));
+  const fresh = freshIds('apps', apps.map((a) => a.id));
   $('#app-list').replaceChildren(...(apps.length ? apps.map((a) => {
     const st = a.health?.status || 'unknown';
-    return h('div', { class: `hub app-row ${st}`, title: `${a.name} on ${a.node} — ${st}${a.launch ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
+    return h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${a.launch ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
       h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node));
   }) : [h('div', { class: 'muted small' }, 'No apps yet.')]));
 }
@@ -798,6 +800,7 @@ async function ask(text, { spoken = false } = {}) {
   let fed = 0; // characters of the spoken part already handed to the voice
   let felt = false;
   const tools = [];
+  const chips = []; // activity chips for this reply's tool calls
   try {
     if (!chatRef || chatRef.nodeId !== b.nodeId) {
       const c = await api(`${node(b.nodeId)}/chats`, { method: 'POST', body: { brain: b.brain, model: b.model, effort: b.effort } });
@@ -814,6 +817,7 @@ async function ask(text, { spoken = false } = {}) {
         if ((spoken || !voice.muted) && say.length > fed) { voice.feed(say.slice(fed)); fed = say.length; }
       } else if (e.type === 'tool') {
         tools.push(e.name);
+        chips.push(activity(e.name, e.input));
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
       } else if (e.type === 'status') {
         showSubtitle(`${reply}\n… ${e.text}`, 'jarvis');
@@ -822,6 +826,7 @@ async function ask(text, { spoken = false } = {}) {
         if (!reply) showSubtitle(e.message, 'error');
       }
     }, ac.signal);
+    for (const c of chips) c.done(true);
     const say = spokenText(reply, true);
     if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
@@ -829,6 +834,7 @@ async function ask(text, { spoken = false } = {}) {
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
+    for (const c of chips) c.done(false);
     if (e.name !== 'AbortError') { toast(e.message, 'error'); showSubtitle(e.message, 'error'); setOrb('error'); setTimeout(() => setOrb('online'), 2500); }
   } finally {
     if (busy === ac) busy = null;
