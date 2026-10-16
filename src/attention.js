@@ -51,9 +51,16 @@ function claudeWaiting() {
   return out;
 }
 
+// A live seat waiting on a person. Detached seats that failed to start ("attention_required" with no
+// session) are broken, not asking — they would blink forever, so they're left to `rig ps`.
+const RIG_GONE = /detached|stopped|exited|dead|failed/i;
 async function openrigNeeds() {
   const st = await openrig.status().catch(() => ({}));
-  return (st.nodes || []).filter((n) => /need|input|block|attention/i.test(`${n.activity} ${n.startupStatus} ${n.status}`) && !/running/i.test(n.activity || ''))
+  return rigNeeds(st.nodes || []);
+}
+
+export function rigNeeds(nodes) {
+  return nodes.filter((n) => !RIG_GONE.test(n.status || '') && (/needs?_input|blocked/i.test(n.activity || '') || /attention|needs?_input/i.test(n.startupStatus || '')))
     .map((n) => ({
       key: `rig:${n.session}`, agent: n.runtime === 'codex' ? 'codex' : 'claude', kind: 'needs-input',
       title: n.title, reason: n.reason || n.startupStatus || 'needs input', since: Date.now(),
@@ -115,7 +122,9 @@ export function refresh(opts = {}) {
 async function compute({ projects } = {}) {
   if (projects) lastProjects = projects; else projects = lastProjects;
   const claude = claudeWaiting();
-  const rig = await openrigNeeds();
+  // Claude's own report is the better one for a seat it runs in; OpenRig's only fills the gaps.
+  const claudeSessions = new Set(claude.map((x) => x.session?.id));
+  const rig = (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id));
   const covered = new Set([...claude, ...rig].map((x) => x.session?.id).filter(Boolean));
   const panes = await paneChrome(covered);
   const tasks = projects.flatMap((p) => (p.tasks || []).filter((t) => t.status === 'blocked' || t.status === 'review').map((t) => ({
