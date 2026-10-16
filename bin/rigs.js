@@ -26,7 +26,7 @@ async function daemonFetch(p, opts = {}) {
  * If a freshly updated version crash-loops, roll back to the previous commit.
  */
 async function supervise() {
-  const { RESTART_CODE, previousSha } = await import('../src/updater.js');
+  const { RESTART_CODE, previousSha, markBad, ensureDependencies } = await import('../src/updater.js');
   const { run, APP_DIR } = await import('../src/util.js');
   let crashes = [];
   let backoff = 1000;
@@ -35,6 +35,7 @@ async function supervise() {
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { stopping = true; if (child) child.kill(sig); else process.exit(0); });
   for (;;) {
     const started = Date.now();
+    await ensureDependencies().catch(() => {});
     const code = await new Promise((resolve) => {
       child = spawn(process.execPath, [path.join(HERE, 'rigs.js'), 'serve'], { stdio: 'inherit', env: process.env });
       child.on('exit', (c, sig) => { child = null; resolve(sig ? `signal ${sig}` : c); });
@@ -46,7 +47,9 @@ async function supervise() {
     if (crashes.length >= 3) {
       const prev = previousSha();
       if (prev) {
-        console.error(`[rigs] crash loop — rolling back to ${prev.slice(0, 7)}`);
+        const cur = (await run('git', ['rev-parse', 'HEAD'], { cwd: APP_DIR, timeout: 10000 })).stdout.trim();
+        if (cur && cur !== prev) await markBad(cur);
+        console.error(`[rigs] crash loop — rolling back to ${prev.slice(0, 7)} (won't auto-apply ${cur.slice(0, 7)} again)`);
         await run('git', ['reset', '--hard', prev], { cwd: APP_DIR, timeout: 60000 });
         await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--no-fund'], { cwd: APP_DIR, timeout: 600000 });
       }
