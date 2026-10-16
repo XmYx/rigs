@@ -29,6 +29,7 @@ git(app, 'push', '-q', 'origin', 'main');
 const events = [];
 const ctx = {
   fetchBundle: (req) => merge.bundle(req.dir, req.branch),
+  cleanup: (req) => merge.cleanupWork(req.dir, req.branch),
   rollout: async () => events.push('rollout'),
   notify: (t) => events.push(t),
   resolve: async (req) => { events.push('resolve:' + req.conflicts.join(',')); return { node: 'here', provider: 'claude' }; },
@@ -53,6 +54,8 @@ test('clean branch is merged, pushed and rolled out', async () => {
   git(app, 'fetch', '-q', 'origin');
   assert.equal(originFile('a.txt'), 'hello');
   assert.ok(events.includes('rollout'));
+  assert.ok(!fs.existsSync(r.dir), 'merged worktree is removed');
+  assert.throws(() => git(app, 'rev-parse', '--verify', r.branch), 'merged branch is deleted');
 });
 
 test('second worker on the same lines gets a resolver; nothing is overwritten', async () => {

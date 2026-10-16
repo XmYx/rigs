@@ -80,6 +80,23 @@ export async function bundle(dir, branch) {
   return file;
 }
 
+/** After a merge: remove the worker's worktree and its (now merged) branch on that machine. */
+export async function cleanupWork(dir, branch) {
+  if (!dir || !fs.existsSync(dir)) return { removed: false };
+  const common = (await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+  const repo = common ? path.dirname(common) : APP_DIR;
+  const dirty = (await git(['status', '--porcelain'], dir)).stdout.trim();
+  if (dirty) return { removed: false, reason: 'worktree has uncommitted changes — left alone' };
+  const ahead = (await git(['rev-list', '--count', 'origin/main..HEAD'], dir)).stdout.trim();
+  await git(['fetch', '--quiet', 'origin'], repo);
+  const merged = (await git(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], dir)).code === 0;
+  if (!merged && ahead !== '0') return { removed: false, reason: 'branch has commits that are not on main yet — left alone' };
+  const w = await git(['worktree', 'remove', dir], repo);
+  if (w.code !== 0) return { removed: false, reason: w.stderr.trim().slice(-200) };
+  await git(['branch', '-D', branch], repo);
+  return { removed: true };
+}
+
 // ---------------------------------------------------------------- steward side
 
 function loadQueue() { return readJsonSync(QUEUE, { requests: [] }); }
@@ -200,6 +217,8 @@ async function mergeOne(req, ctx, repo) {
   await update(req.id, { status: 'merged', sha, worktree: null, event: `merged to main as ${sha}` });
   ctx.notify?.(`Merged ${req.branch} from ${req.node} → main ${sha}. Rolling out to every machine.`, 'ok');
   await ctx.rollout?.();
+  const c = await ctx.cleanup?.(req).catch((e) => ({ removed: false, reason: e.message }));
+  if (c) await update(req.id, { event: c.removed ? `removed the worktree on ${req.node}` : `kept the worktree on ${req.node}: ${c.reason || 'unknown'}` });
 }
 
 async function failChecks(req, ctx, stage, r) {
