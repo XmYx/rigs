@@ -37,8 +37,12 @@ treat `main` as production.
   `RIGS_SSH_DIR`, `RIGS_NO_MIGRATIONS=1` and `RIGS_NO_AUTOUPDATE=1` (see `test/smoke.test.js`).
 - New one-time steps for existing machines go in `src/migrations.js` (append-only); anything needing
   root goes through `src/rootsteps.js` so the user types one password in JARVIS.
-- Before pushing: `npm test` (and `npm run build` if you touched `ui/`). CI runs the same on all three OSes.
-- After pushing to `main`, roll out with the `mesh_update` MCP tool or `rigs update --all`.
+- **Change policy — never commit to `main`.** `rigs dev <topic>` (MCP `rigs_dev_start`) gives you a
+  worktree on `work/<machine>/<topic>` off the latest main; commit there, run `npm test` (and
+  `npm run build` if you touched `ui/`), then `rigs propose` (MCP `rigs_propose`). The merge steward
+  (`src/merge.js`) merges one branch at a time onto the latest main, re-runs build + tests on the
+  merged tree, pushes and rolls out to every machine. Only a real conflict brings in a resolver agent
+  (routing kind `merge`); failing checks come back to you. CI also runs on all three OSes after push.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test

@@ -250,6 +250,8 @@ a.link { color: var(--accent); cursor: pointer; }
 .desk-status { display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--line); }
 .okbox { padding: 8px 10px; border-radius: 7px; background: rgba(74, 222, 128, .1); border: 1px solid rgba(74, 222, 128, .35); }
 .warnbox { padding: 8px 10px; border-radius: 7px; background: rgba(251, 191, 36, .08); border: 1px solid rgba(251, 191, 36, .35); }
+.merge-row { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin: 4px 0; }
+.merge-row summary { cursor: pointer; }
 .pin-in { flex: 0 0 70px; min-width: 70px; text-align: center; letter-spacing: .2em; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tool-row { flex-wrap: wrap; }

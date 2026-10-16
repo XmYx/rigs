@@ -18,6 +18,8 @@ const MIGRATIONS = [
   { id: '2026-10-16-prefer-openssh', run: async () => { const r = await rootsteps.preferOpenSsh(tailscaleBin()); const u = await rootsteps.tryUnattended(); return { ...r, unattended: u.ran, pending: u.steps.map((x) => x.id) }; } },
 ];
 
+MIGRATIONS.push({ id: '2026-10-16-sunshine-gpu-encoder', run: () => desktopInstall.tuneSunshine() });
+
 // Nodes that ran the first desktop migration before root steps were bundled re-register theirs.
 MIGRATIONS.push({ id: '2026-10-16-desktop-root-steps', run: async () => { const s = await desktopInstall.ensure(); await detectTools(true); return { state: s.state, steps: s.steps.slice(-2) }; } });
 

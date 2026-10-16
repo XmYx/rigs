@@ -1,13 +1,16 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
 import * as caps from './capabilities.js';
 import * as chat from './chat.js';
-import { config, loadConfig, patchConfig, publicConfig, saveConfig } from './config.js';
+import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
+import * as merge from './merge.js';
 import * as migrations from './migrations.js';
 import * as rootsteps from './rootsteps.js';
 import { Discovery } from './discovery.js';
@@ -78,6 +81,7 @@ async function selfInfo() {
     ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
     tailscale: tsStatus ? { ip, dnsName: tsStatus.self.dnsName, login: tsStatus.self.login, state: tsStatus.backendState } : null,
     sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name,
+    canPush: await merge.canPush().catch(() => false),
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
     rootSteps: rootsteps.pending(),
   };
@@ -124,6 +128,62 @@ export async function startServer() {
       (pin, addr) => peerJson(target, 'desktop/pin', { method: 'POST', body: { pin, name: config().name, clientAddress: addr }, timeout: 45000 }));
     log(`desktop: ${config().name} → ${target.name}: ${r.ok ? 'ok' : 'failed'} (${[...r.steps, r.message].join('; ')})`);
     return { ...r, viewer: config().name, target: target.name };
+  }
+
+  async function rolloutAll() {
+    const peers = discovery.list().filter((n) => !n.self && n.online && n.rigs);
+    const results = await Promise.all(peers.map((n) => peerJson(n, 'update', { method: 'POST', body: {}, timeout: 15 * 60 * 1000 }).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, updated: false, message: e.message }))));
+    const self = await updater.apply();
+    if (self.restart) setTimeout(() => process.exit(updater.RESTART_CODE), 1200);
+    return [{ node: config().name, ...self }, ...results];
+  }
+
+  /** Download a binary from a peer's local API to a file (git bundles for the merge steward). */
+  async function peerDownload(node, localPath, dest) {
+    const headers = node.viaToken ? { 'x-rigs-token': config().meshToken } : {};
+    const r = await fetch(node.url.replace(/\/$/, '') + '/api/local/' + localPath, { headers, signal: AbortSignal.timeout(10 * 60 * 1000) });
+    if (!r.ok) throw new Error(`${node.name}: ${(await r.text()).slice(0, 200)}`);
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    await fsp.writeFile(dest, Buffer.from(await r.arrayBuffer()));
+    return dest;
+  }
+
+  const mergeCtx = {
+    fetchBundle: async (req) => {
+      const worker = discovery.get(req.node);
+      if (!worker) throw new Error(`${req.node} is offline`);
+      if (worker.self) return merge.bundle(req.dir, req.branch);
+      return peerDownload(worker, `git/bundle?dir=${encodeURIComponent(req.dir)}&branch=${encodeURIComponent(req.branch)}`, path.join(RIGS_HOME, 'merge', `in-${req.id}.bundle`));
+    },
+    rollout: () => rolloutAll().catch((e) => log('rollout after merge:', e.message)),
+    notify: (text, level = 'info') => broadcastNotify({ text, level, speak: false, from: `${config().name} (merge steward)` }),
+    // Only on a real conflict: an agent resolves it in the steward's scratch worktree.
+    resolve: async (req) => {
+      const p = await planner.createProject({ name: `Merge conflict: ${req.branch}`, goal: `Merge branch ${req.branch} from ${req.node} into main without losing anyone's work.`, repoNode: config().name, repoPath: req.worktree, dispatch: 'direct', policy: 'builtin:standard' });
+      const pr = await planner.getProject(p.id);
+      const log_ = (req.commits || []).join('\n');
+      pr.tasks = [{
+        id: 't1', kind: 'merge', size: 'L', deps: [], needs: { platform: 'any', gpu: false, tool: '' }, suggest: {}, status: 'todo', assign: null, reason: '', run: null, summary: '',
+        title: `Resolve merge conflicts: ${req.branch}`,
+        description: `The merge steward is merging ${req.branch} (from ${req.node}) into the latest main in this worktree:\n  ${req.worktree}\nThe merge stopped on conflicts in:\n${req.conflicts.map((f) => '  - ' + f).join('\n')}\n\nThe branch's commits (its intent):\n${log_}\n\nResolve every conflict so BOTH sides' changes survive (read 'git log origin/main' for what landed on main meanwhile; never drop either side's work silently). Then run 'npm test', 'git add' the files and finish the merge with 'git commit --no-edit'. Do not push — when the merge is committed, call the rigs MCP tool rigs_merge_resolved with {"id": "${req.id}"}; the steward re-runs the checks and pushes.`,
+      }];
+      planner.routeProject(pr, await meshSnapshot());
+      pr.tasks[0].assign = { ...(pr.tasks[0].assign || { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }), node: config().name, locked: true };
+      pr.status = 'planned';
+      await planner.saveProject(pr);
+      const d = await planner.dispatchReady(p.id, plannerCtx);
+      const t = d.tasks[0];
+      return { project: p.id, task: 't1', node: t.assign.node, provider: t.assign.provider, model: t.assign.model, status: t.status };
+    },
+  };
+
+  async function iAmSteward() {
+    const st = merge.electSteward(discovery.list());
+    return !!st?.self;
+  }
+
+  function kickMerge() {
+    iAmSteward().then((yes) => yes && merge.processQueue(mergeCtx)).catch((e) => log('merge steward:', e.message));
   }
 
   function meshSummary() {
@@ -352,6 +412,35 @@ export async function startServer() {
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
 
+    // change policy: work branches → merge steward (see src/merge.js)
+    if (sub === 'dev/start' && method === 'POST') { const b = await body(); return merge.startWork(b.topic, { repo: b.repo || undefined }); }
+    if (sub === 'dev/propose' && method === 'POST') {
+      const b = await body();
+      const dir = files.resolvePath(b.dir || '.');
+      const d = await merge.describe(dir);
+      const st = merge.electSteward(discovery.list());
+      if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
+      const reqBody = { node: config().name, dir, branch: d.branch, title: b.title || d.commits[0].replace(/^\w+ /, ''), summary: b.summary || '', commits: d.commits, session: b.session || null };
+      const r = st.self ? await merge.enqueue(reqBody) : await peerJson(st, 'merge/requests', { method: 'POST', body: reqBody, timeout: 20000 });
+      if (st.self) kickMerge();
+      return { ...r, steward: st.name };
+    }
+    if (sub === 'git/bundle' && method === 'GET') {
+      if (!res) throw new HttpError(400, 'stream only');
+      const file = await merge.bundle(files.resolvePath(q.get('dir')), q.get('branch'));
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      await pipeline(fs.createReadStream(file), res);
+      await fsp.rm(file, { force: true });
+      return undefined;
+    }
+    if (sub === 'merge' && method === 'GET') return { steward: (merge.electSteward(discovery.list()) || {}).name || null, queue: merge.queue() };
+    if (sub === 'merge/requests' && method === 'POST') { const r = await merge.enqueue(await body()); kickMerge(); return r; }
+    if ((mm = m(/^merge\/(\w+)\/(resolved|retry|drop)$/)) && method === 'POST') {
+      const r = mm[2] === 'resolved' ? await merge.markResolved(mm[1]) : mm[2] === 'retry' ? await merge.retry(mm[1]) : await merge.drop(mm[1]);
+      kickMerge();
+      return r;
+    }
+
     // remote command execution (used by the mesh MCP tools)
     if (sub === 'exec' && method === 'POST') {
       const b = await body();
@@ -373,6 +462,8 @@ export async function startServer() {
     if (sub === 'desktop/pairings' && method === 'POST') { const b = await body(); return desktop.acceptPairing(b.pairingId, b.pin, b.name || 'moonlight'); }
     // Open a viewer ON THIS machine (e.g. from the phone: "show magix-system on the mac").
     if (sub === 'desktop/connect' && method === 'POST') { const b = await body(); return connectDesktop(b.target, b.method); }
+    if (sub === 'desktop/permission' && method === 'POST') return desktop.openCapturePermissionSettings();
+    if (sub === 'desktop/restart' && method === 'POST') { await desktop.restartSunshine(); return { ok: true }; }
     if (sub === 'desktop/quit' && method === 'POST') { const b = await body(); const t = discovery.get(b.target); return desktop.quit(t ? desktopAddress(t) : b.target); }
     if (sub === 'desktop/install' && method === 'GET') return desktopInstall.status();
     if (sub === 'desktop/install' && method === 'POST') {
@@ -433,12 +524,12 @@ export async function startServer() {
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
-    if (p === '/api/mesh/update' && req.method === 'POST') {
-      const peers = discovery.list().filter((n) => !n.self && n.online && n.rigs);
-      const results = await Promise.all(peers.map((n) => peerJson(n, 'update', { method: 'POST', body: {}, timeout: 15 * 60 * 1000 }).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, updated: false, message: e.message }))));
-      const self = await updater.apply();
-      if (self.restart) setTimeout(() => process.exit(updater.RESTART_CODE), 1200);
-      return [{ node: config().name, ...self }, ...results];
+    if (p === '/api/mesh/update' && req.method === 'POST') return rolloutAll();
+    if (p === '/api/mesh/merge') {
+      const st = merge.electSteward(discovery.list());
+      if (!st) return { steward: null, queue: [], note: 'no online machine can push to the repo (gh auth login on one of them)' };
+      const queue = st.self ? merge.queue() : await peerJson(st, 'merge', { timeout: 10000 }).then((r) => r.queue).catch(() => []);
+      return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
     if (p === '/api/mesh/projects') {
@@ -572,6 +663,9 @@ export async function startServer() {
   if (!process.env.RIGS_NO_MIGRATIONS) setTimeout(() => migrations.runPending((m, res) => {
     if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
   }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+
+  // Merge steward: process proposed branches (also kicked on every proposal / resolution).
+  setInterval(kickMerge, 30000).unref();
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();

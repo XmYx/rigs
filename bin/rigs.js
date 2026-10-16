@@ -75,6 +75,25 @@ const commands = {
     const { startMcp } = await import('../src/mcp.js');
     startMcp();
   },
+  async dev() {
+    const topic = argv.join(' ').trim();
+    if (!topic) { console.log('usage: rigs dev <topic>   — a worktree on its own work branch, off the latest main'); process.exit(1); }
+    const r = await daemonFetch('/api/local/dev/start', { method: 'POST', body: JSON.stringify({ topic }), timeout: 120000 });
+    if (r.error) { console.error(r.error); process.exit(1); }
+    console.log(`${r.existing ? 'existing' : 'new'} worktree ${r.dir}\nbranch ${r.branch}\n\ncd ${r.dir}   # work + commit here, then: rigs propose`);
+  },
+  async propose() {
+    const t = argv.indexOf('--title');
+    const s = argv.indexOf('--summary');
+    const r = await daemonFetch('/api/local/dev/propose', { method: 'POST', body: JSON.stringify({ dir: process.cwd(), title: t >= 0 ? argv[t + 1] : undefined, summary: s >= 0 ? argv[s + 1] : undefined }), timeout: 60000 });
+    if (r.error) { console.error(r.error); process.exit(1); }
+    console.log(`proposed ${r.branch} → merge steward ${r.steward} (request ${r.id}, ${r.status}). Watch: rigs merge`);
+  },
+  async merge() {
+    const r = await daemonFetch('/api/mesh/merge', { timeout: 20000 });
+    console.log(`steward: ${r.steward || 'none'}${r.note ? ' — ' + r.note : ''}`);
+    for (const x of r.queue || []) console.log(`  ${x.id}  ${x.status.padEnd(14)} ${x.branch}  (${x.node})  ${x.sha || ''}  ${x.log?.slice(-1)[0]?.text || ''}`);
+  },
   async 'ssh-session'() {
     const { runSession } = await import('../src/sshsession.js');
     process.exit(await runSession());
@@ -132,6 +151,9 @@ const commands = {
   rigs mcp             stdio MCP server for coding agents (registered by setup)
   rigs desktop [status|--force]  install Sunshine + Moonlight (hardware-accelerated remote desktop)
   rigs ssh-session     (used by the SSH login hook) attach this SSH login to a JARVIS-visible tmux session
+  rigs dev <topic>     start a change: worktree on branch work/<machine>/<topic> off the latest main
+  rigs propose [--title T]  hand the committed branch (cwd) to the merge steward
+  rigs merge           merge steward + queue status
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

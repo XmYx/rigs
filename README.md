@@ -53,36 +53,14 @@ can act on all of them.
   detected coding agent. It also registers the `rigs` MCP server, whose `mesh_*` tools let Claude
   Code and Codex run commands, read and write files, drive sessions, start agents and ask other
   machines' brains anywhere on the mesh.
-- **Changes ship from any node.** Each machine is a git checkout of this repo. An agent on any
-  machine can edit RIGS, push to `main`, and call `mesh_update`. Every node then fast-forwards,
-  rebuilds and restarts, and a crash-looping update rolls itself back.
-
-## Install
-
-Same Tailscale account on every machine. Then, per machine:
-
-| OS | Command |
-| --- | --- |
-| macOS | `curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh \| bash` |
-| Ubuntu (Wayland or X11) | `curl -fsSL https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.sh \| bash` |
-| Windows (admin PowerShell) | `irm https://raw.githubusercontent.com/XmYx/rigs/main/scripts/install.ps1 \| iex` |
-
-To add hardware-accelerated remote desktop, prefix the command with `RIGS_DESKTOP=1` (on Windows it's
-on by default). The full step-by-step guide is [docs/INSTALL.md](docs/INSTALL.md).
-
-When it's done, open **http://localhost:4719** on that machine, or `http://<tailscale-ip>:4719`
-from any other machine on the tailnet.
-
-## How it works
-
-```
- browser ──▶ node A (gateway, :4719) ──Tailscale──▶ node B /api/local/*   (HTTP + WebSocket proxy)
-                │                                    node C …
-                ├─ /api/local/*   files · pty · sessions · chats · exec · desktop · openrig · update
-                └─ /api/nodes/<id>/* → the same API on any peer
- Claude Code / Codex ──stdio──▶ `rigs mcp` ──▶ local node ──▶ any node   (mesh_* tools)
-```
-
+- **Changes ship from any node, without overwriting each other.** An agent on any machine runs
+  `rigs dev <topic>`, which gives it its own worktree on a `work/<machine>/<topic>` branch. It
+  commits there and runs `rigs propose`. The **merge steward** (one machine with push rights) merges
+  proposed branches one at a time onto the latest `main` and runs the build and tests:
+  - If the merge is clean and the checks pass, it pushes `main` and every machine updates and
+    restarts. A crash-looping update rolls itself back.
+  - If there's a real conflict, it hands the conflicting files to a resolver agent (Opus).
+  - If the tests fail, the branch goes back to the author with the log.
 - **Who may connect:** loopback, Tailscale devices owned by the same Tailscale user (verified per
   request with `tailscale whois`), or peers holding this node's mesh token (for non-Tailscale
   LANs). RIGS binds only to loopback and the machine's Tailscale IPs. It never binds 0.0.0.0
