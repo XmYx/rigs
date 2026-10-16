@@ -203,11 +203,11 @@ export async function startServer() {
 
   async function snapshotFor(node) {
     const get = (p) => (node.self ? localCall(p) : peerJson(node, p, { timeout: 7000 }));
-    const [sess, brains, rig, info, projects, att] = await Promise.all([
+    const [sess, brains, rig, info, projects, att, apps] = await Promise.all([
       get('sessions').catch(() => []), get('brains').catch(() => []), get('openrig').catch(() => null), node.self ? selfInfo() : get('info').catch(() => node),
-      get('projects').catch(() => []), get('attention').catch(() => []),
+      get('projects').catch(() => []), get('attention').catch(() => []), get('apps').then((r) => r.apps || []).catch(() => []),
     ]);
-    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects, attention: att };
+    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects, attention: att, apps };
   }
 
   async function meshSnapshot() {
@@ -371,6 +371,10 @@ export async function startServer() {
       return { tools: await caps.capabilities(true) };
     }
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
+    if ((mm = m(/^app-start\/([^/]+)$/)) && method === 'POST') {
+      // Spin an app up on this machine (its launch recipe) and wait until it answers its health check.
+      try { return { ...(await appsReg.startApp(decodeURIComponent(mm[1]))), apps: appsReg.localApps().apps }; } catch (e) { throw new HttpError(e.status || 500, e.message); }
+    }
     if (sub === 'apps' && method === 'POST') {
       // Register / update / remove one app in this node's config ({ ...app } or { id, remove: true }).
       const b = await body();

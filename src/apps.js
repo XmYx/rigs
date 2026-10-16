@@ -240,3 +240,60 @@ export function resolveApp(node, id) {
   const a = meshCatalog.find((x) => x.id === appId && (x.node.toLowerCase() === key || String(x.nodeId).toLowerCase() === key));
   return a ? { local: a.node === cfg.name, node: a.node, nodeId: a.nodeId, app: a } : null;
 }
+
+const starting = new Map(); // app id → in-flight start promise (one start per app at a time)
+
+/**
+ * Spin an app up on this machine and wait until it answers its health check.
+ *  - already up → { started: false, health }
+ *  - launch.systemd → `systemctl --user start <unit>` (Linux user units, the default for RIGS apps)
+ *  - launch.command → run detached through the login shell, output in ~/.rigs/logs/app-<id>.log
+ * Throws when the app is unknown, has no launch recipe, or is not up within waitMs.
+ * `deps` ({ run, spawn, probe, sleep }) is injectable for tests.
+ */
+export function startApp(id, { waitMs = 60000, pollMs = 1000, deps = {} } = {}) {
+  const key = String(id || '').toLowerCase();
+  if (starting.has(key)) return starting.get(key);
+  const p = doStart(key, { waitMs, pollMs, deps }).finally(() => starting.delete(key));
+  starting.set(key, p);
+  return p;
+}
+
+async function doStart(id, { waitMs, pollMs, deps }) {
+  const probe = deps.probe || probeApp;
+  const sleep = deps.sleep || ((ms) => new Promise((ok) => setTimeout(ok, ms)));
+  const app = loadApps().apps.find((a) => a.id === id);
+  if (!app) throw Object.assign(new Error(`unknown app ${id}`), { status: 404 });
+  const record = (res) => { health.set(app.id, nextHealth(health.get(app.id), res)); emitIfChanged(); return health.get(app.id); };
+  const first = await probe(app);
+  if (first.ok) return { started: false, health: record(first) };
+  if (!app.launch) throw Object.assign(new Error(`${app.name} is down and has no launch recipe (add "launch": { "systemd": … } or { "command": … })`), { status: 409 });
+
+  if (app.launch.systemd) {
+    const run = deps.run || (await import('./util.js')).run;
+    const r = await run('systemctl', ['--user', 'start', app.launch.systemd], { timeout: 30000 });
+    if (r.code !== 0) throw Object.assign(new Error(`systemctl --user start ${app.launch.systemd} failed: ${(r.stderr || r.stdout).trim()}`), { status: 502 });
+  } else {
+    const spawn = deps.spawn || (await import('node:child_process')).spawn;
+    const { RIGS_HOME } = await import('./config.js');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const logDir = path.join(RIGS_HOME, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const fd = fs.openSync(path.join(logDir, `app-${app.id}.log`), 'a');
+    const child = spawn(app.launch.command, { shell: process.platform === 'win32' ? true : (process.env.SHELL || '/bin/sh'), cwd: os.homedir(), detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
+    child.on?.('error', () => {});
+    child.unref?.();
+    fs.closeSync(fd);
+  }
+
+  const deadline = Date.now() + waitMs;
+  let last = first;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    last = await probe(app);
+    if (last.ok) return { started: true, health: record(last) };
+  }
+  record(last);
+  throw Object.assign(new Error(`${app.name} was started but did not answer ${app.healthPath} within ${Math.round(waitMs / 1000)}s`), { status: 504 });
+}
