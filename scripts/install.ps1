@@ -87,7 +87,8 @@ Push-Location $RigsDir
 npm install --no-audit --no-fund
 $bin = Join-Path $HOME '.local\bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
-Set-Content -Path (Join-Path $bin 'rigs.cmd') -Value "@echo off`r`nnode `"$RigsDir\bin\rigs.js`" %*"
+$nodeExe = (Get-Command node).Source
+Set-Content -Path (Join-Path $bin 'rigs.cmd') -Value "@echo off`r`n`"$nodeExe`" `"$RigsDir\bin\rigs.js`" %*"
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*$bin*") { [Environment]::SetEnvironmentVariable('Path', "$userPath;$bin", 'User') }
 Ok 'rigs CLI -> ~\.local\bin\rigs.cmd'

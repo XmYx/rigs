@@ -52,7 +52,9 @@ node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo
 if [ "$(node_major)" -lt 22 ]; then
   if [ -s "$HOME/.nvm/nvm.sh" ]; then
     # shellcheck disable=SC1091
-    . "$HOME/.nvm/nvm.sh"; nvm install 22 >/dev/null; nvm alias default 22 >/dev/null; nvm use 22 >/dev/null
+    # Install 22 next to whatever you use; RIGS pins its absolute path, your nvm default is left alone.
+    . "$HOME/.nvm/nvm.sh"; nvm install 22 >/dev/null 2>&1
+    NODE22="$(nvm which 22)"; export PATH="$(dirname "$NODE22"):$PATH"
   elif [ "$OS" = "Darwin" ]; then
     brew install node@22 && brew link --overwrite --force node@22
   else
@@ -118,8 +120,18 @@ fi
 cd "$RIGS_DIR"
 npm install --no-audit --no-fund
 mkdir -p "$HOME/.local/bin"
-ln -sf "$RIGS_DIR/bin/rigs.js" "$HOME/.local/bin/rigs"
-ok "rigs CLI → ~/.local/bin/rigs"
+# A wrapper (not a symlink) so `rigs` always runs on Node 22+, whatever node your shell defaults to.
+NODE_BIN="$(command -v node)"
+rm -f "$HOME/.local/bin/rigs"
+printf '#!/bin/sh\nexec "%s" "%s/bin/rigs.js" "$@"\n' "$NODE_BIN" "$RIGS_DIR" > "$HOME/.local/bin/rigs"
+chmod +x "$HOME/.local/bin/rigs"
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) RC="$HOME/.profile"; case "${SHELL:-}" in */zsh) RC="$HOME/.zshrc" ;; */bash) RC="$HOME/.bashrc" ;; esac
+     grep -qs '.local/bin' "$RC" || printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC"
+     warn "added ~/.local/bin to PATH in $RC — open a new terminal (or: export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
+esac
+ok "rigs CLI → ~/.local/bin/rigs (node $(node -v))"
 
 [ "$RIGS_HTTPS" = "1" ] && RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --https"
 [ -n "${RIGS_NAME:-}" ] && RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --name $RIGS_NAME"
