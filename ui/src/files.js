@@ -1,0 +1,165 @@
+import { ago, api, fmtBytes, h, node, toast } from './api.js';
+import { openWindow } from './wm.js';
+
+const ICON = { dir: '📁', file: '📄', link: '🔗' };
+const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
+const TEXT = /\.(txt|md|json|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|c|h|cpp|cs|sh|zsh|ps1|yml|yaml|toml|ini|cfg|conf|log|csv|html|css|xml|sql|env|gitignore|dockerfile)$/i;
+
+/** File browser for any machine, with upload, download, rename, trash, and copy-to-another-machine. */
+export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], onTerminalHere } = {}) {
+  let cur = { path, entries: [], parent: null, sep: '/' };
+  let showHidden = false;
+  let selected = null;
+
+  const pathInput = h('input', { class: 'path-input', value: path, spellcheck: 'false' });
+  const list = h('div', { class: 'file-list' });
+  const preview = h('div', { class: 'file-preview' }, h('div', { class: 'muted pad' }, 'Select a file to preview it.'));
+  const rootsSel = h('select', { class: 'mini', title: 'Roots' });
+  const upload = h('input', { type: 'file', multiple: true, style: { display: 'none' } });
+
+  const w = openWindow({
+    title: `${nodeName} — files`, icon: '📁', width: 980, height: 560, className: 'files-win',
+    tools: [rootsSel],
+  });
+  const toolbar = h('div', { class: 'toolbar' },
+    h('button', { class: 'tb', title: 'Up', onclick: () => cur.parent && load(cur.parent) }, '↑'),
+    h('button', { class: 'tb', title: 'Home', onclick: () => load('~') }, '⌂'),
+    h('button', { class: 'tb', title: 'Refresh', onclick: () => load(cur.path) }, '↻'),
+    pathInput,
+    h('button', { class: 'tb', title: 'New folder', onclick: newFolder }, '＋📁'),
+    h('button', { class: 'tb', title: 'Upload files here', onclick: () => upload.click() }, '⇪ Upload'),
+    h('button', { class: 'tb', title: 'Terminal here', onclick: () => onTerminalHere?.(cur.path) }, '⌨'),
+    h('label', { class: 'tb check' }, h('input', { type: 'checkbox', onchange: (e) => { showHidden = e.target.checked; load(cur.path); } }), ' hidden'),
+    upload);
+  w.body.append(toolbar, h('div', { class: 'files-split' }, list, preview));
+
+  pathInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(pathInput.value); });
+  rootsSel.addEventListener('change', () => load(rootsSel.value));
+  upload.addEventListener('change', async () => {
+    for (const f of upload.files) {
+      const dest = cur.path.replace(/[\\/]$/, '') + cur.sep + f.name;
+      try {
+        await api(`${node(nodeId)}/files/write?path=${encodeURIComponent(dest)}`, { method: 'PUT', body: f });
+        toast(`Uploaded ${f.name} → ${nodeName}`, 'ok');
+      } catch (e) { toast(`Upload failed: ${e.message}`, 'error'); }
+    }
+    upload.value = '';
+    load(cur.path);
+  });
+  // Drag & drop from the desktop into the window uploads to the current folder.
+  w.body.addEventListener('dragover', (e) => { e.preventDefault(); list.classList.add('drop'); });
+  w.body.addEventListener('dragleave', () => list.classList.remove('drop'));
+  w.body.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    list.classList.remove('drop');
+    const remote = e.dataTransfer.getData('application/x-rigs-file');
+    if (remote) { const src = JSON.parse(remote); return copyBetween(src.nodeId, src.nodeName, src.path, nodeId, nodeName, cur.path + cur.sep + src.name); }
+    for (const f of e.dataTransfer.files) {
+      try { await api(`${node(nodeId)}/files/write?path=${encodeURIComponent(cur.path + cur.sep + f.name)}`, { method: 'PUT', body: f }); }
+      catch (err) { toast(`Upload failed: ${err.message}`, 'error'); }
+    }
+    load(cur.path);
+  });
+
+  async function load(p) {
+    try {
+      const r = await api(`${node(nodeId)}/files?path=${encodeURIComponent(p)}${showHidden ? '&hidden=1' : ''}`);
+      cur = r;
+      pathInput.value = r.path;
+      rootsSel.replaceChildren(...r.roots.map((x) => h('option', { value: x.path }, x.name)));
+      rootsSel.value = '';
+      render();
+    } catch (e) { toast(`${nodeName}: ${e.message}`, 'error'); }
+  }
+
+  function render() {
+    list.replaceChildren(...cur.entries.map((e) => {
+      const row = h('div', { class: 'file-row' + (selected === e.path ? ' sel' : ''), draggable: 'true', title: e.path },
+        h('span', { class: 'fi' }, ICON[e.type] || '📄'),
+        h('span', { class: 'fn' }, e.name),
+        h('span', { class: 'fs' }, e.type === 'dir' ? '' : fmtBytes(e.size)),
+        h('span', { class: 'fm' }, ago(e.mtime)));
+      row.addEventListener('click', () => { selected = e.path; render(); if (e.type !== 'dir') showPreview(e); else showDirActions(e); });
+      row.addEventListener('dblclick', () => (e.type === 'dir' ? load(e.path) : download(e)));
+      row.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('application/x-rigs-file', JSON.stringify({ nodeId, nodeName, path: e.path, name: e.name })));
+      return row;
+    }));
+    if (!cur.entries.length) list.append(h('div', { class: 'muted pad' }, 'Empty folder'));
+  }
+
+  function actions(e) {
+    const others = machines().filter((m) => m.id !== nodeId);
+    const send = h('select', { class: 'mini' }, h('option', { value: '' }, 'Copy to machine…'), ...others.map((m) => h('option', { value: m.id }, m.name)));
+    send.addEventListener('change', () => {
+      const m = others.find((x) => x.id === send.value);
+      if (m) copyBetween(nodeId, nodeName, e.path, m.id, m.name, `~/Downloads/${e.name}`);
+      send.value = '';
+    });
+    return h('div', { class: 'actions' },
+      e.type !== 'dir' && h('button', { class: 'btn', onclick: () => download(e) }, '⇩ Download'),
+      h('button', { class: 'btn', onclick: () => renameItem(e) }, '✎ Rename'),
+      h('button', { class: 'btn danger', onclick: () => trashItem(e) }, '🗑 Trash'),
+      e.type !== 'dir' && others.length ? send : null);
+  }
+
+  function showDirActions(e) {
+    preview.replaceChildren(h('div', { class: 'pad' }, h('div', { class: 'pv-title' }, '📁 ' + e.name), h('div', { class: 'muted' }, e.path), actions(e),
+      h('button', { class: 'btn', onclick: () => load(e.path) }, 'Open folder'), h('button', { class: 'btn', onclick: () => onTerminalHere?.(e.path) }, '⌨ Terminal here')));
+  }
+
+  async function showPreview(e) {
+    const head = h('div', { class: 'pad' }, h('div', { class: 'pv-title' }, e.name), h('div', { class: 'muted' }, `${fmtBytes(e.size)} · ${new Date(e.mtime).toLocaleString()}`), actions(e));
+    preview.replaceChildren(head);
+    const raw = `${node(nodeId)}/files/raw?path=${encodeURIComponent(e.path)}`;
+    if (IMG.test(e.name)) preview.append(h('img', { class: 'pv-img', src: raw }));
+    else if ((TEXT.test(e.name) || !/\.\w+$/.test(e.name)) && e.size < 2 * 1024 * 1024) {
+      try {
+        const r = await api(`${node(nodeId)}/files/read?path=${encodeURIComponent(e.path)}`);
+        preview.append(h('pre', { class: 'pv-text' }, r.text.slice(0, 200000)));
+      } catch (err) { preview.append(h('div', { class: 'muted pad' }, err.message)); }
+    } else if (/\.(mp4|webm|mov)$/i.test(e.name)) preview.append(h('video', { class: 'pv-img', src: raw, controls: true }));
+    else if (/\.pdf$/i.test(e.name)) preview.append(h('iframe', { class: 'pv-frame', src: raw }));
+  }
+
+  function download(e) {
+    const a = h('a', { href: `${node(nodeId)}/files/raw?path=${encodeURIComponent(e.path)}&download=1`, download: e.name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+
+  async function newFolder() {
+    const name = prompt('New folder name');
+    if (!name) return;
+    try { await api(`${node(nodeId)}/files/mkdir`, { method: 'POST', body: { path: cur.path + cur.sep + name } }); load(cur.path); }
+    catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function renameItem(e) {
+    const name = prompt('Rename to', e.name);
+    if (!name || name === e.name) return;
+    try { await api(`${node(nodeId)}/files/rename`, { method: 'POST', body: { from: e.path, to: cur.path + cur.sep + name } }); load(cur.path); }
+    catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function trashItem(e) {
+    if (!confirm(`Move "${e.name}" on ${nodeName} to ~/.rigs/trash?`)) return;
+    try { await api(`${node(nodeId)}/files/trash`, { method: 'POST', body: { path: e.path } }); toast(`Moved ${e.name} to trash`, 'ok'); load(cur.path); }
+    catch (err) { toast(err.message, 'error'); }
+  }
+
+  load(path);
+  return w;
+}
+
+/** Stream a file from one machine to another through this gateway. */
+export async function copyBetween(fromId, fromName, path, toId, toName, dest) {
+  toast(`Copying ${path.split(/[\\/]/).pop()} ${fromName} → ${toName}…`);
+  try {
+    const src = await api(`${node(fromId)}/files/raw?path=${encodeURIComponent(path)}`, { raw: true });
+    if (!src.ok) throw new Error(`read failed (${src.status})`);
+    const blob = await src.blob();
+    const r = await api(`${node(toId)}/files/write?path=${encodeURIComponent(dest)}`, { method: 'PUT', body: blob });
+    toast(`Copied to ${toName}:${r.path} (${fmtBytes(r.size)})`, 'ok', 7000);
+  } catch (e) { toast(`Copy failed: ${e.message}`, 'error'); }
+}

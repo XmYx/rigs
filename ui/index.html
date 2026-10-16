@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RIGS OS</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%232dd4bf' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%232dd4bf'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/dist/app.css">
+</head>
+<body>
+  <div id="graph"></div>
+
+  <aside id="left" class="panel">
+    <div class="brand">
+      <div class="title">RIGS OS</div>
+      <div id="counts" class="sub">connecting…</div>
+      <a id="back" class="back" style="visibility:hidden">← back to mesh</a>
+    </div>
+    <input id="search" class="search" placeholder="Search the mesh…" autocomplete="off" spellcheck="false">
+    <div id="search-results"></div>
+    <section><h4>Inspector</h4><div id="inspector"></div></section>
+    <section><h4>Top hubs</h4><div id="hubs"></div></section>
+    <section>
+      <h4>Forces</h4>
+      <label class="slider">Repel <input id="repel" type="range" min="20" max="400"></label>
+      <label class="slider">Link length <input id="linklen" type="range" min="8" max="80"></label>
+    </section>
+    <section>
+      <h4>Display</h4>
+      <label class="check"><input id="d-labels" type="checkbox"> labels</label>
+      <label class="check"><input id="d-particles" type="checkbox"> traffic</label>
+      <label class="check"><input id="d-rotate" type="checkbox"> orbit</label>
+    </section>
+  </aside>
+
+  <div id="topbar">
+    <button id="fit" class="pill" title="Fit the whole mesh">◎ Fit</button>
+    <button id="refresh" class="pill" title="Rescan the tailnet">↻</button>
+  </div>
+
+  <aside id="legend" class="panel"><h4>Filters</h4><div id="filters"></div></aside>
+
+  <div id="orb-wrap">
+    <canvas id="orb" title="Click to talk"></canvas>
+    <div id="orb-state"></div>
+    <button id="brain-badge" class="pill" title="Switch brain (model + machine)"></button>
+    <div id="brain-menu" class="panel"></div>
+  </div>
+
+  <div id="subtitle"></div>
+
+  <div id="bar">
+    <input id="ask" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS…">
+    <button id="btn-mic" class="round" title="Push to talk">🎙</button>
+    <button id="btn-hands" class="round" title="Hands-free — just say “Jarvis…”">👂</button>
+    <button id="btn-term" class="round" title="Terminal on the focused machine">⌨</button>
+    <button id="btn-files" class="round" title="Files on the focused machine">📁</button>
+    <button id="btn-desk" class="round" title="Remote desktop to the focused machine">🖥</button>
+    <button id="btn-sess" class="round" title="All sessions on all machines">💬</button>
+    <button id="btn-mesh" class="round" title="Mesh control, updates, settings">⚙</button>
+    <button id="btn-mute" class="round" title="Voice output on/off">🔊</button>
+  </div>
+  <div id="footer">RIGS OS · OpenRig · REA · built with Claude Code</div>
+
+  <script type="module" src="/dist/app.js"></script>
+</body>
+</html>

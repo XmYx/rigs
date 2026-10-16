@@ -1,0 +1,27 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install tmux (for session discovery)
+        if: runner.os != 'Windows'
+        run: ${{ runner.os == 'macOS' && 'brew install tmux' || 'sudo apt-get update && sudo apt-get install -y tmux' }}
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: CLI help
+        run: node bin/rigs.js help

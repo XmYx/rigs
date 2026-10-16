@@ -1,0 +1,31 @@
+{
+  "name": "rigs-mesh",
+  "version": "0.1.0",
+  "description": "RIGS OS — a JARVIS-style control plane for all your Tailscale-connected workstations: SSH, files, hardware-accelerated remote desktop, terminals, and every coding/chat agent session (Claude Code, Codex, Ollama, OpenRig, REA) on every machine.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "rigs": "bin/rigs.js"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "build": "node scripts/build-ui.js",
+    "postinstall": "node scripts/build-ui.js --soft",
+    "start": "node bin/rigs.js start",
+    "dev": "node bin/rigs.js serve",
+    "test": "node --test --test-timeout=120000 \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.15",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "3d-force-graph": "^1.80.1",
+    "esbuild": "^0.28.2",
+    "three": "^0.186.1",
+    "three-spritetext": "^1.10.0",
+    "ws": "^8.22.0"
+  }
+}
