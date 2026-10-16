@@ -5,7 +5,7 @@ import { agentModes, claudeFlags, codexFlags } from './models.js';
 import { bin } from './tools.js';
 import * as openrig from './openrig.js';
 import { listPtys, ptyTranscript, getPty, createPty, shellWrap } from './pty.js';
-import { HOME, isWin, run, truncate } from './util.js';
+import { HOME, augmentedPath, isWin, run, spawnCmd, truncate } from './util.js';
 
 const CLAUDE_DIR = path.join(HOME, '.claude', 'projects');
 const CODEX_DIR = path.join(HOME, '.codex', 'sessions');
@@ -283,7 +283,42 @@ export async function send(kind, id, text) {
     await run(t, ['send-keys', '-t', id, 'Enter'], { timeout: 5000 });
     return { ok: true, delivered: 'tmux' };
   }
-  throw new Error(`cannot type into a stored ${kind} session — attach (resume) it in a terminal instead`);
+  if (kind === 'claude' || kind === 'codex') return resumeWith(kind, id, text);
+  throw new Error(`cannot type into a ${kind} session`);
+}
+
+// Stored Claude Code / Codex sessions are continued headlessly: `claude -p --resume <id>` and
+// `codex exec resume <id>` append the turn to the same session, so its transcript (and the JARVIS chat
+// dock attached to it) shows the reply. One turn at a time per session.
+const resuming = new Map(); // `${kind}:${id}` → { startedAt }
+
+export function resumeState(kind, id) {
+  const r = resuming.get(`${kind}:${id}`);
+  return r ? { running: true, startedAt: r.startedAt } : { running: false };
+}
+
+async function resumeWith(kind, id, text) {
+  const key = `${kind}:${id}`;
+  if (resuming.has(key)) throw new Error('that session is still working on the previous message');
+  const tool = bin(kind);
+  if (!tool) throw new Error(`${kind} is not installed on this machine`);
+  let cwd;
+  if (kind === 'claude') { const f = await findClaudeFile(id); if (!f) throw new Error('session not found'); cwd = (await claudeMeta({ file: f, mtime: 0, size: (await fsp.stat(f)).size })).cwd; }
+  else cwd = (await codexSessions()).find((x) => x.id === id)?.cwd;
+  if (cwd && !fs.existsSync(cwd)) cwd = undefined;
+  const modes = agentModes();
+  const args = kind === 'claude'
+    ? ['-p', text, '--resume', id, '--permission-mode', modes.claude.permissionMode]
+    : ['exec', 'resume', '--skip-git-repo-check', id, text];
+  const env = { ...process.env, PATH: augmentedPath() };
+  for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
+  const child = spawnCmd(tool, args, { cwd: cwd || HOME, env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let err = '';
+  child.stderr?.on('data', (d) => { if (err.length < 4000) err += d; });
+  resuming.set(key, { startedAt: Date.now() });
+  child.on('error', () => resuming.delete(key));
+  child.on('close', (code) => { resuming.delete(key); if (code) console.error(`[sessions] ${kind} resume ${id} exited ${code}: ${err.trim().slice(-300)}`); });
+  return { ok: true, delivered: 'resume', running: true };
 }
 
 function q(s) {

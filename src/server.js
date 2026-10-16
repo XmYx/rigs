@@ -318,6 +318,7 @@ export async function startServer() {
       return t;
     }
     if (sub === 'sessions/send' && method === 'POST') { const b = await body(); return sessions.send(b.kind, b.id, b.text); }
+    if (sub === 'sessions/state') return sessions.resumeState(q.get('kind'), q.get('id'));
     if (sub === 'sessions/attach' && method === 'POST') { const b = await body(); return sessions.attach(b.kind, b.id, b); }
     if (sub === 'agents/start' && method === 'POST') return sessions.startAgent(await body());
 

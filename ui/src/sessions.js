@@ -6,7 +6,7 @@ const KIND_ICON = { claude: '✳', codex: '◎', tmux: '▤', rig: '⛭', pty: '
 const KIND_LABEL = { claude: 'Claude Code', codex: 'Codex', tmux: 'tmux', rig: 'OpenRig seat', pty: 'RIGS terminal', chat: 'JARVIS chat' };
 
 /** Every coding & chat session on every machine — browse, read, attach, type into, resume. */
-export function openSessions({ snapshot, focus, onContinueChat } = {}) {
+export function openSessions({ snapshot, focus, onContinueChat, onAttachChat } = {}) {
   let filter = '';
   let kind = '';
   let active = null;
@@ -52,8 +52,8 @@ export function openSessions({ snapshot, focus, onContinueChat } = {}) {
     active = { node: n, s };
     render();
     const msgs = h('div', { class: 'transcript' }, h('div', { class: 'muted pad' }, 'Loading transcript…'));
-    const input = h('input', { class: 'path-input', placeholder: s.live ? `Type into this ${KIND_LABEL[s.kind]} on ${n.name}…` : 'Not live — attach/resume to continue' });
-    const canType = s.live && ['tmux', 'rig', 'pty'].includes(s.kind);
+    const input = h('input', { class: 'path-input', placeholder: s.live || s.kind === 'claude' || s.kind === 'codex' ? `Type into this ${KIND_LABEL[s.kind]} on ${n.name}…` : 'Not live — attach/resume to continue' });
+    const canType = (s.live && ['tmux', 'rig', 'pty'].includes(s.kind)) || s.kind === 'claude' || s.kind === 'codex';
     input.disabled = !canType;
     input.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter' || !input.value.trim()) return;
@@ -66,6 +66,7 @@ export function openSessions({ snapshot, focus, onContinueChat } = {}) {
       h('div', { class: 'muted' }, `${n.name} · ${KIND_LABEL[s.kind] || s.kind}${s.cwd ? ' · ' + s.cwd : ''}${s.branch ? ' · ⎇ ' + s.branch : ''}`),
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: () => attach(n, s) }, attachLabel),
+        s.kind !== 'chat' && onAttachChat ? h('button', { class: 'btn', title: 'Attach the JARVIS chat dock to this session: what you type or say goes straight into it', onclick: () => onAttachChat(n, s) }, '💬 Chat here') : null,
         h('button', { class: 'btn', onclick: loadT }, '↻ Refresh'),
         h('button', { class: 'btn', onclick: () => focus?.(n, s) }, '◎ Show in galaxy'),
         s.kind === 'claude' || s.kind === 'codex' ? h('button', { class: 'btn', onclick: () => { navigator.clipboard.writeText(`ssh ${n.sshAlias || n.name} -t "cd ${s.cwd || '~'} && ${s.kind === 'claude' ? 'claude --resume' : 'codex resume'} ${s.id}"`); toast('Resume command copied'); } }, '⧉ Copy ssh resume') : null));
