@@ -130,3 +130,73 @@ test('resolveApp: local by name/self, peers from the mesh catalog, null when unk
   assert.equal(A.resolveApp('n2', 'szuf').node, 'magix');
   assert.equal(A.resolveApp('magix', 'nope'), null);
 });
+
+test('declaredApps: a hand edit of config.json is picked up without restarting', async () => {
+  const { CONFIG_FILE, config } = await import('../src/config.js');
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'one', port: 1 }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  assert.deepEqual(A.loadApps().apps.map((a) => a.id), ['one']);
+  const disk = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  disk.apps.push({ id: 'two', port: 2 });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(disk));
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(CONFIG_FILE, later, later);
+  assert.deepEqual(A.loadApps().apps.map((a) => a.id), ['one', 'two']);
+  assert.equal(config().apps.length, 2, 'in-memory config follows so saveConfig does not revert the edit');
+});
+
+test('onAppsChange: fires when an app is added or flips up/down, not on unchanged probes', async () => {
+  const srv = http.createServer((q, r) => r.end('ok'));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'live', port: srv.address().port }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const seen = [];
+  const off = A.onAppsChange((r) => seen.push(r.apps.map((a) => `${a.id}:${a.health.status}`).join(',')));
+  await A.checkAll();
+  await A.checkAll();
+  await new Promise((ok) => srv.close(ok));
+  await A.checkAll({ timeoutMs: 500 });
+  off();
+  assert.deepEqual(seen, ['live:up', 'live:down']);
+});
+
+test('appResponseHeaders: drops frame blockers, keeps redirects and cookies under the proxy base', async () => {
+  const { appResponseHeaders } = await import('../src/proxy.js');
+  const base = '/api/nodes/magix/apps/krea';
+  const out = appResponseHeaders({
+    'x-frame-options': 'DENY', 'content-security-policy': "default-src 'self'; frame-ancestors 'none'", connection: 'close',
+    location: '/login', 'set-cookie': ['sid=1; Path=/; HttpOnly'], 'content-type': 'text/html',
+  }, base);
+  assert.equal(out['x-frame-options'], undefined);
+  assert.equal(out.connection, undefined);
+  assert.equal(out['content-security-policy'], "default-src 'self'");
+  assert.equal(out.location, base + '/login');
+  assert.deepEqual(out['set-cookie'], [`sid=1; Path=${base}/; HttpOnly`]);
+  assert.equal(appResponseHeaders({ location: 'https://x.y/z' }, base).location, 'https://x.y/z');
+  assert.equal(appResponseHeaders({ location: base + '/a' }, base).location, base + '/a');
+});
+
+test('forwardApp: streams method, path, query and body to the app; 502 when it is down', async () => {
+  const { forwardApp } = await import('../src/proxy.js');
+  const app = http.createServer((q, r) => {
+    let b = '';
+    q.on('data', (d) => { b += d; });
+    q.on('end', () => r.end(JSON.stringify({ m: q.method, u: q.url, b, prefix: q.headers['x-forwarded-prefix'], tok: q.headers['x-rigs-token'] || null })));
+  });
+  await new Promise((ok) => app.listen(0, '127.0.0.1', ok));
+  const target = { id: 'k', name: 'K', node: 'mac', target: `http://127.0.0.1:${app.address().port}` };
+  const gw = http.createServer((q, r) => forwardApp(target, q, r, q.url.slice(1), '/api/local/apps/k'));
+  await new Promise((ok) => gw.listen(0, '127.0.0.1', ok));
+  const url = `http://127.0.0.1:${gw.address().port}`;
+  const r = await fetch(url + '/api/generate?x=1', { method: 'POST', body: 'hi', headers: { 'x-rigs-token': 'secret' } });
+  assert.deepEqual(await r.json(), { m: 'POST', u: '/api/generate?x=1', b: 'hi', prefix: '/api/local/apps/k', tok: null });
+  await new Promise((ok) => app.close(ok));
+  const down = await fetch(url + '/');
+  assert.equal(down.status, 502);
+  assert.match(await down.text(), /K on mac is not answering/);
+  await new Promise((ok) => gw.close(ok));
+});

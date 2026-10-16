@@ -1,6 +1,7 @@
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
+import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -156,6 +157,7 @@ function connectEvents() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
+    onAppsEvent(m);
     if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
@@ -625,6 +627,12 @@ async function intent(text) {
     return true;
   }
   if (/^(?:show |open )?(?:my )?projects$/i.test(t)) { projectsWindow(); say('Your projects.'); return true; }
+  if (/^(?:show |open |list )?(?:my |the )?(?:apps|applets|app cloud)$/i.test(t)) { openApps(); say('Your apps.'); return true; }
+  if ((m = t.match(/^(?:open|launch|show|start|run)\s+(?:the |my )?(.+?)(?: app| applet)?$/i))) {
+    await refreshApps();
+    const a = findApp(m[1]);
+    if (a) { openApp(a); say(`${a.name}, ${persona.address}.`); return true; }
+  }
   if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); setOrb('online'); return true; }
   return false;
 }
@@ -714,6 +722,7 @@ function wire() {
   $('#btn-sess').onclick = () => sessionsWindow();
   $('#btn-mesh').onclick = meshWindow;
   $('#btn-proj').onclick = () => projectsWindow();
+  $('#btn-apps').onclick = () => openApps();
   $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; };
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#subtitle').onclick = conversationWindow;

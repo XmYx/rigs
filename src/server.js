@@ -22,7 +22,7 @@ import * as files from './files.js';
 import * as models from './models.js';
 import * as openrig from './openrig.js';
 import * as planner from './planner.js';
-import { forwardHttp, forwardWs, peerJson } from './proxy.js';
+import { forwardApp, forwardAppUpgrade, forwardHttp, forwardWs, peerJson } from './proxy.js';
 import * as pty from './pty.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
@@ -370,6 +370,33 @@ export async function startServer() {
       return { tools: await caps.capabilities(true) };
     }
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
+    if (sub === 'apps' && method === 'POST') {
+      // Register / update / remove one app in this node's config ({ ...app } or { id, remove: true }).
+      const b = await body();
+      const cfg = config();
+      const id = String(b.id || '').trim().toLowerCase();
+      const rest = (cfg.apps || []).filter((a) => String(a.id || '').toLowerCase() !== id);
+      if (!b.remove) {
+        const { app, errors } = appsReg.validateApp(b);
+        if (!app) throw new HttpError(400, errors.join('; '));
+        const { remove, ...raw } = b;
+        rest.push({ ...raw, id });
+      }
+      cfg.apps = rest;
+      saveConfig(cfg);
+      appsReg.checkAll().catch(() => {});
+      return appsReg.localApps();
+    }
+    if ((mm = m(/^apps\/([^/]+)(?:\/(.*))?$/))) {
+      // App Cloud proxy: /api/local/apps/<id>/<path> → the app's own server on this machine.
+      const r = appsReg.resolveApp('self', decodeURIComponent(mm[1]));
+      if (!r) throw new HttpError(404, 'unknown app ' + mm[1]);
+      const search = new URL(req.url, 'http://x').search;
+      if (mm[2] === undefined) { res.writeHead(308, { location: `${mm[1]}/${search}` }); res.end(); return undefined; }
+      const base = String(req.headers['x-rigs-app-base'] || `/api/local/apps/${mm[1]}`);
+      forwardApp(r.app, req, res, mm[2] + search, base);
+      return undefined;
+    }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();
@@ -578,8 +605,14 @@ export async function startServer() {
       const node = discovery.get(decodeURIComponent(mm[1]));
       if (!node) throw new HttpError(404, 'unknown node ' + mm[1]);
       const rest = mm[2] + url.search;
-      if (node.self) return localApi(req, res, mm[2], url.searchParams);
+      if (node.self) {
+        const am = mm[2].match(/^apps\/([^/]+)/);
+        if (am) req.headers['x-rigs-app-base'] = `/api/nodes/${mm[1]}/apps/${am[1]}`;
+        return localApi(req, res, mm[2], url.searchParams);
+      }
       if (!node.rigs || !node.online) throw new HttpError(503, `${node.name} is not running RIGS`);
+      const am = mm[2].match(/^apps\/([^/]+)/);
+      if (am) req.headers['x-rigs-app-base'] = `/api/nodes/${mm[1]}/apps/${am[1]}`;
       forwardHttp(node, req, res, rest);
       return undefined;
     }
@@ -649,6 +682,16 @@ export async function startServer() {
       else forwardWs(node, req, socket, head, `pty/${mm[2]}/ws`);
       return;
     }
+    if ((mm = url.pathname.match(/^\/api\/(?:local|nodes\/([^/]+))\/apps\/([^/]+)\/(.*)$/))) {
+      const node = mm[1] ? discovery.get(decodeURIComponent(mm[1])) : { self: true };
+      const base = mm[1] ? `/api/nodes/${mm[1]}/apps/${mm[2]}` : String(req.headers['x-rigs-app-base'] || `/api/local/apps/${mm[2]}`);
+      if (!node) { socket.destroy(); return; }
+      if (!node.self) { req.headers['x-rigs-app-base'] = base; forwardWs(node, req, socket, head, `apps/${mm[2]}/${mm[3]}${url.search}`); return; }
+      const r = appsReg.resolveApp('self', decodeURIComponent(mm[2]));
+      if (!r) { socket.destroy(); return; }
+      forwardAppUpgrade(r.app, req, socket, head, mm[3] + url.search, base);
+      return;
+    }
     socket.destroy();
   }
 
@@ -714,7 +757,8 @@ export async function startServer() {
 
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).
   setInterval(kickMerge, 30000).unref();
-  appsReg.startHealthChecks();
+  appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
+  appsReg.startHealthChecks({ intervalMs: 5000 });
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();

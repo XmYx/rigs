@@ -1,4 +1,5 @@
-import { config } from './config.js';
+import fs from 'node:fs';
+import { CONFIG_FILE, config } from './config.js';
 
 /**
  * App registry: web apps hosted on a node and shared with the mesh (the "App Cloud").
@@ -79,8 +80,27 @@ export function validateApp(raw, node = config().name) {
   };
 }
 
+let diskMtime = 0;
+/**
+ * The declared apps, re-read from config.json whenever the file changes on disk, so an app added by
+ * hand or by another process shows up without restarting the daemon. The in-memory config is updated
+ * too, so a later saveConfig() does not write the stale list back.
+ */
+export function declaredApps() {
+  const cfg = config();
+  try {
+    const mtime = fs.statSync(CONFIG_FILE).mtimeMs;
+    if (mtime !== diskMtime) {
+      diskMtime = mtime;
+      const disk = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).apps;
+      if (disk !== undefined) cfg.apps = disk;
+    }
+  } catch { /* missing or mid-write: keep what we have */ }
+  return cfg.apps;
+}
+
 /** Validate the whole "apps" array. Invalid and duplicate entries are dropped and reported. */
-export function loadApps(list = config().apps, node = config().name) {
+export function loadApps(list = declaredApps(), node = config().name) {
   const apps = [];
   const errors = [];
   const seen = new Set();
@@ -124,6 +144,19 @@ export async function probeApp(app, { timeoutMs = 4000, fetchImpl = fetch } = {}
 }
 
 const health = new Map(); // app id → health record (local apps)
+const listeners = new Set();
+let lastSignature = '';
+/** Subscribe to changes in this node's app list or any app's up/down status. Returns unsubscribe. */
+export function onAppsChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+function signature() {
+  return loadApps().apps.map((a) => `${a.id}|${a.name}|${a.icon}|${a.target}|${health.get(a.id)?.status || 'unknown'}`).join('\n');
+}
+function emitIfChanged() {
+  const sig = signature();
+  if (sig === lastSignature) return;
+  lastSignature = sig;
+  for (const fn of listeners) { try { fn(localApps()); } catch { /* listener bugs never stop health checks */ } }
+}
 let meshCatalog = []; // last aggregated catalog, for resolveApp on peers
 let timer = null;
 
@@ -142,6 +175,7 @@ export async function checkAll(opts = {}) {
     const res = await probeApp(a, opts);
     health.set(a.id, nextHealth(health.get(a.id), res));
   }));
+  emitIfChanged();
 }
 
 export function startHealthChecks({ intervalMs = 15000, ...opts } = {}) {
@@ -153,7 +187,7 @@ export function startHealthChecks({ intervalMs = 15000, ...opts } = {}) {
 
 export function stopHealthChecks() { clearInterval(timer); timer = null; }
 
-export function resetAppsState() { health.clear(); meshCatalog = []; }
+export function resetAppsState() { health.clear(); meshCatalog = []; lastSignature = ''; diskMtime = 0; }
 
 /**
  * Merge per-node results into the mesh catalog. `results` = [{ node: {id,name}, apps?: [...], error? }].

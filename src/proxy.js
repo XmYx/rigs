@@ -81,3 +81,79 @@ export function forwardWs(node, req, socket, head, localPath) {
     if (client) client.close(); else socket.destroy();
   });
 }
+
+// ---------------------------------------------------------------- App Cloud: forward to a local web app
+
+const APP_DROP = new Set([...HOP, 'x-rigs-token', 'x-rigs-via', 'x-rigs-app-base']);
+const FRAME_BLOCKERS = new Set(['x-frame-options']);
+
+function appRequestHeaders(target, incoming, base, { upgrade = false } = {}) {
+  const h = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    if (k.startsWith('tailscale-')) continue;
+    if (APP_DROP.has(k) && !(upgrade && (k === 'connection' || k === 'upgrade'))) continue;
+    h[k] = v;
+  }
+  h.host = target.host;
+  h['x-forwarded-prefix'] = base;
+  return h;
+}
+
+/**
+ * Response headers for the browser: drop hop headers and frame blockers (JARVIS shows apps in an
+ * iframe), drop frame-ancestors from CSP, and keep root-relative redirects/cookies under `base`.
+ */
+export function appResponseHeaders(headers, base) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (HOP.has(k) || FRAME_BLOCKERS.has(k)) continue;
+    if (k === 'content-security-policy') {
+      const csp = String(v).split(';').filter((d) => !/^\s*frame-ancestors\b/i.test(d)).join(';').trim();
+      if (csp) out[k] = csp;
+      continue;
+    }
+    if (k === 'location' && typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') && !v.startsWith(base + '/')) { out[k] = base + v; continue; }
+    if (k === 'set-cookie') { out[k] = [].concat(v).map((c) => c.replace(/;\s*path=\/(?=;|$)/i, `; Path=${base}/`)); continue; }
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Stream one HTTP request to a web app hosted on this machine. `subPath` excludes the leading slash. */
+export function forwardApp(app, req, res, subPath, base) {
+  const target = new URL(app.target + '/' + subPath);
+  const lib = target.protocol === 'https:' ? https : http;
+  const preq = lib.request(target, { method: req.method, headers: appRequestHeaders(target, req.headers, base), timeout: 0 }, (pres) => {
+    res.writeHead(pres.statusCode || 502, appResponseHeaders(pres.headers, base));
+    pres.pipe(res);
+  });
+  preq.setTimeout(300000, () => preq.destroy(new Error('app timeout')));
+  preq.on('error', (e) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(`${app.name} on ${app.node} is not answering (${e.code || e.message}).`);
+    } else res.end();
+  });
+  res.on('close', () => preq.destroy());
+  req.pipe(preq);
+}
+
+/** Bridge a WebSocket (or any HTTP upgrade) to a web app hosted on this machine. */
+export function forwardAppUpgrade(app, req, socket, head, subPath, base) {
+  const target = new URL(app.target + '/' + subPath);
+  const lib = target.protocol === 'https:' ? https : http;
+  const preq = lib.request(target, { method: req.method, headers: appRequestHeaders(target, req.headers, base, { upgrade: true }) });
+  preq.on('upgrade', (pres, psock, phead) => {
+    const lines = [`HTTP/1.1 ${pres.statusCode} ${pres.statusMessage}`];
+    for (let i = 0; i < pres.rawHeaders.length; i += 2) lines.push(`${pres.rawHeaders[i]}: ${pres.rawHeaders[i + 1]}`);
+    socket.write(lines.join('\r\n') + '\r\n\r\n');
+    if (phead?.length) socket.write(phead);
+    if (head?.length) psock.write(head);
+    psock.pipe(socket).pipe(psock);
+    psock.on('error', () => socket.destroy());
+    socket.on('error', () => psock.destroy());
+  });
+  preq.on('response', (pres) => { socket.end(`HTTP/1.1 ${pres.statusCode} ${pres.statusMessage}\r\n\r\n`); pres.resume(); });
+  preq.on('error', () => socket.destroy());
+  preq.end();
+}
