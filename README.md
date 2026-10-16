@@ -48,6 +48,9 @@ can act on all of them.
 - **Agents run in auto mode.** Agents RIGS starts, project tasks and OpenRig seats (`builtin:auto`)
   run unattended: Claude Code in its auto mode, Codex with the `rigs-auto` profile (workspace-write
   sandbox with network, asking only to escalate). Anything that still has to ask shows up as above.
+- **App Cloud: any machine's web apps, from anywhere.** Declare a web app in a machine's
+  `~/.rigs/config.json` and every JARVIS on the mesh can open it at
+  `/api/nodes/<machine>/apps/<id>/`, relayed over the tailnet (see [Sharing a web app](#sharing-a-web-app)).
 - **Files on any machine.** Browse, preview, upload, download, rename, trash, and drag-and-drop or
   "copy to machine" between nodes.
 - **Easy SSH.** Each node gets a mesh key and `~/.ssh/config` aliases. `ssh <machine>` works from
@@ -93,6 +96,42 @@ dispatch), `project_list`, `project_get`, `project_dispatch` and `project_task_u
 
 ```
 ```
+
+## Sharing a web app
+
+Add the app to `"apps"` in `~/.rigs/config.json` on the machine that runs it:
+
+```json
+"apps": [
+  { "id": "szuf", "name": "SZÜF", "icon": "🚗", "port": 8787, "host": "100.82.152.1",
+    "healthPath": "/api/status", "launch": { "systemd": "szuf.service" } }
+]
+```
+
+Use `port` (with `host` when the app doesn't listen on 127.0.0.1) or a full `url`, not both. The
+node checks the app's health every 15 s; `GET /api/apps` and the `mesh_apps` MCP tool list every
+app on the mesh.
+
+Every daemon serves every app at `/api/nodes/<machine>/apps/<id>/`. If the app runs on this
+machine, the daemon forwards to its port. Otherwise it relays the request to the hosting machine's
+daemon, which checks the caller the same way it checks any other request. Request and response
+bodies stream, so uploads, chunked responses and Server-Sent Events work. WebSockets are piped
+through. The hosting daemon makes an app written for `/` work under the prefix:
+
+- `Location`, `Set-Cookie` `Path` (and `Domain`, which it drops) and root-relative
+  `src`/`href`/`action`/`srcset` attributes and CSS `url()` are rewritten into the prefix.
+- A small script loaded first in `<head>` points `fetch`, XHR, `WebSocket`, `EventSource` and
+  `history.pushState` back inside the prefix.
+- Root-relative requests that still escape are sent back into the app based on their `Referer`.
+- `X-Frame-Options` and CSP `frame-ancestors` are removed so JARVIS can show the app in a window.
+- The app receives `X-Forwarded-Prefix`, `X-Forwarded-Host` and `X-Forwarded-Proto`. Mesh tokens and
+  Tailscale identity headers are never passed to it.
+
+An unknown app answers 404 and an app that is down answers 502, both as JSON. Optional hints in
+`"rewrite"`: `"rootRelative": false` turns off the HTML/CSS rewriting and the script for apps that
+already honour `X-Forwarded-Prefix`; `"cookies": false` leaves `Set-Cookie` alone; `"websocket": false`
+refuses upgrades. Apps that build URLs relative to the page (`api/x`, not `/api/x`) need none of the
+rewriting.
 
 ## Developing
 

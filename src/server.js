@@ -22,7 +22,7 @@ import * as files from './files.js';
 import * as models from './models.js';
 import * as openrig from './openrig.js';
 import * as planner from './planner.js';
-import { forwardHttp, forwardWs, peerJson } from './proxy.js';
+import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
 import * as pty from './pty.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
@@ -574,6 +574,8 @@ export async function startServer() {
       if (!isLoopback(clientIp(req)) && !req.headers['tailscale-user-login']) throw new HttpError(400, 'open the UI from this machine (localhost) to launch a native viewer here — or use “view on” another machine');
       return connectDesktop(b.target, b.method);
     }
+    const route = appRoute(p);
+    if (route) { await appHttp(req, res, url, route); return undefined; }
     if ((mm = p.match(/^\/api\/nodes\/([^/]+)\/(.+)$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));
       if (!node) throw new HttpError(404, 'unknown node ' + mm[1]);
@@ -586,9 +588,43 @@ export async function startServer() {
     throw new HttpError(404, 'not found');
   }
 
+  /**
+   * App Cloud: /api/nodes/<node>/apps/<id>/* (src/proxy.js). Local apps are forwarded to their port;
+   * apps on a peer are relayed to that peer's daemon, which authorizes the hop again.
+   * Returns { app } for a local app, { peer } for a remote one; throws 404/502 HttpErrors.
+   */
+  async function appTarget(route) {
+    const ref = decodeURIComponent(route.nodeRef);
+    // This node is known from config alone, so apps answer while the first discovery scan still runs.
+    let node = appsReg.isSelfRef(ref) ? { self: true, name: config().name } : discovery.get(ref);
+    if (!node && !discovery.list().some((n) => n.self)) { await discovery.tick(); node = discovery.get(ref); }
+    if (!node) throw new HttpError(404, `unknown node ${ref}`);
+    if (!node.self) {
+      if (!node.rigs || !node.online) throw new HttpError(502, `${node.name} is not reachable (offline or not running RIGS)`);
+      return { peer: node };
+    }
+    const r = appsReg.resolveApp('self', decodeURIComponent(route.appId));
+    if (!r) throw new HttpError(404, `unknown app ${decodeURIComponent(route.appId)} on ${node.name}`);
+    return { app: r.app };
+  }
+
+  async function appHttp(req, res, url, route) {
+    if (route.rest === undefined) {
+      // Relative URLs in the app only resolve inside the prefix with a trailing slash.
+      res.writeHead(308, { location: url.pathname + '/' + url.search, 'cache-control': 'no-store' });
+      res.end();
+      return;
+    }
+    const t = await appTarget(route);
+    if (t.peer) relayApp(t.peer, req, res, route, url.search);
+    else proxyApp(req, res, t.app, route, url.search);
+  }
+
   async function handler(req, res) {
     const url = new URL(req.url, 'http://localhost');
     try {
+      const back = appRefererRedirect(req);
+      if (back) { res.writeHead(307, { location: back, 'cache-control': 'no-store' }); res.end(); return; }
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
@@ -640,6 +676,16 @@ export async function startServer() {
     }
     if ((mm = url.pathname.match(/^\/api\/local\/pty\/(\w+)\/ws$/))) {
       wss.handleUpgrade(req, socket, head, (ws) => pty.attachWs(mm[1], ws));
+      return;
+    }
+    const appR = appRoute(url.pathname);
+    if (appR) {
+      const route = { ...appR, rest: appR.rest ?? '/' };
+      try {
+        const t = await appTarget(route);
+        if (t.peer) relayAppWs(t.peer, req, socket, head, route, url.search);
+        else proxyAppWs(req, socket, head, t.app, route, url.search);
+      } catch (e) { rejectUpgrade(socket, e.status || 500, e.message); }
       return;
     }
     if ((mm = url.pathname.match(/^\/api\/nodes\/([^/]+)\/pty\/(\w+)\/ws$/))) {
