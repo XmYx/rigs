@@ -41,6 +41,8 @@ function defaults() {
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
     // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
     capabilities: {},
+    // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
+    apps: [],
     // Extra model ids per provider, appended to the built-in catalog (src/models.js).
     models: { claude: [], codex: [] },
     // How the planner assigns each task kind to a provider/model/effort. First match wins;
@@ -140,6 +142,6 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps,
   };
 }

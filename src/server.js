@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
 import * as caps from './capabilities.js';
+import * as appsReg from './apps.js';
 import * as chat from './chat.js';
 import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
@@ -213,6 +214,16 @@ export async function startServer() {
     return [...results, ...offline];
   }
 
+  /** Mesh-wide app catalog: this node's apps plus every online peer's, with health (src/apps.js). */
+  async function meshApps() {
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? Promise.resolve(appsReg.localApps()) : peerJson(n, 'apps', { timeout: 7000 }))
+      .then((r) => ({ node: n, apps: r.apps })).catch((e) => ({ node: n, error: e.message }))));
+    const out = appsReg.aggregateApps(results);
+    appsReg.setMeshCatalog(out.apps);
+    return out;
+  }
+
   /** Call any node's local API by id or name (direct function call for this node). */
   async function callNode(nodeRef, p, { method = 'GET', body, timeout = 30000 } = {}) {
     const node = discovery.get(nodeRef);
@@ -356,6 +367,7 @@ export async function startServer() {
       saveConfig(cfg);
       return { tools: await caps.capabilities(true) };
     }
+    if (sub === 'apps' && method === 'GET') return appsReg.localApps();
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();
@@ -532,6 +544,7 @@ export async function startServer() {
     }
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
+    if (p === '/api/apps') return meshApps();
     if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
     if (p === '/api/mesh/update' && req.method === 'POST') return rolloutAll();
@@ -676,6 +689,7 @@ export async function startServer() {
 
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).
   setInterval(kickMerge, 30000).unref();
+  appsReg.startHealthChecks();
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();
