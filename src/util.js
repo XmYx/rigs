@@ -123,13 +123,21 @@ export async function writeJsonAtomic(file, data) {
   await fsp.rename(tmp, file);
 }
 
+export const MANAGED_START = '# >>> rigs mesh >>>';
+export const MANAGED_END = '# <<< rigs mesh <<<';
+
+/** `text` with the block delimited by marker comments replaced by `body` (appended if absent). Pure. */
+export function applyManagedBlock(text, body, { start = MANAGED_START, end = MANAGED_END } = {}) {
+  const block = `${start}\n${body.trim() ? body.trimEnd() + '\n' : ''}${end}\n`;
+  const re = new RegExp(`${escapeRe(start)}[\\s\\S]*?${escapeRe(end)}\\n?`);
+  return re.test(text) ? text.replace(re, () => block) : (text && !text.endsWith('\n') ? text + '\n' : text) + (text ? '\n' : '') + block;
+}
+
 /** Replace (or append) a block delimited by marker comments inside a text file. */
-export async function upsertManagedBlock(file, body, { start = '# >>> rigs mesh >>>', end = '# <<< rigs mesh <<<', mode } = {}) {
+export async function upsertManagedBlock(file, body, { start = MANAGED_START, end = MANAGED_END, mode } = {}) {
   let text = '';
   try { text = await fsp.readFile(file, 'utf8'); } catch {}
-  const block = `${start}\n${body.trimEnd()}\n${end}\n`;
-  const re = new RegExp(`${escapeRe(start)}[\\s\\S]*?${escapeRe(end)}\\n?`);
-  const next = re.test(text) ? text.replace(re, block) : (text && !text.endsWith('\n') ? text + '\n' : text) + (text ? '\n' : '') + block;
+  const next = applyManagedBlock(text, body, { start, end });
   if (next === text) return false;
   await fsp.mkdir(path.dirname(file), { recursive: true });
   await fsp.writeFile(file, next, mode ? { mode } : undefined);

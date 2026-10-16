@@ -84,7 +84,7 @@ async function selfInfo() {
     url: `http://${ip || '127.0.0.1'}:${cfg.port}`,
     ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
     tailscale: tsStatus ? { ip, dnsName: tsStatus.self.dnsName, login: tsStatus.self.login, state: tsStatus.backendState } : null,
-    sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name,
+    sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name, sshHostKeys: await ssh.hostKeys().catch(() => null),
     canPush: await merge.canPush().catch(() => false),
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
     rootSteps: rootsteps.pending(),
@@ -105,6 +105,7 @@ export async function startServer() {
     try {
       const r = await ssh.syncPeers(nodes);
       if (r.authorized || r.aliases) log(`ssh: ${r.authorized} peer key(s) authorized, ${r.aliases} alias(es) in ~/.ssh/config`);
+      if (r.replaced?.length) log(`ssh: peer host key changed for ${r.replaced.join(', ')}; replaced the stale known_hosts entries (previous file: known_hosts.rigs.old)`);
       if (config().openrig.registerPeers) {
         const o = await openrig.registerPeers(nodes.filter((n) => !n.self && n.rigs).map((n) => ({ name: n.name, sshAlias: n.sshAlias || n.name, rigsTools: { rig: !!n.tools?.rig } })));
         if (o.added?.length) log(`openrig: registered host(s) ${o.added.join(', ')}`);
@@ -502,7 +503,7 @@ export async function startServer() {
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
 
     // ssh
-    if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), server: await ssh.serverStatus(), alias: config().name };
+    if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), hostKeys: await ssh.hostKeys(), server: await ssh.serverStatus(), alias: config().name };
     if (sub === 'ssh/sync' && method === 'POST') return ssh.syncPeers(discovery.list());
 
     // self-update

@@ -61,7 +61,7 @@ export class Discovery extends EventEmitter {
       if (res.info && res.info.id && res.info.id !== self.id) {
         next.set(res.info.id, {
           ...res.info, url: c.url, address: new URL(c.url).hostname, self: false, online: true, rigs: true, viaToken: c.viaToken, lastSeen: Date.now(),
-          tailscale: c.ts ? { ip: c.ts.ips[0], dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login } : res.info.tailscale,
+          tailscale: c.ts ? { ip: c.ts.ips[0], ips: c.ts.ips, dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login } : res.info.tailscale,
         });
       } else if (c.ts) {
         // MagicDNS label is unique and DNS-safe (HostName can be "localhost" on iOS or contain spaces).
@@ -70,7 +70,7 @@ export class Discovery extends EventEmitter {
         next.set(id, {
           id, name: label, url: c.url, self: false, rigs: false, online: c.ts.online,
           platform: tsOsToPlatform(c.ts.os), error: res.error,
-          tailscale: { ip: c.ts.ips[0], dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login },
+          tailscale: { ip: c.ts.ips[0], ips: c.ts.ips, dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login },
         });
       } else if (c.url) {
         const prev = [...this.nodes.values()].find((n) => n.url === c.url && !n.self);
@@ -80,7 +80,8 @@ export class Discovery extends EventEmitter {
     }));
 
     this.nodes = next;
-    const sig = JSON.stringify([...next.values()].map((n) => [n.id, n.online, n.rigs, n.name, n.version]).sort());
+    // Host keys are in the signature so a peer switching SSH servers re-pins them everywhere.
+    const sig = JSON.stringify([...next.values()].map((n) => [n.id, n.online, n.rigs, n.name, n.version, n.sshHostKeys]).sort());
     if (sig !== this.lastSig) {
       this.lastSig = sig;
       log(`mesh: ${[...next.values()].filter((n) => n.online && n.rigs).length} rigs node(s) online, ${next.size} device(s) total`);

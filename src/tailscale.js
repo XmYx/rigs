@@ -59,6 +59,21 @@ export async function selfIps() {
   return s?.self?.ips || [];
 }
 
+let sshCache = { at: 0, value: null };
+
+/** Does Tailscale SSH answer port 22 on the tailnet? true/false, null when Tailscale can't tell. Cached for a minute. */
+export async function sshServerEnabled() {
+  if (Date.now() - sshCache.at < 60000) return sshCache.value;
+  const bin = tailscaleBin();
+  let value = false;
+  if (bin) {
+    const r = await run(bin, ['debug', 'prefs'], { timeout: 6000 });
+    value = r.code === 0 && /"RunSSH"\s*:/.test(r.stdout) ? /"RunSSH"\s*:\s*true/.test(r.stdout) : null;
+  }
+  sshCache = { at: Date.now(), value };
+  return value;
+}
+
 const whoisCache = new Map();
 
 /** Identity of a tailnet peer by IP: { login, node, tags }. Cached for a minute. */
