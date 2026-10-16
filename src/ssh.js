@@ -168,8 +168,12 @@ async function syncKnownHosts(peers) {
   const r = pinHostKeys(text, peers);
   if (r.text !== text) {
     await fsp.mkdir(SSH_DIR, { recursive: true, mode: 0o700 });
-    // Like ssh-keygen -R: keep the previous file when entries outside our block were dropped.
-    if (r.replaced.length) await fsp.writeFile(KNOWN_HOSTS + '.rigs.old', text);
+    // Like ssh-keygen -R: keep the previous file (as private as the original) when entries outside our block were dropped.
+    if (r.replaced.length) {
+      const old = KNOWN_HOSTS + '.rigs.old';
+      await fsp.writeFile(old, text, { mode: 0o600 });
+      if (!isWin) await fsp.chmod(old, (await fsp.stat(KNOWN_HOSTS)).mode & 0o777).catch(() => {});
+    }
     await fsp.writeFile(KNOWN_HOSTS, r.text);
   }
   return r;
