@@ -72,9 +72,12 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
 - **Tools**: \`mesh_status\` lists each machine's tools (e.g. ComfyUI for image generation). Use the
   machine that has the tool you need.
 - **SSH**: \`ssh <machine-name>\` works between all nodes (aliases in ~/.ssh/config).
-- **Changing the mesh itself**: the source is the public repo checked out at \`${APP_DIR}\`
-  (see its AGENTS.md). Edit, run \`npm test\`, commit, push to \`main\`, then call \`mesh_update\`
-  so every machine pulls the change and restarts.
+- **Changing the mesh itself** (policy): never edit \`${APP_DIR}\` and never commit to \`main\`.
+  Start with \`rigs_dev_start\` (CLI: \`rigs dev <topic>\`) — a worktree on branch
+  \`work/<machine>/<topic>\` — work and commit there (see its AGENTS.md, run \`npm test\`), then
+  \`rigs_propose\` (\`rigs propose\`). The merge steward merges one branch at a time onto the latest
+  main, runs the checks, pushes and rolls out to every machine; it only calls in a resolver agent
+  when there is a real conflict. Check progress with \`rigs_merge_status\`.
 `;
 }
 

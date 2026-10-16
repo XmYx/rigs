@@ -12,7 +12,8 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
   const settings = h('div', { class: 'pad settings' });
   const toolsEl = h('div', { class: 'pad settings' });
   const routingEl = h('div', { class: 'pad settings' });
-  const tabs = [['Machines', table], ['Tools', toolsEl], ['Routing', routingEl], ['Updates', updates], ['JARVIS', settings]];
+  const changesEl = h('div', { class: 'pad settings' });
+  const tabs = [['Machines', table], ['Changes', changesEl], ['Tools', toolsEl], ['Routing', routingEl], ['Updates', updates], ['JARVIS', settings]];
   const tabBar = h('div', { class: 'tabs' }, ...tabs.map(([name, el], i) => h('button', { class: 'tab' + (i ? '' : ' on'), onclick: (e) => { tabBar.querySelectorAll('.tab').forEach((t) => t.classList.remove('on')); e.target.classList.add('on'); tabs.forEach(([, x]) => (x.style.display = 'none')); el.style.display = ''; } }, name)));
   w.body.append(tabBar, ...tabs.map(([, el], i) => { el.style.display = i ? 'none' : ''; return el; }));
 
@@ -183,7 +184,32 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
         h('button', { class: 'btn', onclick: async () => { await api('/api/local/routing', { method: 'POST', body: { reset: true } }); toast('Back to the default rules'); renderRouting(); } }, 'Reset to defaults')));
   }
 
+  async function renderChanges() {
+    const r = await api('/api/mesh/merge').catch((e) => ({ error: e.message }));
+    const STATUS = { queued: '', fetching: 'run', merging: 'run', checking: 'run', resolved: 'run', merged: 'ok', conflict: 'warn', 'checks-failed': 'bad', error: 'bad', dropped: '' };
+    const steward = r.steward ? (snapshot().find((e) => e.node.name === r.steward)?.node) : null;
+    changesEl.replaceChildren(
+      h('div', { class: 'pv-title' }, 'Change policy'),
+      h('p', { class: 'muted small' }, 'Workers never touch main: each change lives on its own branch (rigs dev <topic> → work/<machine>/<topic>) and is proposed with rigs propose. The merge steward merges one branch at a time onto the latest main, runs build + tests, pushes and rolls out. It only brings in a resolver agent when there is a real conflict; failing checks go back to the author.'),
+      h('div', { class: 'upd-row' }, h('span', {}, 'Merge steward:'), h('b', {}, r.steward || '—'), h('span', { class: 'muted small' }, r.note || 'first online machine with push rights, unless pinned in config (merge.steward)')),
+      h('div', { class: 'pv-title', style: { marginTop: '10px' } }, 'Queue'),
+      ...((r.queue || []).length ? r.queue.slice(0, 40).map((x) => h('details', { class: 'merge-row' },
+        h('summary', {}, h('span', { class: `chip st-${STATUS[x.status] || ''}` }, x.status), ' ', h('b', {}, x.branch), h('span', { class: 'muted small' }, `  ${x.node} · ${x.title}${x.sha ? ' · ' + x.sha : ''}`)),
+        h('div', { class: 'small' }, ...(x.commits || []).map((c) => h('div', { class: 'mono' }, c))),
+        x.conflicts?.length ? h('div', { class: 'warnbox small' }, `Conflicts: ${x.conflicts.join(', ')}${x.resolver?.node ? ` — resolver: ${x.resolver.provider} ${x.resolver.model || ''} on ${x.resolver.node}` : ''}`) : null,
+        x.output ? h('pre', { class: 'pv-text' }, x.output) : null,
+        h('div', { class: 'small muted' }, ...(x.log || []).slice(-8).map((l) => h('div', {}, `${new Date(l.ts).toLocaleTimeString()} ${l.text}`))),
+        steward && !['merged', 'dropped'].includes(x.status) ? h('div', { class: 'actions' },
+          h('button', { class: 'btn', onclick: async () => { await api(`${node(steward.id)}/merge/${x.id}/retry`, { method: 'POST' }); renderChanges(); } }, '↻ Retry'),
+          x.status === 'conflict' ? h('button', { class: 'btn', onclick: async () => { try { await api(`${node(steward.id)}/merge/${x.id}/resolved`, { method: 'POST' }); toast('Re-checking'); } catch (e) { toast(e.message, 'error'); } renderChanges(); } }, '✓ I resolved it') : null,
+          h('button', { class: 'btn danger', onclick: async () => { if (confirm(`Drop ${x.branch} from the queue?`)) { await api(`${node(steward.id)}/merge/${x.id}/drop`, { method: 'POST' }); renderChanges(); } } }, 'Drop')) : null))
+        : [h('div', { class: 'muted small' }, 'Nothing proposed yet.')]));
+  }
+
   renderMachines();
+  renderChanges();
+  const changesTimer = setInterval(() => { if (changesEl.style.display !== 'none' && document.body.contains(changesEl)) renderChanges(); }, 5000);
+  w.el.querySelector('.win-btn.close').addEventListener('click', () => clearInterval(changesTimer));
   renderTools();
   renderRouting();
   renderUpdates();

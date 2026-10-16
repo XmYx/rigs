@@ -4,7 +4,7 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import * as rootsteps from './rootsteps.js';
 import { bin } from './tools.js';
-import { HOME, clearWhichCache, isMac, isWin, log, run } from './util.js';
+import { HOME, clearWhichCache, isLinux, isMac, isWin, log, run } from './util.js';
 
 /**
  * Installs the hardware-accelerated remote desktop stack on this machine, unattended where the OS
@@ -217,6 +217,8 @@ async function afterSunshineLinux(st) {
   await run(c[0], c.slice(1), { timeout: 30000 });
   await run('systemctl', ['--user', 'enable', '--now', 'app-dev.lizardbyte.app.Sunshine'], { timeout: 20000 });
   st.steps.push('Sunshine credentials set and user service enabled');
+  const t = await tuneSunshine().catch((e) => ({ error: e.message }));
+  if (t.encoder) st.steps.push(`Sunshine encoder: ${t.encoder}${t.changed ? ' (switched to portal capture)' : ''}`);
 }
 
 async function windows(st) {
@@ -242,6 +244,39 @@ async function windows(st) {
   st.command = rootsteps.pending().command;
   st.steps.push('Sunshine needs administrator approval: finish setup on that PC (UAC prompt)');
   return 'needs-sudo';
+}
+
+/**
+ * Linux: make Sunshine encode on the GPU. On NVIDIA + GNOME Wayland its KMS path can't feed NVENC
+ * ("Couldn't find monitor"), so it falls back to libx264; portal (PipeWire) capture + nvenc works.
+ * Only touches a sunshine.conf RIGS owns or an empty one, verifies in the log, reverts otherwise.
+ */
+export async function tuneSunshine() {
+  if (!isLinux || !bin('sunshine')) return { skipped: true };
+  const dir = path.join(HOME, '.config', 'sunshine');
+  const conf = path.join(dir, 'sunshine.conf');
+  const encoderNow = async () => {
+    const logs = (await fsp.readdir(dir).catch(() => [])).filter((f) => f.startsWith('sunshine.log')).map((f) => path.join(dir, f));
+    const withProbe = [];
+    for (const f of logs) { const t = await fsp.readFile(f, 'utf8').catch(() => ''); const m = [...t.matchAll(/Found H\.264 encoder: (\S+)/g)].pop(); if (m) withProbe.push({ f, mtime: (await fsp.stat(f)).mtimeMs, enc: m[1] }); }
+    return withProbe.sort((a, b) => b.mtime - a.mtime)[0]?.enc || '';
+  };
+  const before = await encoderNow();
+  if (before && before !== 'libx264') return { encoder: before, changed: false };
+  const nvidia = !!bin('nvidia-smi');
+  let current = '';
+  try { current = await fsp.readFile(conf, 'utf8'); } catch {}
+  if (current.trim() && !current.includes('# rigs-managed')) return { encoder: before, changed: false, note: 'sunshine.conf has your own settings — left alone' };
+  const wanted = `# rigs-managed: GPU encode via portal capture (edit freely; remove this line to stop RIGS tuning)\ncapture = portal\n${nvidia ? 'encoder = nvenc\n' : ''}`;
+  if (current === wanted) return { encoder: before, changed: false };
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(conf, wanted);
+  await run('systemctl', ['--user', 'restart', 'app-dev.lizardbyte.app.Sunshine'], { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 15000));
+  const after = await encoderNow();
+  if (!after || after === 'libx264') { await fsp.writeFile(conf, current); await run('systemctl', ['--user', 'restart', 'app-dev.lizardbyte.app.Sunshine'], { timeout: 20000 }); return { encoder: after || before, changed: false, reverted: true }; }
+  log(`desktop: Sunshine now encodes with ${after} (portal capture)`);
+  return { encoder: after, changed: true };
 }
 
 /** Install whatever is missing. Safe to call repeatedly; runs at most once at a time. */

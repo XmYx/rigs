@@ -329,6 +329,14 @@ function desktopTo(m, { viewer } = {}) {
       rs?.steps?.length ? h('a', { class: 'link', onclick: () => runOn(m.id, rs.command, `Finish setup · ${m.name}`) }, 'Finish setup (password)') : h('a', { class: 'link', onclick: () => installDesktop(m) }, 'Install Sunshine + Moonlight')));
   }
   if (!viewers.length) status.append(h('div', { class: 'warnbox' }, 'No machine with Moonlight is online to view from.'));
+  // macOS hosts: Sunshine needs the Screen Recording permission or viewers get a black stream.
+  api(`${node(m.id)}/desktop`).then((d) => {
+    if (d.host?.sunshine?.capturePermission !== false) return;
+    status.prepend(h('div', { class: 'warnbox' }, `Sunshine on ${m.name} isn't allowed to record the screen yet (viewers see black). On ${m.name}: `,
+      h('a', { class: 'link', onclick: () => api(`${node(m.id)}/desktop/permission`, { method: 'POST' }).then(() => toast(`Opened Screen Recording settings on ${m.name} — switch Sunshine on`)) }, 'open Screen Recording settings'),
+      ' → enable Sunshine (and Accessibility for input) → ',
+      h('a', { class: 'link', onclick: () => api(`${node(m.id)}/desktop/restart`, { method: 'POST' }).then(() => toast('Sunshine restarted')) }, 'restart Sunshine')));
+  }).catch(() => {});
 
   async function loadPairings() {
     try {

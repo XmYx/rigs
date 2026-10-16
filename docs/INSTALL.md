@@ -119,13 +119,24 @@ rigs setup --https   # tailscale serve → https://<machine>.<tailnet>.ts.net
 
 ## 7. Making changes from any node
 
-1. Ask any agent (Claude Code or Codex, on any machine) to change RIGS. The repo is at
-   `~/.rigs/app`, and its `AGENTS.md` explains the code.
-2. The agent runs `npm test`, commits, and pushes to `main`. That machine needs `gh auth login`.
-3. The agent calls the `mesh_update` tool, or you press **⟳ Update every machine** in ⚙ Mesh
-   control.
-4. Every node fast-forwards, reinstalls if dependencies changed, rebuilds the UI and restarts.
-   Nodes with uncommitted local edits are skipped. Auto-update also checks every 10 minutes.
+Changes to RIGS never go straight to `main`, so two agents working at the same time can't lose each
+other's work.
+
+1. Start a change on any machine with `rigs dev <topic>` (agents use the `rigs_dev_start` tool).
+   You get a worktree in `~/rigs-dev/<topic>` on the branch `work/<machine>/<topic>`, based on the
+   latest `main`.
+2. Work and commit there. Run `npm test` before proposing.
+3. Run `rigs propose` from the worktree (agents use `rigs_propose`).
+4. The **merge steward** picks the branch up. That's the first online machine with push rights
+   (`gh auth login`); you can pin one with `merge.steward` in `~/.rigs/config.json`. The worker
+   needs no GitHub credentials: the steward fetches its branch over the mesh. Requests are
+   merged one at a time onto the latest `main`, and the build and tests run on the merged result.
+   - **Clean and green:** pushed to `main` and rolled out to every machine automatically.
+   - **Conflict:** a resolver agent gets a task with the conflicting files and both sides' commits.
+     It resolves in the steward's worktree and calls `rigs_merge_resolved`, and the steward checks
+     again and pushes.
+   - **Checks fail:** nothing is merged and the author gets the log.
+5. Follow it with `rigs merge`, or in ⚙ Mesh control → **Changes**.
 
 ## Uninstall
 

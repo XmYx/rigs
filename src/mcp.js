@@ -132,6 +132,31 @@ const TOOLS = [
     run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
+    name: 'rigs_dev_start', description: 'Start a change to RIGS (or the repo checked out at `repo`): creates a git worktree on branch work/<this machine>/<topic> from the latest origin/main and returns its path. Work and commit ONLY there — never on main or in the installed checkout.',
+    inputSchema: { type: 'object', properties: { topic: { type: 'string' }, repo: { type: 'string' } }, required: ['topic'] },
+    run: (a) => api('/api/local/dev/start', { method: 'POST', body: a, timeout: 120000 }),
+  },
+  {
+    name: 'rigs_propose', description: 'Hand a committed work branch to the merge steward. It merges onto the latest main one request at a time, runs build + tests, pushes and rolls out automatically; it only brings in a resolver agent if there is a real conflict. Failing checks come back to you.',
+    inputSchema: { type: 'object', properties: { dir: { type: 'string', description: 'the worktree path from rigs_dev_start' }, title: { type: 'string' }, summary: { type: 'string' } }, required: ['dir'] },
+    run: (a) => api('/api/local/dev/propose', { method: 'POST', body: a, timeout: 60000 }),
+  },
+  {
+    name: 'rigs_merge_status', description: 'The merge steward and its queue: each proposed branch with status (queued, merging, checking, merged, conflict, checks-failed) and log.',
+    inputSchema: { type: 'object', properties: {} },
+    run: () => api('/api/mesh/merge', { timeout: 20000 }),
+  },
+  {
+    name: 'rigs_merge_resolved', description: 'Resolver only: call after committing the conflict resolution in the steward worktree; the steward re-checks and pushes.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    run: async (a) => {
+      const m = await api('/api/mesh/merge', { timeout: 20000 });
+      const nodes = await api('/api/nodes');
+      const st = nodes.find((x) => x.name === m.steward);
+      return api(`/api/nodes/${n(st?.id || 'self')}/merge/${encodeURIComponent(a.id)}/resolved`, { method: 'POST', body: {}, timeout: 60000 });
+    },
+  },
+  {
     name: 'mesh_update', description: 'Roll out the latest RIGS code from GitHub to every machine (git pull + restart). Call after pushing a change to the rigs repo.',
     inputSchema: { type: 'object', properties: {} },
     run: () => api('/api/mesh/update', { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),

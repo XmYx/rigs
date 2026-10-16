@@ -6,7 +6,7 @@ import { HOME, readJsonSync, shortHost } from './util.js';
 export const RIGS_HOME = process.env.RIGS_HOME ? path.resolve(process.env.RIGS_HOME) : path.join(HOME, '.rigs');
 export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
 export const DEFAULT_PORT = 4719;
-const RULES_VERSION = 2;
+const RULES_VERSION = 3;
 
 function defaults() {
   return {
@@ -54,6 +54,7 @@ function defaults() {
         { kind: 'test', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low' },
         { kind: 'review', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', crossCheck: true },
         { kind: 'review', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+        { kind: 'merge', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'reverse-engineer', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'research', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
         { kind: 'media', tool: 'comfyui', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
@@ -71,6 +72,8 @@ function defaults() {
     update: { auto: true, intervalMin: 10, remote: 'origin', branch: 'main' },
     ssh: { autoAuthorize: true, manageConfig: true, authorizeStaticPeers: false },
     openrig: { registerPeers: true },
+    // Change policy: work branches merged by one steward. steward: '' = auto (first machine that can push).
+    merge: { steward: '' },
     desktop: { sunshineUser: 'rigs', sunshinePass: crypto.randomBytes(12).toString('base64url') },
   };
 }

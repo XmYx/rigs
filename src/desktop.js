@@ -33,7 +33,7 @@ function portOpen(port, host = '127.0.0.1', timeout = 600) {
 export async function hostInfo() {
   const [sunshine, vnc, rdp] = await Promise.all([portOpen(47989), portOpen(5900), portOpen(3389)]);
   return {
-    sunshine: { installed: !!bin('sunshine'), running: sunshine, hw: true },
+    sunshine: { installed: !!bin('sunshine'), running: sunshine, hw: true, capturePermission: macCapturePermission() },
     vnc: { running: vnc, hw: isMac, note: isMac ? 'macOS Screen Sharing (High Performance on Apple silicon)' : '' },
     rdp: { running: rdp, hw: isWin },
   };
@@ -109,9 +109,23 @@ export async function sunshinePin(pin, name = 'rigs', clientAddress = '') {
 
 // ---------------------------------------------------------------- Moonlight (viewer side)
 
+let sessionEnv = { at: 0, vars: {} };
+
+/** Linux: the graphical session's DISPLAY / WAYLAND_DISPLAY / XAUTHORITY as GNOME/KDE export them to systemd. */
+async function refreshSessionEnv() {
+  if (!isLinux || Date.now() - sessionEnv.at < 30000) return;
+  const r = await run('systemctl', ['--user', 'show-environment'], { timeout: 5000 });
+  const vars = {};
+  for (const l of r.stdout.split('\n')) {
+    const m = l.match(/^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP)=(.*)$/);
+    if (m) vars[m[1]] = m[2];
+  }
+  sessionEnv = { at: Date.now(), vars };
+}
+
 /** Env for GUI apps launched by the background service: point them at the user's desktop session. */
 function guiEnv() {
-  const env = { ...process.env };
+  const env = { ...process.env, ...sessionEnv.vars };
   if (isLinux) {
     const uid = os.userInfo().uid;
     const run_ = `/run/user/${uid}`;
@@ -149,6 +163,7 @@ async function moonlightPaired(address) {
  * asks the target's node to accept the PIN. Returns { ok, method, message, steps }.
  */
 export async function connect({ address, platform, method = 'auto', targetHost, myAddress = '' }, pairWithTarget) {
+  await refreshSessionEnv();
   const c = clientInfo();
   const h = targetHost || {};
   const steps = [];
@@ -200,7 +215,35 @@ export async function connect({ address, platform, method = 'auto', targetHost, 
 
 /** End a stream this machine is viewing. */
 export async function quit(address) {
+  await refreshSessionEnv();
   const [cmd, args] = moonlight(['quit', address]);
   const r = await run(cmd, args, { timeout: 20000, env: guiEnv() });
-  return { ok: r.code === 0, out: (r.stdout + r.stderr).trim().slice(-200) };
+  if (r.code === 0) return { ok: true, how: 'moonlight quit' };
+  // Fall back to closing the viewer window(s) on this machine.
+  if (isWin) await run('taskkill', ['/IM', 'Moonlight.exe', '/F'], { timeout: 10000 });
+  else await run('pkill', ['-f', isMac ? 'Moonlight.app/Contents/MacOS/Moonlight' : 'Moonlight'], { timeout: 10000 });
+  return { ok: true, how: 'closed the viewer', note: (r.stdout + r.stderr).trim().slice(-160) };
+}
+
+/** macOS: Sunshine can't capture the screen until it has the Screen Recording permission. */
+export function macCapturePermission() {
+  if (!isMac) return null;
+  try {
+    const t = fs.readFileSync(path.join(RIGS_HOME, 'logs', 'sunshine.log'), 'utf8');
+    const lastStart = t.lastIndexOf('Sunshine version');
+    const tail = lastStart >= 0 ? t.slice(lastStart) : t;
+    return !/No screen capture permission/.test(tail);
+  } catch { return null; }
+}
+
+export async function restartSunshine() {
+  if (isMac) return run('launchctl', ['kickstart', '-k', `gui/${os.userInfo().uid}/dev.rigs.sunshine`], { timeout: 15000 });
+  if (isLinux) return run('systemctl', ['--user', 'restart', 'app-dev.lizardbyte.app.Sunshine'], { timeout: 20000 });
+  return run('powershell.exe', ['-NoProfile', '-Command', 'Restart-Service SunshineService -ErrorAction SilentlyContinue'], { timeout: 30000 });
+}
+
+export async function openCapturePermissionSettings() {
+  if (!isMac) return { ok: false };
+  await run('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'], { timeout: 10000 });
+  return { ok: true };
 }

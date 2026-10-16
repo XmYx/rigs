@@ -14,7 +14,7 @@ import { slug } from './work.js';
  */
 
 const DIR = path.join(RIGS_HOME, 'projects');
-export const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
+export const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'merge', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
 // Fallback order when the policy's provider isn't available. Ollama is opt-in only (kind "private" or a rule/hand pick).
 const PROVIDER_ORDER = ['claude', 'codex'];
 
