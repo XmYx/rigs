@@ -162,3 +162,10 @@ test('tts: speakable text + engine info (engine-independent)', async () => {
   const info = await get('/api/local/tts');
   assert.ok('engine' in info && Array.isArray(info.voices));
 });
+
+test('access: the node can read and write its home', async () => {
+  const a = await get('/api/local/access?force=1');
+  assert.equal(a.home.read, true);
+  assert.equal(a.home.write, true);
+  assert.ok(Array.isArray(a.folders));
+});

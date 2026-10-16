@@ -117,7 +117,22 @@ rigs setup --https   # tailscale serve → https://<machine>.<tailnet>.ts.net
 - **Tools.** ⚙ → Tools: ComfyUI is detected automatically; add each new tool as you introduce it
   (id, task kinds it serves, URL or command, notes for agents).
 
-## 7. Making changes from any node
+## 7. JARVIS and agents work in your home
+
+RIGS runs as you, so JARVIS and every agent it starts can read and write your home on each machine.
+JARVIS's brains start in `~` with write access there: Claude in `acceptEdits` mode with edit and
+Bash tools, Codex in its `workspace-write` sandbox. Change this per machine in ⚙ → JARVIS. It moves
+files to `~/.rigs/trash` instead of deleting them and asks before destructive changes. ⚙ →
+Machines shows each machine's disk access:
+
+- **macOS:** home, Documents, Desktop, Downloads and iCloud Drive work out of the box. **Full Disk
+  Access** is optional; it also opens Mail, Safari, Messages and other app data. Click the chip:
+  it opens the setting and shows the RIGS runtime in Finder, which you drag into the list.
+- **Windows:** if Defender's *Controlled folder access* is on, RIGS adds a "Finish setup" step that
+  allows `node.exe` (one administrator prompt).
+- **Linux:** standard permissions; nothing to do.
+
+## 8. Making changes from any node
 
 Changes to RIGS never go straight to `main`, so two agents working at the same time can't lose each
 other's work.
