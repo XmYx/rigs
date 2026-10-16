@@ -74,6 +74,13 @@ export async function catalog() {
 
 function uniq(a) { return [...new Set(a.filter(Boolean))]; }
 
+/** JARVIS's conversational brain: casual chat and replies to the user (fast, cheap). Heavy work is delegated. */
+export function chatBrain() {
+  const b = config().brain;
+  const c = b.chat || {};
+  return { provider: c.provider || 'claude', model: c.model || 'claude-haiku-5-5', effort: c.effort || 'low' };
+}
+
 /** The machine's default "core brain" (JARVIS + planner). */
 export function coreBrain() {
   const b = config().brain;

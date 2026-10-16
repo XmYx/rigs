@@ -27,6 +27,8 @@ function defaults() {
     brain: {
       // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+      // JARVIS's conversational brain (casual chat, replies to the user); substantial work is delegated.
+      chat: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
       ollamaUrl: 'http://127.0.0.1:11434',
       // JARVIS works in your home: brains run with cwd = workRoot and may read/write there
       // (Claude: auto mode + edit/bash tools; Codex: workspace-write sandbox rooted at workRoot).

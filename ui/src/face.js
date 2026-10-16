@@ -6,6 +6,8 @@ import * as THREE from 'three';
 //  - Without a timeline (espeak, macOS say, browser speech) the live audio loudness and brightness
 //    drive the mouth instead, so any voice still lip-syncs.
 //  - Idle life: blinks, eye saccades, breathing sway; colour follows the JARVIS state.
+//  - It looks at the mouse pointer (eyes lead, the head follows) and drifts back to idle when it rests.
+//  - Expressions (setEmotion): smile/frown, eye openness, inner-eye tilt (worry), head tilt and nod.
 
 const STATE_COLOR = { online: 0x5eead4, listening: 0x4ade80, thinking: 0xfbbf24, speaking: 0xc084fc, error: 0xf87171, offline: 0x64748b };
 
@@ -15,6 +17,19 @@ export const VISEMES = {
   DD: [0.22, 0.15, 0.0, 0.0], kk: [0.3, 0.1, 0.0, 0.0], CH: [0.2, 0.0, 0.6, 0.0], SS: [0.1, 0.5, 0.0, 0.0],
   RR: [0.2, 0.0, 0.45, 0.0], aa: [0.85, 0.2, 0.0, 0.0], E: [0.5, 0.5, 0.0, 0.0], I: [0.28, 0.75, 0.0, 0.0],
   O: [0.6, 0.0, 0.8, 0.0], U: [0.25, 0.0, 1.0, 0.0],
+};
+
+// Expression targets: smile (-1 frown … 1 smile), eyes (openness ×), worry (inner eye corners up),
+// tilt (head roll), nod (head pitch, + = down), jaw (resting mouth open), squint (lower lids up)
+export const EXPRESSIONS = {
+  neutral: { smile: 0, eyes: 1, worry: 0, tilt: 0, nod: 0, jaw: 0 },
+  happy: { smile: 0.85, eyes: 0.82, worry: 0, tilt: 0.04, nod: -0.03, jaw: 0.04 },
+  amused: { smile: 0.55, eyes: 0.72, worry: -0.25, tilt: 0.12, nod: 0, jaw: 0 },
+  curious: { smile: 0.1, eyes: 1.18, worry: 0.15, tilt: -0.17, nod: -0.02, jaw: 0 },
+  concerned: { smile: -0.35, eyes: 1.05, worry: 0.75, tilt: 0, nod: 0.03, jaw: 0 },
+  sad: { smile: -0.7, eyes: 0.72, worry: 1, tilt: 0.06, nod: 0.09, jaw: 0 },
+  surprised: { smile: 0, eyes: 1.45, worry: 0.4, tilt: 0, nod: -0.05, jaw: 0.3 },
+  focused: { smile: -0.05, eyes: 0.74, worry: -0.2, tilt: 0, nod: 0.04, jaw: 0 },
 };
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -214,6 +229,23 @@ export function createFace(container) {
   let gazeAt = 0;
   let state = 'online';
   let disposed = false;
+  // expression: current values ease toward the target emotion
+  const expr = { ...EXPRESSIONS.neutral };
+  let exprTarget = EXPRESSIONS.neutral;
+  let exprUntil = 0;
+  // mouse following: pointer position relative to the face (-1..1 across the viewport), last movement time
+  const look = new THREE.Vector2();
+  const lookTarget = new THREE.Vector2();
+  let lookAt = 0;
+  const onPointer = (e) => {
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width) return;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height * 0.42; // roughly eye level
+    lookTarget.set(Math.max(-1, Math.min(1, (e.clientX - cx) / (window.innerWidth * 0.5))), Math.max(-1, Math.min(1, (e.clientY - cy) / (window.innerHeight * 0.5))));
+    lookAt = performance.now();
+  };
+  window.addEventListener('pointermove', onPointer, { passive: true });
   const freq = new Uint8Array(256);
 
   function resize() {
@@ -259,7 +291,8 @@ export function createFace(container) {
         const u = (i / (LIP_N - 1)) * 2 - 1; // -1..1 across the mouth
         const curve = 1 - u * u;
         const cupid = sign > 0 ? 0.012 * gauss(u, 0, 0.18, 1) : 0;
-        const y = y0 + sign * (open * 0.5 * Math.pow(curve, 0.7 - mouth.round * 0.4) + 0.008 * curve + cupid) + mouth.wide * 0.015 * (1 - curve);
+        const y = y0 + sign * (open * 0.5 * Math.pow(curve, 0.7 - mouth.round * 0.4) + 0.008 * curve + cupid) + mouth.wide * 0.015 * (1 - curve)
+          + expr.smile * 0.075 * (u * u - 0.35); // corners up for a smile, down for a frown
         const zi = Math.max(0, Math.min(40, Math.round((u * w + 0.3) / 0.6 * 40)));
         a.setXYZ(i, u * w, y, lipZ[zi] + 0.015 + mouth.round * 0.05 * curve);
       }
@@ -286,7 +319,11 @@ export function createFace(container) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     const t = now / 1000;
-    const tgt = target();
+    const tgt = [...target()]; // a copy: target() may hand back the shared VISEMES arrays
+    if (exprUntil && now > exprUntil) { exprTarget = EXPRESSIONS.neutral; exprUntil = 0; }
+    const ke = 1 - Math.exp(-dt * 5);
+    for (const k of Object.keys(expr)) expr[k] += (exprTarget[k] - expr[k]) * ke;
+    tgt[0] = Math.max(tgt[0], expr.jaw); // surprise drops the jaw a little even when silent
     const k = 1 - Math.exp(-dt * 28); // critically damped approach to the target shape
     mouth.open += (tgt[0] - mouth.open) * k;
     mouth.wide += (tgt[1] - mouth.wide) * k;
@@ -296,13 +333,27 @@ export function createFace(container) {
     if (now > blinkAt) { blink = 1; blinkAt = now + 2200 + Math.random() * 4200; }
     blink = Math.max(0, blink - dt * 7);
     const lid = blink > 0.5 ? (1 - blink) * 2 : blink * 2;
-    for (const e of eyes) e.scale.y = 0.62 * Math.max(0.08, 1 - lid);
+    eyes.forEach((e, i) => {
+      e.scale.y = 0.62 * expr.eyes * Math.max(0.08, 1 - lid);
+      e.rotation.z = (i ? 0.08 : -0.08) + (i ? -1 : 1) * expr.worry * 0.32; // inner corners up = worried
+    });
+    // Following the pointer for 4 s after it last moved, then easing back to the idle three-quarter view
+    const following = now - lookAt < 4000;
+    const kf = 1 - Math.exp(-dt * (following ? 7 : 1.5));
+    look.x += ((following ? lookTarget.x : 0) - look.x) * kf;
+    look.y += ((following ? lookTarget.y : 0) - look.y) * kf;
+    const f = Math.min(1, (4000 - Math.min(4000, now - lookAt)) / 600); // 1 while following, fades to 0
     if (now > gazeAt) { gazeTarget.set((Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.02); gazeAt = now + 900 + Math.random() * 2600; }
     gaze.lerp(gazeTarget, 1 - Math.exp(-dt * 12));
-    for (const e of eyes) e.children[0].position.set(gaze.x, gaze.y, 0.002);
+    // eyes lead: pupils toward the pointer (wander when idle)
+    const px = gaze.x * (1 - f) + look.x * 0.026 * f;
+    const py = gaze.y * (1 - f) - look.y * 0.02 * f;
+    for (const e of eyes) e.children[0].position.set(px, py, 0.002);
     const talk = Math.min(1, mouth.open * 1.5);
-    head.rotation.y = 0.28 + Math.sin(t * 0.35) * 0.16 + gaze.x * 2; // a three-quarter view reads as a face
-    head.rotation.x = Math.sin(t * 0.5) * 0.04 - (state === 'thinking' ? 0.08 : 0) + talk * 0.02 * Math.sin(t * 9);
+    const idleYaw = 0.28 + Math.sin(t * 0.35) * 0.16 + gaze.x * 2; // a three-quarter view reads as a face
+    head.rotation.y = idleYaw * (1 - f) + look.x * 0.6 * f;
+    head.rotation.x = Math.sin(t * 0.5) * 0.04 * (1 - f) + look.y * 0.38 * f - (state === 'thinking' ? 0.08 : 0) + talk * 0.02 * Math.sin(t * 9) + expr.nod;
+    head.rotation.z = expr.tilt;
     head.position.y = Math.sin(t * 1.1) * 0.015;
     color.lerp(targetColor, 1 - Math.exp(-dt * 4));
     for (const m of [shell.material, lines.material]) { m.uniforms.uColor.value.copy(color); m.uniforms.uTime.value = t; }
@@ -325,6 +376,12 @@ export function createFace(container) {
       speech = { cues: cues?.length ? cues : null, startAt, ctx, analyser, until: (duration || 60) + 0.2, i: 0 };
     },
     stop() { speech = null; },
-    dispose() { disposed = true; ro.disconnect(); renderer.dispose(); renderer.domElement.remove(); },
+    /** Show an emotion (EXPRESSIONS key); `hold` ms later it eases back to neutral (0 = keep). */
+    setEmotion(name, { hold = 0 } = {}) {
+      exprTarget = EXPRESSIONS[name] || EXPRESSIONS.neutral;
+      exprUntil = hold ? performance.now() + hold : 0;
+    },
+    get emotion() { return Object.keys(EXPRESSIONS).find((k) => EXPRESSIONS[k] === exprTarget) || 'neutral'; },
+    dispose() { disposed = true; ro.disconnect(); window.removeEventListener('pointermove', onPointer); renderer.dispose(); renderer.domElement.remove(); },
   };
 }

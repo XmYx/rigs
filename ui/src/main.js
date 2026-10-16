@@ -24,6 +24,7 @@ const store = {
 let snap = [];
 let selfId = null;
 let persona = { name: 'J.A.R.V.I.S.', address: 'sir' };
+if (store.get('brainv', 0) < 2) { store.set('brain', null); store.set('brainv', 2); } // JARVIS chat now defaults to Haiku
 let brainSel = store.get('brain', null); // { nodeId, nodeName, brain, model }
 let chatRef = store.get('chat', null); // { nodeId, chatId }
 // The chat dock can be attached to any session on the mesh instead of JARVIS's own conversation:
@@ -36,10 +37,22 @@ const graph = createGraph($('#graph'), { onSelect: (n) => select(n.id), onBackgr
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
-try { face = createFace($('#face')); } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone
+try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
 if (localStorage.getItem('rigs.face') === '0') $('#face').classList.add('off');
 $('#face').onclick = () => $('#face').classList.toggle('big');
 function showFace(on) { $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
+// The face's emotion for each line JARVIS says (LocalJev on the mesh decides; see src/senses.js)
+let feelSeq = 0;
+function feel(text) {
+  if (!face || !text?.trim()) return;
+  const seq = ++feelSeq;
+  api('/api/local/emotion', { method: 'POST', body: { text: text.slice(0, 600) } }).then((r) => {
+    if (seq !== feelSeq) return; // a newer line already decided
+    const words = text.split(/\s+/).length;
+    face.setEmotion(r.emotion, { hold: Math.max(4500, words * 420 + 2500) });
+  }).catch(() => {});
+}
+
 const voice = createVoice({
   onSpeech: (s) => { if (!face) return; if (s) face.speak(s); else face.stop(); },
   onTranscript: (t) => { $('#ask').value = ''; ask(t, { spoken: true }); },
@@ -47,6 +60,7 @@ const voice = createVoice({
   onState: (s) => setOrb(s),
   onLevel: (v) => { orb.setLevel(v); face?.setLevel(v); },
 });
+{ const say = voice.say; voice.say = (t) => { feel(t); say(t); }; } // every spoken line gets an expression
 
 function setOrb(s) {
   orb.setState(s);
@@ -530,10 +544,15 @@ function allBrains() {
 }
 
 let coreDefault = null; // this gateway's core brain from the server
+let chatDefault = null; // this gateway's conversational brain (Haiku by default): casual chat and replies
 
 function currentBrain() {
   const has = (nodeId, brain) => snap.find((e) => e.node.id === nodeId && e.node.online)?.brains?.some((b) => b.id === brain);
   if (brainSel && has(brainSel.nodeId, brainSel.brain)) return brainSel;
+  if (chatDefault?.model) {
+    const node = snap.find((e) => e.node.self)?.node;
+    if (node && has(node.id, chatDefault.provider)) return { nodeId: node.id, nodeName: node.name, brain: chatDefault.provider, model: chatDefault.model, effort: chatDefault.effort };
+  }
   if (coreDefault && coreDefault.provider !== 'auto') {
     const node = coreDefault.node ? snap.find((e) => e.node.name === coreDefault.node)?.node : snap.find((e) => e.node.self)?.node;
     if (node && has(node.id, coreDefault.provider)) return { nodeId: node.id, nodeName: node.name, brain: coreDefault.provider, model: coreDefault.model, effort: coreDefault.effort };
@@ -706,6 +725,7 @@ async function ask(text, { spoken = false } = {}) {
   setOrb('thinking');
   let reply = '';
   let fed = 0; // characters of the spoken part already handed to the voice
+  let felt = false;
   const tools = [];
   try {
     if (!chatRef || chatRef.nodeId !== b.nodeId) {
@@ -719,6 +739,7 @@ async function ask(text, { spoken = false } = {}) {
         reply += e.text;
         showSubtitle(reply, 'jarvis');
         const say = spokenText(reply);
+        if (!felt && /[.!?]\s/.test(say + ' ') && say.length > 12) { felt = true; feel(say); } // first sentence sets the expression early
         if ((spoken || !voice.muted) && say.length > fed) { voice.feed(say.slice(fed)); fed = say.length; }
       } else if (e.type === 'tool') {
         tools.push(e.name);
@@ -731,6 +752,7 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     const say = spokenText(reply, true);
+    if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
     voice.feed('', true);
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
@@ -866,7 +888,7 @@ function wire() {
   renderDock();
   if (chatTarget) { targetPoll = setInterval(() => pollTarget(), 2500); pollTarget(true); }
   $('#ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; ask(v); } });
-  $('#btn-mic').onclick = () => { if (!voice.pushToTalk()) toast(window.isSecureContext ? 'Speech recognition needs Chrome, Edge or Safari.' : 'Microphone needs https or localhost — run `rigs setup --https` or open http://localhost:4719 on this machine.', 'error', 8000); };
+  $('#btn-mic').onclick = () => { if (!voice.pushToTalk()) toast(window.isSecureContext ? 'This browser cannot record the microphone.' : 'Microphone needs https or localhost — run `rigs setup --https` or open http://localhost:4719 on this machine.', 'error', 8000); };
   $('#btn-hands').onclick = () => {
     const on = voice.toggleHandsFree();
     $('#btn-hands').classList.toggle('on', on);
@@ -920,6 +942,7 @@ function wire() {
 wire();
 setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
+api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();

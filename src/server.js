@@ -24,6 +24,7 @@ import * as openrig from './openrig.js';
 import * as planner from './planner.js';
 import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
 import * as pty from './pty.js';
+import * as senses from './senses.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
@@ -351,6 +352,21 @@ export async function startServer() {
     // model catalog + this machine's core brain (provider / exact model / effort)
     if (sub === 'models') return models.catalog();
     if (sub === 'brain/core' && method === 'GET') return models.coreBrain();
+    if (sub === 'brain/chat' && method === 'GET') return models.chatBrain();
+    if (sub === 'brain/chat' && method === 'POST') {
+      const b = await body();
+      patchConfig({ brain: { chat: { provider: b.provider || 'claude', model: b.model || '', effort: b.effort || '' } } });
+      return models.chatBrain();
+    }
+    if (sub === 'emotion' && method === 'POST') { const b = await body(); return senses.emotion(b.text); }
+    if (sub === 'stt' && method === 'POST') {
+      // raw audio body (webm/ogg/mp4/wav) → text, via the jarvis-voice app's Whisper
+      const chunks = [];
+      let size = 0;
+      for await (const c of req) { size += c.length; if (size > 25 * 1024 * 1024) throw new HttpError(413, 'recording too long'); chunks.push(c); }
+      if (!size) throw new HttpError(400, 'no audio');
+      try { return await senses.stt(Buffer.concat(chunks), { contentType: req.headers['content-type'], lang: q.get('lang') || undefined }); } catch (e) { throw new HttpError(e.status || 502, e.message); }
+    }
     if (sub === 'brain/core' && method === 'POST') {
       const b = await body();
       const cfg = config();
