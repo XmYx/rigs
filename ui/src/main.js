@@ -803,13 +803,13 @@ async function ask(text, { spoken = false } = {}) {
   const tools = [];
   const chips = []; // activity chips for this reply's tool calls
   try {
-    if (!chatRef || chatRef.nodeId !== b.nodeId) {
-      const c = await api(`${node(b.nodeId)}/chats`, { method: 'POST', body: { brain: b.brain, model: b.model, effort: b.effort } });
-      chatRef = { nodeId: b.nodeId, chatId: c.id };
-      store.set('chat', chatRef);
-    }
-    await stream(`${node(b.nodeId)}/chats/${chatRef.chatId}/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
-      if (e.type === 'delta') {
+    // Every request is routed on the server: a new conversation, or the ongoing thread it belongs to
+    await stream(`${node(b.nodeId)}/jarvis/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
+      if (e.type === 'route') {
+        chatRef = { nodeId: b.nodeId, chatId: e.chatId };
+        store.set('chat', chatRef);
+        activity(`route ${e.route}`, `${e.continued ? 'continuing' : 'new'} · ${e.title || ''}`).done(true);
+      } else if (e.type === 'delta') {
         if (!reply) setOrb('speaking');
         reply += e.text;
         showSubtitle(reply, 'jarvis');

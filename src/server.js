@@ -348,6 +348,20 @@ export async function startServer() {
     if (sub === 'chats' && method === 'POST') return chat.createChat(await body());
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'GET') { const c = await chat.getChat(mm[1]); if (!c) throw new HttpError(404, 'not found'); return c; }
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'DELETE') return { ok: await chat.deleteChat(mm[1]) };
+    if (sub === 'jarvis/send' && method === 'POST') {
+      // A request from the screen or voice: routed (answer · implement · plan · continue) into a new or ongoing thread.
+      const b = await body();
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+      res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
+      const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
+      try {
+        await chat.jarvisSend(String(b.text || ''), b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal });
+      } catch (e) {
+        res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
+      } finally { clearInterval(hb); res.end(); }
+      return undefined;
+    }
     if ((mm = m(/^chats\/([\w-]+)\/send$/)) && method === 'POST') {
       const b = await body();
       if (!res || q.get('wait') === '1') {

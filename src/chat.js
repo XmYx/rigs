@@ -6,6 +6,7 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
+import { parseProjects, route as routeRequest } from './router.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
@@ -20,7 +21,7 @@ export async function listChats() {
   await fsp.mkdir(DIR, { recursive: true });
   const names = (await fsp.readdir(DIR)).filter((n) => n.endsWith('.json'));
   const chats = await Promise.all(names.map((n) => readJson(path.join(DIR, n))));
-  return chats.filter(Boolean).map((c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: c.messages.length }))
+  return chats.filter(Boolean).map((c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: c.messages.length, project: c.project || '', ongoing: !!c.ongoing }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -39,9 +40,10 @@ function workRoot() {
   return r === '~' ? HOME : r.startsWith('~/') ? path.join(HOME, r.slice(2)) : r;
 }
 
-export async function createChat({ brain, model, effort, title, cwd, hidden } = {}) {
+export async function createChat({ brain, model, effort, title, cwd, hidden, project, ongoing } = {}) {
   const c = {
     id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', effort: effort || '', cwd: cwd || workRoot(), hidden: !!hidden,
+    project: project || '', ongoing: !!ongoing,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [], claudeSessionId: null, codexThreadId: null, seen: {},
   };
   await saveChat(c);
@@ -90,13 +92,22 @@ export function soul() {
   } catch { return ''; }
 }
 
+/** JARVIS's operating rules (AGENTS.md): ~/.rigs/AGENTS.md if present, else persona/AGENTS.md. */
+export function agentsRules() {
+  const own = path.join(RIGS_HOME, 'AGENTS.md');
+  const file = fs.existsSync(own) ? own : path.join(APP_DIR, 'persona', 'AGENTS.md');
+  try { return fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->\s*/, '').trim(); } catch { return ''; }
+}
+
 export function personaPrompt(meshSummary, projects = '') {
   const p = config().persona;
   const humor = p.humor ?? 60;
   const now = new Date();
   const character = p.soul === false ? '' : soul();
+  const rules = agentsRules();
   return [
     character ? `${character}\n\n---\n# RIGS specifics` : '',
+    rules ? `# Operating rules (AGENTS.md)\n${rules}\n` : '',
     `You are ${p.name}, the voice of RIGS OS — the user's personal control plane for every workstation on their Tailscale network.`,
     `Local time on this machine: ${now.toLocaleString('en-GB', { weekday: 'long', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'long' })}.`,
     `This brain is running on the machine "${config().name}" (${os.type()} ${os.release()}, ${process.arch}).`,
@@ -264,7 +275,36 @@ export async function sendMessage(id, { text, brain, model, effort }, emit, opts
   try { return await sendMessageInner(id, { text, brain, model, effort }, emit, opts); } finally { activeTurns.delete(id); }
 }
 
-async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', projects = '', signal } = {}) {
+/** Threads a request may continue: ongoing work (implement/plan) touched in the last three days. */
+export async function ongoingThreads({ days = 3, limit = 8 } = {}) {
+  const cutoff = Date.now() - days * 86400000;
+  const all = await listChats();
+  return all.filter((c) => c.ongoing && c.updatedAt >= cutoff && c.count > 0).slice(0, limit);
+}
+
+/**
+ * Send a request through the router. It goes to a NEW conversation (persona + mesh state + active projects
+ * only) unless the router finds it belongs to an ongoing thread, which is then continued. The chosen route
+ * is emitted first ({ type: 'route' }) so the screen can show it, and it is handed to the brain as a hint.
+ */
+export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts = {}) {
+  const threads = await ongoingThreads();
+  const projects = parseProjects(opts.projects || '');
+  const decision = await routeRequest(text, { rules: agentsRules(), threads, projects });
+  const isContinue = decision.route === 'continue' && decision.threadId;
+  const chat = isContinue
+    ? await getChat(decision.threadId)
+    : await createChat({
+      brain, model, effort, title: decision.title || truncate(text.replace(/\s+/g, ' '), 60),
+      project: decision.projectId || '', ongoing: decision.route !== 'answer',
+    });
+  if (!chat) throw new Error('thread not found');
+  const hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
+  emit({ type: 'route', route: decision.route, reason: decision.reason, via: decision.via, chatId: chat.id, title: chat.title, projectId: decision.projectId || '', continued: !!isContinue });
+  return sendMessage(chat.id, { text, brain, model, effort }, emit, { ...opts, hint });
+}
+
+async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', projects = '', signal, hint = '' } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -278,7 +318,8 @@ async function sendMessageInner(id, { text, brain, model, effort }, emit, { mesh
   const turn = activeTurns.get(id);
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
-  const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal, projects);
+  const sent = hint ? `${hint}\n${text}` : text;
+  const out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects);
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;
