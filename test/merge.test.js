@@ -89,6 +89,15 @@ test('failing checks are not merged and go back to the author', async () => {
   assert.throws(() => originFile('BROKEN'));
 });
 
+test('a branch that commits node_modules (e.g. the worktree symlink) is refused', async () => {
+  const w = await merge.startWork('sneaky deps', { repo: app });
+  fs.symlinkSync(app, path.join(w.dir, 'node_modules'));
+  fs.writeFileSync(path.join(w.dir, 'ok.txt'), 'x\n');
+  git(w.dir, 'add', '-A', '-f');
+  git(w.dir, 'commit', '-q', '-m', 'oops');
+  await assert.rejects(() => merge.describe(w.dir), /node_modules/);
+});
+
 test('main itself is never a work branch', async () => {
   await assert.rejects(() => merge.describe(app), /work branch, not main|nothing to propose/);
 });

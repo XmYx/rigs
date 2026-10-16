@@ -67,6 +67,10 @@ export async function apply({ force = false } = {}) {
     const st = await check();
     if (st.error) return { updated: false, message: st.error };
     if (!st.behind) return { updated: false, message: 'already up to date', version: before.short };
+    // A version that crash-looped here (and was rolled back) is not re-applied until main moves on.
+    const target = (await git(['rev-parse', `${remote}/${branch}`], 5000)).stdout.trim();
+    const bad = readJsonSync(STATE, {})?.bad;
+    if (!force && bad && bad === target) return { updated: false, message: `${target.slice(0, 7)} crash-looped on this machine before — waiting for a newer commit on main` };
     const changed = (await git(['diff', '--name-only', `HEAD..${remote}/${branch}`])).stdout.split('\n');
     const pull = await git(['merge', '--ff-only', `${remote}/${branch}`]);
     if (pull.code !== 0) return { updated: false, message: 'cannot fast-forward: ' + pull.stderr.trim().slice(0, 200) };
@@ -91,6 +95,30 @@ export async function apply({ force = false } = {}) {
 /** Rollback target if the new version crash-loops (used by the supervisor). */
 export function previousSha() {
   return readJsonSync(STATE, {})?.previous || null;
+}
+
+/** Remember a version that crash-looped so auto-update doesn't re-apply it. */
+export async function markBad(sha) {
+  const s = readJsonSync(STATE, {}) || {};
+  await writeJsonAtomic(STATE, { ...s, bad: sha, badAt: Date.now() });
+}
+
+/**
+ * Make sure dependencies load before starting the server: a missing/broken node_modules (deleted,
+ * or replaced by a dangling symlink) is reinstalled instead of crash-looping into a rollback.
+ */
+export async function ensureDependencies() {
+  const nm = path.join(APP_DIR, 'node_modules');
+  let ok = false;
+  try {
+    const st = fs.lstatSync(nm);
+    ok = st.isDirectory() && fs.existsSync(path.join(nm, 'ws', 'package.json'));
+    if (st.isSymbolicLink()) fs.unlinkSync(nm);
+  } catch {}
+  if (ok) return { ok: true };
+  log('dependencies missing or broken — running npm install');
+  const r = await npm(['install', '--no-audit', '--no-fund']);
+  return { ok: r.code === 0, healed: true, error: r.code === 0 ? null : r.stderr.slice(-300) };
 }
 
 export function startAutoUpdate(onUpdated) {

@@ -25,6 +25,14 @@ import { APP_DIR, HOME, isWin, log, readJsonSync, run, truncate, writeJsonAtomic
 const DIR = path.join(RIGS_HOME, 'merge');
 const QUEUE = path.join(DIR, 'queue.json');
 const BRANCH_PREFIX = 'work';
+// Never part of a change: dependencies (a worktree's node_modules is a symlink, which a "dir/"
+// ignore rule does not match) and build output.
+const FORBIDDEN = /^(node_modules|ui\/dist)(\/|$)/;
+
+async function forbiddenPaths(cwd, range) {
+  const r = await git(['diff', '--name-only', range], cwd);
+  return r.stdout.split('\n').filter((f) => FORBIDDEN.test(f));
+}
 
 function git(args, cwd, timeout = 120000) {
   return run(bin('git') || 'git', args, { cwd, timeout });
@@ -66,6 +74,8 @@ export async function describe(dir) {
   if (st.stdout.trim()) throw new Error('commit your changes first (git status is not clean)');
   const commits = logr.stdout.trim().split('\n').filter(Boolean);
   if (!commits.length) throw new Error('nothing to propose: no commits ahead of origin/main');
+  const bad = await forbiddenPaths(dir, 'origin/main...HEAD');
+  if (bad.length) throw new Error(`the branch commits ${bad.join(', ')} — remove them (git rm -r --cached ${bad[0].split('/')[0]}) and commit again`);
   return { branch, base: base.stdout.trim(), commits };
 }
 
@@ -182,6 +192,10 @@ async function mergeOne(req, ctx, repo) {
       throw new Error('merge failed: ' + (m.stderr || m.stdout).trim().slice(-300));
     }
   }
+
+  // Policy gate: the change must not carry dependencies or build output (they break every machine).
+  const bad = (await git(['ls-files', 'node_modules', 'ui/dist'], work)).stdout.trim().split('\n').filter(Boolean);
+  if (bad.length) return failChecks(req, ctx, 'policy', { stdout: `The merged tree tracks ${bad.join(', ')}. Dependencies and build output must never be committed.`, stderr: '' });
 
   // Checks: the same gate CI runs (build + tests), on the merged tree.
   await update(req.id, { status: 'checking', event: 'running build + tests on the merged tree' });
