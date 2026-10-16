@@ -3,6 +3,8 @@ import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
+import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -23,8 +25,12 @@ const store = {
 let snap = [];
 let selfId = null;
 let persona = { name: 'J.A.R.V.I.S.', address: 'sir' };
+if (store.get('brainv', 0) < 2) { store.set('brain', null); store.set('brainv', 2); } // JARVIS chat now defaults to Haiku
 let brainSel = store.get('brain', null); // { nodeId, nodeName, brain, model }
 let chatRef = store.get('chat', null); // { nodeId, chatId }
+// The chat dock can be attached to any session on the mesh instead of JARVIS's own conversation:
+// { nodeId, nodeName, kind, id, title, live } — typed/spoken input goes straight into that session.
+let chatTarget = store.get('chatTarget', null);
 let busy = null;
 
 // ------------------------------------------------------------------ boot
@@ -32,10 +38,22 @@ const graph = createGraph($('#graph'), { onSelect: (n) => select(n.id), onBackgr
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
-try { face = createFace($('#face')); } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone
+try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
 if (localStorage.getItem('rigs.face') === '0') $('#face').classList.add('off');
 $('#face').onclick = () => $('#face').classList.toggle('big');
 function showFace(on) { $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
+// The face's emotion for each line JARVIS says (LocalJev on the mesh decides; see src/senses.js)
+let feelSeq = 0;
+function feel(text) {
+  if (!face || !text?.trim()) return;
+  const seq = ++feelSeq;
+  api('/api/local/emotion', { method: 'POST', body: { text: text.slice(0, 600) } }).then((r) => {
+    if (seq !== feelSeq) return; // a newer line already decided
+    const words = text.split(/\s+/).length;
+    face.setEmotion(r.emotion, { hold: Math.max(4500, words * 420 + 2500) });
+  }).catch(() => {});
+}
+
 const voice = createVoice({
   onSpeech: (s) => { if (!face) return; if (s) face.speak(s); else face.stop(); },
   onTranscript: (t) => { $('#ask').value = ''; ask(t, { spoken: true }); },
@@ -43,6 +61,7 @@ const voice = createVoice({
   onState: (s) => setOrb(s),
   onLevel: (v) => { orb.setLevel(v); face?.setLevel(v); },
 });
+{ const say = voice.say; voice.say = (t) => { feel(t); say(t); }; } // every spoken line gets an expression
 
 function setOrb(s) {
   orb.setState(s);
@@ -300,6 +319,7 @@ function renderInspector(id) {
     out.push(h('div', { class: 'ins-meta' }, `${m?.name} · ${s.kind}${s.project ? ' · ' + s.project : ''}`, h('br'), s.cwd || '', h('br'), `${s.live ? '● live · ' : ''}${ago(s.updatedAt)}`));
     out.push(h('div', { class: 'ins-actions' },
       act('📜 Transcript', () => sessionsWindow('', { node: m, s })),
+      s.kind !== 'chat' ? act('💬 Chat here', () => attachChat(m, s)) : null,
       s.kind === 'chat' ? act('◆ Continue', () => continueChat(m, s)) : act(s.kind === 'pty' ? '⌨ Open' : s.live ? '⌨ Attach' : '⌨ Resume', () => attachSession(m, s))));
   } else if (n.type === 'project') {
     const sess = graph.neighbors(id, 1).filter((x) => x.session);
@@ -388,7 +408,7 @@ function filesOn(m, path = '~') {
 
 let sessWin = null;
 function sessionsWindow(filter = '', show = null) {
-  sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat });
+  sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat });
   if (filter) { const i = sessWin.window.body.querySelector('input'); i.value = filter; i.dispatchEvent(new Event('input')); }
   if (show) sessWin.showSession(show.node, show.s);
 }
@@ -525,10 +545,15 @@ function allBrains() {
 }
 
 let coreDefault = null; // this gateway's core brain from the server
+let chatDefault = null; // this gateway's conversational brain (Haiku by default): casual chat and replies
 
 function currentBrain() {
   const has = (nodeId, brain) => snap.find((e) => e.node.id === nodeId && e.node.online)?.brains?.some((b) => b.id === brain);
   if (brainSel && has(brainSel.nodeId, brainSel.brain)) return brainSel;
+  if (chatDefault?.model) {
+    const node = snap.find((e) => e.node.self)?.node;
+    if (node && has(node.id, chatDefault.provider)) return { nodeId: node.id, nodeName: node.name, brain: chatDefault.provider, model: chatDefault.model, effort: chatDefault.effort };
+  }
   if (coreDefault && coreDefault.provider !== 'auto') {
     const node = coreDefault.node ? snap.find((e) => e.node.name === coreDefault.node)?.node : snap.find((e) => e.node.self)?.node;
     if (node && has(node.id, coreDefault.provider)) return { nodeId: node.id, nodeName: node.name, brain: coreDefault.provider, model: coreDefault.model, effort: coreDefault.effort };
@@ -681,24 +706,57 @@ async function intent(text) {
   }
   if (/^(?:show|open)(?: me)? your face$/i.test(t)) { showFace(true); say(`At your service, ${persona.address}.`); return true; }
   if (/^(?:hide|close) your face$/i.test(t)) { showFace(false); say('As you wish.'); return true; }
-  if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); setOrb('online'); return true; }
+  if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); busy?.abort(); setOrb('online'); return true; }
   return false;
+}
+
+// New input while JARVIS is still answering never interrupts that work: it goes to the overseer (a
+// long-running agent session, persona.overseer, default tmux "jarvis-overseer" on this machine), which decides
+// who should hear it — answer itself, queue it for a running agent, or start one — and replies via a
+// notification. Typing into a busy Claude Code session queues the message instead of interrupting it.
+// Without a live overseer the message waits and runs after the current reply.
+const waiting = [];
+function overseerSession() {
+  const want = persona.overseer || { kind: 'tmux', id: 'jarvis-overseer' };
+  for (const e of snap) {
+    if (want.node && e.node.name !== want.node) continue;
+    const s = (e.sessions || []).find((x) => x.kind === want.kind && x.id === want.id && x.live);
+    if (s) return { node: e.node, s };
+  }
+  return null;
+}
+
+async function toOverseer(text) {
+  const o = overseerSession();
+  if (!o) {
+    waiting.push(text);
+    showSubtitle(`Noted — I'll take that up right after the current answer (${waiting.length} waiting).`, 'jarvis');
+    return;
+  }
+  const note = `[New message from the user, typed into JARVIS while it is busy. You are the overseer: decide who should handle it — answer it yourself, queue it for the agent or session already working on that topic, or start a new agent. Never interrupt or stop a running agent or subagent; queue for them instead. Reply to the user with mesh_notify.]\n${text}`;
+  try {
+    await api(`${node(o.node.id)}/sessions/send`, { method: 'POST', body: { kind: o.s.kind, id: o.s.id, text: note } });
+    showSubtitle(`Passed to the overseer on ${o.node.name} — it will route it without interrupting anyone.`, 'jarvis');
+  } catch (e) { waiting.push(text); toast(`Overseer unreachable (${e.message}); queued after the current answer.`, 'error', 8000); }
 }
 
 async function ask(text, { spoken = false } = {}) {
   text = text.trim();
   if (!text) return;
+  if (busy && !chatTarget && !/^(stop|quiet|silence|shut up|enough)$/i.test(text)) { showSubtitle(text, 'user'); await toOverseer(text); return; }
   voice.stop();
   showSubtitle(text, 'user');
+  if (chatTarget && /^(?:detach|back to jarvis|talk to (?:jarvis|you)|stop chatting(?: here)?)\.?$/i.test(text.trim())) { detachChat(); return; }
+  if (chatTarget) { await sendToSession(text); return; }
   if (await intent(text)) return;
   const b = currentBrain();
   if (!b) { const s = 'I have no brain on any machine yet. Install Claude Code, Codex or Ollama.'; showSubtitle(s); voice.say(s); return; }
-  busy?.abort();
   const ac = new AbortController();
   busy = ac;
   setOrb('thinking');
   let reply = '';
   let fed = 0; // characters of the spoken part already handed to the voice
+  let felt = false;
   const tools = [];
   try {
     if (!chatRef || chatRef.nodeId !== b.nodeId) {
@@ -712,6 +770,7 @@ async function ask(text, { spoken = false } = {}) {
         reply += e.text;
         showSubtitle(reply, 'jarvis');
         const say = spokenText(reply);
+        if (!felt && /[.!?]\s/.test(say + ' ') && say.length > 12) { felt = true; feel(say); } // first sentence sets the expression early
         if ((spoken || !voice.muted) && say.length > fed) { voice.feed(say.slice(fed)); fed = say.length; }
       } else if (e.type === 'tool') {
         tools.push(e.name);
@@ -724,13 +783,17 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     const say = spokenText(reply, true);
+    if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
     voice.feed('', true);
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
     if (e.name !== 'AbortError') { toast(e.message, 'error'); showSubtitle(e.message, 'error'); setOrb('error'); setTimeout(() => setOrb('online'), 2500); }
-  } finally { if (busy === ac) busy = null; }
+  } finally {
+    if (busy === ac) busy = null;
+    if (!busy && waiting.length) setTimeout(() => ask(waiting.shift()), 400); // next queued message
+  }
 }
 
 async function continueChat(m, s) {
@@ -747,7 +810,91 @@ async function continueChat(m, s) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ------------------------------------------------------------------ chat dock ↔ any session
+const TARGET_ICON = { claude: '✳', codex: '◎', tmux: '▣', rig: '⛭', pty: '⌨' };
+let targetPoll = null;
+let targetLast = '';
+
+function renderDock() {
+  const label = $('#dock-target');
+  if (!label) return;
+  if (chatTarget) {
+    label.textContent = `${TARGET_ICON[chatTarget.kind] || '💬'} ${chatTarget.title || chatTarget.id} · ${chatTarget.nodeName}`;
+    label.title = `Chat attached to this ${chatTarget.kind} session on ${chatTarget.nodeName} — click for its transcript`;
+    $('#ask').placeholder = `Message ${chatTarget.kind} session on ${chatTarget.nodeName}…`;
+  } else {
+    label.textContent = '◆ JARVIS';
+    label.title = 'Chatting with JARVIS — click for the conversation; attach to any session with 💬 Chat here';
+    $('#ask').placeholder = 'Ask JARVIS…';
+  }
+  $('#dock-detach').classList.toggle('hidden', !chatTarget);
+  $('#chat-dock').classList.toggle('attached', !!chatTarget);
+}
+
+function lastReply(t) {
+  const out = (Array.isArray(t) ? t : []).filter((x) => x.role !== 'user' && x.text?.trim());
+  const m = out[out.length - 1];
+  return m ? m.text.trim() : '';
+}
+
+async function pollTarget(first = false) {
+  const t = chatTarget;
+  if (!t) return;
+  try {
+    const [tr, st] = await Promise.all([
+      api(`${node(t.nodeId)}/sessions/transcript?kind=${encodeURIComponent(t.kind)}&id=${encodeURIComponent(t.id)}`),
+      t.kind === 'claude' || t.kind === 'codex' ? api(`${node(t.nodeId)}/sessions/state?kind=${t.kind}&id=${encodeURIComponent(t.id)}`).catch(() => null) : null,
+    ]);
+    if (chatTarget !== t) return;
+    // tmux/pty transcripts are the whole screen: show its tail
+    const text = t.kind === 'tmux' || t.kind === 'rig' || t.kind === 'pty' ? (lastReply(tr).split('\n').filter((l) => l.trim()).slice(-14).join('\n')) : lastReply(tr);
+    if (text && (text !== targetLast || first)) {
+      const fresh = !first && text !== targetLast && targetLast !== '';
+      targetLast = text;
+      showSubtitle(text, 'jarvis');
+      if (fresh && !voice.muted && (t.kind === 'claude' || t.kind === 'codex')) voice.say(spokenText(text, true));
+    }
+    setOrb(st?.running ? 'thinking' : voice.mode === 'handsfree' ? 'listening' : 'online');
+  } catch (e) { if (first) showSubtitle(e.message, 'error'); }
+}
+
+/** Attach the chat dock to a session: what you type or say goes into it, its replies show here. */
+function attachChat(m, s) {
+  if (s.kind === 'chat') { continueChat(m, s); return; }
+  chatTarget = { nodeId: m.id, nodeName: m.name, kind: s.kind, id: s.id, title: s.title || s.id, live: !!s.live, cwd: s.cwd };
+  store.set('chatTarget', chatTarget);
+  targetLast = '';
+  showPanel('dock');
+  renderDock();
+  clearInterval(targetPoll);
+  targetPoll = setInterval(() => pollTarget(), 2500);
+  pollTarget(true);
+  toast(`Chat attached to ${s.kind} session “${chatTarget.title}” on ${m.name}. Say “detach” to talk to JARVIS again.`);
+  $('#ask').focus();
+}
+
+function detachChat() {
+  chatTarget = null;
+  store.set('chatTarget', null);
+  clearInterval(targetPoll);
+  targetPoll = null;
+  renderDock();
+  showSubtitle(`Back with you, ${persona.address}.`, 'jarvis');
+  setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
+}
+
+async function sendToSession(text) {
+  const t = chatTarget;
+  try {
+    const r = await api(`${node(t.nodeId)}/sessions/send`, { method: 'POST', body: { kind: t.kind, id: t.id, text } });
+    setOrb('thinking');
+    showSubtitle(r.delivered === 'resume' ? `→ ${t.title}: ${text}\n… working` : `→ ${t.title}: ${text}`, 'user');
+    setTimeout(() => pollTarget(), 1200);
+  } catch (e) { toast(e.message, 'error', 9000); showSubtitle(e.message, 'error'); }
+}
+
 async function conversationWindow() {
+  if (chatTarget) { const m = machineById(chatTarget.nodeId); if (m) sessionsWindow('', { node: m, s: chatTarget }); return; }
   if (!chatRef) { toast('No conversation yet — ask me something.'); return; }
   const w = openWindow({ title: 'Conversation', icon: '◆', width: 640, height: 520 });
   const list = h('div', { class: 'transcript' });
@@ -761,8 +908,25 @@ async function conversationWindow() {
 
 // ------------------------------------------------------------------ wiring
 function wire() {
+  // Every panel floats: drag by ⠿, close with ✕, bring back from ☰ (see panels.js)
+  makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
+  makeFloating($('#legend'), { id: 'legend', title: 'Filters', keep: [$('#legend h4')] });
+  makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
+  makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
+  makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
+  const work = createWork($('#work'), { onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); } });
+  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
+  { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
+  makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
+  panelMenu();
+  $('#btn-work').onclick = () => togglePanel('work');
+  $('#dock-target').onclick = conversationWindow;
+  $('#dock-detach').onclick = detachChat;
+  renderDock();
+  if (chatTarget) { targetPoll = setInterval(() => pollTarget(), 2500); pollTarget(true); }
   $('#ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; ask(v); } });
-  $('#btn-mic').onclick = () => { if (!voice.pushToTalk()) toast(window.isSecureContext ? 'Speech recognition needs Chrome, Edge or Safari.' : 'Microphone needs https or localhost — run `rigs setup --https` or open http://localhost:4719 on this machine.', 'error', 8000); };
+  $('#btn-mic').onclick = () => { if (!voice.pushToTalk()) toast(window.isSecureContext ? 'This browser cannot record the microphone.' : 'Microphone needs https or localhost — run `rigs setup --https` or open http://localhost:4719 on this machine.', 'error', 8000); };
   $('#btn-hands').onclick = () => {
     const on = voice.toggleHandsFree();
     $('#btn-hands').classList.toggle('on', on);
@@ -816,6 +980,7 @@ function wire() {
 wire();
 setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
+api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();

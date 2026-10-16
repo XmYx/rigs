@@ -5,11 +5,26 @@
 // on the first click/key; speechSynthesis stays as the fallback. Recognition needs a secure context:
 // localhost or https://<machine>.<tailnet>.ts.net (rigs setup --https).
 
+// Hearing: Web Speech where it works (Chrome/Edge on macOS & Windows, Safari); everywhere else — Firefox,
+// and Chromium on Linux, whose SpeechRecognition exists but has no backend — the microphone is recorded and
+// transcribed by the mesh's own Whisper (hearing.js). localStorage rigs.stt = "server" | "browser" forces one.
+import { createHearing } from './hearing.js';
+
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AC = window.AudioContext || window.webkitAudioContext;
+const WAKE = /\b(jarvis|jarvas|jervis|javis|jarv[iu]s)\b[\s,.!?]*/i;
+
+function preferServerHearing() {
+  const forced = localStorage.getItem('rigs.stt');
+  if (forced === 'server') return true;
+  if (forced === 'browser') return !SR;
+  return !SR || (/Linux/.test(navigator.platform || navigator.userAgent) && !/Android/.test(navigator.userAgent));
+}
 
 export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeech, wakeWord = 'jarvis' }) {
-  const supported = !!SR && window.isSecureContext;
+  let serverHearing = preferServerHearing();
+  const canRecord = !!navigator.mediaDevices?.getUserMedia;
+  const supported = window.isSecureContext && (!!SR || canRecord);
   let rec = null;
   let mode = 'off'; // off | ptt | handsfree
   let speaking = false;
@@ -235,6 +250,42 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
   }
   function stopMeter() { meter?.stop(); meter = null; onLevel?.(0); }
 
+  // ---- server hearing (Whisper on the mesh)
+  let armedUntil = 0;
+  const hearing = createHearing({
+    isSpeaking: () => speaking,
+    onLevel: (v) => { if (!speaking) onLevel?.(v); },
+    onActivity: (a) => {
+      if (a === 'speech') onInterim?.('…');
+      else if (a === 'sending') onInterim?.('… transcribing');
+      else if (a === 'stopped' && mode === 'ptt') { mode = 'off'; onInterim?.(''); if (!speaking) onState?.('online'); }
+    },
+    onError: (e) => { onInterim?.(''); console.warn('[voice] hearing:', e.message); onState?.('error'); setTimeout(() => onState?.(mode === 'handsfree' ? 'listening' : 'online'), 2500); },
+    onText: (raw) => {
+      let t = raw.trim();
+      const m = t.match(WAKE);
+      if (mode === 'ptt') {
+        if (m && m.index === 0) t = t.slice(m[0].length);
+        onInterim?.('');
+        if (t) onTranscript?.(t);
+        return;
+      }
+      if (mode !== 'handsfree') return;
+      if (m) {
+        if (speaking) stopSpeaking(); // barge-in only on the wake word (echo of our own voice never says it)
+        t = t.slice(m.index + m[0].length).trim();
+        if (!t) { armedUntil = Date.now() + 8000; onInterim?.(''); onState?.('listening'); return; }
+        armedUntil = 0; onInterim?.(''); onTranscript?.(t); return;
+      }
+      if (Date.now() < armedUntil) { armedUntil = 0; onInterim?.(''); onTranscript?.(t); return; }
+      onInterim?.('');
+    },
+  });
+
+  function startServerHearing(continuous) {
+    hearing.start({ continuous }).catch((e) => { mode = 'off'; onState?.('error'); console.warn('[voice] microphone:', e.message); });
+  }
+
   function makeRec(continuous) {
     const r = new SR();
     r.lang = navigator.language || 'en-US';
@@ -267,8 +318,18 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
       }
       onInterim?.(interim);
     };
-    r.onerror = (e) => { if (e.error === 'not-allowed') { mode = 'off'; onState?.('error'); } };
+    r.onerror = (e) => {
+      if (e.error === 'not-allowed') { mode = 'off'; onState?.('error'); return; }
+      if ((e.error === 'network' || e.error === 'service-not-allowed' || e.error === 'language-not-supported') && canRecord && !serverHearing) {
+        // this browser's speech service is unreachable (e.g. Chromium on Linux): switch to Whisper on the mesh
+        serverHearing = true;
+        const m = mode;
+        rec = null;
+        if (m === 'ptt' || m === 'handsfree') startServerHearing(m === 'handsfree');
+      }
+    };
     r.onend = () => {
+      if (serverHearing) return;
       if (mode === 'handsfree') { try { r.start(); } catch {} } else { mode = 'off'; stopMeter(); if (!speaking) onState?.('online'); }
     };
     return r;
@@ -276,11 +337,19 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
 
   return {
     supported,
+    get hearing() { return serverHearing ? 'whisper' : 'browser'; },
     get mode() { return mode; },
     get muted() { return muted; },
     pushToTalk() {
       if (!supported) return false;
       stopSpeaking();
+      if (serverHearing) {
+        if (mode === 'ptt') { hearing.stop(); return true; }
+        mode = 'ptt';
+        startServerHearing(false);
+        onState?.('listening');
+        return true;
+      }
       if (mode === 'ptt') { rec?.stop(); return true; }
       if (mode === 'handsfree') rec?.stop();
       mode = 'ptt';
@@ -292,6 +361,13 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     },
     toggleHandsFree() {
       if (!supported) return false;
+      if (serverHearing) {
+        if (mode === 'handsfree') { mode = 'off'; hearing.stop(); onState?.('online'); return false; }
+        mode = 'handsfree';
+        startServerHearing(true);
+        onState?.('online');
+        return true;
+      }
       if (mode === 'handsfree') { mode = 'off'; rec?.stop(); stopMeter(); onState?.('online'); return false; }
       rec?.stop();
       mode = 'handsfree';

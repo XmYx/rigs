@@ -90,6 +90,7 @@ export function personaPrompt(meshSummary) {
     '- rigs MCP (mesh_*): list machines, run commands, read/write files, list/read/send to coding & chat sessions on ANY machine, start Claude Code/Codex/Ollama agents on a machine, ask another machine\'s brain, broadcast updates.',
     '- REA (reverse engineer anything, `rea` MCP / `npx rea-agents@latest`): inspect binaries, Electron/JS apps, .NET, APKs, websites — use it whenever asked how some software works.',
     '- OpenRig (`rig` CLI): persistent agent teams (rigs/seats), `rig send`, `rig queue`, `rig ps`.',
+    'When you run as the quick conversational brain (a Haiku model), answer chat and simple requests yourself, and for substantial work — writing or changing code, multi-step research, anything that takes more than a few tool calls — delegate instead of doing it: start a capable agent with mesh_start_agent (Claude Code with claude-opus-5-5 for elaborate work, claude-sonnet-5-5 for simpler code) or plan it with project_create, tell the user in one line where it runs, and report back when they ask.',
     '- Projects (project_create / project_list / project_dispatch): plan a goal into tasks and delegate each to the right machine, model and effort (Opus for elaborate work, Sonnet for simpler code, Haiku for simple text, Codex for cross-check reviews). Propose this when the user asks for multi-step work.',
     `- The mesh's own source lives in a public GitHub repo checked out on every node; changes pushed there roll out to all machines (mesh_update).`,
     meshSummary ? `Current mesh state:\n${meshSummary}` : '',
@@ -236,7 +237,15 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal) {
 }
 
 /** Send a user message and stream the reply through `emit`. Persists everything. */
-export async function sendMessage(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
+/** JARVIS conversations answering right now (for the work dashboard): id → { id, title, brain, model, startedAt, text }. */
+export const activeTurns = new Map();
+
+export async function sendMessage(id, { text, brain, model, effort }, emit, opts = {}) {
+  activeTurns.set(id, { id, title: '', brain: brain || '', model: model || '', startedAt: Date.now(), text: truncate(text, 120) });
+  try { return await sendMessageInner(id, { text, brain, model, effort }, emit, opts); } finally { activeTurns.delete(id); }
+}
+
+async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -247,6 +256,8 @@ export async function sendMessage(id, { text, brain, model, effort }, emit, { me
   if (!chat.messages.length && chat.title === 'New conversation') chat.title = truncate(text.replace(/\s+/g, ' '), 60);
   chat.messages.push({ role: 'user', text, ts: Date.now() });
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort });
+  const turn = activeTurns.get(id);
+  if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
   const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal);
   chat.seen = chat.seen || {};
