@@ -164,3 +164,45 @@ test('onAppsChange: fires when an app is added or flips up/down, not on unchange
   assert.deepEqual(seen, ['live:up', 'live:down']);
 });
 
+
+test('startApp: already up is a no-op; systemd unit is started and awaited; no recipe is a clear error', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [
+    { id: 'svc', port: 9, launch: { systemd: 'svc.service' } },
+    { id: 'bare', port: 9 },
+  ];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const calls = [];
+  let up = false;
+  const deps = {
+    probe: async () => (up ? { ok: true, latencyMs: 1 } : { ok: false, error: 'ECONNREFUSED' }),
+    run: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); setTimeout(() => { up = true; }, 5); return { code: 0, stdout: '', stderr: '' }; },
+    sleep: (ms) => new Promise((ok) => setTimeout(ok, 10)),
+  };
+  const r = await A.startApp('svc', { deps, pollMs: 10, waitMs: 2000 });
+  assert.equal(r.started, true);
+  assert.equal(r.health.status, 'up');
+  assert.deepEqual(calls, ['systemctl --user start svc.service']);
+  const again = await A.startApp('svc', { deps });
+  assert.equal(again.started, false);
+  assert.equal(calls.length, 1);
+  up = false;
+  await assert.rejects(A.startApp('bare', { deps }), /no launch recipe/);
+  await assert.rejects(A.startApp('nope', { deps }), /unknown app/);
+});
+
+test('startApp: command recipe spawns detached and times out if the app never answers', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'cmd', port: 9, launch: { command: 'python3 -m http.server 9' } }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const spawned = [];
+  const deps = {
+    probe: async () => ({ ok: false, error: 'ECONNREFUSED' }),
+    spawn: (command, opts) => { spawned.push([command, opts.detached]); return { unref() {}, on() {} }; },
+    sleep: () => new Promise((ok) => setTimeout(ok, 5)),
+  };
+  await assert.rejects(A.startApp('cmd', { deps, pollMs: 5, waitMs: 40 }), /did not answer \/ within/);
+  assert.deepEqual(spawned, [['python3 -m http.server 9', true]]);
+});

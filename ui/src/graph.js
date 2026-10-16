@@ -16,6 +16,7 @@ export const TYPES = {
   chat: { label: 'Chats', color: '#fb923c' },
   rig: { label: 'Rigs', color: '#f87171' },
   tool: { label: 'Tools', color: '#22d3ee' },
+  app: { label: 'Apps', color: '#e879f9' },
   plan: { label: 'Plans', color: '#fde047' },
   task: { label: 'Tasks', color: '#a3e635' },
   offline: { label: 'Offline', color: '#475569' },
@@ -63,6 +64,11 @@ export function buildGraph(snapshot) {
     for (const c of Object.values(m.capabilities || {})) {
       const id = `tool:${m.id}:${c.id}`;
       add({ id, type: 'tool', name: c.label, machine: m.id, tool: c, val: 9 });
+      link(mid, id, 'tool');
+    }
+    for (const a of entry.apps || []) {
+      const id = `app:${m.id}:${a.id}`;
+      add({ id, type: 'app', name: `${a.icon ? a.icon + ' ' : ''}${a.name}`, machine: m.id, app: { ...a, node: m.name, nodeId: m.id }, val: 12 });
       link(mid, id, 'tool');
     }
     const rigNodes = new Map();

@@ -5,6 +5,7 @@ import { openWindow } from './wm.js';
 // proxy (/api/nodes/<node>/apps/<id>/). The catalog refreshes on its own: on 'apps'/'mesh' events
 // from the gateway and on a short poll while anything app-related is open. An open app window reloads
 // itself when its app comes back up (redeploy, restart) and shows a notice while it is down.
+// Opening an app that is not up spins it up on its own machine first (its launch recipe).
 
 let catalog = [];
 let launcher = null;
@@ -72,7 +73,8 @@ export function openApp(a) {
   const k = key(a);
   const existing = appWindows.get(k);
   if (existing) { existing.win.raise(); return existing; }
-  const frame = h('iframe', { class: 'app-frame', src: appPath(a), allow: 'clipboard-read; clipboard-write; fullscreen; microphone; camera' });
+  const needsStart = statusOf(a) !== 'up' && a.launch;
+  const frame = h('iframe', { class: 'app-frame', src: needsStart ? 'about:blank' : appPath(a), allow: 'clipboard-read; clipboard-write; fullscreen; microphone; camera' });
   const overlay = h('div', { class: 'app-overlay hidden' });
   const w = { app: a, frame, overlay, status: statusOf(a) };
   w.win = openWindow({
@@ -86,8 +88,26 @@ export function openApp(a) {
   w.win.body.append(h('div', { class: 'app-stage' }, frame, overlay));
   appWindows.set(k, w);
   ensurePoll();
-  updateWindow(w, a);
+  if (needsStart) startApp(w); else updateWindow(w, a);
   return w;
+}
+
+/** Spin the app up on its machine, then load it. */
+export async function startApp(w) {
+  const a = w.app;
+  w.starting = true;
+  w.overlay.classList.remove('hidden');
+  w.overlay.textContent = `Starting ${a.name} on ${a.node}…`;
+  try {
+    await api(`/api/nodes/${encodeURIComponent(a.node)}/app-start/${encodeURIComponent(a.id)}`, { method: 'POST', body: {} });
+    w.status = 'up';
+    w.overlay.classList.add('hidden');
+    w.frame.src = appPath(a);
+    refreshApps();
+  } catch (e) {
+    w.status = 'down';
+    w.overlay.textContent = `Could not start ${a.name} on ${a.node}: ${e.message}`;
+  } finally { w.starting = false; }
 }
 
 function reload(w) {
@@ -95,6 +115,7 @@ function reload(w) {
 }
 
 function updateWindow(w, a) {
+  if (w.starting) { w.app = a; return; }
   const was = w.status;
   const now = statusOf(a);
   w.app = a;

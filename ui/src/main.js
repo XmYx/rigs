@@ -142,6 +142,7 @@ async function refresh() {
     graph.setAttention(attentionGraphIds());
     renderCounts();
     renderHubs();
+    renderAppList();
     renderFilters();
     renderBrainBadge();
     if (graph.focused) renderInspector(graph.focused);
@@ -158,6 +159,7 @@ function connectEvents() {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
     onAppsEvent(m);
+    if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
@@ -180,6 +182,16 @@ function renderCounts() {
   const sessions = snap.reduce((a, e) => a + (e.sessions?.length || 0), 0);
   const live = snap.reduce((a, e) => a + (e.sessions || []).filter((s) => s.live).length, 0);
   $('#counts').textContent = `${up}/${total} machines · ${sessions} sessions · ${live} live`;
+}
+
+/** Left panel: every app on the mesh, one click to open (and spin up) it. */
+function renderAppList() {
+  const apps = snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id })));
+  $('#app-list').replaceChildren(...(apps.length ? apps.map((a) => {
+    const st = a.health?.status || 'unknown';
+    return h('div', { class: `hub app-row ${st}`, title: `${a.name} on ${a.node} — ${st}${a.launch ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
+      h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node));
+  }) : [h('div', { class: 'muted small' }, 'No apps yet.')]));
 }
 
 function renderHubs() {
@@ -308,6 +320,11 @@ function renderInspector(id) {
     const c = n.tool;
     out.push(h('div', { class: 'ins-meta' }, `${m?.name} · serves ${c.kinds.join(', ') || '—'}`, h('br'), [c.url, c.command].filter(Boolean).join(' · '), c.notes ? [h('br'), c.notes] : ''));
     if (c.url) out.push(h('div', { class: 'ins-actions' }, act('↗ Open', () => window.open(c.url.replace('127.0.0.1', m?.tailscale?.ip || '127.0.0.1'), '_blank'))));
+  } else if (n.type === 'app') {
+    const a = n.app;
+    const st = a.health?.status || 'unknown';
+    out.push(h('div', { class: 'ins-meta' }, `${a.node} · ${st}${a.health?.latencyMs != null ? ` · ${a.health.latencyMs} ms` : ''}`, h('br'), a.launch ? `starts with ${a.launch.systemd || a.launch.command}` : 'no launch recipe — start it by hand'));
+    out.push(h('div', { class: 'ins-actions' }, act(st === 'up' ? '▦ Open' : '▶ Start & open', () => openApp(a)), act('↗ Tab', () => window.open(`/api/nodes/${encodeURIComponent(a.node)}/apps/${encodeURIComponent(a.id)}/`, '_blank', 'noopener'))));
   } else if (n.type === 'mesh') {
     out.push(h('div', { class: 'ins-meta' }, `${machines().length} RIGS nodes online on your tailnet.`));
     out.push(h('div', { class: 'ins-actions' }, act('⚙ Mesh control', () => meshWindow()), act('↻ Rescan', async () => { await api('/api/mesh/refresh', { method: 'POST' }); refresh(); })));

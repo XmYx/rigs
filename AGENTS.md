@@ -57,3 +57,17 @@ docker run -d --name rigs-ubuntu -p 127.0.0.1:4720:4719 -e RIGS_MESH_TOKEN=$TOKE
 RIGS_HOME=$PWD/.rigs-dev RIGS_SSH_DIR=$PWD/.rigs-dev/ssh RIGS_MESH_TOKEN=$TOKEN \
   RIGS_PEERS=http://127.0.0.1:4720 node bin/rigs.js start
 ```
+
+## Ground rule: apps and applets go into the App Cloud
+
+Every web app or applet built on the mesh is published so it opens inside JARVIS on any machine:
+
+1. Serve it with **relative URLs** (it is reached under `/api/nodes/<node>/apps/<id>/`) and a cheap
+   health endpoint (`/healthz`).
+2. Give it a **launch recipe**: on Linux a `systemctl --user` unit (enabled, so it survives reboots);
+   elsewhere a `command`. JARVIS uses it to spin the app up when someone opens it while it is down.
+3. **Register** it on its host: MCP `mesh_app_register` (or `POST /api/local/apps`, or `apps` in
+   `~/.rigs/config.json` — picked up live). It appears in the galaxy (Apps), the left-panel Apps list
+   and the ▦ launcher on every JARVIS; "open <name>" works by voice.
+
+Code: `src/apps.js` (registry, health, `startApp`), `src/proxy.js` (proxy), `ui/src/apps.js` (windows).
