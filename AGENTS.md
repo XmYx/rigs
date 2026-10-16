@@ -33,8 +33,10 @@ treat `main` as production.
 - Node 22+, plain ESM JavaScript, no build step for the server. Keep dependencies minimal.
 - Everything must work on macOS, Ubuntu (Wayland) and Windows. Use `src/util.js` helpers (`run`,
   `spawnCmd`, `which`) — they handle Windows `.cmd` shims and PATH for services.
-- Never write to a user's real `~/.ssh`, `~/.claude*`, or `~/.codex` from tests; use `RIGS_HOME` and
-  `RIGS_SSH_DIR` (see `test/smoke.test.js`).
+- Never write to a user's real `~/.ssh`, `~/.claude*`, or `~/.codex` from tests; use `RIGS_HOME`,
+  `RIGS_SSH_DIR`, `RIGS_NO_MIGRATIONS=1` and `RIGS_NO_AUTOUPDATE=1` (see `test/smoke.test.js`).
+- New one-time steps for existing machines go in `src/migrations.js` (append-only); anything needing
+  root goes through `src/rootsteps.js` so the user types one password in JARVIS.
 - Before pushing: `npm test` (and `npm run build` if you touched `ui/`). CI runs the same on all three OSes.
 - After pushing to `main`, roll out with the `mesh_update` MCP tool or `rigs update --all`.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.

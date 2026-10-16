@@ -532,7 +532,7 @@ export async function startServer() {
   if (cfg.bind === 'auto') setInterval(() => bindAll().catch(() => {}), 30000).unref();
 
   discovery.start();
-  updater.startAutoUpdate((r) => {
+  if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });
@@ -549,7 +549,8 @@ export async function startServer() {
   }
 
   // One-time steps shipped by updates (SSH session hook, Sunshine + Moonlight…), in the background.
-  setTimeout(() => migrations.runPending((m, res) => {
+  // RIGS_NO_MIGRATIONS: throwaway nodes (tests) must never install software or touch dotfiles.
+  if (!process.env.RIGS_NO_MIGRATIONS) setTimeout(() => migrations.runPending((m, res) => {
     if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
   }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
 
