@@ -29,13 +29,23 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
         up ? h('div', { class: 'mr-bars' }, bar('CPU', n.stats?.cpu || 0), bar('MEM', mem, `${fmtBytes(n.stats?.memUsed)} / ${fmtBytes(n.stats?.memTotal)}`)) : h('div'),
         h('div', { class: 'mr-agents' }, ...AGENTS.map(([k, label]) => h('span', { class: 'badge' + (n.tools?.[k] ? ' on' : ''), title: n.tools?.[k] || 'not installed' }, label)),
           n.tools?.reaRegistered ? h('span', { class: 'muted small' }, `REA→ claude:${n.tools.reaRegistered.claude ? '✓' : '✗'} codex:${n.tools.reaRegistered.codex ? '✓' : '✗'}`) : null,
-          up ? desktopChip(n) : null),
+          up ? desktopChip(n) : null,
+          up ? accessChip(n) : null),
         h('div', { class: 'mr-actions' },
           up ? h('button', { class: 'btn', onclick: () => onTerminal(n) }, '⌨') : null,
           h('button', { class: 'btn', onclick: () => onDesktop(n) }, '🖥'),
           h('button', { class: 'btn', title: 'SSH in (opens a session visible in JARVIS)', onclick: () => onSsh(n) }, 'ssh'),
           up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null));
     }));
+  }
+
+  function accessChip(n) {
+    const a = n.access;
+    if (!a) return null;
+    if (!a.home?.write) return h('span', { class: 'chip st-bad' }, 'home not writable');
+    if (a.blocked?.length) return h('span', { class: 'chip st-warn', title: a.blocked.join('\n') }, `${a.blocked.length} folder${a.blocked.length > 1 ? 's' : ''} blocked`);
+    if (a.fullDiskAccess === false) return h('button', { class: 'chip chip-btn', title: 'Home is fully writable. Full Disk Access additionally opens Mail, Safari, Messages… data to RIGS and its agents.', onclick: () => api(`${node(n.id)}/access/full-disk`, { method: 'POST' }).then((r) => toast(r.message, 'ok', 12000)) }, 'home rw ✓ · Full Disk Access ▸');
+    return h('span', { class: 'chip st-ok' }, 'home rw ✓');
   }
 
   function desktopChip(n) {
@@ -91,14 +101,18 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     const voices = voice.voices();
     const voiceSel = h('select', { class: 'mini' }, ...voices.map((v) => h('option', { value: v.id, selected: v.id === voice.voiceId }, v.label)));
     const perm = h('select', { class: 'mini' }, ...['default', 'acceptEdits', 'bypassPermissions', 'plan'].map((m) => h('option', { value: m, selected: cfg.brain.claudePermissionMode === m }, m)));
+    const sandbox = h('select', { class: 'mini' }, ...[['read-only', 'read-only'], ['workspace-write', 'workspace-write (home)'], ['danger-full-access', 'danger-full-access']].map(([v, l]) => h('option', { value: v, selected: cfg.brain.codexSandbox === v }, l)));
+    const root = h('input', { class: 'path-input', value: cfg.brain.workRoot || '~' });
     settings.replaceChildren(
       h('label', {}, 'Assistant name', name), h('label', {}, 'Calls you', address),
       h('label', {}, `Humor (${cfg.persona.humor}%)`, humor), h('label', {}, 'Voice', voiceSel),
+      h('label', {}, 'JARVIS works in (cwd + writable root, this machine)', root),
       h('label', {}, 'Claude chat permission mode (this machine)', perm),
+      h('label', {}, 'Codex chat sandbox (this machine)', sandbox),
       h('label', { class: 'check' }, auto, ' Auto-update this machine from GitHub every ', String(cfg.update.intervalMin), ' min'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
         voice.setVoice(voiceSel.value);
-        await api('/api/local/config', { method: 'POST', body: { persona: { name: name.value, address: address.value, humor: Number(humor.value) }, update: { auto: auto.checked }, brain: { claudePermissionMode: perm.value } } });
+        await api('/api/local/config', { method: 'POST', body: { persona: { name: name.value, address: address.value, humor: Number(humor.value) }, update: { auto: auto.checked }, brain: { claudePermissionMode: perm.value, codexSandbox: sandbox.value, workRoot: root.value.trim() || '~' } } });
         toast('Saved', 'ok');
         voice.say(`Settings saved, ${address.value}.`);
       } }, 'Save'), h('button', { class: 'btn', onclick: () => voice.say(`Good evening, ${address.value}. All systems nominal.`) }, '▶ Test voice')));

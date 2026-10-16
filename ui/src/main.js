@@ -156,6 +156,7 @@ function renderInspector(id) {
       if (d.gpus?.length) out.push(h('div', { class: 'muted small' }, '⧉ ' + d.gpus.map((g) => g.replace(/^[\d:.]+ VGA compatible controller: /, '')).join(', ')));
       const ds = desktopState(d);
       if (ds) out.push(ds);
+      if (d.access) out.push(h('div', { class: 'muted small' }, `💾 ${d.access.home?.write ? 'home read/write' : 'home NOT writable'}${d.access.blocked?.length ? ` · blocked: ${d.access.blocked.map((b) => b.split(/[\\/]/).pop()).join(', ')}` : ''}${d.access.fullDiskAccess === false ? ' · no Full Disk Access (optional)' : d.access.fullDiskAccess ? ' · Full Disk Access ✓' : ''}`));
     }
     out.push(h('div', { class: 'ins-actions' },
       up ? act('⌨ Terminal', () => openTerminal({ nodeId: d.id, nodeName: d.name })) : null,

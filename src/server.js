@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
+import * as access from './access.js';
 import * as caps from './capabilities.js';
 import * as chat from './chat.js';
 import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
@@ -84,6 +85,7 @@ async function selfInfo() {
     canPush: await merge.canPush().catch(() => false),
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
     rootSteps: rootsteps.pending(),
+    access: await access.status().then((a) => ({ ok: a.ok, home: a.home, blocked: a.blocked, fullDiskAccess: a.fullDiskAccess, controlledFolderAccess: a.controlledFolderAccess, runtime: a.runtime })).catch(() => null),
   };
 }
 
@@ -480,6 +482,8 @@ export async function startServer() {
     }
     if (sub === 'migrations') return migrations.status();
     if (sub === 'root-steps') return rootsteps.pending();
+    if (sub === 'access' && method === 'GET') return access.status(q.get('force') === '1');
+    if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), server: await ssh.serverStatus(), alias: config().name };

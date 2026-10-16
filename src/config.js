@@ -28,10 +28,13 @@ function defaults() {
       // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
       ollamaUrl: 'http://127.0.0.1:11434',
-      // Permission posture for chat-driven agents. Interactive terminal sessions keep their own prompts.
-      claudePermissionMode: 'default',
-      claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
-      codexSandbox: 'read-only',
+      // JARVIS works in your home: brains run with cwd = workRoot and may read/write there
+      // (Claude: acceptEdits + edit/bash tools; Codex: workspace-write sandbox rooted at workRoot).
+      // Interactive terminal sessions keep their own prompts.
+      workRoot: '~',
+      claudePermissionMode: 'acceptEdits',
+      claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'WebSearch', 'WebFetch'],
+      codexSandbox: 'workspace-write',
     },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.

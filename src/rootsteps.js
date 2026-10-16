@@ -72,6 +72,17 @@ export async function tryUnattended() {
   return { ran: true, ok: r.code === 0, output: (r.stdout + r.stderr).slice(-600), ...pending() };
 }
 
+/** Windows Defender "Controlled folder access" blocks writes to Documents/Desktop by unknown apps. */
+export async function allowControlledFolderAccess() {
+  if (!isWin) return { skipped: true };
+  const r = await run('powershell.exe', ['-NoProfile', '-Command', '(Get-MpPreference).EnableControlledFolderAccess'], { timeout: 15000 });
+  if (r.stdout.trim() !== '1') { await remove('cfa'); return { controlledFolderAccess: false }; }
+  await add('cfa', 'Let RIGS (node.exe) write in Documents/Desktop under Controlled folder access', [
+    `Add-MpPreference -ControlledFolderAccessAllowedApplications '${process.execPath}'`,
+  ]);
+  return { controlledFolderAccess: true, pendingRoot: true };
+}
+
 /** Tailscale SSH takes over port 22 on the tailnet and ignores the mesh keys; hand it back to OpenSSH. */
 export async function preferOpenSsh(tailscaleBin) {
   if (!tailscaleBin || isWin) return { skipped: true };

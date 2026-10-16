@@ -33,9 +33,14 @@ async function saveChat(c) {
   await writeJsonAtomic(path.join(DIR, c.id + '.json'), c);
 }
 
+function workRoot() {
+  const r = config().brain.workRoot || '~';
+  return r === '~' ? HOME : r.startsWith('~/') ? path.join(HOME, r.slice(2)) : r;
+}
+
 export async function createChat({ brain, model, effort, title, cwd, hidden } = {}) {
   const c = {
-    id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', effort: effort || '', cwd: cwd || HOME, hidden: !!hidden,
+    id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', effort: effort || '', cwd: cwd || workRoot(), hidden: !!hidden,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [], claudeSessionId: null, codexThreadId: null, seen: {},
   };
   await saveChat(c);
@@ -78,6 +83,7 @@ export function personaPrompt(meshSummary) {
   return [
     `You are ${p.name}, the voice of RIGS OS — the user's personal control plane for every workstation on their Tailscale network.`,
     `This brain is running on the machine "${config().name}" (${os.type()} ${os.release()}, ${process.arch}).`,
+    `You work in the user's home (${workRoot()}): you may read, create and edit files there and run commands (git, builds, scripts) to get things done. Other machines' homes are reachable with the mesh_* tools. Be careful with destructive actions: never delete or overwrite the user's data without asking — move things to ~/.rigs/trash instead of deleting.`,
     `Address the user as "${p.address}". Be brief: answers are spoken aloud, so 1–3 sentences unless asked for detail. Humor setting ${humor}%: ${humor > 70 ? 'dry, cheeky wit welcome' : humor > 30 ? 'a light touch of dry wit' : 'strictly professional'}.`,
     'Capabilities you can use (when your harness exposes them as tools):',
     '- rigs MCP (mesh_*): list machines, run commands, read/write files, list/read/send to coding & chat sessions on ANY machine, start Claude Code/Codex/Ollama agents on a machine, ask another machine\'s brain, broadcast updates.',
@@ -130,6 +136,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal) {
   const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', personaPrompt(meshSummary), '--permission-mode', cfg.claudePermissionMode || 'default'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
+  args.push('--add-dir', workRoot());
   args.push(...claudeFlags({ model, effort }));
   if (chat.claudeSessionId) args.push('--resume', chat.claudeSessionId);
   let full = '';
@@ -167,7 +174,7 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal) {
   const flags = codexFlags({ model, effort });
   const args = chat.codexThreadId
     ? ['exec', 'resume', '--json', '--skip-git-repo-check', ...flags, chat.codexThreadId, prompt]
-    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', cfg.codexSandbox || 'read-only', ...flags, prompt];
+    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', cfg.codexSandbox || 'workspace-write', ...(cfg.codexSandbox === 'workspace-write' ? ['--add-dir', workRoot()] : []), ...flags, prompt];
   let full = '';
   let error = null;
   const res = await streamProcess(bin('codex'), args, {
