@@ -104,7 +104,20 @@ another machine:
 rigs setup --https   # tailscale serve → https://<machine>.<tailnet>.ts.net
 ```
 
-## 6. Making changes from any node
+## 6. Brains, projects and tools
+
+- **Core brain.** Click the badge under the orb and pick a machine, provider, exact model and
+  effort. With "Core brain" ticked, the choice is saved on that machine and used for JARVIS and
+  for planning. The default is `claude-opus-5-5` at high effort.
+- **Projects.** Press 📋, describe a goal, then choose **Create & plan**. Review each task's
+  machine, provider, model and effort (every row shows why it was chosen and can be changed), then
+  press **▶ Dispatch ready tasks**. You can also say "Jarvis, plan a project to …".
+- **Routing policy.** ⚙ → Routing has the rule table (kind and size → provider, model, effort;
+  needs-tool; cross-check). Rules are per machine; the machine that owns a project applies its own.
+- **Tools.** ⚙ → Tools: ComfyUI is detected automatically; add each new tool as you introduce it
+  (id, task kinds it serves, URL or command, notes for agents).
+
+## 7. Making changes from any node
 
 1. Ask any agent (Claude Code or Codex, on any machine) to change RIGS. The repo is at
    `~/.rigs/app`, and its `AGENTS.md` explains the code.

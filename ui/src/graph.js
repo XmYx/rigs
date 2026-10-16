@@ -15,6 +15,9 @@ export const TYPES = {
   live: { label: 'Live', color: '#f472b6' },
   chat: { label: 'Chats', color: '#fb923c' },
   rig: { label: 'Rigs', color: '#f87171' },
+  tool: { label: 'Tools', color: '#22d3ee' },
+  plan: { label: 'Plans', color: '#fde047' },
+  task: { label: 'Tasks', color: '#a3e635' },
   offline: { label: 'Offline', color: '#475569' },
 };
 
@@ -57,6 +60,11 @@ export function buildGraph(snapshot) {
         link(agents.ollama.id, id, 'model');
       }
     }
+    for (const c of Object.values(m.capabilities || {})) {
+      const id = `tool:${m.id}:${c.id}`;
+      add({ id, type: 'tool', name: c.label, machine: m.id, tool: c, val: 9 });
+      link(mid, id, 'tool');
+    }
     const rigNodes = new Map();
     for (const r of entry.openrig?.rigs || []) {
       const id = `r:${m.id}:${r.name}`;
@@ -80,6 +88,26 @@ export function buildGraph(snapshot) {
       }
     }
   }
+  // Plans and their tasks: each task hangs off its plan and points at the agent/machine it's delegated to.
+  const machineByName = new Map(snapshot.map((e) => [e.node.name, e.node]));
+  for (const entry of snapshot) {
+    for (const pj of entry.projects || []) {
+      if (pj.status === 'done' && Date.now() - pj.updatedAt > 3 * 86400000) continue;
+      const pid = `pj:${pj.id}`;
+      add({ id: pid, type: 'plan', name: pj.name, val: 14, plan: pj, owner: entry.node.id });
+      link(`m:${entry.node.id}`, pid, 'plan');
+      for (const t of pj.tasks) {
+        const tid = `tk:${pj.id}:${t.id}`;
+        add({ id: tid, type: 'task', name: `${t.id} ${t.title}`, val: t.status === 'running' ? 5 : 3, task: t, plan: pj, live: t.status === 'running' });
+        link(pid, tid, 'plan');
+        const target = t.assign && machineByName.get(t.assign.node);
+        if (target) link(tid, target.id && ['claude', 'codex', 'ollama'].includes(t.assign.provider) ? `a:${target.id}:${t.assign.provider}` : `m:${target.id}`, t.status === 'running' ? 'live' : 'delegate');
+      }
+    }
+  }
+  // Drop links whose agent endpoint doesn't exist (e.g. provider not detected on that machine).
+  const ids = new Set(nodes.map((n) => n.id).concat(reaUsed ? [skillRea.id] : [], rigsUsed ? [skillRigs.id] : []));
+  for (let i = links.length - 1; i >= 0; i--) if (!ids.has(links[i].source) || !ids.has(links[i].target)) links.splice(i, 1);
   if (reaUsed) add(skillRea);
   if (rigsUsed) add(skillRigs);
   for (const p of projects.values()) { p.val = 5 + Math.min(16, p.machines.size * 4); p.machines = [...p.machines]; }
@@ -87,7 +115,7 @@ export function buildGraph(snapshot) {
 }
 
 function labelFor(n) {
-  if (n.type === 'session' || n.type === 'live' || n.type === 'chat' || n.type === 'model') return null;
+  if (n.type === 'session' || n.type === 'live' || n.type === 'chat' || n.type === 'model' || n.type === 'task') return null;
   return n.name;
 }
 
@@ -159,6 +187,9 @@ export function createGraph(el, { onSelect, onBackground }) {
     if (l.kind === 'mesh') return '#2dd4bf';
     if (l.kind === 'live') return '#f472b6';
     if (l.kind === 'skill') return '#c084fc';
+    if (l.kind === 'delegate') return '#a3e635';
+    if (l.kind === 'plan') return '#a16207';
+    if (l.kind === 'tool') return '#22d3ee';
     return '#3b5568';
   }
 
@@ -193,7 +224,7 @@ export function createGraph(el, { onSelect, onBackground }) {
         group.add(ring);
       }
     }
-    if (n.type === 'live') group.userData.pulse = true;
+    if (n.type === 'live' || (n.type === 'task' && n.live)) group.userData.pulse = true;
     n.__group = group;
     return group;
   }
@@ -257,7 +288,7 @@ export function createGraph(el, { onSelect, onBackground }) {
         return n;
       });
       state.byId = new Map(nodes.map((n) => [n.id, n]));
-      const sig = (d) => d.nodes.map((n) => n.id + n.type + (n.session?.live ? 1 : 0)).join('|') + d.links.length;
+      const sig = (d) => d.nodes.map((n) => n.id + n.type + (n.session?.live ? 1 : 0) + (n.task?.status || '')).join('|') + d.links.map((l) => `${l.source.id ?? l.source}>${l.target.id ?? l.target}`).join('|');
       const changed = sig({ nodes, links: data.links }) !== state.sig;
       state.sig = sig({ nodes, links: data.links });
       for (const old of state.data.nodes) if (!state.byId.has(old.id)) old.__label?.remove();

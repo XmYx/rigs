@@ -15,6 +15,26 @@ can act on all of them.
 - **J.A.R.V.I.S.** You can talk to it (push-to-talk, or hands-free with the wake word "Jarvis" and
   barge-in) or type. Answers are spoken. You can switch the brain mid-conversation between Claude
   Code, Codex and any Ollama model on any machine, and the conversation carries over.
+- **Choose the brain: machine, provider, exact model, effort.** The core brain defaults to
+  Claude Opus 5.5 at high effort. It is JARVIS's voice and the project planner. Any Claude,
+  Codex or Ollama model on any machine can be picked from the badge under the orb.
+- **Plan projects and delegate every task.** Describe a goal and the core brain breaks it into
+  tasks with dependencies. RIGS routes each task to a machine, provider, model and effort by
+  policy:
+  - Opus 5.5 for plans, architecture and elaborate code
+  - Sonnet 5.5 for simpler algorithms, tests and research
+  - Haiku 5.5 for docs and simple text
+  - Codex for cross-check reviews of Claude's code
+  - Ollama only for work marked private
+
+  Each assignment shows its reason and can be changed per task. Dispatch runs every ready task as
+  an **OpenRig** seat (runtime, model and effort set in a generated rig spec, with the task
+  delivered as an owned queue item), or directly as an agent in tmux. Dependents start
+  automatically when agents report done through the `project_task_update` MCP tool, or when
+  they close their OpenRig queue item.
+- **Tools, one at a time.** Machines advertise tools such as ComfyUI (auto-detected on :8188 or via
+  the `comfy` CLI). You can declare any other tool in ⚙ → Tools. A task that needs a tool is routed
+  only to machines that have it, and its brief explains how to use the tool.
 - **Terminals on any machine,** in the browser (xterm.js over WebSockets). They are shared, so
   several machines can watch and type into the same one.
 - **Every coding and chat session, everywhere.** Claude Code and Codex history, OpenRig seats, tmux
@@ -80,6 +100,12 @@ rigs setup     make this machine a node (MCP, agent instructions, REA, OpenRig, 
 rigs status    list machines           rigs open      open the UI
 rigs ssh <m>   ssh to a node           rigs update --all   roll out the latest main everywhere
 rigs notify …  speak on every open UI  rigs mcp       stdio MCP server for agents
+```
+
+Agents get the same powers through MCP: `project_create` (goal → plan → routing → optional
+dispatch), `project_list`, `project_get`, `project_dispatch` and `project_task_update`.
+
+```
 ```
 
 ## Developing

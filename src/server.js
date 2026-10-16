@@ -3,12 +3,15 @@ import http from 'node:http';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
+import * as caps from './capabilities.js';
 import * as chat from './chat.js';
-import { config, patchConfig, publicConfig } from './config.js';
+import { config, loadConfig, patchConfig, publicConfig, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
+import * as models from './models.js';
 import * as openrig from './openrig.js';
+import * as planner from './planner.js';
 import { forwardHttp, forwardWs, peerJson } from './proxy.js';
 import * as pty from './pty.js';
 import * as sessions from './sessions.js';
@@ -18,6 +21,7 @@ import * as ts from './tailscale.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
 import { APP_DIR, isWin, log, run, truncate } from './util.js';
+import * as work from './work.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -62,12 +66,12 @@ function compactTools(t) {
 
 async function selfInfo() {
   const cfg = config();
-  const [sys, st, tools, tsStatus, ver] = await Promise.all([systemInfo(), stats(), detectTools(), ts.status(), appVersion()]);
+  const [sys, st, tools, tsStatus, ver, capabilities] = await Promise.all([systemInfo(), stats(), detectTools(), ts.status(), appVersion(), caps.capabilities()]);
   const ip = tsStatus?.self?.ips?.find((x) => x.includes('.'));
   return {
     id: cfg.nodeId, name: cfg.name, version: ver.short, versionInfo: ver, port: cfg.port,
     url: `http://${ip || '127.0.0.1'}:${cfg.port}`,
-    ...sys, stats: st, tools: compactTools(tools), ptyAvailable: pty.ptyAvailable(),
+    ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
     tailscale: tsStatus ? { ip, dnsName: tsStatus.self.dnsName, login: tsStatus.self.login, state: tsStatus.backendState } : null,
     sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name,
   };
@@ -99,21 +103,56 @@ export async function startServer() {
   }
 
   function meshSummary() {
-    return discovery.list().map((n) => `- ${n.name}${n.self ? ' (this machine)' : ''}: ${n.platform || '?'} ${n.online ? 'online' : 'offline'}${n.rigs ? '' : ' (no RIGS agent)'}${n.tools ? ` · agents: ${['claude', 'codex', 'ollama', 'rig', 'rea'].filter((k) => n.tools[k]).join(', ') || 'none'}` : ''}${n.stats ? ` · cpu ${n.stats.cpu}% mem ${Math.round((n.stats.memUsed / n.stats.memTotal) * 100)}%` : ''}`).join('\n');
+    return discovery.list().map((n) => `- ${n.name}${n.self ? ' (this machine)' : ''}: ${n.platform || '?'} ${n.online ? 'online' : 'offline'}${n.rigs ? '' : ' (no RIGS agent)'}${n.tools ? ` · agents: ${['claude', 'codex', 'ollama', 'rig', 'rea'].filter((k) => n.tools[k]).join(', ') || 'none'}` : ''}${n.capabilities && Object.keys(n.capabilities).length ? ` · tools: ${Object.keys(n.capabilities).join(', ')}` : ''}${n.stats ? ` · cpu ${n.stats.cpu}% mem ${Math.round((n.stats.memUsed / n.stats.memTotal) * 100)}%` : ''}`).join('\n');
   }
 
   async function snapshotFor(node) {
     const get = (p) => (node.self ? localCall(p) : peerJson(node, p, { timeout: 7000 }));
-    const [sess, brains, rig, info] = await Promise.all([
+    const [sess, brains, rig, info, projects] = await Promise.all([
       get('sessions').catch(() => []), get('brains').catch(() => []), get('openrig').catch(() => null), node.self ? selfInfo() : get('info').catch(() => node),
+      get('projects').catch(() => []),
     ]);
-    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig };
+    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects };
+  }
+
+  async function meshSnapshot() {
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => snapshotFor(n).catch((e) => ({ node: stripNode(n), error: e.message, sessions: [], brains: [] }))));
+    const offline = discovery.list().filter((n) => !(n.online && n.rigs)).map((n) => ({ node: stripNode(n), sessions: [], brains: [], offline: true }));
+    return [...results, ...offline];
+  }
+
+  /** Call any node's local API by id or name (direct function call for this node). */
+  async function callNode(nodeRef, p, { method = 'GET', body, timeout = 30000 } = {}) {
+    const node = discovery.get(nodeRef);
+    if (!node) throw new Error(`unknown machine ${nodeRef}`);
+    if (node.self) return localCall(p, method, body);
+    if (!node.rigs || !node.online) throw new Error(`${node.name} is offline`);
+    return peerJson(node, p, { method, body, timeout });
+  }
+
+  /** One-shot question to the brain on any machine (used by the planner). */
+  async function askNode(nodeRef, text, { brain, model, effort, title } = {}) {
+    const c = await callNode(nodeRef, 'chats', { method: 'POST', body: { brain, model, effort, title } });
+    return callNode(nodeRef, `chats/${c.id}/send?wait=1`, { method: 'POST', body: { text, brain, model, effort }, timeout: 15 * 60 * 1000 });
+  }
+
+  const plannerCtx = {
+    snapshot: meshSnapshot,
+    call: callNode,
+    ask: askNode,
+    notify: (text, level = 'info') => broadcastNotify({ text, level, speak: true, from: config().name }),
+  };
+
+  async function broadcastNotify(b) {
+    const all = discovery.list().filter((n) => n.online && n.rigs);
+    return Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
   }
 
   // Local handlers are invoked directly for the self node so the gateway never loops over HTTP.
   async function localCall(p, method = 'GET', body) {
     const fake = { method, url: '/api/local/' + p, body };
-    return localApi(fake, null, p.split('?')[0], new URL('http://x/' + p).searchParams, body);
+    return localApi(fake, null, p.split('?')[0], new URL('http://x/' + p).searchParams, body === undefined ? {} : body);
   }
 
   async function localApi(req, res, sub, q, preBody) {
@@ -179,7 +218,7 @@ export async function startServer() {
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'DELETE') return { ok: await chat.deleteChat(mm[1]) };
     if ((mm = m(/^chats\/([\w-]+)\/send$/)) && method === 'POST') {
       const b = await body();
-      if (!res) {
+      if (!res || q.get('wait') === '1') {
         let final = null;
         await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary() });
         return final;
@@ -195,6 +234,92 @@ export async function startServer() {
       } finally { clearInterval(hb); res.end(); }
       return undefined;
     }
+
+    // model catalog + this machine's core brain (provider / exact model / effort)
+    if (sub === 'models') return models.catalog();
+    if (sub === 'brain/core' && method === 'GET') return models.coreBrain();
+    if (sub === 'brain/core' && method === 'POST') {
+      const b = await body();
+      const cfg = config();
+      cfg.brain.core = { provider: b.provider || 'auto', model: b.model || '', effort: b.effort || '', node: b.node || '' };
+      patchConfig({ brain: { core: cfg.brain.core } });
+      return models.coreBrain();
+    }
+    if (sub === 'capabilities' && method === 'GET') return { tools: await caps.capabilities(q.get('force') === '1'), known: caps.knownTools() };
+    if (sub === 'capabilities' && method === 'POST') {
+      // { id, label, kinds, url, command, notes } declares/updates a tool; { id, remove: true } removes it.
+      const b = await body();
+      if (!/^[\w-]{1,40}$/.test(b.id || '')) throw new HttpError(400, 'tool id must be letters, digits, - or _');
+      const all = { ...(config().capabilities || {}) };
+      if (b.remove) delete all[b.id];
+      else all[b.id] = { label: b.label || b.id, kinds: Array.isArray(b.kinds) ? b.kinds : String(b.kinds || '').split(',').map((x) => x.trim()).filter(Boolean), url: b.url || '', command: b.command || '', notes: b.notes || '', ...(b.disabled ? { disabled: true } : {}) };
+      const cfg = config();
+      cfg.capabilities = all;
+      saveConfig(cfg);
+      return { tools: await caps.capabilities(true) };
+    }
+    if (sub === 'routing' && method === 'GET') return config().routing;
+    if (sub === 'routing' && method === 'POST') {
+      const b = await body();
+      if (b.reset) { const cfg = config(); cfg.routing.customized = false; cfg.routing.rulesVersion = 0; saveConfig(cfg); loadConfig(); return config().routing; }
+      patchConfig({ routing: { ...b, customized: b.rules ? true : config().routing.customized } });
+      return config().routing;
+    }
+
+    // projects (owned by this machine) and the work they dispatch to machines
+    if (sub === 'projects' && method === 'GET') return planner.listProjects();
+    if (sub === 'projects' && method === 'POST') return planner.createProject(await body());
+    if ((mm = m(/^projects\/([\w-]+)$/))) {
+      if (method === 'DELETE') { await planner.stopProject(mm[1], plannerCtx).catch(() => {}); return { ok: await planner.deleteProject(mm[1]) }; }
+      const pr = await planner.getProject(mm[1]);
+      if (!pr) throw new HttpError(404, 'project not found');
+      if (method === 'POST') { const b = await body(); for (const k of ['name', 'goal', 'gitUrl', 'dispatch', 'policy', 'planner']) if (b[k] !== undefined) pr[k] = b[k]; if (b.repo) pr.repo = { ...pr.repo, ...b.repo }; return planner.saveProject(pr); }
+      return pr;
+    }
+    if ((mm = m(/^projects\/([\w-]+)\/plan$/)) && method === 'POST') return planner.planProject(mm[1], plannerCtx, await body());
+    if ((mm = m(/^projects\/([\w-]+)\/route$/)) && method === 'POST') {
+      const b = await body();
+      const pr = await planner.getProject(mm[1]);
+      if (!pr) throw new HttpError(404, 'project not found');
+      if (b.unlock) for (const t of pr.tasks) if (t.assign) delete t.assign.locked;
+      planner.routeProject(pr, await meshSnapshot(), { onlyUnassigned: !!b.onlyUnassigned });
+      if (pr.status === 'draft' && pr.tasks.length) pr.status = 'planned';
+      return planner.saveProject(pr);
+    }
+    if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
+    if ((mm = m(/^projects\/([\w-]+)\/stop$/)) && method === 'POST') return planner.stopProject(mm[1], plannerCtx);
+    if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
+      const pr = await planner.getProject(mm[1]);
+      if (!pr) throw new HttpError(404, 'project not found');
+      const b = await body();
+      const id = b.id && /^[\w-]{1,12}$/.test(b.id) && !pr.tasks.some((t) => t.id === b.id) ? b.id : `t${pr.tasks.length + 1}${pr.tasks.some((t) => t.id === `t${pr.tasks.length + 1}`) ? 'b' : ''}`;
+      pr.tasks.push({ id, title: b.title || 'New task', description: b.description || b.title || '', kind: planner.KINDS.includes(b.kind) ? b.kind : 'code', size: b.size || 'M', deps: b.deps || [], needs: { platform: 'any', gpu: false, ...(b.needs || {}) }, suggest: {}, status: 'todo', assign: b.assign ? { ...b.assign, locked: true } : null, reason: b.assign ? 'set by hand' : '', run: null, summary: '' });
+      if (!b.assign) planner.routeProject(pr, await meshSnapshot(), { onlyUnassigned: true });
+      if (pr.status === 'draft') pr.status = 'planned';
+      return planner.saveProject(pr);
+    }
+    if ((mm = m(/^projects\/([\w-]+)\/tasks\/([\w-]+)$/))) {
+      if (method === 'DELETE') {
+        const pr = await planner.getProject(mm[1]);
+        if (!pr) throw new HttpError(404, 'project not found');
+        pr.tasks = pr.tasks.filter((t) => t.id !== mm[2]);
+        for (const t of pr.tasks) t.deps = t.deps.filter((d) => d !== mm[2]);
+        return planner.saveProject(pr);
+      }
+      if (method === 'POST') {
+        const b = await body();
+        const pr = await planner.getProject(mm[1]);
+        if (!pr) throw new HttpError(404, 'project not found');
+        const t = pr.tasks.find((x) => x.id === mm[2]);
+        if (!t) throw new HttpError(404, 'task not found');
+        for (const k of ['title', 'description', 'kind', 'size', 'deps', 'needs']) if (b[k] !== undefined) t[k] = b[k];
+        await planner.saveProject(pr);
+        return planner.updateTask(mm[1], mm[2], { status: b.status, summary: b.summary, assign: b.assign }, plannerCtx);
+      }
+    }
+    if (sub === 'work/start' && method === 'POST') return work.startTask(await body());
+    if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
+    if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
 
     // remote command execution (used by the mesh MCP tools)
     if (sub === 'exec' && method === 'POST') {
@@ -244,12 +369,7 @@ export async function startServer() {
     if (p === '/api/nodes') return discovery.list().map(stripNode);
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
-    if (p === '/api/mesh/snapshot') {
-      const nodes = discovery.list().filter((n) => n.online && n.rigs);
-      const results = await Promise.all(nodes.map((n) => snapshotFor(n).catch((e) => ({ node: stripNode(n), error: e.message, sessions: [], brains: [] }))));
-      const offline = discovery.list().filter((n) => !(n.online && n.rigs)).map((n) => ({ node: stripNode(n), sessions: [], brains: [], offline: true }));
-      return [...results, ...offline];
-    }
+    if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
     if (p === '/api/mesh/update' && req.method === 'POST') {
       const peers = discovery.list().filter((n) => !n.self && n.online && n.rigs);
@@ -258,10 +378,10 @@ export async function startServer() {
       if (self.restart) setTimeout(() => process.exit(updater.RESTART_CODE), 1200);
       return [{ node: config().name, ...self }, ...results];
     }
-    if (p === '/api/mesh/notify' && req.method === 'POST') {
-      const b = await readBody(req);
-      const all = discovery.list().filter((n) => n.online && n.rigs);
-      return Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
+    if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
+    if (p === '/api/mesh/projects') {
+      const snap = await meshSnapshot();
+      return snap.flatMap((e) => (e.projects || []).map((x) => ({ ...x, ownerId: e.node.id })));
     }
     if (p === '/api/desktop/connect' && req.method === 'POST') {
       // This node is where the person sits; launch the native viewer here, pointed at the target.
@@ -377,6 +497,8 @@ export async function startServer() {
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });
+  // Project tracker: finished seats/sessions → start what became ready.
+  setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();
   // Live stats push for the HUD.
   setInterval(async () => { if (uiSockets.size) broadcast({ type: 'stats', id: config().nodeId, stats: await stats() }); }, 5000).unref();
 

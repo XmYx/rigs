@@ -6,6 +6,7 @@ import { HOME, readJsonSync, shortHost } from './util.js';
 export const RIGS_HOME = process.env.RIGS_HOME ? path.resolve(process.env.RIGS_HOME) : path.join(HOME, '.rigs');
 export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
 export const DEFAULT_PORT = 4719;
+const RULES_VERSION = 2;
 
 function defaults() {
   return {
@@ -24,17 +25,47 @@ function defaults() {
     allowTaggedDevices: true,
     files: { showHidden: false },
     brain: {
-      default: 'auto',
+      // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
+      core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
       ollamaUrl: 'http://127.0.0.1:11434',
-      ollamaModel: '',
-      claudeModel: '',
-      codexModel: '',
       // Permission posture for chat-driven agents. Interactive terminal sessions keep their own prompts.
       claudePermissionMode: 'default',
       claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
       codexSandbox: 'read-only',
     },
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '' },
+    // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
+    capabilities: {},
+    // Extra model ids per provider, appended to the built-in catalog (src/models.js).
+    models: { claude: [], codex: [] },
+    // How the planner assigns each task kind to a provider/model/effort. First match wins;
+    // the machine is then picked by availability, load, GPU/platform needs and spread.
+    routing: {
+      // Bumped whenever the default rules change; stored rules follow unless you customized them.
+      rulesVersion: RULES_VERSION,
+      customized: false,
+      rules: [
+        { kind: 'plan', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+        { kind: 'architecture', provider: 'claude', model: 'claude-opus-5-5', effort: 'xhigh' },
+        { kind: 'code', size: 'L', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+        { kind: 'code', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+        { kind: 'test', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low' },
+        { kind: 'review', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', crossCheck: true },
+        { kind: 'review', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+        { kind: 'reverse-engineer', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+        { kind: 'research', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+        { kind: 'media', tool: 'comfyui', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+        { kind: 'docs', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
+        { kind: 'text', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
+        { kind: 'private', provider: 'ollama', model: '', effort: 'off' },
+        { kind: '*', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+      ],
+      // 'auto' = OpenRig when the target machine runs it (Claude Code / Codex seats), else start agents directly.
+      dispatch: 'auto',
+      // What the planning brain may override: 'machine' (default), 'all' (provider + model too) or 'none'.
+      plannerPicks: 'machine',
+      maxTasksPerMachine: 4,
+    },
     update: { auto: true, intervalMin: 10, remote: 'origin', branch: 'main' },
     ssh: { autoAuthorize: true, manageConfig: true, authorizeStaticPeers: false },
     openrig: { registerPeers: true },
@@ -55,7 +86,12 @@ let current = null;
 
 export function loadConfig() {
   const stored = readJsonSync(CONFIG_FILE, null);
-  const cfg = merge(defaults(), stored || {});
+  const base = defaults();
+  const cfg = merge(base, stored || {});
+  if (!cfg.routing.customized && stored?.routing?.rulesVersion !== RULES_VERSION) {
+    cfg.routing.rules = base.routing.rules;
+    cfg.routing.rulesVersion = RULES_VERSION;
+  }
   // Environment overrides (handy for tests, containers and a second instance on one machine).
   if (process.env.RIGS_PORT) cfg.port = Number(process.env.RIGS_PORT);
   if (process.env.RIGS_NAME) cfg.name = process.env.RIGS_NAME;
@@ -96,5 +132,6 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
+    models: c.models, routing: c.routing, capabilities: c.capabilities,
   };
 }

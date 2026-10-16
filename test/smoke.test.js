@@ -134,3 +134,22 @@ test('MCP server lists mesh tools and answers mesh_status', async () => {
   assert.ok(byId[2].result.tools.some((t) => t.name === 'mesh_exec'));
   assert.match(byId[3].result.content[0].text, /test-node/);
 });
+
+test('models catalog + core brain round-trip', async () => {
+  const cat = await get('/api/local/models');
+  assert.ok(Array.isArray(cat));
+  const set = await post('/api/local/brain/core', { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' });
+  assert.equal(set.model, 'claude-opus-5-5');
+  assert.equal((await get('/api/local/brain/core')).effort, 'high');
+});
+
+test('projects: create, add task by hand, route, delete', async () => {
+  const p = await post('/api/nodes/self/projects', { name: 'smoke', goal: 'test the planner API' });
+  const withTask = await post(`/api/nodes/self/projects/${p.id}/tasks`, { title: 'write docs', kind: 'docs' });
+  assert.equal(withTask.tasks.length, 1);
+  assert.equal(withTask.status, 'planned');
+  const routed = await post(`/api/nodes/self/projects/${p.id}/route`, { unlock: true });
+  assert.ok('reason' in routed.tasks[0]);
+  const r = await fetch(`${BASE}/api/nodes/self/projects/${p.id}`, { method: 'DELETE' });
+  assert.equal(r.status, 200);
+});

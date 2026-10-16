@@ -3,7 +3,8 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
-import { bin, ollamaModels } from './tools.js';
+import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
+import { bin } from './tools.js';
 import { HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
@@ -32,9 +33,9 @@ async function saveChat(c) {
   await writeJsonAtomic(path.join(DIR, c.id + '.json'), c);
 }
 
-export async function createChat({ brain, model, title, cwd } = {}) {
+export async function createChat({ brain, model, effort, title, cwd, hidden } = {}) {
   const c = {
-    id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', cwd: cwd || HOME,
+    id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', effort: effort || '', cwd: cwd || HOME, hidden: !!hidden,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [], claudeSessionId: null, codexThreadId: null, seen: {},
   };
   await saveChat(c);
@@ -47,25 +48,28 @@ export async function deleteChat(id) {
   return true;
 }
 
+/** Providers usable as a brain on this machine, with models + effort levels (see models.js). */
 export async function availableBrains() {
-  const cfg = config().brain;
-  const o = await ollamaModels();
-  const brains = [];
-  if (bin('claude')) brains.push({ id: 'claude', label: 'Claude Code', models: ['', 'opus', 'sonnet', 'haiku', 'fable'], default: cfg.claudeModel });
-  if (bin('codex')) brains.push({ id: 'codex', label: 'Codex', models: [''], default: cfg.codexModel });
-  if (o.running) brains.push({ id: 'ollama', label: 'Ollama', models: o.models.map((m) => m.name), default: cfg.ollamaModel || o.models[0]?.name || '' });
-  return brains;
+  const core = coreBrain();
+  return (await catalog()).map((p) => ({
+    id: p.id, label: p.label, models: p.models, efforts: p.efforts,
+    default: core.provider === p.id ? core.model : (p.id === 'ollama' ? p.models[0] || '' : ''),
+    defaultEffort: core.provider === p.id ? core.effort : '',
+  }));
 }
 
-async function resolveBrain(brain, model) {
+/** Pick provider/model/effort: explicit request → this machine's core brain → first available. */
+async function resolveBrain(brain, model, effort) {
   const list = await availableBrains();
+  const core = coreBrain();
   let b = brain && brain !== 'auto' ? list.find((x) => x.id === brain) : null;
-  if (!b && config().brain.default !== 'auto') b = list.find((x) => x.id === config().brain.default);
+  if (!b && core.provider !== 'auto') b = list.find((x) => x.id === core.provider);
   if (!b) b = list[0];
   if (!b) throw new Error('No brain available on this machine — install Claude Code, Codex or Ollama.');
   const m = model || b.default || (b.id === 'ollama' ? b.models[0] : '');
   if (b.id === 'ollama' && !m) throw new Error('Ollama is running but has no models — `ollama pull llama3.2`.');
-  return { brain: b.id, model: m };
+  const e = effort && b.efforts.includes(effort) ? effort : (b.defaultEffort || '');
+  return { brain: b.id, model: m, effort: e };
 }
 
 export function personaPrompt(meshSummary) {
@@ -79,6 +83,7 @@ export function personaPrompt(meshSummary) {
     '- rigs MCP (mesh_*): list machines, run commands, read/write files, list/read/send to coding & chat sessions on ANY machine, start Claude Code/Codex/Ollama agents on a machine, ask another machine\'s brain, broadcast updates.',
     '- REA (reverse engineer anything, `rea` MCP / `npx rea-agents@latest`): inspect binaries, Electron/JS apps, .NET, APKs, websites — use it whenever asked how some software works.',
     '- OpenRig (`rig` CLI): persistent agent teams (rigs/seats), `rig send`, `rig queue`, `rig ps`.',
+    '- Projects (project_create / project_list / project_dispatch): plan a goal into tasks and delegate each to the right machine, model and effort (Opus for elaborate work, Sonnet for simpler code, Haiku for simple text, Codex for cross-check reviews). Propose this when the user asks for multi-step work.',
     `- The mesh's own source lives in a public GitHub repo checked out on every node; changes pushed there roll out to all machines (mesh_update).`,
     meshSummary ? `Current mesh state:\n${meshSummary}` : '',
   ].filter(Boolean).join('\n');
@@ -120,12 +125,12 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal }) {
   });
 }
 
-async function runClaude(chat, text, model, emit, meshSummary, signal) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal) {
   const cfg = config().brain;
   const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', personaPrompt(meshSummary), '--permission-mode', cfg.claudePermissionMode || 'default'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
-  if (model) args.push('--model', model);
+  args.push(...claudeFlags({ model, effort }));
   if (chat.claudeSessionId) args.push('--resume', chat.claudeSessionId);
   let full = '';
   let error = null;
@@ -155,13 +160,14 @@ async function runClaude(chat, text, model, emit, meshSummary, signal) {
   return { text: full, error };
 }
 
-async function runCodex(chat, text, model, emit, meshSummary, signal) {
+async function runCodex(chat, text, model, effort, emit, meshSummary, signal) {
   const cfg = config().brain;
   const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary) + '\n\n') + unseenContext(chat, 'codex') + text;
   // `codex exec resume` takes its own option set (no --sandbox: that is fixed by the original session).
+  const flags = codexFlags({ model, effort });
   const args = chat.codexThreadId
-    ? ['exec', 'resume', '--json', '--skip-git-repo-check', ...(model ? ['-m', model] : []), chat.codexThreadId, prompt]
-    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', cfg.codexSandbox || 'read-only', ...(model ? ['-m', model] : []), prompt];
+    ? ['exec', 'resume', '--json', '--skip-git-repo-check', ...flags, chat.codexThreadId, prompt]
+    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', cfg.codexSandbox || 'read-only', ...flags, prompt];
   let full = '';
   let error = null;
   const res = await streamProcess(bin('codex'), args, {
@@ -186,13 +192,17 @@ async function runCodex(chat, text, model, emit, meshSummary, signal) {
   return { text: full, error };
 }
 
-async function runOllama(chat, text, model, emit, meshSummary, signal) {
+async function runOllama(chat, text, model, effort, emit, meshSummary, signal) {
   const url = config().brain.ollamaUrl.replace(/\/$/, '') + '/api/chat';
   const messages = [{ role: 'system', content: personaPrompt(meshSummary) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
   for (const m of chat.messages) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
   let full = '';
   try {
-    const r = await fetch(url, { method: 'POST', body: JSON.stringify({ model, messages, stream: true }), headers: { 'content-type': 'application/json' }, signal });
+    const think = ollamaThink(effort);
+    const req = (withThink) => fetch(url, { method: 'POST', body: JSON.stringify({ model, messages, stream: true, ...(withThink && think !== undefined ? { think } : {}) }), headers: { 'content-type': 'application/json' }, signal });
+    let r = await req(true);
+    // Models without thinking support reject `think`; retry without it rather than failing the turn.
+    if (!r.ok && think !== undefined) { const t = await r.text(); if (/think/i.test(t)) { emit({ type: 'status', text: `${model} has no thinking mode — answering without it` }); r = await req(false); } else return { text: '', error: `Ollama HTTP ${r.status}: ${t}` }; }
     if (!r.ok) return { text: '', error: `Ollama HTTP ${r.status}: ${await r.text()}` };
     const dec = new TextDecoder();
     let buf = '';
@@ -205,6 +215,7 @@ async function runOllama(chat, text, model, emit, meshSummary, signal) {
         if (!line) continue;
         try {
           const e = JSON.parse(line);
+          if (e.message?.thinking && !full) emit({ type: 'thinking', text: e.message.thinking });
           if (e.message?.content) { full += e.message.content; emit({ type: 'delta', text: e.message.content }); }
           if (e.error) return { text: full, error: e.error };
         } catch {}
@@ -217,22 +228,24 @@ async function runOllama(chat, text, model, emit, meshSummary, signal) {
 }
 
 /** Send a user message and stream the reply through `emit`. Persists everything. */
-export async function sendMessage(id, { text, brain, model }, emit, { meshSummary = '', signal } = {}) {
+export async function sendMessage(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
-  const resolved = await resolveBrain(brain || chat.brain, brain && brain !== chat.brain ? model : (model || chat.model));
+  const switching = brain && brain !== chat.brain;
+  const resolved = await resolveBrain(brain || chat.brain, switching ? model : (model || chat.model), effort ?? (switching ? '' : chat.effort));
   chat.brain = resolved.brain;
   chat.model = resolved.model;
+  chat.effort = resolved.effort;
   if (!chat.messages.length && chat.title === 'New conversation') chat.title = truncate(text.replace(/\s+/g, ' '), 60);
   chat.messages.push({ role: 'user', text, ts: Date.now() });
-  emit({ type: 'start', brain: resolved.brain, model: resolved.model });
+  emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
-  const out = await runner(chat, text, resolved.model, emit, meshSummary, signal);
+  const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal);
   chat.seen = chat.seen || {};
-  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, ts: Date.now() });
+  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;
   await saveChat(chat);
   if (out.error) emit({ type: 'error', message: out.error });
-  emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, chatId: chat.id, title: chat.title });
+  emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title });
   return out;
 }

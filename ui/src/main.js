@@ -1,9 +1,11 @@
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
+import { openBrainPanel } from './brain.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
+import { openProjects } from './projects.js';
 import { createOrb } from './orb.js';
 import { openSessions } from './sessions.js';
 import { openTerminal } from './terminal.js';
@@ -193,6 +195,19 @@ function renderInspector(id) {
   } else if (n.type === 'rig') {
     out.push(h('div', { class: 'ins-meta' }, `OpenRig on ${m?.name} · ${n.data.status} · ${n.data.running}/${n.data.nodes} seats running`));
     out.push(h('div', { class: 'ins-actions' }, act('⛭ OpenRig TUI', () => openTerminal({ nodeId: m.id, nodeName: m.name, command: 'rig tui', title: 'OpenRig' })), act('📜 rig ps', () => openTerminal({ nodeId: m.id, nodeName: m.name, command: `rig ps --nodes --rig ${n.name}; exec $SHELL`, title: 'rig ps' }))));
+  } else if (n.type === 'plan') {
+    const pj = n.plan;
+    const by = pj.tasks.reduce((a, t) => ((a[t.status] = (a[t.status] || 0) + 1), a), {});
+    out.push(h('div', { class: 'ins-meta' }, pj.goal, h('br'), `${pj.status} · ${Object.entries(by).map(([k, v]) => `${v} ${k}`).join(', ')}`));
+    out.push(h('div', { class: 'ins-actions' }, act('📋 Open project', () => projectsWindow({ owner: n.owner, id: pj.id }))));
+  } else if (n.type === 'task') {
+    const t = n.task;
+    out.push(h('div', { class: 'ins-meta' }, `${n.plan.name} · ${t.kind} · ${t.status}`, h('br'), t.assign ? `${t.assign.provider} ${t.assign.model || ''} ${t.assign.effort ? '· ' + t.assign.effort : ''} on ${t.assign.node}` : 'unassigned'));
+    out.push(h('div', { class: 'ins-actions' }, act('📋 Open project', () => projectsWindow({ owner: snap.find((e) => (e.projects || []).some((p) => p.id === n.plan.id))?.node.id, id: n.plan.id }))));
+  } else if (n.type === 'tool') {
+    const c = n.tool;
+    out.push(h('div', { class: 'ins-meta' }, `${m?.name} · serves ${c.kinds.join(', ') || '—'}`, h('br'), [c.url, c.command].filter(Boolean).join(' · '), c.notes ? [h('br'), c.notes] : ''));
+    if (c.url) out.push(h('div', { class: 'ins-actions' }, act('↗ Open', () => window.open(c.url.replace('127.0.0.1', m?.tailscale?.ip || '127.0.0.1'), '_blank'))));
   } else if (n.type === 'mesh') {
     out.push(h('div', { class: 'ins-meta' }, `${machines().length} RIGS nodes online on your tailnet.`));
     out.push(h('div', { class: 'ins-actions' }, act('⚙ Mesh control', () => meshWindow()), act('↻ Rescan', async () => { await api('/api/mesh/refresh', { method: 'POST' }); refresh(); })));
@@ -264,61 +279,75 @@ function desktopHelp(m, r) {
     h('pre', { class: 'pv-text' }, `Target ${m.name} (${m.platform}):\n  ${m.platform === 'windows' ? 'winget install LizardByte.Sunshine' : m.platform === 'mac' ? 'brew install --cask moonlight && brew tap LizardByte/homebrew && brew install sunshine' : 'sudo apt install ./sunshine-ubuntu-24.04-amd64.deb   (from github.com/LizardByte/Sunshine/releases)'}\nThis machine:\n  Moonlight from moonlight-stream.org (or: winget install MoonlightGameStreamingProject.Moonlight / brew install --cask moonlight / flatpak install flathub com.moonlight_stream.Moonlight)\n\nManual: moonlight stream ${addr} Desktop\nMac↔Mac: open vnc://${addr}  (Screen Sharing → High Performance)`)));
 }
 
+function projectsWindow(openId) {
+  const pw = openProjects({ snapshot: () => snap, voice, coreBrain: currentBrain, onFocus: (p) => select(`pj:${p.id}`) });
+  if (openId) pw.open(openId.owner, openId.id);
+  return pw;
+}
+
 function meshWindow() {
   openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo });
 }
 
 // ------------------------------------------------------------------ brain
+/** Flat list of (machine, provider, model) choices — used by voice commands like "switch to sonnet on ubuntu". */
 function allBrains() {
   const out = [];
   for (const e of snap) {
     if (!e.node.online || !e.node.rigs) continue;
     for (const b of e.brains || []) {
-      if (b.id === 'ollama') for (const mdl of b.models) out.push({ nodeId: e.node.id, nodeName: e.node.name, brain: 'ollama', model: mdl, label: `Ollama · ${mdl}` });
-      else out.push({ nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: '', label: b.label });
+      out.push({ nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: b.default || '', effort: b.defaultEffort || '', label: b.label });
+      for (const mdl of b.models) out.push({ nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: mdl, effort: b.defaultEffort || '', label: `${b.label} · ${mdl}` });
     }
   }
   return out;
 }
 
+let coreDefault = null; // this gateway's core brain from the server
+
 function currentBrain() {
-  const all = allBrains();
-  if (brainSel && all.find((b) => b.nodeId === brainSel.nodeId && b.brain === brainSel.brain && (b.brain !== 'ollama' || b.model === brainSel.model))) return brainSel;
-  const local = all.filter((b) => b.nodeId === selfId);
-  return local.find((b) => b.brain === 'claude') || local[0] || all[0] || null;
+  const has = (nodeId, brain) => snap.find((e) => e.node.id === nodeId && e.node.online)?.brains?.some((b) => b.id === brain);
+  if (brainSel && has(brainSel.nodeId, brainSel.brain)) return brainSel;
+  if (coreDefault && coreDefault.provider !== 'auto') {
+    const node = coreDefault.node ? snap.find((e) => e.node.name === coreDefault.node)?.node : snap.find((e) => e.node.self)?.node;
+    if (node && has(node.id, coreDefault.provider)) return { nodeId: node.id, nodeName: node.name, brain: coreDefault.provider, model: coreDefault.model, effort: coreDefault.effort };
+  }
+  const self = snap.find((e) => e.node.self);
+  const b = self?.brains?.[0];
+  return b ? { nodeId: self.node.id, nodeName: self.node.name, brain: b.id, model: b.default || '', effort: b.defaultEffort || '' } : null;
+}
+
+function shortModel(b) {
+  const m = b.model || b.brain;
+  return m.replace(/^claude-/, '').replace(/:latest$/, '');
 }
 
 function renderBrainBadge() {
   const b = currentBrain();
-  $('#brain-badge').innerHTML = b ? `◆ ${(b.brain === 'ollama' ? b.model.split(':')[0] : b.brain).toUpperCase()} <small>· ${b.nodeName}</small> ▾` : '◆ NO BRAIN ▾';
+  $('#brain-badge').innerHTML = b ? `◆ ${shortModel(b).toUpperCase()}${b.effort ? ` <small>· ${b.effort}</small>` : ''} <small>· ${b.nodeName}</small> ▾` : '◆ NO BRAIN ▾';
 }
 
-function setBrain(b) {
+function setBrain(b, { quiet = false } = {}) {
   const prevNode = currentBrain()?.nodeId;
-  brainSel = { nodeId: b.nodeId, nodeName: b.nodeName, brain: b.brain, model: b.model };
+  brainSel = { nodeId: b.nodeId, nodeName: b.nodeName, brain: b.brain, model: b.model || '', effort: b.effort || '' };
   store.set('brain', brainSel);
   if (prevNode !== b.nodeId) { chatRef = null; store.set('chat', null); }
   renderBrainBadge();
   $('#brain-menu').classList.remove('open');
-  toast(`Brain → ${b.brain}${b.model ? ' ' + b.model : ''} on ${b.nodeName}`);
+  if (!quiet) toast(`Brain → ${b.brain}${b.model ? ' ' + b.model : ''}${b.effort ? ' · ' + b.effort : ''} on ${b.nodeName}`);
 }
 
-function pickBrainOn(m) {
-  const opts = allBrains().filter((b) => b.nodeId === m.id);
-  if (opts.length === 1) return setBrain(opts[0]);
-  toggleBrainMenu(m.id);
-}
+function pickBrainOn(m) { toggleBrainMenu(m.id); }
 
 function toggleBrainMenu(onlyNode) {
   const menu = $('#brain-menu');
   if (menu.classList.contains('open') && !onlyNode) { menu.classList.remove('open'); return; }
-  const cur = currentBrain();
-  const groups = {};
-  for (const b of allBrains()) if (!onlyNode || b.nodeId === onlyNode) (groups[b.nodeName] ||= []).push(b);
-  menu.replaceChildren(...Object.entries(groups).map(([name, list]) => h('div', { class: 'bm-group' }, h('div', { class: 'bm-node' }, name),
-    ...list.map((b) => { const el = h('div', { class: 'bm-item' + (cur && cur.nodeId === b.nodeId && cur.brain === b.brain && cur.model === b.model ? ' on' : '') }, b.label); el.onclick = () => setBrain(b); return el; }))));
-  if (!menu.children.length) menu.append(h('div', { class: 'muted pad' }, 'No brains found. Install Claude Code, Codex or Ollama.'));
-  menu.classList.add('open');
+  const cur = currentBrain() || {};
+  openBrainPanel({
+    host: menu, entries: snap, current: onlyNode ? { ...cur, nodeId: onlyNode, brain: '' } : cur,
+    gatewayName: snap.find((e) => e.node.self)?.node.name || 'this machine',
+    onSave: (b) => { setBrain(b); api('/api/local/brain/core').then((c) => { coreDefault = c; }).catch(() => {}); },
+  });
 }
 
 // ------------------------------------------------------------------ JARVIS conversation
@@ -382,7 +411,8 @@ async function intent(text) {
     const target = where ? findMachine(where) : null;
     const pool = allBrains().filter((x) => !target || x.nodeId === target.id);
     const pref = (list) => list.find((x) => x.nodeId === selfId) || list[0];
-    const b = pref(pool.filter((x) => x.model && what.includes(x.model.toLowerCase().split(':')[0]))) || pref(pool.filter((x) => what.includes(x.brain)));
+    const words = what.replace(/claude /, '');
+    const b = pref(pool.filter((x) => x.model && (words.includes(x.model.toLowerCase().split(':')[0]) || x.model.toLowerCase().includes(words.trim())))) || pref(pool.filter((x) => what.includes(x.brain)));
     if (b) { setBrain(b); say(`Switching my brain to ${b.label} on ${b.nodeName}.`); return true; }
   }
   if ((m = t.match(/^(?:focus|zoom(?: in)?(?: on)?|go to|show me)\s+(.+)$/i))) {
@@ -390,6 +420,18 @@ async function intent(text) {
     const hit = graph.nodes().find((x) => x.name?.toLowerCase() === q) || graph.nodes().find((x) => x.name?.toLowerCase().includes(q));
     if (hit) { select(hit.id); say(`${hit.name}.`); return true; }
   }
+  if ((m = t.match(/^(?:plan|start|create|new)(?: a| the)?(?: new)? project(?: to| for|:)?\s+(.+)$/i))) {
+    const self = snap.find((e) => e.node.self)?.node;
+    const b = currentBrain();
+    say(`Planning it with ${b ? shortModel(b) : 'the core brain'}, ${persona.address}. I'll show you the routing before anything runs.`);
+    try {
+      const p = await api(`${node(self.id)}/projects`, { method: 'POST', body: { goal: m[1], planner: b ? { provider: b.brain, model: b.model, effort: b.effort, node: b.nodeName } : undefined } });
+      const pw = projectsWindow({ owner: self.id, id: p.id });
+      api(`${node(self.id)}/projects/${p.id}/plan`, { method: 'POST', body: {} }).then(() => { pw.open(self.id, p.id); refresh(); say(`The plan for ${p.name} is ready for your review.`); }).catch((e) => toast('Planning failed: ' + e.message, 'error', 12000));
+    } catch (e) { toast(e.message, 'error'); }
+    return true;
+  }
+  if (/^(?:show |open )?(?:my )?projects$/i.test(t)) { projectsWindow(); say('Your projects.'); return true; }
   if (/^(stop|quiet|silence|shut up|enough)$/i.test(t)) { voice.stop(); setOrb('online'); return true; }
   return false;
 }
@@ -410,11 +452,11 @@ async function ask(text, { spoken = false } = {}) {
   const tools = [];
   try {
     if (!chatRef || chatRef.nodeId !== b.nodeId) {
-      const c = await api(`${node(b.nodeId)}/chats`, { method: 'POST', body: { brain: b.brain, model: b.model } });
+      const c = await api(`${node(b.nodeId)}/chats`, { method: 'POST', body: { brain: b.brain, model: b.model, effort: b.effort } });
       chatRef = { nodeId: b.nodeId, chatId: c.id };
       store.set('chat', chatRef);
     }
-    await stream(`${node(b.nodeId)}/chats/${chatRef.chatId}/send`, { text, brain: b.brain, model: b.model }, (e) => {
+    await stream(`${node(b.nodeId)}/chats/${chatRef.chatId}/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
       if (e.type === 'delta') {
         if (!reply) setOrb('speaking');
         reply += e.text;
@@ -443,7 +485,7 @@ async function continueChat(m, s) {
   store.set('chat', chatRef);
   try {
     const c = await api(`${node(m.id)}/chats/${s.id}`);
-    setBrain({ nodeId: m.id, nodeName: m.name, brain: c.brain, model: c.model });
+    setBrain({ nodeId: m.id, nodeName: m.name, brain: c.brain, model: c.model, effort: c.effort }, { quiet: true });
     chatRef = { nodeId: m.id, chatId: s.id };
     store.set('chat', chatRef);
     const last = c.messages.filter((x) => x.role === 'assistant').pop();
@@ -478,6 +520,7 @@ function wire() {
   $('#btn-desk').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; if (n && !n.self) desktopTo(n); else toast('Focus another machine first (click it in the galaxy), then press 🖥.'); };
   $('#btn-sess').onclick = () => sessionsWindow();
   $('#btn-mesh').onclick = meshWindow;
+  $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; };
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#subtitle').onclick = conversationWindow;
@@ -518,6 +561,7 @@ function wire() {
 
 wire();
 setOrb('online');
+api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();

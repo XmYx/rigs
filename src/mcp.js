@@ -47,7 +47,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
     run: async () => {
       const nodes = await api('/api/nodes');
-      return nodes.map((x) => ({ name: x.name, self: x.self, online: x.online, rigs: x.rigs, platform: x.platform, distro: x.distro, address: x.tailscale?.dnsName || x.tailscale?.ip || x.url, version: x.version, agents: x.tools, cpu: x.stats?.cpu, memPct: x.stats ? Math.round((x.stats.memUsed / x.stats.memTotal) * 100) : null, gpus: x.gpus }));
+      return nodes.map((x) => ({ name: x.name, self: x.self, online: x.online, rigs: x.rigs, platform: x.platform, distro: x.distro, address: x.tailscale?.dnsName || x.tailscale?.ip || x.url, version: x.version, agents: x.tools, tools: x.capabilities, cpu: x.stats?.cpu, memPct: x.stats ? Math.round((x.stats.memUsed / x.stats.memTotal) * 100) : null, gpus: x.gpus }));
     },
   },
   {
@@ -97,6 +97,39 @@ const TOOLS = [
     name: 'mesh_ask', description: "Ask another machine's brain (claude | codex | ollama) a question and wait for the answer — e.g. delegate to the Ubuntu box's local Ollama model.",
     inputSchema: { type: 'object', properties: { node: { type: 'string' }, prompt: { type: 'string' }, brain: { type: 'string' }, model: { type: 'string' } }, required: ['node', 'prompt'] },
     run: (a) => askBrain(a.node, a.prompt, a.brain, a.model),
+  },
+  {
+    name: 'project_task_update', description: 'Report progress on a RIGS project task you were assigned: status done | blocked | failed (or running), with a summary of what you did / where the result is / what you need. Your task brief names the owner machine, project id and task id.',
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, task: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'blocked', 'failed'] }, summary: { type: 'string' } }, required: ['owner', 'project', 'task', 'status'] },
+    run: async (a) => {
+      const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/tasks/${encodeURIComponent(a.task)}`, { method: 'POST', body: { status: a.status, summary: a.summary || '' }, timeout: 120000 });
+      return { ok: true, project: p.status, next: p.tasks.filter((t) => t.status === 'running').map((t) => `${t.id} on ${t.assign?.node}`) };
+    },
+  },
+  {
+    name: 'project_list', description: 'List RIGS projects on every machine with their tasks, routing (machine/provider/model/effort) and status.',
+    inputSchema: { type: 'object', properties: {} },
+    run: () => api('/api/mesh/projects', { timeout: 30000 }),
+  },
+  {
+    name: 'project_get', description: 'Full detail of one project: tasks, deps, assignment reasons, run handles, log.',
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' } }, required: ['owner', 'project'] },
+    run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}`),
+  },
+  {
+    name: 'project_create', description: 'Create a RIGS project from a goal on this machine. With plan=true the core brain breaks it into tasks and RIGS routes each to the best machine + provider + model + effort; with dispatch=true the ready tasks start right away (OpenRig seats or direct agents).',
+    inputSchema: { type: 'object', properties: { goal: { type: 'string' }, name: { type: 'string' }, repoNode: { type: 'string' }, repoPath: { type: 'string' }, gitUrl: { type: 'string' }, plan: { type: 'boolean' }, dispatch: { type: 'boolean' } }, required: ['goal'] },
+    run: async (a) => {
+      let p = await api('/api/nodes/self/projects', { method: 'POST', body: a });
+      if (a.plan !== false) p = await api(`/api/nodes/self/projects/${p.id}/plan`, { method: 'POST', body: {}, timeout: 16 * 60 * 1000 });
+      if (a.dispatch) p = await api(`/api/nodes/self/projects/${p.id}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 });
+      return { id: p.id, owner: p.owner, status: p.status, tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, deps: t.deps, assign: t.assign, reason: t.reason, status: t.status })) };
+    },
+  },
+  {
+    name: 'project_dispatch', description: 'Start every task of a planned project whose dependencies are done.',
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' } }, required: ['owner', 'project'] },
+    run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
     name: 'mesh_update', description: 'Roll out the latest RIGS code from GitHub to every machine (git pull + restart). Call after pushing a change to the rigs repo.',

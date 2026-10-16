@@ -63,6 +63,12 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   gather evidence before re-implementing a feature. Keep it current with \`npx rea-agents@latest setup\`.
 - **OpenRig** (\`rig\` CLI): persistent agent teams. \`rig ps --nodes\`, \`rig send <seat> "<msg>"\`,
   \`rig queue\`, \`rig transcript\`. Other mesh machines are registered as OpenRig hosts (\`rig host list\`).
+- **Projects**: work is often planned by the core brain (Opus) and delegated per task to a machine +
+  model + effort. If your prompt is a RIGS task brief, finish by calling \`project_task_update\`
+  (owner, project, task, status, summary) — dependents start automatically after you report.
+  \`project_create\` plans and routes a new goal across the mesh.
+- **Tools**: \`mesh_status\` lists each machine's tools (e.g. ComfyUI for image generation). Use the
+  machine that has the tool you need.
 - **SSH**: \`ssh <machine-name>\` works between all nodes (aliases in ~/.ssh/config).
 - **Changing the mesh itself**: the source is the public repo checked out at \`${APP_DIR}\`
   (see its AGENTS.md). Edit, run \`npm test\`, commit, push to \`main\`, then call \`mesh_update\`

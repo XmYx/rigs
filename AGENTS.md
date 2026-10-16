@@ -14,6 +14,10 @@ treat `main` as production.
 | `src/auth.js` | Who may call: loopback, same-owner tailnet devices (`tailscale whois`), or the mesh token |
 | `src/sessions.js` | Claude Code / Codex / tmux / OpenRig / terminal session discovery, transcripts, attach, send |
 | `src/chat.js` | JARVIS brains: Claude Code (`claude -p`), Codex (`codex exec --json`), Ollama (HTTP). Hot-swappable mid-conversation |
+| `src/models.js` | Provider → model → effort catalog and the per-harness flags (`--model/--effort`, `-m/-c model_reasoning_effort`, Ollama `think`); core brain |
+| `src/planner.js` | Projects: core-brain planning → routing policy (`config.routing.rules`) → dispatch → tracking. `routeProject` is pure and unit-tested |
+| `src/work.js` | Runs one task on this machine: one-seat OpenRig rig + queue item, or a direct agent session |
+| `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |
 | `src/openrig.js` | OpenRig (`rig`) status, seats, and peer registration as OpenRig hosts |
@@ -33,6 +37,7 @@ treat `main` as production.
   `RIGS_SSH_DIR` (see `test/smoke.test.js`).
 - Before pushing: `npm test` (and `npm run build` if you touched `ui/`). CI runs the same on all three OSes.
 - After pushing to `main`, roll out with the `mesh_update` MCP tool or `rigs update --all`.
+- Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test
 

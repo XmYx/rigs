@@ -10,7 +10,9 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop }) {
   const table = h('div', { class: 'mesh-table' });
   const updates = h('div', { class: 'pad' });
   const settings = h('div', { class: 'pad settings' });
-  const tabs = [['Machines', table], ['Updates', updates], ['JARVIS', settings]];
+  const toolsEl = h('div', { class: 'pad settings' });
+  const routingEl = h('div', { class: 'pad settings' });
+  const tabs = [['Machines', table], ['Tools', toolsEl], ['Routing', routingEl], ['Updates', updates], ['JARVIS', settings]];
   const tabBar = h('div', { class: 'tabs' }, ...tabs.map(([name, el], i) => h('button', { class: 'tab' + (i ? '' : ' on'), onclick: (e) => { tabBar.querySelectorAll('.tab').forEach((t) => t.classList.remove('on')); e.target.classList.add('on'); tabs.forEach(([, x]) => (x.style.display = 'none')); el.style.display = ''; } }, name)));
   w.body.append(tabBar, ...tabs.map(([, el], i) => { el.style.display = i ? 'none' : ''; return el; }));
 
@@ -89,7 +91,89 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop }) {
       } }, 'Save'), h('button', { class: 'btn', onclick: () => voice.say(`Good evening, ${address.value}. All systems nominal.`) }, '▶ Test voice')));
   }
 
+  async function renderTools() {
+    const ms = snapshot().filter((e) => e.node.online && e.node.rigs);
+    const known = await api('/api/local/capabilities').then((r) => r.known).catch(() => []);
+    const rows = ms.map((e) => h('div', { class: 'upd-row tool-row' }, h('b', {}, e.node.name),
+      ...Object.values(e.node.capabilities || {}).map((c) => h('span', { class: 'chip', title: [c.url, c.command, c.notes].filter(Boolean).join(' · ') }, `${c.label}${c.detected ? ' ✓' : ''}`, c.declared ? h('button', { class: 'chip-x', title: 'remove', onclick: async () => { await api(`${node(e.node.id)}/capabilities`, { method: 'POST', body: { id: c.id, remove: true } }).catch((err) => toast(err.message, 'error')); toast(`Removed ${c.label} from ${e.node.name}`); } }, '×') : null)),
+      Object.keys(e.node.capabilities || {}).length ? null : h('span', { class: 'muted small' }, 'no tools yet')));
+    const machine = h('select', { class: 'mini' }, ...ms.map((e) => h('option', { value: e.node.id }, e.node.name)));
+    const id = h('input', { class: 'path-input', placeholder: 'id, e.g. comfyui', list: 'known-tools' });
+    const dl = h('datalist', { id: 'known-tools' }, ...known.map((k) => h('option', { value: k.id }, k.label)));
+    const label = h('input', { class: 'path-input', placeholder: 'Label, e.g. ComfyUI' });
+    const kinds = h('input', { class: 'path-input', placeholder: 'Task kinds it serves (comma), e.g. media' });
+    const url = h('input', { class: 'path-input', placeholder: 'URL (optional), e.g. http://127.0.0.1:8188' });
+    const command = h('input', { class: 'path-input', placeholder: 'CLI command (optional), e.g. comfy' });
+    const notes = h('textarea', { class: 'path-input', rows: 2, placeholder: 'How agents should use it (shown in their task brief)' });
+    id.onchange = () => { const k = known.find((x) => x.id === id.value); if (k) { label.value ||= k.label; kinds.value ||= k.kinds.join(', '); notes.value ||= k.notes; } };
+    toolsEl.replaceChildren(
+      h('div', { class: 'pv-title' }, 'Tools on each machine'),
+      h('p', { class: 'muted small' }, 'Tasks that need a tool (e.g. media → ComfyUI) are routed only to machines that have it. Tools are auto-detected where possible (ComfyUI on :8188 or the comfy CLI); declare anything else here, one tool at a time.'),
+      ...rows,
+      h('div', { class: 'pv-title', style: { marginTop: '14px' } }, 'Add a tool'),
+      h('div', { class: 'grid2' }, h('label', {}, 'Machine', machine), h('label', {}, 'Tool id', id, dl)),
+      h('div', { class: 'grid2' }, h('label', {}, 'Label', label), h('label', {}, 'Serves task kinds', kinds)),
+      h('div', { class: 'grid2' }, h('label', {}, 'URL', url), h('label', {}, 'Command', command)),
+      h('label', {}, 'Notes for agents', notes),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
+        try { await api(`${node(machine.value)}/capabilities`, { method: 'POST', body: { id: id.value.trim(), label: label.value, kinds: kinds.value, url: url.value, command: command.value, notes: notes.value } }); toast('Tool added — it appears after the next mesh refresh', 'ok'); }
+        catch (e) { toast(e.message, 'error'); }
+      } }, 'Add tool')));
+  }
+
+  async function renderRouting() {
+    const r = await api('/api/local/routing').catch(() => null);
+    if (!r) return;
+    const catalog = await api('/api/local/models').catch(() => []);
+    const KINDS = ['*', 'plan', 'architecture', 'code', 'test', 'review', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
+    const PROVS = ['claude', 'codex', 'ollama'];
+    let rules = r.rules.map((x) => ({ ...x }));
+    const picks = h('select', { class: 'mini' }, ...[['machine', 'planner may suggest machines'], ['all', 'planner may also pick provider + model'], ['none', 'ignore planner suggestions']].map(([v, l]) => h('option', { value: v, selected: r.plannerPicks === v }, l)));
+    const dispatch = h('select', { class: 'mini' }, ...[['auto', 'auto (OpenRig when available)'], ['openrig', 'OpenRig'], ['direct', 'direct agent sessions']].map(([v, l]) => h('option', { value: v, selected: r.dispatch === v }, l)));
+    const table = h('div', { class: 'rule-table' });
+    const sel = (opts, val, on) => { const e = h('select', { class: 'mini' }, ...opts.map((o) => h('option', { value: o, selected: o === (val ?? '') }, o || '—'))); e.onchange = () => on(e.value); return e; };
+    function draw() {
+      table.replaceChildren(h('div', { class: 'rule-row head' }, ...['kind', 'size', 'needs tool', 'provider', 'model', 'effort', 'cross-check', ''].map((x) => h('span', {}, x))),
+        ...rules.map((x, i) => {
+          const prov = catalog.find((c) => c.id === x.provider);
+          const listId = `rm-${i}`;
+          const model = h('input', { class: 'path-input', value: x.model || '', list: listId, placeholder: 'default' });
+          model.onchange = () => { x.model = model.value.trim(); };
+          const tool = h('input', { class: 'path-input', value: x.tool || '', placeholder: '—' });
+          tool.onchange = () => { x.tool = tool.value.trim() || undefined; };
+          const cc = h('input', { type: 'checkbox', checked: !!x.crossCheck });
+          cc.onchange = () => { x.crossCheck = cc.checked || undefined; };
+          return h('div', { class: 'rule-row' },
+            sel(KINDS, x.kind, (v) => { x.kind = v; }), sel(['', 'S', 'M', 'L'], x.size || '', (v) => { x.size = v || undefined; }), tool,
+            sel(PROVS, x.provider, (v) => { x.provider = v; x.model = ''; x.effort = ''; draw(); }),
+            h('span', {}, model, h('datalist', { id: listId }, ...(prov?.models || []).map((m) => h('option', { value: m })))),
+            sel(['', ...(prov?.efforts || ['low', 'medium', 'high'])], x.effort || '', (v) => { x.effort = v; }), h('span', {}, cc),
+            h('span', { class: 'rule-btns' },
+              h('button', { class: 'tb', title: 'up', onclick: () => { if (i) { [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; draw(); } } }, '↑'),
+              h('button', { class: 'tb', title: 'down', onclick: () => { if (i < rules.length - 1) { [rules[i + 1], rules[i]] = [rules[i], rules[i + 1]]; draw(); } } }, '↓'),
+              h('button', { class: 'tb', title: 'remove', onclick: () => { rules.splice(i, 1); draw(); } }, '✕')));
+        }));
+    }
+    draw();
+    routingEl.replaceChildren(
+      h('div', { class: 'pv-title' }, `Routing policy — this machine ${r.customized ? '(customized)' : '(defaults)'}`),
+      h('p', { class: 'muted small' }, 'First matching rule wins (kind, then optional size S/M/L). It fixes the provider, exact model and effort; a "needs tool" rule only lands on machines with that tool; cross-check sends a review to the other agent when one agent wrote all the code. The machine is then chosen by availability, load, GPU/platform needs and spread.'),
+      h('div', { class: 'grid2' }, h('label', {}, 'Planner suggestions', picks), h('label', {}, 'Default dispatch', dispatch)),
+      table,
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: () => { rules.splice(Math.max(0, rules.length - 1), 0, { kind: 'code', provider: 'claude', model: '', effort: '' }); draw(); } }, '＋ Rule'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          const clean = rules.map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined && v !== '')));
+          await api('/api/local/routing', { method: 'POST', body: { rules: clean, plannerPicks: picks.value, dispatch: dispatch.value } });
+          toast('Routing saved — use ⇄ Re-route on a project to apply it', 'ok');
+          renderRouting();
+        } }, 'Save'),
+        h('button', { class: 'btn', onclick: async () => { await api('/api/local/routing', { method: 'POST', body: { reset: true } }); toast('Back to the default rules'); renderRouting(); } }, 'Reset to defaults')));
+  }
+
   renderMachines();
+  renderTools();
+  renderRouting();
   renderUpdates();
   renderSettings();
   timer = setInterval(renderMachines, 5000);
