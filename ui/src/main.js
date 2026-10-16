@@ -4,6 +4,7 @@ import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { renderReply } from './visual.js';
 import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -649,7 +650,9 @@ function showSubtitle(text, cls = 'jarvis') {
   const m = text.match(SEPARATOR);
   el.replaceChildren();
   if (m) {
-    el.append(h('div', { class: 'spoken' }, text.slice(0, m.index).trim()), h('div', { class: 'written' }, text.slice(m.index + m[0].length).trim()));
+    const written = h('div', { class: 'written' });
+    renderReply(written, text.slice(m.index + m[0].length).trim());
+    el.append(h('div', { class: 'spoken' }, text.slice(0, m.index).trim()), written);
     el.classList.add('has-details');
   } else el.textContent = text;
   el.scrollTop = el.scrollHeight;
@@ -944,6 +947,43 @@ async function conversationWindow() {
 }
 
 // ------------------------------------------------------------------ wiring
+/** Chat dock size: drag the grip at its bottom-right corner (width, and how tall the reply area may grow). */
+function makeResizable(dock) {
+  const KEY = 'rigs.dockSize';
+  const grip = h('span', { class: 'dock-grip', title: 'Drag to resize the chat · double-click to reset' }, '◢');
+  dock.append(grip);
+  const apply = ({ w, h: hh }) => {
+    if (w) dock.style.width = `${w}px`;
+    if (hh) dock.style.setProperty('--dock-h', `${hh}px`);
+  };
+  try { apply(JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* none saved */ }
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = dock.getBoundingClientRect();
+    const sy = e.clientY;
+    const sh = $('#subtitle').getBoundingClientRect().height;
+    const max = window.innerWidth - 40;
+    grip.setPointerCapture(e.pointerId);
+    dock.classList.add('resizing');
+    const move = (ev) => {
+      const w = Math.min(max, Math.max(300, ev.clientX - r.left));
+      const hh = Math.min(window.innerHeight - 120, Math.max(60, sh + (ev.clientY - sy)));
+      dock.style.width = `${w}px`;
+      dock.style.setProperty('--dock-h', `${hh}px`);
+    };
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      dock.classList.remove('resizing');
+      localStorage.setItem(KEY, JSON.stringify({ w: dock.getBoundingClientRect().width, h: parseFloat(dock.style.getPropertyValue('--dock-h')) || null }));
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+  });
+  grip.addEventListener('dblclick', () => { dock.style.width = ''; dock.style.removeProperty('--dock-h'); localStorage.removeItem(KEY); });
+}
+
 function wire() {
   // Every panel floats: drag by ⠿, close with ✕, bring back from ☰ (see panels.js)
   makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
@@ -951,6 +991,7 @@ function wire() {
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
   makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
   makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
+  makeResizable($('#chat-dock'));
   const work = createWork($('#work'), {
     onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); },
     onOpenTask: (t) => { const m = findMachine(t.node); if (m && t.session) sessionsWindow('', { node: m, s: { kind: t.session.kind, id: t.session.id, title: t.title, live: true } }); else toast('That agent has no session to show yet.'); },

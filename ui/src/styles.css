@@ -98,7 +98,7 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 #dock-target:hover { color: var(--accent); }
 #chat-dock.attached #dock-target { color: #f0abfc; }
 #subtitle { padding: 0 14px; font-size: 13px; white-space: pre-wrap; max-height: 0; overflow-y: auto; cursor: pointer; transition: max-height .3s, padding .3s; }
-#subtitle.show { max-height: 30vh; padding: 2px 14px 9px; }
+#subtitle.show { max-height: var(--dock-h, 30vh); padding: 2px 14px 9px; }
 #subtitle.user { color: #9fb2bf; font-style: italic; }
 #subtitle.interim { opacity: .7; }
 #subtitle.error { color: var(--danger); border-color: rgba(248, 113, 113, .4); }
@@ -326,7 +326,7 @@ a.link { color: var(--accent); cursor: pointer; }
 #face.big { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%); width: min(60vh, 560px); height: min(66vh, 620px); z-index: 12;
   background: radial-gradient(closest-side, rgba(45, 212, 191, .08), transparent); border-radius: 50%; }
 /* Replies: the short spoken line, then the written-only description (after "---") */
-#subtitle.show.has-details { max-height: 42vh; }
+#subtitle.show.has-details { max-height: var(--dock-h, 42vh); }
 #subtitle .spoken { font-size: 14px; font-weight: 500; }
 #subtitle .written { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); color: #b9c8d2; font-size: 12.5px; white-space: pre-wrap; }
 
@@ -405,6 +405,59 @@ a.link { color: var(--accent); cursor: pointer; }
 .wk-rnow { font-size: 11px; color: #b9c8d2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #work > .wk-head > .pctl { order: 2; }
 
+/* Visual replies (visual.js): animated cards inside the chat dock */
+.vz-text { white-space: pre-wrap; margin: 4px 0; }
+.vz-card { margin: 8px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(45, 212, 191, .05); animation: vz-in .5s cubic-bezier(.2,.8,.2,1) both; position: relative; overflow: hidden; }
+.vz-cap { font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; }
+@keyframes vz-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+.vz-weather .vz-hero { display: flex; align-items: center; gap: 14px; }
+.vz-icon { font-size: 44px; line-height: 1; animation: vz-bob 3.2s ease-in-out infinite; display: inline-block; }
+.vz-weather.wet .vz-icon { animation: vz-sway 2.4s ease-in-out infinite; }
+.vz-temp { font: 600 40px/1 var(--mono); color: #7dd3fc; text-shadow: 0 0 18px rgba(125, 211, 252, .35); }
+.vz-meta { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; font-size: 13px; }
+.vz-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 6px; margin-top: 10px; }
+.vz-day { display: flex; flex-direction: column; align-items: center; gap: 2px; font: 11px var(--mono); animation: vz-in .5s both; }
+.vz-day span { font-size: 16px; }
+.vz-deco { position: absolute; right: 8px; top: 8px; width: 90px; height: auto; pointer-events: none; opacity: .9; }
+.vz-cloud { fill: rgba(148, 163, 184, .10); stroke: rgba(148, 163, 184, .25); animation: vz-drift 9s ease-in-out infinite alternate; }
+.vz-codecard pre.vz-code { margin: 0; font: 11.5px/1.5 var(--mono); max-height: 240px; overflow: auto; }
+.vz-line { white-space: pre; padding: 0 6px; border-left: 2px solid transparent; animation: vz-in .25s both; }
+.vz-line.add { background: rgba(74, 222, 128, .12); border-color: #4ade80; }
+.vz-line.del { background: rgba(248, 113, 113, .12); border-color: #f87171; }
+.vz-line.com { color: var(--muted); }
+.vz-metric { display: grid; grid-template-columns: 110px 1fr 56px; gap: 8px; align-items: center; font: 12px var(--mono); margin: 6px 0; }
+.vz-track { height: 8px; border-radius: 4px; background: rgba(148, 163, 184, .12); overflow: hidden; }
+.vz-track i { display: block; height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, #2dd4bf, #7dd3fc); animation: vz-fill .9s cubic-bezier(.2,.8,.2,1) both; }
+.vz-track i.warn { background: linear-gradient(90deg, #f5c451, #fb923c); }
+.vz-track i.bad { background: linear-gradient(90deg, #f87171, #fb7185); }
+.vz-step { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; animation: vz-in .45s both; color: #b9c8d2; }
+.vz-dot { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font: 11px var(--mono); flex: none; }
+.vz-step.done .vz-dot { background: #4ade80; border-color: #4ade80; color: #04110a; }
+.vz-step.run .vz-dot { border-color: #f5c451; border-top-color: transparent; animation: vz-spin 1s linear infinite; }
+.vz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.vz-tile { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: 11px var(--mono); display: flex; flex-direction: column; gap: 2px; animation: vz-in .4s both; position: relative; }
+.vz-tile i { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 8px #4ade80; animation: vz-pulse 1.8s ease-in-out infinite; }
+.vz-tile.warn i { background: #f5c451; box-shadow: 0 0 8px #f5c451; }
+.vz-tile.bad i { background: #f87171; box-shadow: 0 0 8px #f87171; }
+.vz-tile small { color: var(--muted); }
+.vz-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; }
+.vz-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+.vz-col span { display: block; width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: linear-gradient(0deg, #2dd4bf, #818cf8); animation: vz-grow .8s cubic-bezier(.2,.8,.2,1) both; transform-origin: bottom; }
+.vz-col small { font: 10px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.vz-fallback { font: 11px var(--mono); white-space: pre-wrap; color: var(--muted); }
+@keyframes vz-bob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-4px) rotate(2deg); } }
+@keyframes vz-sway { 0%,100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
+@keyframes vz-drift { from { transform: translateX(0); } to { transform: translateX(-14px); } }
+@keyframes vz-fill { from { width: 0; } }
+@keyframes vz-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes vz-spin { to { transform: rotate(360deg); } }
+@keyframes vz-pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .vz-card, .vz-card *, .vz-line, .vz-step, .vz-tile { animation: none !important; } }
+
+/* Chat dock resize grip (main.js makeResizable) */
+.dock-grip { position: absolute; right: 2px; bottom: 0; font-size: 11px; line-height: 1; color: var(--muted); opacity: .45; cursor: nwse-resize; padding: 2px 3px; user-select: none; touch-action: none; }
+.dock-grip:hover, #chat-dock.resizing .dock-grip { opacity: 1; color: var(--accent); }
+#chat-dock.resizing { transition: none !important; }
 /* Work dashboard: agents cast by a project, indented under it */
 .wk-row.wk-agent { margin-left: 14px; padding-top: 4px; padding-bottom: 4px; border-left: 2px solid rgba(45, 212, 191, .25); }
 .wk-row.wk-agent .wk-rtitle { font-size: 12px; }
