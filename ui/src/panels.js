@@ -22,6 +22,57 @@ function place(el, pos) {
 
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
+const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+const MIN_W = 160;
+const MIN_H = 48;
+
+/** Eight resize handles (edges and corners) on a floating panel; sizes and position persist with it. */
+function addResizeHandles(el, id) {
+  for (const dir of EDGES) {
+    const hd = document.createElement('span');
+    hd.className = `presize presize-${dir}`;
+    hd.dataset.dir = dir;
+    hd.title = 'Drag to resize';
+    el.append(hd);
+    hd.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = el.getBoundingClientRect();
+      const sx = e.clientX;
+      const sy = e.clientY;
+      hd.setPointerCapture(e.pointerId);
+      el.classList.add('resizing');
+      const move = (ev) => {
+        const dx = ev.clientX - sx;
+        const dy = ev.clientY - sy;
+        let left = r.left;
+        let top = r.top;
+        let width = r.width;
+        let height = r.height;
+        if (dir.includes('e')) width = Math.max(MIN_W, r.width + dx);
+        if (dir.includes('w')) { width = Math.max(MIN_W, r.width - dx); left = r.right - width; }
+        if (dir.includes('s')) height = Math.max(MIN_H, r.height + dy);
+        if (dir.includes('n')) { height = Math.max(MIN_H, r.height - dy); top = r.bottom - height; }
+        width = Math.min(width, window.innerWidth - 8);
+        height = Math.min(height, window.innerHeight - 8);
+        Object.assign(el.style, { width: width + 'px', height: height + 'px' });
+        place(el, { left, top });
+      };
+      const up = () => {
+        hd.removeEventListener('pointermove', move);
+        hd.removeEventListener('pointerup', up);
+        el.classList.remove('resizing');
+        const b = el.getBoundingClientRect();
+        state[id] = { ...state[id], pos: { left: b.left, top: b.top, width: b.width + 'px', height: b.height + 'px' } };
+        save();
+        el.dispatchEvent(new CustomEvent('panelresize'));
+      };
+      hd.addEventListener('pointermove', move);
+      hd.addEventListener('pointerup', up);
+    });
+  }
+}
+
 /** Animated show/hide: fade + scale out, then display:none; the reverse on the way back. */
 function animateClosed(el, closed) {
   clearTimeout(el._panelTimer);
@@ -67,6 +118,7 @@ export function makeFloating(el, { id, title, into = el, keep = [], onToggle }) 
   panels.set(id, { el, title, collapseBtn, onToggle });
   into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
+  addResizeHandles(el, id);
 
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault();
