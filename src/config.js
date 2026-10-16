@@ -29,13 +29,17 @@ function defaults() {
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
       ollamaUrl: 'http://127.0.0.1:11434',
       // JARVIS works in your home: brains run with cwd = workRoot and may read/write there
-      // (Claude: acceptEdits + edit/bash tools; Codex: workspace-write sandbox rooted at workRoot).
+      // (Claude: auto mode + edit/bash tools; Codex: workspace-write sandbox rooted at workRoot).
       // Interactive terminal sessions keep their own prompts.
       workRoot: '~',
-      claudePermissionMode: 'acceptEdits',
+      claudePermissionMode: 'auto',
       claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'WebSearch', 'WebFetch'],
       codexSandbox: 'workspace-write',
     },
+    // How agents RIGS starts (terminal agents, project tasks, OpenRig seats) handle permissions. "auto" = work
+    // unattended: Claude's auto mode (a classifier approves safe actions), Codex in its workspace-write sandbox
+    // with network, asking only to escalate. Anything that still asks shows up as "needs you" (blinking planet).
+    agents: { claudePermissionMode: 'auto', codexSandbox: 'workspace-write', codexApproval: 'on-request', codexNetwork: true, rigPolicy: 'builtin:auto' },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },

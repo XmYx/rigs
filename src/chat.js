@@ -134,7 +134,7 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal }) {
 async function runClaude(chat, text, model, effort, emit, meshSummary, signal) {
   const cfg = config().brain;
   const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--append-system-prompt', personaPrompt(meshSummary), '--permission-mode', cfg.claudePermissionMode || 'default'];
+    '--append-system-prompt', personaPrompt(meshSummary), '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   args.push('--add-dir', workRoot());
   args.push(...claudeFlags({ model, effort }));

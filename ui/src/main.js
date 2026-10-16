@@ -44,12 +44,100 @@ function setOrb(s) {
 const machines = () => snap.filter((e) => e.node.online && e.node.rigs).map((e) => e.node);
 const machineById = (id) => snap.find((e) => e.node.id === id)?.node;
 
+// ------------------------------------------------------------------ "an agent needs you"
+// Every machine reports agents waiting on the user (permission prompts, questions, blocked tasks).
+// They blink in the galaxy, sit in a banner until answered, and announce themselves once.
+let attention = []; // [{ node, nodeId, items: [...] }]
+const baseTitle = document.title;
+
+const attnItems = () => attention.flatMap((g) => (g.items || []).map((it) => ({ ...it, nodeId: g.nodeId, nodeName: g.node })));
+
+function sessionFor(it) {
+  const e = snap.find((x) => x.node.id === it.nodeId);
+  if (!e || !it.session) return null;
+  return (e.sessions || []).find((s) => s.id === it.session.id && s.kind === it.session.kind) || (e.sessions || []).find((s) => s.id === it.session.id) || null;
+}
+
+function attentionGraphIds() {
+  const ids = new Set();
+  for (const it of attnItems()) {
+    ids.add('m:' + it.nodeId);
+    const s = sessionFor(it);
+    if (s) ids.add(`s:${it.nodeId}:${s.kind}:${s.id}`);
+    if (it.project) ids.add(`tk:${it.project.id}:${it.project.task}`);
+  }
+  return ids;
+}
+
+async function refreshAttention() {
+  try { attention = await api('/api/mesh/attention'); } catch { return; }
+  graph.setAttention(attentionGraphIds());
+  renderAttention();
+}
+
+function renderAttention() {
+  const items = attnItems();
+  // The banner heads the toast column, so toasts stack under it instead of on top of it.
+  let box = document.getElementById('toasts');
+  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  let bar = $('#attn');
+  if (!bar) bar = h('div', { id: 'attn' });
+  if (box.firstChild !== bar) box.prepend(bar);
+  document.title = items.length ? `(${items.length}) ⚠ ${baseTitle}` : baseTitle;
+  $('#orb-wrap').classList.toggle('alert', items.length > 0);
+  if (!items.length) { bar.replaceChildren(); bar.classList.remove('on'); return; }
+  bar.classList.add('on');
+  const who = (a) => ({ claude: 'Claude', codex: 'Codex', ollama: 'Ollama' }[a] || a || 'agent');
+  bar.replaceChildren(
+    h('div', { class: 'attn-head' }, h('b', {}, `⚠ ${items.length} agent${items.length > 1 ? 's' : ''} need${items.length > 1 ? '' : 's'} you`)),
+    ...items.slice(0, 5).map((it) => h('div', { class: 'attn-row' },
+      h('div', { class: 'attn-what' }, h('b', {}, `${who(it.agent)} · ${it.nodeName}`), ' ', h('span', {}, it.title || ''), h('div', { class: 'muted small' }, `${it.reason || ''}${it.since ? ' · ' + ago(it.since) : ''}${it.where && it.where !== 'tmux' ? ' · in ' + it.where : ''}`)),
+      h('div', { class: 'attn-btns' }, act('⌨ Answer', () => openAttention(it), 'primary'), act('◎', () => showAttention(it), 'icon')))),
+    items.length > 5 ? h('div', { class: 'muted small' }, `+${items.length - 5} more — see the blinking planets`) : null);
+}
+
+function showAttention(it) {
+  const s = sessionFor(it);
+  if (s) select(`s:${it.nodeId}:${s.kind}:${s.id}`);
+  else if (it.project) select(`tk:${it.project.id}:${it.project.task}`);
+  else select('m:' + it.nodeId);
+}
+
+async function openAttention(it) {
+  const m = machineById(it.nodeId);
+  if (!m) return;
+  if (it.project && !it.session) { showAttention(it); projectsWindow({ owner: it.nodeId, id: it.project.id }); return; }
+  if (it.where === 'Claude app') { showAttention(it); toast(`It's waiting in the Claude app on ${m.name} — answer it there.`, 'ok', 12000); return; }
+  const s = sessionFor(it) || (it.session && { ...it.session, title: it.title, live: true });
+  if (!s) { showAttention(it); return; }
+  // A Claude Code / Codex session outside tmux can't be joined (resuming would fork it): show where it is instead.
+  if (s.kind === 'claude' || s.kind === 'codex') { showAttention(it); sessionsWindow('', { node: m, s }); toast(`Answer it in the terminal where it runs on ${m.name}.`, 'ok', 12000); return; }
+  attachSession(m, s);
+}
+
+function attentionNotify(m) {
+  const it = m.action?.item ? { ...m.action.item, nodeName: m.action.node, nodeId: snap.find((e) => e.node.name === m.action.node)?.node.id } : null;
+  refreshAttention();
+  if (!it) return;
+  toast(`⚠ ${m.text}`, 'attn', 60000, { label: 'Answer', run: () => openAttention(it) });
+  try {
+    if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      const n = new Notification(`${m.from}: an agent needs you`, { body: m.text, tag: it.key, requireInteraction: true });
+      n.onclick = () => { window.focus(); openAttention(it); n.close(); };
+    }
+  } catch {}
+}
+
+// Browsers only allow asking for notification permission from a user gesture.
+window.addEventListener('pointerdown', () => { try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch {} }, { once: true });
+
 async function refresh() {
   try {
     snap = await api('/api/mesh/snapshot');
     const self = snap.find((e) => e.node.self);
     if (self) selfId = self.node.id;
     graph.setData(buildGraph(snap));
+    graph.setAttention(attentionGraphIds());
     renderCounts();
     renderHubs();
     renderFilters();
@@ -67,7 +155,11 @@ function connectEvents() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
-    if (m.type === 'notify') {
+    if (m.type === 'notify' && m.level === 'attention') {
+      attentionNotify(m);
+      showSubtitle(m.text, 'jarvis');
+      if (m.speak) voice.say(m.text);
+    } else if (m.type === 'notify') {
       const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
       toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', act ? 60000 : 9000, act);
       showSubtitle(m.text, 'jarvis');
@@ -667,6 +759,8 @@ await refresh();
 graph.fit();
 connectEvents();
 setInterval(refresh, 15000);
+setInterval(refreshAttention, 4000);
+refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
 
 function greeting() {

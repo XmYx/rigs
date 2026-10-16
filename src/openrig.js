@@ -43,7 +43,8 @@ export async function status(force = false) {
 function normalizeNode(n) {
   return {
     rig: n.rigName, role: n.logicalId, session: n.canonicalSessionName, runtime: n.runtime,
-    status: n.sessionStatus || n.lifecycleState, activity: n.agentActivity?.state || 'unknown',
+    status: n.sessionStatus || n.lifecycleState, activity: n.agentActivity?.state || 'unknown', reason: n.agentActivity?.reason || '',
+    startupStatus: n.startupStatus || '', lifecycle: n.lifecycleState || '',
     attach: n.tmuxAttachCommand, resume: n.resumeCommand, work: n.assignedWorkCount || 0,
     title: `${n.logicalId || n.canonicalSessionName} @ ${n.rigName}`,
   };

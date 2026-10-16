@@ -146,6 +146,7 @@ test('models catalog + core brain round-trip', async () => {
 
 test('projects: create, add task by hand, route, delete', async () => {
   const p = await post('/api/nodes/self/projects', { name: 'smoke', goal: 'test the planner API' });
+  assert.equal(p.policy, 'builtin:auto', 'project agents run in auto mode by default');
   const withTask = await post(`/api/nodes/self/projects/${p.id}/tasks`, { title: 'write docs', kind: 'docs' });
   assert.equal(withTask.tasks.length, 1);
   assert.equal(withTask.status, 'planned');
@@ -168,4 +169,12 @@ test('access: the node can read and write its home', async () => {
   assert.equal(a.home.read, true);
   assert.equal(a.home.write, true);
   assert.ok(Array.isArray(a.folders));
+});
+
+test('attention: feed per node + mesh-wide, codex hook endpoint', async () => {
+  assert.ok(Array.isArray(await get('/api/local/attention')));
+  const mesh = await get('/api/mesh/attention');
+  assert.ok(mesh.some((g) => g.node && Array.isArray(g.items)));
+  const r = await post('/api/local/attention/codex', { type: 'agent-turn-complete', 'thread-id': 'smoke' });
+  assert.equal(r.ok, true);
 });

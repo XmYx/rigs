@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
-import { claudeFlags, codexFlags } from './models.js';
+import { agentModes, claudeFlags, codexFlags } from './models.js';
+import { CODEX_AUTO_PROFILE, codexAutoProfileReady } from './agentmodes.js';
 import * as openrig from './openrig.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
@@ -52,7 +53,7 @@ async function prepareWorkdir(workdir, gitUrl) {
   return dir;
 }
 
-export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = 'builtin:standard' }) {
+export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto' }) {
   const dir = await prepareWorkdir(workdir, project.gitUrl);
   // The full brief lives on disk; agents get a short pointer to it (robust quoting on every OS).
   const briefDir = path.join(dir, '.rigs', 'tasks');
@@ -92,6 +93,9 @@ async function startOpenRig({ project, task, dir, brief, policy }) {
     `        cwd: ${JSON.stringify(dir)}`,
     ...(a.model ? [`        model: ${JSON.stringify(a.model)}`] : []),
     ...(a.effort ? [`        effort: ${JSON.stringify(a.effort)}`] : []),
+    // Codex has no auto mode of its own; under builtin:auto OpenRig launches it "at the floor", which with a named
+    // profile means `-p rigs-auto`: workspace-write + network, asking only to escalate (see agentmodes.js).
+    ...(runtime === 'codex' && policy !== 'builtin:yolo' && codexAutoProfileReady() ? [`        codex_config_profile: ${CODEX_AUTO_PROFILE}`] : []),
     `        role: ${slug(task.kind || 'builder', 20)}`,
     '    edges: []',
     'edges: []',
@@ -118,8 +122,9 @@ async function startOpenRig({ project, task, dir, brief, policy }) {
 async function startDirect({ project, task, dir, pointer }) {
   const a = task.assign;
   let line;
-  if (a.provider === 'claude') line = ['claude', ...claudeFlags(a).map(q), q(pointer)].join(' ');
-  else if (a.provider === 'codex') line = ['codex', ...codexFlags(a).map(q), q(pointer)].join(' ');
+  const modes = agentModes();
+  if (a.provider === 'claude') line = ['claude', ...claudeFlags({ ...a, ...modes.claude }).map(q), q(pointer)].join(' ');
+  else if (a.provider === 'codex') line = ['codex', ...codexFlags({ ...a, ...modes.codex }).map(q), q(pointer)].join(' ');
   else if (a.provider === 'ollama') {
     // Codex drives local Ollama models as a real agent (tools + MCP incl. REA); plain `ollama run` otherwise.
     line = bin('codex') ? ['codex', '--oss', '--local-provider', 'ollama', ...(a.model ? ['-m', q(a.model)] : []), q(pointer)].join(' ') : `ollama run ${q(a.model || 'llama3.2')} ${q(pointer)}`;

@@ -6,6 +6,8 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
+import * as attention from './attention.js';
+import { osNotify } from './osnotify.js';
 import * as caps from './capabilities.js';
 import * as appsReg from './apps.js';
 import * as chat from './chat.js';
@@ -200,11 +202,11 @@ export async function startServer() {
 
   async function snapshotFor(node) {
     const get = (p) => (node.self ? localCall(p) : peerJson(node, p, { timeout: 7000 }));
-    const [sess, brains, rig, info, projects] = await Promise.all([
+    const [sess, brains, rig, info, projects, att] = await Promise.all([
       get('sessions').catch(() => []), get('brains').catch(() => []), get('openrig').catch(() => null), node.self ? selfInfo() : get('info').catch(() => node),
-      get('projects').catch(() => []),
+      get('projects').catch(() => []), get('attention').catch(() => []),
     ]);
-    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects };
+    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects, attention: att };
   }
 
   async function meshSnapshot() {
@@ -494,6 +496,8 @@ export async function startServer() {
     }
     if (sub === 'migrations') return migrations.status();
     if (sub === 'root-steps') return rootsteps.pending();
+    if (sub === 'attention' && method === 'GET') return attention.list();
+    if (sub === 'attention/codex' && method === 'POST') return attention.codexEvent(await body());
     if (sub === 'access' && method === 'GET') return access.status(q.get('force') === '1');
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
 
@@ -555,6 +559,11 @@ export async function startServer() {
       return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
+    if (p === '/api/mesh/attention') {
+      const nodes = discovery.list().filter((n) => n.online && n.rigs);
+      return Promise.all(nodes.map((n) => (n.self ? Promise.resolve(attention.list()) : peerJson(n, 'attention', { timeout: 5000 }))
+        .then((items) => ({ node: n.name, nodeId: n.id, items })).catch(() => ({ node: n.name, nodeId: n.id, items: [] }))));
+    }
     if (p === '/api/mesh/projects') {
       const snap = await meshSnapshot();
       return snap.flatMap((e) => (e.projects || []).map((x) => ({ ...x, ownerId: e.node.id })));
@@ -686,6 +695,22 @@ export async function startServer() {
   if (!process.env.RIGS_NO_MIGRATIONS) setTimeout(() => migrations.runPending((m, res) => {
     if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
   }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+
+  // "An agent needs you": watch every agent on this machine; announce new waits mesh-wide.
+  attention.events.on('new', (items) => {
+    for (const it of items) {
+      const who = it.agent === 'claude' ? 'Claude' : it.agent === 'codex' ? 'Codex' : it.agent;
+      const text = `${who} on ${config().name} needs you — ${it.title}: ${it.reason}`;
+      broadcastNotify({ text, speak: true, level: 'attention', from: config().name, action: { type: 'attention', node: config().name, item: it } }).catch(() => {});
+      osNotify(`${who} needs you on ${config().name}`, `${it.title} — ${it.reason}`).catch(() => {});
+    }
+  });
+  const attentionTick = async () => {
+    const projects = await planner.listProjects().catch(() => []);
+    await attention.refresh({ projects });
+  };
+  setTimeout(() => attentionTick().catch(() => {}), 3000).unref();
+  setInterval(() => attentionTick().catch((e) => log('attention:', e.message)), 5000).unref();
 
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).
   setInterval(kickMerge, 30000).unref();

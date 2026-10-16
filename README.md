@@ -40,10 +40,18 @@ can act on all of them.
 - **Every coding and chat session, everywhere.** Claude Code and Codex history, OpenRig seats, tmux
   sessions, RIGS terminals and JARVIS chats from all machines in one list. Read transcripts, type
   into live sessions, or resume a session on the machine where its code lives.
+- **"An agent needs you" is impossible to miss.** When any agent on any machine waits for you (a
+  Claude Code permission prompt or question, a Codex approval, an OpenRig seat that needs input, a
+  blocked project task), its machine's planet and the session blink amber in the galaxy, a banner
+  lists every waiting agent with an **Answer** button that attaches you to it, JARVIS says it out
+  loud, and a desktop notification appears (browser and the machine's own OS).
+- **Agents run in auto mode.** Agents RIGS starts, project tasks and OpenRig seats (`builtin:auto`)
+  run unattended: Claude Code in its auto mode, Codex with the `rigs-auto` profile (workspace-write
+  sandbox with network, asking only to escalate). Anything that still has to ask shows up as above.
 - **Files on any machine.** Browse, preview, upload, download, rename, trash, and drag-and-drop or
   "copy to machine" between nodes.
 - **Easy SSH.** Each node gets a mesh key and `~/.ssh/config` aliases. `ssh <machine>` works from
-  every node to every other node, and Tailscale SSH is enabled on Linux.
+  every node to every other node (served by OpenSSH; SSH logins open a tmux session JARVIS shows).
 - **Hardware-accelerated remote desktop** with Sunshine (host) and Moonlight (client): NVENC, VAAPI,
   QuickSync or VideoToolbox, and KMS capture on Wayland. RIGS pairs them automatically when you
   press 🖥. macOS Screen Sharing (High Performance), RDP and VNC are fallbacks.
