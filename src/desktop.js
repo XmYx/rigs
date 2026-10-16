@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
+import { pruneStale } from './moonlight-hosts.js';
 import { bin } from './tools.js';
 import { isLinux, isMac, isWin, log, run, sleep, spawnCmd } from './util.js';
 
@@ -161,6 +162,8 @@ export async function connect({ address, platform, method = 'auto', targetHost, 
   }
   if (m === 'moonlight') {
     if (!c.moonlight) return { ok: false, method: m, message: 'Moonlight is not installed on this machine (rigs desktop installs it).', steps };
+    const pruned = await pruneStale(address).catch(() => ({}));
+    if (pruned.dropped) steps.push(`removed ${pruned.dropped} stale Moonlight entr${pruned.dropped > 1 ? 'ies' : 'y'} for ${pruned.live.hostname}`);
     let state = await moonlightPaired(address);
     if (!state.ok) {
       if (!pairWithTarget) return { ok: false, method: m, message: 'Not paired yet.', steps };
