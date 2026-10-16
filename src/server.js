@@ -156,6 +156,11 @@ export async function startServer() {
       return peerDownload(worker, `git/bundle?dir=${encodeURIComponent(req.dir)}&branch=${encodeURIComponent(req.branch)}`, path.join(RIGS_HOME, 'merge', `in-${req.id}.bundle`));
     },
     rollout: () => rolloutAll().catch((e) => log('rollout after merge:', e.message)),
+    cleanup: async (req) => {
+      const worker = discovery.get(req.node);
+      if (!worker) return { removed: false, reason: `${req.node} offline` };
+      return worker.self ? merge.cleanupWork(req.dir, req.branch) : peerJson(worker, 'dev/cleanup', { method: 'POST', body: { dir: req.dir, branch: req.branch }, timeout: 60000 });
+    },
     notify: (text, level = 'info') => broadcastNotify({ text, level, speak: false, from: `${config().name} (merge steward)` }),
     // Only on a real conflict: an agent resolves it in the steward's scratch worktree.
     resolve: async (req) => {
@@ -425,6 +430,7 @@ export async function startServer() {
       if (st.self) kickMerge();
       return { ...r, steward: st.name };
     }
+    if (sub === 'dev/cleanup' && method === 'POST') { const b = await body(); return merge.cleanupWork(files.resolvePath(b.dir), b.branch); }
     if (sub === 'git/bundle' && method === 'GET') {
       if (!res) throw new HttpError(400, 'stream only');
       const file = await merge.bundle(files.resolvePath(q.get('dir')), q.get('branch'));
