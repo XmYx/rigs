@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
+import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
  * JARVIS chats. One conversation can hop between brains mid-stream (Claude Code, Codex, any
@@ -77,11 +78,27 @@ async function resolveBrain(brain, model, effort) {
   return { brain: b.id, model: m, effort: e };
 }
 
-export function personaPrompt(meshSummary) {
+// JARVIS's character: ~/.rigs/SOUL.md when Sir keeps his own copy (JARVIS may refine it), else persona/SOUL.md.
+let soulCache = { file: '', mtime: 0, text: '' };
+export function soul() {
+  const own = path.join(RIGS_HOME, 'SOUL.md');
+  const file = fs.existsSync(own) ? own : path.join(APP_DIR, 'persona', 'SOUL.md');
+  try {
+    const mtime = fs.statSync(file).mtimeMs;
+    if (file !== soulCache.file || mtime !== soulCache.mtime) soulCache = { file, mtime, text: fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->\s*/, '').trim() };
+    return soulCache.text;
+  } catch { return ''; }
+}
+
+export function personaPrompt(meshSummary, projects = '') {
   const p = config().persona;
   const humor = p.humor ?? 60;
+  const now = new Date();
+  const character = p.soul === false ? '' : soul();
   return [
+    character ? `${character}\n\n---\n# RIGS specifics` : '',
     `You are ${p.name}, the voice of RIGS OS — the user's personal control plane for every workstation on their Tailscale network.`,
+    `Local time on this machine: ${now.toLocaleString('en-GB', { weekday: 'long', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'long' })}.`,
     `This brain is running on the machine "${config().name}" (${os.type()} ${os.release()}, ${process.arch}).`,
     `You work in the user's home (${workRoot()}): you may read, create and edit files there and run commands (git, builds, scripts) to get things done. Other machines' homes are reachable with the mesh_* tools. Be careful with destructive actions: never delete or overwrite the user's data without asking — move things to ~/.rigs/trash instead of deleting.`,
     `Address the user as "${p.address}". Humor setting ${humor}%: ${humor > 70 ? 'dry, cheeky wit welcome' : humor > 30 ? 'a light touch of dry wit' : 'strictly professional'}.`,
@@ -91,10 +108,11 @@ export function personaPrompt(meshSummary) {
     '- rigs MCP (mesh_*): list machines, run commands, read/write files, list/read/send to coding & chat sessions on ANY machine, start Claude Code/Codex/Ollama agents on a machine, ask another machine\'s brain, broadcast updates.',
     '- REA (reverse engineer anything, `rea` MCP / `npx rea-agents@latest`): inspect binaries, Electron/JS apps, .NET, APKs, websites — use it whenever asked how some software works.',
     '- OpenRig (`rig` CLI): persistent agent teams (rigs/seats), `rig send`, `rig queue`, `rig ps`.',
-    'When you run as the quick conversational brain (a Haiku model), answer chat and simple requests yourself, and for substantial work — writing or changing code, multi-step research, anything that takes more than a few tool calls — delegate instead of doing it: start a capable agent with mesh_start_agent (Claude Code with claude-opus-5-5 for elaborate work, claude-sonnet-5-5 for simpler code) or plan it with project_create, tell the user in one line where it runs, and report back when they ask.',
+    'Every instruction gets a brief reply in your own voice. Answer chat, questions and quick one-step actions yourself. Substantial work — writing or changing code, building something, multi-step research, long jobs — you do NOT do inline: file it with jarvis_task (pick the project from the list below, "rigs" for RIGS/JARVIS itself and anything on the go, or newProject for a new line of work); RIGS casts an agent for it (OpenRig seat when available) and it shows on the Work dashboard. Then say in one or two sentences what you set in motion, under which project and where. For a big multi-part goal, project_create with plan=true and dispatch=true plans and starts the whole thing.',
     '- Projects (project_create / project_list / project_dispatch): plan a goal into tasks and delegate each to the right machine, model and effort (Opus for elaborate work, Sonnet for simpler code, Haiku for simple text, Codex for cross-check reviews). Propose this when the user asks for multi-step work.',
     `- The mesh's own source lives in a public GitHub repo checked out on every node; changes pushed there roll out to all machines (mesh_update).`,
     meshSummary ? `Current mesh state:\n${meshSummary}` : '',
+    projects ? `Projects (id · name · status · owner — file work under these):\n${projects}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -134,10 +152,10 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
   const cfg = config().brain;
   const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--append-system-prompt', personaPrompt(meshSummary), '--permission-mode', cfg.claudePermissionMode || 'auto'];
+    '--append-system-prompt', personaPrompt(meshSummary, projects), '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   args.push('--add-dir', workRoot());
   args.push(...claudeFlags({ model, effort }));
@@ -170,9 +188,9 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal) {
   return { text: full, error };
 }
 
-async function runCodex(chat, text, model, effort, emit, meshSummary, signal) {
+async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
   const cfg = config().brain;
-  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary) + '\n\n') + unseenContext(chat, 'codex') + text;
+  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary, projects) + '\n\n') + unseenContext(chat, 'codex') + text;
   // `codex exec resume` takes its own option set (no --sandbox: that is fixed by the original session).
   const flags = codexFlags({ model, effort });
   const args = chat.codexThreadId
@@ -202,9 +220,9 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal) {
   return { text: full, error };
 }
 
-async function runOllama(chat, text, model, effort, emit, meshSummary, signal) {
+async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
   const url = config().brain.ollamaUrl.replace(/\/$/, '') + '/api/chat';
-  const messages = [{ role: 'system', content: personaPrompt(meshSummary) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
+  const messages = [{ role: 'system', content: personaPrompt(meshSummary, projects) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
   for (const m of chat.messages) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
   let full = '';
   try {
@@ -246,7 +264,7 @@ export async function sendMessage(id, { text, brain, model, effort }, emit, opts
   try { return await sendMessageInner(id, { text, brain, model, effort }, emit, opts); } finally { activeTurns.delete(id); }
 }
 
-async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', signal } = {}) {
+async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', projects = '', signal } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -260,7 +278,7 @@ async function sendMessageInner(id, { text, brain, model, effort }, emit, { mesh
   const turn = activeTurns.get(id);
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
-  const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal);
+  const out = await runner(chat, text, resolved.model, resolved.effort, emit, meshSummary, signal, projects);
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;

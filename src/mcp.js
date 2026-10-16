@@ -68,6 +68,11 @@ const TOOLS = [
     run: async (a) => { const { node, ...app } = a; const r = await api(`/api/nodes/${n(node)}/apps`, { method: 'POST', body: app }); return { apps: r.apps.map((x) => ({ id: x.id, name: x.name, target: x.target })), errors: r.errors }; },
   },
   {
+    name: 'mesh_pin_project', description: 'Pin a project folder (it stays on its machine) in JARVIS\'s Top hubs on every UI: shows live sessions inside it and opens a project window to start Claude / a terminal there. remove:true unpins.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine that holds the project; "self" for this one' }, path: { type: 'string' }, name: { type: 'string' }, remove: { type: 'boolean' } }, required: ['node', 'path'] },
+    run: async (a) => (await api(`/api/nodes/${n(a.node)}/pins`, { method: 'POST', body: { path: a.path, name: a.name, remove: a.remove } })),
+  },
+  {
     name: 'mesh_app_start', description: 'Spin up an App Cloud app on its machine (its launch recipe: systemd unit or command) and wait until it is healthy. Opening an app in JARVIS does this automatically.',
     inputSchema: { type: 'object', properties: { node: { type: 'string' }, id: { type: 'string' } }, required: ['node', 'id'] },
     run: async (a) => { const r = await api(`/api/nodes/${n(a.node)}/app-start/${encodeURIComponent(a.id)}`, { method: 'POST', body: {}, timeout: 90000 }); return { started: r.started, status: r.health?.status, path: `/api/nodes/${encodeURIComponent(a.node)}/apps/${a.id}/` }; },
@@ -126,6 +131,27 @@ const TOOLS = [
     run: async (a) => {
       const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/tasks/${encodeURIComponent(a.task)}`, { method: 'POST', body: { status: a.status, summary: a.summary || '' }, timeout: 120000 });
       return { ok: true, project: p.status, next: p.tasks.filter((t) => t.status === 'running').map((t) => `${t.id} on ${t.assign?.node}`) };
+    },
+  },
+  {
+    name: 'jarvis_task', description: "File one of Sir's instructions as work and cast an agent for it right away. project: an existing project id (see project_list / the list in your prompt), \"rigs\" for RIGS · JARVIS itself and anything on the go (the default), or give newProject {name, goal, repoNode?, repoPath?, gitUrl?} to start a new one. instruction: Sir's full request plus any context the agent needs. RIGS routes it to the best machine + model + effort and starts it (an OpenRig seat when available); it shows on the Work dashboard. Returns where it runs.",
+    inputSchema: { type: 'object', properties: {
+      title: { type: 'string', description: 'short task title' },
+      instruction: { type: 'string', description: "Sir's request in full, plus context" },
+      project: { type: 'string', description: 'existing project id; "rigs" = RIGS · JARVIS (default)' },
+      newProject: { type: 'object', description: '{ name, goal, repoNode?, repoPath?, gitUrl? } to create a project for this', properties: { name: { type: 'string' }, goal: { type: 'string' }, repoNode: { type: 'string' }, repoPath: { type: 'string' }, gitUrl: { type: 'string' } } },
+      kind: { type: 'string', description: 'code | research | docs | text | review | test | architecture | media | reverse-engineer' },
+      size: { type: 'string', enum: ['S', 'M', 'L'], description: 'S/M simpler work, L elaborate (picks a stronger model)' },
+    }, required: ['title', 'instruction'] },
+    run: async (a) => {
+      const r = await api('/api/nodes/self/projects/intake', { method: 'POST', body: a, timeout: 10 * 60 * 1000 });
+      const t = r.task || {};
+      return {
+        project: `${r.project?.name} (${r.project?.id}, on ${r.project?.owner})`, task: `${t.id} ${t.title}`, started: !!r.started,
+        runs: t.assign ? `${t.assign.provider} ${t.assign.model || ''} ${t.assign.effort || ''} on ${t.assign.node}`.replace(/\s+/g, ' ').trim() : null,
+        via: t.run ? (t.run.mode === 'openrig' ? `OpenRig seat ${t.run.seat} (rig ${t.run.rig})` : `${t.run.session?.kind} ${t.run.session?.id}`) : null,
+        why: r.why || t.reason || '', error: t.status === 'failed' ? t.summary : undefined,
+      };
     },
   },
   {

@@ -82,6 +82,7 @@ async function selfInfo() {
   const [sys, st, tools, tsStatus, ver, capabilities] = await Promise.all([systemInfo(), stats(), detectTools(), ts.status(), appVersion(), caps.capabilities()]);
   const ip = tsStatus?.self?.ips?.find((x) => x.includes('.'));
   return {
+    pinnedProjects: cfg.pinnedProjects || [],
     id: cfg.nodeId, name: cfg.name, version: ver.short, versionInfo: ver, port: cfg.port,
     url: `http://${ip || '127.0.0.1'}:${cfg.port}`,
     ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
@@ -197,6 +198,22 @@ export async function startServer() {
 
   function kickMerge() {
     iAmSteward().then((yes) => yes && merge.processQueue(mergeCtx)).catch((e) => log('merge steward:', e.message));
+  }
+
+  /** Projects on every machine, one line each, for JARVIS to file instructions under (cached 30 s). */
+  let projCache = { at: 0, text: '' };
+  async function projectsSummary() {
+    if (Date.now() - projCache.at < 30000) return projCache.text;
+    try {
+      const snap = await meshSnapshot();
+      const rows = snap.flatMap((e) => (e.projects || []).map((p) => {
+        const live = (p.tasks || []).filter((t) => t.status === 'running').length;
+        return `- ${p.id} · ${p.name} · ${p.status}${live ? ` (${live} running)` : ''} · on ${e.node.name}`;
+      }));
+      if (!rows.some((r) => r.startsWith(`- ${planner.MAIN_ID} `))) rows.unshift(`- ${planner.MAIN_ID} · RIGS · JARVIS · main project (created on first use)`);
+      projCache = { at: Date.now(), text: rows.slice(0, 40).join('\n') };
+    } catch { /* keep the old list */ }
+    return projCache.text;
   }
 
   function meshSummary() {
@@ -335,7 +352,7 @@ export async function startServer() {
       const b = await body();
       if (!res || q.get('wait') === '1') {
         let final = null;
-        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary() });
+        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary(), projects: await projectsSummary() });
         return final;
       }
       res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
@@ -343,7 +360,7 @@ export async function startServer() {
       res.on('close', () => { if (!res.writableEnded) ac.abort(); });
       const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
       try {
-        await chat.sendMessage(mm[1], b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), signal: ac.signal });
+        await chat.sendMessage(mm[1], b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal });
       } catch (e) {
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
       } finally { clearInterval(hb); res.end(); }
@@ -387,6 +404,19 @@ export async function startServer() {
       cfg.capabilities = all;
       saveConfig(cfg);
       return { tools: await caps.capabilities(true) };
+    }
+    if (sub === 'pins' && method === 'GET') return { pinnedProjects: config().pinnedProjects || [] };
+    if (sub === 'pins' && method === 'POST') {
+      // Pin / unpin a project folder on this machine ({ path, name?, remove? }).
+      const b = await body();
+      const p = String(b.path || '').trim().replace(/(.)[\\/]+$/, '$1');
+      if (!p) throw new HttpError(400, 'path required');
+      const cfg = config();
+      const rest = (cfg.pinnedProjects || []).filter((x) => x.path !== p);
+      if (!b.remove) rest.push({ name: String(b.name || '').trim() || p.split(/[\\/]/).filter(Boolean).pop() || p, path: p });
+      cfg.pinnedProjects = rest;
+      saveConfig(cfg);
+      return { pinnedProjects: rest };
     }
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
     if ((mm = m(/^app-start\/([^/]+)$/)) && method === 'POST') {
@@ -449,14 +479,20 @@ export async function startServer() {
     if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/stop$/)) && method === 'POST') return planner.stopProject(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
-      const pr = await planner.getProject(mm[1]);
-      if (!pr) throw new HttpError(404, 'project not found');
+      if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
+      return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;
+    }
+    if (sub === 'projects/intake' && method === 'POST') {
+      // JARVIS files an instruction under a project and casts an agent for it. The project may live on
+      // another machine: forward to its owner (the main project too, wherever it was first created).
       const b = await body();
-      const id = b.id && /^[\w-]{1,12}$/.test(b.id) && !pr.tasks.some((t) => t.id === b.id) ? b.id : `t${pr.tasks.length + 1}${pr.tasks.some((t) => t.id === `t${pr.tasks.length + 1}`) ? 'b' : ''}`;
-      pr.tasks.push({ id, title: b.title || 'New task', description: b.description || b.title || '', kind: planner.KINDS.includes(b.kind) ? b.kind : 'code', size: b.size || 'M', deps: b.deps || [], needs: { platform: 'any', gpu: false, ...(b.needs || {}) }, suggest: {}, status: 'todo', assign: b.assign ? { ...b.assign, locked: true } : null, reason: b.assign ? 'set by hand' : '', run: null, summary: '' });
-      if (!b.assign) planner.routeProject(pr, await meshSnapshot(), { onlyUnassigned: true });
-      if (pr.status === 'draft') pr.status = 'planned';
-      return planner.saveProject(pr);
+      const want = b.newProject ? null : (b.project || planner.MAIN_ID);
+      if (want && !(await planner.getProject(want))) {
+        const owner = (await meshSnapshot()).find((e) => !e.node.self && (e.projects || []).some((x) => x.id === want));
+        if (owner) return callNode(owner.node.id, 'projects/intake', { method: 'POST', body: b, timeout: 10 * 60 * 1000 });
+        if (want !== planner.MAIN_ID) throw new HttpError(404, `project ${want} not found on any machine`);
+      }
+      return planner.intake(b, plannerCtx);
     }
     if ((mm = m(/^projects\/([\w-]+)\/tasks\/([\w-]+)$/))) {
       if (method === 'DELETE') {

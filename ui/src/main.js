@@ -223,9 +223,41 @@ function renderAppList() {
   }) : [h('div', { class: 'muted small' }, 'No apps yet.')]));
 }
 
+const inside = (cwd, root) => !!cwd && !!root && (cwd === root || cwd.startsWith(root.replace(/[\\/]+$/, '') + (root.includes('\\') ? '\\' : '/')));
+const pinSessions = (e, p) => (e.sessions || []).filter((s) => s.live !== false && inside(s.cwd, p.path));
+const allPins = () => snap.flatMap((e) => (e.node.pinnedProjects || []).map((p) => ({ ...p, node: e.node, entry: e })));
+
+function projectWindow(pin) {
+  const m = pin.node;
+  const list = h('div', { class: 'proj-sessions' });
+  const w = openWindow({ title: `📌 ${pin.name} · ${m.name}`, width: 520, height: 420 });
+  const render = () => {
+    const cur = allPins().find((x) => x.node.id === m.id && x.path === pin.path) || pin;
+    const ss = pinSessions(cur.entry, cur);
+    list.replaceChildren(...(ss.length ? ss.map((s) => h('div', { class: 'hub', onclick: () => attachSession(m, s) },
+      h('i', { style: { background: TYPES.machine.color } }), h('span', {}, s.title || s.id), h('em', {}, s.kind))) : [h('div', { class: 'muted small' }, 'No live sessions in this project.')]));
+  };
+  render();
+  const t = setInterval(() => { if (!w.el.isConnected) clearInterval(t); else render(); }, 3000);
+  w.body.append(h('div', { class: 'muted small' }, `${m.name}:${pin.path}`), list,
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn primary', onclick: () => startAgent(m, 'claude', pin.path) }, '▶ New Claude here'),
+      h('button', { class: 'btn', onclick: () => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: pin.path, title: pin.name }) }, '⌨ Terminal here'),
+      h('button', { class: 'btn', onclick: async () => { await pinProject(m, pin.path, pin.name, true); w.close(); } }, 'Unpin')));
+}
+
+async function pinProject(m, path, name, remove = false) {
+  try { await api(`${node(m.id)}/pins`, { method: 'POST', body: { path, name, remove } }); refresh(); toast(remove ? 'Unpinned.' : `Pinned ${name || path}.`, 'ok'); } catch (e) { toast(e.message, 'error'); }
+}
+
 function renderHubs() {
+  const pinRows = allPins().map((p) => {
+    const el = h('div', { class: 'hub' + (p.node.online ? '' : ' off'), title: `${p.node.name}:${p.path}` }, h('i', { style: { background: '#fbbf24' } }), h('span', {}, `📌 ${p.name}`), h('em', {}, `${p.node.name} · ${pinSessions(p.entry, p).length}`));
+    el.onclick = () => projectWindow(p);
+    return el;
+  });
   const rows = snap.map((e) => ({ n: e.node, c: e.sessions?.length || 0 })).sort((a, b) => (b.n.online - a.n.online) || b.c - a.c);
-  $('#hubs').replaceChildren(...rows.map(({ n, c }) => {
+  $('#hubs').replaceChildren(...pinRows, ...rows.map(({ n, c }) => {
     const el = h('div', { class: 'hub' + (n.online && n.rigs ? '' : ' off') }, h('i', { style: { background: n.online && n.rigs ? TYPES.machine.color : TYPES.offline.color } }), h('span', {}, n.name), h('em', {}, c || ''));
     el.onclick = () => select('m:' + n.id);
     return el;
@@ -329,7 +361,7 @@ function renderInspector(id) {
     const first = sess[0];
     if (first) {
       const mm = machineById(first.machine);
-      out.push(h('div', { class: 'ins-actions' }, act('⌨ Terminal in project', () => openTerminal({ nodeId: mm.id, nodeName: mm.name, cwd: first.session.cwd, title: n.name })), act('📁 Files', () => filesOn(mm, first.session.cwd)), act('✳ Claude here', () => startAgent(mm, 'claude', first.session.cwd))));
+      out.push(h('div', { class: 'ins-actions' }, act('⌨ Terminal in project', () => openTerminal({ nodeId: mm.id, nodeName: mm.name, cwd: first.session.cwd, title: n.name })), act('📁 Files', () => filesOn(mm, first.session.cwd)), act('✳ Claude here', () => startAgent(mm, 'claude', first.session.cwd)), act('📌 Pin', () => pinProject(mm, first.session.cwd, n.name))));
     }
   } else if (n.type === 'skill') {
     out.push(h('div', { class: 'ins-meta' }, n.detail));
@@ -668,6 +700,11 @@ async function intent(text) {
     const n = findMachine(m[1]);
     if (n) { desktopTo(n); say(`Connecting to ${n.name}'s desktop.`); return true; }
   }
+  if ((m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
+    const q = m[1].toLowerCase().replace(/[?.!]$/, '').trim();
+    const pin = allPins().find((p) => p.name.toLowerCase() === q) || allPins().find((p) => q.length > 2 && p.name.toLowerCase().includes(q));
+    if (pin) { projectWindow(pin); say(`${pin.name}, on ${pin.node.name}.`); return true; }
+  }
   if (/^(?:show |list |open )?(?:all |my )?(?:sessions|chats|conversations|coding sessions)\b/i.test(t)) { sessionsWindow(); say('Every session on every machine.'); return true; }
   if (/^(?:mesh |system )?status( report)?$|^how are (?:the |my )?(?:rigs|machines|systems)/i.test(t)) { say(meshStatusLine()); return true; }
   if (/^(?:update|upgrade|deploy|roll ?out)(?: the)?(?: mesh| all| everything| every machine)?$/i.test(t)) { meshWindow(); say(`Opening mesh control. Confirm the rollout there, ${persona.address}.`); return true; }
@@ -955,7 +992,11 @@ function wire() {
   makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
   makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
   makeResizable($('#chat-dock'));
-  const work = createWork($('#work'), { onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); } });
+  const work = createWork($('#work'), {
+    onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); },
+    onOpenTask: (t) => { const m = findMachine(t.node); if (m && t.session) sessionsWindow('', { node: m, s: { kind: t.session.kind, id: t.session.id, title: t.title, live: true } }); else toast('That agent has no session to show yet.'); },
+    onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
+  });
   makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });

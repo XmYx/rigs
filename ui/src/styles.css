@@ -458,3 +458,6 @@ a.link { color: var(--accent); cursor: pointer; }
 .dock-grip { position: absolute; right: 2px; bottom: 0; font-size: 11px; line-height: 1; color: var(--muted); opacity: .45; cursor: nwse-resize; padding: 2px 3px; user-select: none; touch-action: none; }
 .dock-grip:hover, #chat-dock.resizing .dock-grip { opacity: 1; color: var(--accent); }
 #chat-dock.resizing { transition: none !important; }
+/* Work dashboard: agents cast by a project, indented under it */
+.wk-row.wk-agent { margin-left: 14px; padding-top: 4px; padding-bottom: 4px; border-left: 2px solid rgba(45, 212, 191, .25); }
+.wk-row.wk-agent .wk-rtitle { font-size: 12px; }

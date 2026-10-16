@@ -31,7 +31,7 @@ function progress(pct) {
 }
 
 /** Mount the dashboard into `el` (an aside). Returns { refresh, setActive }. */
-export function createWork(el, { onOpenSession } = {}) {
+export function createWork(el, { onOpenSession, onOpenTask, onOpenProject } = {}) {
   const head = h('div', { class: 'wk-head keep' }, h('span', { class: 'wk-title' }, 'Work'), h('span', { class: 'wk-meta' }, ''));
   const limits = h('div', { class: 'wk-limits' });
   const list = h('div', { class: 'wk-list' });
@@ -63,10 +63,17 @@ export function createWork(el, { onOpenSession } = {}) {
           h('div', { class: 'wk-rmeta' }, `${n.node} · ${MODEL(j.model) || j.brain} · answering for ${ago(j.startedAt)}`)));
       }
       for (const pj of n.projects || []) {
-        rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') },
-          h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), `📋 ${pj.name}`, h('b', {}, `${pj.pct}%`)),
+        // A project and, under it, every agent it has cast — click a project to open it, an agent to watch its session
+        rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : ''), title: 'Open the project', onclick: () => onOpenProject?.(n, pj) },
+          h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), `${pj.main ? '◆' : '📋'} ${pj.name}`, h('b', {}, `${pj.pct}%`)),
           progress(pj.pct),
-          h('div', { class: 'wk-rmeta' }, `${pj.done}/${pj.total} tasks${pj.blocked ? ` · ${pj.blocked} stuck` : ''}${pj.running.length ? ' · running: ' + pj.running.map((t) => `${t.title} (${MODEL(t.model)} on ${t.node})`).join(', ') : ''}`)));
+          h('div', { class: 'wk-rmeta' }, `${pj.done}/${pj.total} tasks${pj.running.length ? ` · ${pj.running.length} agent${pj.running.length > 1 ? 's' : ''} working` : ''}${pj.blocked ? ` · ${pj.blocked} stuck` : ''}`)));
+        for (const t of pj.running) {
+          busy++;
+          rows.push(h('div', { class: 'wk-row wk-agent busy', title: t.via ? `Watch ${t.via}` : '', onclick: (e) => { e.stopPropagation(); onOpenTask?.(t); } },
+            h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), `↳ ${t.title}`),
+            h('div', { class: 'wk-rmeta' }, [MODEL(t.model), t.effort, t.node, t.via, t.startedAt ? `for ${ago(t.startedAt)}` : ''].filter(Boolean).join(' · '))));
+        }
       }
       for (const s of n.sessions || []) {
         const recent = s.status === 'busy' || Date.now() - (s.lastAt || 0) < 20 * 60000;
