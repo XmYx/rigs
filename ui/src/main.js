@@ -93,7 +93,8 @@ function renderAttention() {
     ...items.slice(0, 5).map((it) => h('div', { class: 'attn-row' },
       h('div', { class: 'attn-what' }, h('b', {}, `${who(it.agent)} · ${it.nodeName}`), ' ', h('span', {}, it.title || ''), h('div', { class: 'muted small' }, `${it.reason || ''}${it.since ? ' · ' + ago(it.since) : ''}${it.where && it.where !== 'tmux' ? ' · in ' + it.where : ''}`)),
       h('div', { class: 'attn-btns' }, act('⌨ Answer', () => openAttention(it), 'primary'), act('◎', () => showAttention(it), 'icon')))),
-    items.length > 5 ? h('div', { class: 'muted small' }, `+${items.length - 5} more — see the blinking planets`) : null);
+    // (replaceChildren would print a literal "null", unlike h())
+    ...(items.length > 5 ? [h('div', { class: 'muted small' }, `+${items.length - 5} more — see the blinking planets`)] : []));
 }
 
 function showAttention(it) {
