@@ -37,7 +37,7 @@ export function openSessions({ snapshot, focus, onContinueChat } = {}) {
     const r = rows();
     listEl.replaceChildren(...r.slice(0, 400).map(({ node: n, s }) => {
       const el = h('div', { class: 'sess-row' + (active && active.s.id === s.id && active.node.id === n.id ? ' sel' : '') },
-        h('span', { class: `sk k-${s.kind}` }, KIND_ICON[s.kind] || '•'),
+        h('span', { class: `sk k-${s.agent === 'ssh' ? 'ssh' : s.kind}` }, s.agent === 'ssh' ? '🔐' : KIND_ICON[s.kind] || '•'),
         h('div', { class: 'sm' },
           h('div', { class: 'st' }, s.title || s.id),
           h('div', { class: 'ss' }, `${n.name} · ${KIND_LABEL[s.kind] || s.kind}${s.project ? ' · ' + s.project : ''} · ${ago(s.updatedAt)}`)),

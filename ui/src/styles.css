@@ -242,6 +242,11 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 .chip.st-bad { background: rgba(248, 113, 113, .16); color: #fca5a5; }
 .chip.st-warn { background: rgba(251, 191, 36, .16); color: #fcd34d; }
 .chip-x { border: 0; background: transparent; color: inherit; padding: 0 0 0 4px; }
+.chip-btn { border: 0; cursor: pointer; }
+.toast-btn { margin-left: 10px; padding: 3px 10px; }
+.ibtn.icon { padding: 4px 6px; }
+a.link { color: var(--accent); cursor: pointer; }
+.k-ssh { color: #22d3ee; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tool-row { flex-wrap: wrap; }
 .rule-table { display: flex; flex-direction: column; gap: 4px; }

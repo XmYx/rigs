@@ -4,7 +4,7 @@ import { openWindow } from './wm.js';
 const AGENTS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig'], ['rea', 'REA'], ['sunshine', 'Sunshine'], ['moonlight', 'Moonlight'], ['tmux', 'tmux']];
 
 /** Machines, versions, rollout of updates from GitHub, and JARVIS settings. */
-export function openMesh({ snapshot, voice, onTerminal, onDesktop }) {
+export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun, onInstallDesktop }) {
   let timer = null;
   const w = openWindow({ title: 'Mesh control', icon: '⚙', width: 1080, height: 640, className: 'mesh-win', onClose: () => clearInterval(timer) });
   const table = h('div', { class: 'mesh-table' });
@@ -27,13 +27,23 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop }) {
           h('div', { class: 'muted' }, up ? `rigs ${n.version || '?'} · ${sessions.length} sessions · ${(n.gpus || []).join(', ')}` : n.rigs ? 'offline' : `no RIGS agent${n.error ? ' (' + n.error + ')' : ''}`)),
         up ? h('div', { class: 'mr-bars' }, bar('CPU', n.stats?.cpu || 0), bar('MEM', mem, `${fmtBytes(n.stats?.memUsed)} / ${fmtBytes(n.stats?.memTotal)}`)) : h('div'),
         h('div', { class: 'mr-agents' }, ...AGENTS.map(([k, label]) => h('span', { class: 'badge' + (n.tools?.[k] ? ' on' : ''), title: n.tools?.[k] || 'not installed' }, label)),
-          n.tools?.reaRegistered ? h('span', { class: 'muted small' }, `REA→ claude:${n.tools.reaRegistered.claude ? '✓' : '✗'} codex:${n.tools.reaRegistered.codex ? '✓' : '✗'}`) : null),
+          n.tools?.reaRegistered ? h('span', { class: 'muted small' }, `REA→ claude:${n.tools.reaRegistered.claude ? '✓' : '✗'} codex:${n.tools.reaRegistered.codex ? '✓' : '✗'}`) : null,
+          up ? desktopChip(n) : null),
         h('div', { class: 'mr-actions' },
           up ? h('button', { class: 'btn', onclick: () => onTerminal(n) }, '⌨') : null,
           h('button', { class: 'btn', onclick: () => onDesktop(n) }, '🖥'),
-          h('button', { class: 'btn', title: 'copy ssh command', onclick: () => { navigator.clipboard.writeText(`ssh ${n.sshAlias || n.name}`); toast(`Copied: ssh ${n.sshAlias || n.name}`); } }, 'ssh'),
+          h('button', { class: 'btn', title: 'SSH in (opens a session visible in JARVIS)', onclick: () => onSsh(n) }, 'ssh'),
           up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null));
     }));
+  }
+
+  function desktopChip(n) {
+    const d = n.desktopInstall;
+    if (!d) return null;
+    if (d.sunshine && d.moonlight) return h('span', { class: 'chip st-ok' }, 'desktop ready');
+    if (d.state === 'needs-sudo') return h('button', { class: 'chip st-warn chip-btn', title: d.command, onclick: () => onRun(n.id, d.command, 'Finish Sunshine install') }, 'desktop: finish (password) ▸');
+    if (d.state === 'installing') return h('span', { class: 'chip st-run' }, 'desktop installing…');
+    return h('button', { class: 'chip chip-btn', title: (d.steps || []).join('\n'), onclick: () => onInstallDesktop(n) }, d.state === 'failed' ? 'desktop failed — retry ▸' : 'install desktop ▸');
   }
 
   function bar(label, pct, title = '') {

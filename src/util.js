@@ -24,10 +24,14 @@ export function expandHome(p) {
 
 const whichCache = new Map();
 
-/** Resolve an executable on PATH (plus a few well-known install locations). */
+/**
+ * Resolve an executable on PATH (plus a few well-known install locations). Hits are cached;
+ * misses expire after a minute so tools installed while the node runs (Tailscale, Sunshine…) appear.
+ */
 export function which(name, extra = []) {
   const key = name + '|' + extra.join('|');
-  if (whichCache.has(key)) return whichCache.get(key);
+  const hit = whichCache.get(key);
+  if (hit && (hit.path || Date.now() - hit.at < 60000)) return hit.path;
   const exts = isWin ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.PS1').split(';').map((e) => e.toLowerCase()) : [''];
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
   const candidates = [];
@@ -40,7 +44,7 @@ export function which(name, extra = []) {
       if (st.isFile()) { found = c; break; }
     } catch {}
   }
-  whichCache.set(key, found);
+  whichCache.set(key, { path: found, at: Date.now() });
   return found;
 }
 

@@ -64,9 +64,11 @@ export class Discovery extends EventEmitter {
           tailscale: c.ts ? { ip: c.ts.ips[0], dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login } : res.info.tailscale,
         });
       } else if (c.ts) {
-        const id = 'ts:' + c.ts.hostName.toLowerCase();
+        // MagicDNS label is unique and DNS-safe (HostName can be "localhost" on iOS or contain spaces).
+        const label = (c.ts.dnsName || '').split('.')[0] || c.ts.hostName.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+        const id = 'ts:' + label;
         next.set(id, {
-          id, name: c.ts.hostName.toLowerCase(), url: c.url, self: false, rigs: false, online: c.ts.online,
+          id, name: label, url: c.url, self: false, rigs: false, online: c.ts.online,
           platform: tsOsToPlatform(c.ts.os), error: res.error,
           tailscale: { ip: c.ts.ips[0], dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login },
         });

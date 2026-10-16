@@ -6,7 +6,7 @@
 #   RIGS_REPO=https://github.com/XmYx/rigs.git
 #   RIGS_NAME=<machine name>   defaults to the short hostname
 #   RIGS_AGENTS=1              install missing Claude Code / Codex / Ollama (0 to skip)
-#   RIGS_DESKTOP=1             install Sunshine (host) + Moonlight (client) for HW-accelerated remote desktop
+#   RIGS_DESKTOP=0             skip Sunshine (host) + Moonlight (client) — installed by default
 #   RIGS_HTTPS=1               expose the UI via `tailscale serve` (https, enables the microphone remotely)
 #   RIGS_SETUP_ARGS="..."      extra args for `rigs setup`
 set -euo pipefail
@@ -14,7 +14,7 @@ set -euo pipefail
 RIGS_DIR="${RIGS_DIR:-$HOME/.rigs/app}"
 RIGS_REPO="${RIGS_REPO:-https://github.com/XmYx/rigs.git}"
 RIGS_AGENTS="${RIGS_AGENTS:-1}"
-RIGS_DESKTOP="${RIGS_DESKTOP:-0}"
+RIGS_DESKTOP="${RIGS_DESKTOP:-1}"
 RIGS_HTTPS="${RIGS_HTTPS:-0}"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -102,33 +102,9 @@ if [ "$RIGS_AGENTS" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------- remote desktop
-if [ "$RIGS_DESKTOP" = "1" ]; then
-  c "Remote desktop (Sunshine host + Moonlight client, hardware accelerated)"
-  if [ "$OS" = "Darwin" ]; then
-    brew install --cask moonlight || true
-    (brew tap LizardByte/homebrew && brew install sunshine) || warn "Sunshine on macOS is beta; Mac↔Mac can use Screen Sharing (High Performance) instead"
-    warn "Grant Sunshine Screen Recording + Accessibility in System Settings → Privacy & Security"
-  else
-    . /etc/os-release
-    DEB_ARCH="$(dpkg --print-architecture)"
-    URL="https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine-ubuntu-${VERSION_ID}-${DEB_ARCH}.deb"
-    TMP="$(mktemp -d)"
-    if curl -fsSL -o "$TMP/sunshine.deb" "$URL"; then
-      apt_install "$TMP/sunshine.deb"
-      # KMS capture works on GNOME/KDE Wayland without the portal prompt.
-      $SUDO setcap cap_sys_admin+p "$(readlink -f "$(command -v sunshine)")" || true
-      systemctl --user enable --now sunshine >/dev/null 2>&1 || true
-      ok "Sunshine installed (KMS capture, VAAPI/NVENC encode)"
-    else
-      warn "No Sunshine .deb for Ubuntu ${VERSION_ID}/${DEB_ARCH} — see https://github.com/LizardByte/Sunshine/releases"
-    fi
-    rm -rf "$TMP"
-    have flatpak || apt_install flatpak
-    flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
-    flatpak install --user -y flathub com.moonlight_stream.Moonlight || warn "Moonlight install failed"
-  fi
-  RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --desktop"
-fi
+# Sunshine + Moonlight are installed by `rigs setup` (latest GitHub releases, see src/desktop-install.js).
+# Here we only finish the root step interactively, since you're at the keyboard anyway (see below).
+[ "$RIGS_DESKTOP" = "1" ] || RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --no-desktop"
 
 # ---------------------------------------------------------------- RIGS itself
 c "RIGS → $RIGS_DIR"
@@ -148,6 +124,10 @@ ok "rigs CLI → ~/.local/bin/rigs"
 [ -n "${RIGS_NAME:-}" ] && RIGS_SETUP_ARGS="${RIGS_SETUP_ARGS:-} --name $RIGS_NAME"
 # shellcheck disable=SC2086
 node bin/rigs.js setup ${RIGS_SETUP_ARGS:-}
+if [ "$RIGS_DESKTOP" = "1" ] && [ -f "$HOME/.rigs/desktop-finish.sh" ] && ! command -v sunshine >/dev/null 2>&1 && [ "$OS" != "Darwin" ]; then
+  c "Finishing the Sunshine install (needs sudo once)"
+  sh "$HOME/.rigs/desktop-finish.sh" || warn "Sunshine finish step failed — rerun: sh ~/.rigs/desktop-finish.sh"
+fi
 [ "$OS" != "Darwin" ] && $SUDO loginctl enable-linger "$USER" >/dev/null 2>&1 || true
 
 echo

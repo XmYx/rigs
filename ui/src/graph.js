@@ -79,6 +79,8 @@ export function buildGraph(snapshot) {
       add({ id, type, name: s.title, machine: m.id, session: s, val: s.live ? 5 : 2.2 });
       const parent = s.kind === 'rig' && rigNodes.get(s.rig) ? rigNodes.get(s.rig).id : agents[s.agent]?.id || mid;
       link(parent, id, s.live ? 'live' : 'session');
+      // An SSH session bridges the two machines: draw it from the machine it came from.
+      if (s.sshFrom) { const from = snapshot.find((e) => e.node.name === s.sshFrom); if (from) link(`m:${from.node.id}`, id, 'live'); }
       if (s.project && s.kind !== 'chat') {
         const key = s.project.toLowerCase();
         if (!projects.has(key)) projects.set(key, add({ id: 'p:' + key, type: 'project', name: s.project, val: 6, machines: new Set() }));

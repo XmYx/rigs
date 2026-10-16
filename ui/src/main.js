@@ -68,7 +68,8 @@ function connectEvents() {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
     if (m.type === 'notify') {
-      toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', 9000);
+      const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
+      toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', act ? 60000 : 9000, act);
       showSubtitle(m.text, 'jarvis');
       if (m.speak) voice.say(m.text);
     }
@@ -152,7 +153,9 @@ function renderInspector(id) {
     if (up && d.stats) {
       const mem = Math.round((d.stats.memUsed / d.stats.memTotal) * 100);
       out.push(statBar('CPU', d.stats.cpu || 0), statBar('MEM', mem, `${fmtBytes(d.stats.memUsed)} / ${fmtBytes(d.stats.memTotal)}`));
-      if (d.gpus?.length) out.push(h('div', { class: 'muted small' }, '⧉ ' + d.gpus.join(', ')));
+      if (d.gpus?.length) out.push(h('div', { class: 'muted small' }, '⧉ ' + d.gpus.map((g) => g.replace(/^[\d:.]+ VGA compatible controller: /, '')).join(', ')));
+      const ds = desktopState(d);
+      if (ds) out.push(ds);
     }
     out.push(h('div', { class: 'ins-actions' },
       up ? act('⌨ Terminal', () => openTerminal({ nodeId: d.id, nodeName: d.name })) : null,
@@ -160,7 +163,8 @@ function renderInspector(id) {
       act('🖥 Desktop', () => desktopTo(d)),
       up ? act('💬 Sessions', () => sessionsWindow(d.name)) : null,
       up ? act('◆ Use as brain', () => pickBrainOn(d)) : null,
-      act('⧉ ssh', () => { navigator.clipboard.writeText(`ssh ${d.sshAlias || d.name}`); toast(`Copied: ssh ${d.sshAlias || d.name}`); }),
+      act('🔐 SSH', () => sshTo(d)),
+      act('⧉', () => { navigator.clipboard.writeText(`ssh ${d.sshAlias || d.name}`); toast(`Copied: ssh ${d.sshAlias || d.name}`); }, 'icon'),
       up ? act('✳ New agent', () => newAgent(d)) : null,
       up && d.tools?.rig ? act('⛭ OpenRig TUI', () => openTerminal({ nodeId: d.id, nodeName: d.name, command: 'rig tui', title: 'OpenRig' })) : null));
   } else if (n.type === 'agent') {
@@ -221,6 +225,39 @@ function renderInspector(id) {
 }
 
 // ------------------------------------------------------------------ actions
+/** Open a terminal on a machine (by name or id) running a command — e.g. a sudo step you finish by typing your password. */
+function runOn(nodeRef, command, title) {
+  const m = snap.find((e) => e.node.name === nodeRef || e.node.id === nodeRef)?.node;
+  if (!m) { toast(`${nodeRef} is offline`, 'error'); return; }
+  openTerminal({ nodeId: m.id, nodeName: m.name, command, title: title || command.slice(0, 40) });
+}
+
+/** SSH into a machine from the gateway; the login lands in a tmux session that also shows up in JARVIS. */
+function sshTo(m) {
+  const self = snap.find((e) => e.node.self)?.node;
+  if (!self || m.self) { openTerminal({ nodeId: m.id, nodeName: m.name }); return; }
+  openTerminal({ nodeId: self.id, nodeName: self.name, command: `ssh ${m.sshAlias || m.name}`, title: `ssh ${m.name}` });
+  setTimeout(refresh, 4000);
+}
+
+function desktopState(d) {
+  const di = d.desktopInstall;
+  if (!di) return null;
+  const label = di.sunshine && di.moonlight ? 'Sunshine + Moonlight ready' : di.state === 'needs-sudo' ? 'Sunshine needs your password to finish' : di.state === 'installing' ? 'installing Sunshine + Moonlight…' : di.state === 'failed' ? 'remote desktop install failed' : di.moonlight && !di.sunshine ? 'Moonlight ready · no Sunshine host' : 'remote desktop not installed';
+  return h('div', { class: 'muted small' }, '🖥 ' + label,
+    di.state === 'needs-sudo' && di.command ? [' · ', h('a', { class: 'link', onclick: () => runOn(d.id, di.command, 'Finish Sunshine install') }, 'finish now')] : null,
+    (di.state === 'failed' || di.state === 'idle' || !di.state) && !(di.sunshine && di.moonlight) ? [' · ', h('a', { class: 'link', onclick: () => installDesktop(d) }, 'install')] : null);
+}
+
+async function installDesktop(d) {
+  toast(`Installing Sunshine + Moonlight on ${d.name}…`);
+  try {
+    const r = await api(`${node(d.id)}/desktop/install`, { method: 'POST', body: { force: true } });
+    toast(`${d.name}: ${r.state}${r.steps?.length ? ' — ' + r.steps.slice(-1)[0] : ''}`, r.state === 'failed' ? 'error' : 'ok', 9000, r.state === 'needs-sudo' ? { label: 'Finish install', run: () => runOn(d.id, r.command, 'Finish Sunshine install') } : null);
+    refresh();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function filesOn(m, path = '~') {
   openFiles({ nodeId: m.id, nodeName: m.name, path, machines, onTerminalHere: (p) => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: p }) });
 }
@@ -286,7 +323,7 @@ function projectsWindow(openId) {
 }
 
 function meshWindow() {
-  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo });
+  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo, onSsh: sshTo, onRun: runOn, onInstallDesktop: installDesktop });
 }
 
 // ------------------------------------------------------------------ brain
@@ -389,7 +426,7 @@ async function intent(text) {
   }
   if ((m = t.match(/^ssh(?: to| into)?\s+(.+)$/i))) {
     const n = findMachine(m[1]);
-    if (n) { openTerminal({ nodeId: selfId, nodeName: 'here', command: `ssh ${n.sshAlias || n.name}`, title: `ssh ${n.name}` }); say(`Opening a secure shell to ${n.name}.`); return true; }
+    if (n) { sshTo(n); say(`Secure shell to ${n.name}. The session shows up in JARVIS on every machine.`); return true; }
   }
   if ((m = t.match(/^(?:open |show |browse )?(?:the )?files?(?: on| for| at| of)?\s+(.+)$/i))) {
     const n = findMachine(m[1]);

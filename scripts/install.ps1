@@ -67,8 +67,8 @@ if ($Agents -eq '1') {
 
 if ($Desktop -eq '1') {
   Step 'Remote desktop (Sunshine host + Moonlight client, NVENC/AMF/QuickSync)'
-  if ($admin) { WinGet 'LizardByte.Sunshine' } else { Warn 'Sunshine needs an elevated shell' }
-  WinGet 'MoonlightGameStreamingProject.Moonlight'
+  if ($admin) { WinGet 'LizardByte.Sunshine' } else { Warn 'Sunshine needs an elevated shell (RIGS will offer the finish step in JARVIS)' }
+  # Moonlight is also installed by rigs setup (portable, no admin) if winget can't.
   if ($admin -and -not (Get-NetFirewallRule -DisplayName 'RIGS Sunshine (tailnet)' -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName 'RIGS Sunshine (tailnet)' -Direction Inbound -Protocol TCP -LocalPort 47984,47989,47990,48010 -RemoteAddress 100.64.0.0/10 -Action Allow | Out-Null
     New-NetFirewallRule -DisplayName 'RIGS Sunshine UDP (tailnet)' -Direction Inbound -Protocol UDP -LocalPort 47998-48000,48002,48010 -RemoteAddress 100.64.0.0/10 -Action Allow | Out-Null
@@ -94,7 +94,7 @@ Ok 'rigs CLI -> ~\.local\bin\rigs.cmd'
 
 $args2 = @('bin\rigs.js', 'setup')
 if ($env:RIGS_NAME) { $args2 += @('--name', $env:RIGS_NAME) }
-if ($Desktop -eq '1') { $args2 += '--desktop' }
+if ($Desktop -ne '1') { $args2 += '--no-desktop' }
 node @args2
 Pop-Location
 

@@ -75,6 +75,15 @@ const commands = {
     const { startMcp } = await import('../src/mcp.js');
     startMcp();
   },
+  async 'ssh-session'() {
+    const { runSession } = await import('../src/sshsession.js');
+    process.exit(await runSession());
+  },
+  async desktop() {
+    const d = await import('../src/desktop-install.js');
+    const r = argv[0] === 'status' ? await d.status() : await d.ensure({ force: argv.includes('--force') });
+    console.log(JSON.stringify(r, null, 2));
+  },
   async status() {
     const nodes = await daemonFetch('/api/nodes').catch(() => null);
     if (!Array.isArray(nodes)) { console.log('RIGS daemon is not running (rigs start).'); process.exit(1); }
@@ -121,6 +130,8 @@ const commands = {
   rigs update [--all]  pull the latest code from GitHub (this node or every node) and restart
   rigs notify <text>   speak a message on every open JARVIS UI
   rigs mcp             stdio MCP server for coding agents (registered by setup)
+  rigs desktop [status|--force]  install Sunshine + Moonlight (hardware-accelerated remote desktop)
+  rigs ssh-session     (used by the SSH login hook) attach this SSH login to a JARVIS-visible tmux session
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

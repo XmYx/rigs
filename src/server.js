@@ -7,6 +7,8 @@ import * as caps from './capabilities.js';
 import * as chat from './chat.js';
 import { config, loadConfig, patchConfig, publicConfig, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
+import * as desktopInstall from './desktop-install.js';
+import * as migrations from './migrations.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
 import * as models from './models.js';
@@ -75,6 +77,7 @@ async function selfInfo() {
     ...sys, stats: st, tools: compactTools(tools), capabilities, ptyAvailable: pty.ptyAvailable(),
     tailscale: tsStatus ? { ip, dnsName: tsStatus.self.dnsName, login: tsStatus.self.login, state: tsStatus.backendState } : null,
     sshPubKey: ssh.publicKey(), sshUser: ssh.sshUser(), sshAlias: cfg.name,
+    desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
   };
 }
 
@@ -346,6 +349,14 @@ export async function startServer() {
     // remote desktop
     if (sub === 'desktop') return { host: await desktop.hostInfo(), client: desktop.clientInfo() };
     if (sub === 'desktop/pin' && method === 'POST') { const b = await body(); return desktop.sunshinePin(b.pin, b.name); }
+    if (sub === 'desktop/install' && method === 'GET') return desktopInstall.status();
+    if (sub === 'desktop/install' && method === 'POST') {
+      const b = await body();
+      const r = await desktopInstall.ensure({ force: !!b.force });
+      announceDesktop(r);
+      return r;
+    }
+    if (sub === 'migrations') return migrations.status();
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), server: await ssh.serverStatus(), alias: config().name };
@@ -377,7 +388,7 @@ export async function startServer() {
     // notifications to the JARVIS UI on this node
     if (sub === 'notify' && method === 'POST') {
       const b = await body();
-      broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info' });
+      broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null });
       return { ok: true, delivered: uiSockets.size };
     }
 
@@ -387,7 +398,11 @@ export async function startServer() {
   async function meshApi(req, res, url) {
     const p = url.pathname;
     let mm;
-    if (p === '/api/nodes') return discovery.list().map(stripNode);
+    if (p === '/api/nodes') {
+      // The first scan can take seconds (Windows GPU/tool probes); never answer without this node.
+      if (!discovery.list().some((n) => n.self)) await discovery.tick();
+      return discovery.list().map(stripNode);
+    }
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/mesh/snapshot') return meshSnapshot();
@@ -518,6 +533,17 @@ export async function startServer() {
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });
+  function announceDesktop(st) {
+    if (st.state === 'needs-sudo') broadcastNotify({ text: `${config().name}: Sunshine is downloaded — it needs your password once to finish installing.`, speak: false, level: 'action', from: config().name, action: { type: 'run', node: config().name, command: st.command, label: 'Finish install', title: 'Sunshine install' } }).catch(() => {});
+    else if (st.state === 'done') broadcastNotify({ text: `${config().name}: Sunshine + Moonlight ready — hardware-accelerated remote desktop is available.`, speak: false, from: config().name }).catch(() => {});
+    else if (st.state === 'failed') broadcastNotify({ text: `${config().name}: remote desktop install failed — ${st.steps.slice(-1)[0] || ''}`, speak: false, level: 'error', from: config().name }).catch(() => {});
+  }
+
+  // One-time steps shipped by updates (SSH session hook, Sunshine + Moonlight…), in the background.
+  setTimeout(() => migrations.runPending((m, res) => {
+    if (m.id.includes('desktop') && res.ok) desktopInstall.status().then(announceDesktop).catch(() => {});
+  }).catch((e) => log('migrations:', e.message)), 4000).unref();
+
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();
   // Live stats push for the HUD.

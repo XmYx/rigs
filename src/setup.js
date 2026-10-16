@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, CONFIG_FILE, loadConfig, saveConfig } from './config.js';
+import * as desktopInstall from './desktop-install.js';
 import * as service from './service.js';
+import * as sshSession from './sshsession.js';
 import * as ssh from './ssh.js';
 import * as ts from './tailscale.js';
 import { bin, detectTools } from './tools.js';
@@ -128,19 +130,11 @@ async function setupOpenRig(opts) {
   else warn('rig daemon start failed: ' + (d.stdout + d.stderr).trim().slice(-200));
 }
 
-async function sunshineCreds() {
-  const s = bin('sunshine');
-  if (!s) return warn('Sunshine not installed — remote desktop hosting unavailable on this machine (see docs/INSTALL.md)');
-  const { sunshineUser, sunshinePass } = config().desktop;
-  const r = await run(s, ['--creds', sunshineUser, sunshinePass], { timeout: 20000 });
-  if (r.code === 0) ok('Sunshine credentials set (stored in ~/.rigs/config.json, used for automatic Moonlight pairing)');
-  else warn('could not set Sunshine credentials: ' + (r.stderr || r.stdout).trim().slice(0, 200));
-}
 
 export async function setup(argv) {
   const opts = {
     service: !argv.includes('--no-service'), rea: !argv.includes('--no-rea'), openrig: !argv.includes('--no-openrig'),
-    includeDesktop: argv.includes('--include-claude-desktop'), https: argv.includes('--https'), desktop: argv.includes('--desktop'),
+    includeDesktop: argv.includes('--include-claude-desktop'), https: argv.includes('--https'), desktop: !argv.includes('--no-desktop'),
     openrigKernel: !argv.includes('--no-kernel'),
   };
   const nameIdx = argv.indexOf('--name');
@@ -163,6 +157,8 @@ export async function setup(argv) {
   if (key) ok(`mesh key ${key}`); else warn('ssh-keygen not found — install OpenSSH');
   const sv = await ssh.serverStatus();
   if (sv.running) ok('SSH server: ' + sv.detail); else warn('SSH server: ' + sv.detail + ' — the installer can enable it');
+  const hook = await sshSession.installHook();
+  if (hook.files) ok(`SSH logins open JARVIS-visible tmux sessions (${hook.files.map((f) => path.basename(f)).join(', ')})`); else warn(hook.skipped);
 
   step('Agents');
   const tools = await detectTools(true);
@@ -172,7 +168,13 @@ export async function setup(argv) {
   await writeInstructions();
   if (opts.rea) { step('REA (reverse engineer anything)'); await setupRea(opts); }
   if (opts.openrig) { step('OpenRig'); await setupOpenRig(opts); }
-  if (opts.desktop) { step('Remote desktop'); await sunshineCreds(); }
+  if (opts.desktop) {
+    step('Remote desktop (Sunshine + Moonlight)');
+    const d = await desktopInstall.ensure();
+    for (const x of d.steps) (/error|failed|pending|needs/i.test(x) ? warn : ok)(x);
+    if (d.state === 'needs-sudo') warn(`finish with: ${d.command}`);
+    if (d.note) warn(d.note);
+  }
 
   if (opts.service) {
     step('Service');

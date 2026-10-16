@@ -81,10 +81,10 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
-export function toast(text, level = 'info', ms = 5000) {
+export function toast(text, level = 'info', ms = 5000, action = null) {
   let box = document.getElementById('toasts');
   if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
-  const t = h('div', { class: `toast ${level}` }, text);
+  const t = h('div', { class: `toast ${level}` }, text, action ? h('button', { class: 'btn primary toast-btn', onclick: () => { t.remove(); action.run(); } }, action.label) : null);
   box.append(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 400); }, ms);
 }

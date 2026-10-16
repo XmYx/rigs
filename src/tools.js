@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { tailscaleBin } from './tailscale.js';
 
 const WIN_PF = 'C:\\Program Files';
+const macApp = (app, bins) => ['/Applications', path.join(HOME, 'Applications')].flatMap((d) => bins.map((b) => path.join(d, `${app}.app`, 'Contents', 'MacOS', b)));
 const KNOWN = {
   claude: { extra: [path.join(HOME, '.local', 'bin', isWin ? 'claude.exe' : 'claude'), path.join(HOME, '.claude', 'local', 'claude')], args: ['--version'] },
   codex: { extra: [], args: ['--version'] },
@@ -15,8 +16,8 @@ const KNOWN = {
   git: { extra: isWin ? [WIN_PF + '\\Git\\cmd\\git.exe'] : [], args: ['--version'] },
   gh: { extra: ['/opt/homebrew/bin/gh', WIN_PF + '\\GitHub CLI\\gh.exe'], args: ['--version'] },
   ssh: { extra: isWin ? ['C:\\Windows\\System32\\OpenSSH\\ssh.exe'] : [], args: ['-V'] },
-  sunshine: { extra: isWin ? [WIN_PF + '\\Sunshine\\sunshine.exe'] : isMac ? ['/opt/homebrew/bin/sunshine', '/Applications/Sunshine.app/Contents/MacOS/Sunshine'] : ['/usr/bin/sunshine'], args: ['--version'] },
-  moonlight: { extra: isWin ? [WIN_PF + '\\Moonlight Game Streaming\\Moonlight.exe'] : isMac ? ['/Applications/Moonlight.app/Contents/MacOS/Moonlight'] : ['/usr/bin/moonlight', '/usr/bin/moonlight-qt'], args: null },
+  sunshine: { extra: isWin ? [WIN_PF + '\\Sunshine\\sunshine.exe'] : isMac ? ['/opt/homebrew/bin/sunshine', ...macApp('Sunshine', ['sunshine', 'Sunshine'])] : ['/usr/bin/sunshine'], args: ['--version'] },
+  moonlight: { extra: isWin ? [WIN_PF + '\\Moonlight Game Streaming\\Moonlight.exe', path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'RIGS', 'Moonlight', 'Moonlight.exe')] : isMac ? macApp('Moonlight', ['Moonlight']) : ['/usr/bin/moonlight', '/usr/bin/moonlight-qt', path.join(HOME, '.local', 'bin', 'moonlight')], args: null },
   rustdesk: { extra: isWin ? [WIN_PF + '\\RustDesk\\rustdesk.exe'] : isMac ? ['/Applications/RustDesk.app/Contents/MacOS/RustDesk'] : ['/usr/bin/rustdesk'], args: null },
 };
 
