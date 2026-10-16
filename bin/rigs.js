@@ -137,7 +137,7 @@ const commands = {
     console.log(JSON.stringify(r, null, 2));
   },
   async help() {
-    console.log(`rigs — RIGS OS mesh node
+    console.log(`rigs — RIGS OS mesh node  (changes: rigs dev <topic> → commit → rigs propose; never main)
 
   rigs setup [--name N] [--https] [--desktop] [--no-service] [--no-rea] [--no-openrig] [--no-kernel]
                        make this machine a mesh node and wire up Claude Code / Codex / REA / OpenRig
