@@ -105,13 +105,14 @@ test('matches hashed known_hosts entries and leaves a file OpenSSH resolves to t
 test('syncPeers writes known_hosts under RIGS_SSH_DIR and keeps the previous file', async () => {
   fs.mkdirSync(SSH_DIR, { recursive: true });
   const kh = path.join(SSH_DIR, 'known_hosts');
-  fs.writeFileSync(kh, `${DNS} ${TAILSCALE_KEY}\n`);
+  fs.writeFileSync(kh, `${DNS} ${TAILSCALE_KEY}\n`, { mode: 0o600 });
   const r = await ssh.syncPeers([{ id: 'me', name: 'test-node', self: true, rigs: true, online: true }, magix()]);
   assert.equal(r.hostKeys, 1);
   assert.deepEqual(r.replaced, [DNS]);
   assert.match(fs.readFileSync(kh, 'utf8'), new RegExp(`rigs-peer:magix-system`));
   assert.doesNotMatch(fs.readFileSync(kh, 'utf8'), new RegExp(TAILSCALE_KEY.split(' ')[1].replace(/[+/]/g, '\\$&')));
   assert.equal(fs.readFileSync(kh + '.rigs.old', 'utf8'), `${DNS} ${TAILSCALE_KEY}\n`);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(kh + '.rigs.old').mode & 0o777, 0o600, 'backup no more readable than known_hosts');
   assert.match(fs.readFileSync(path.join(SSH_DIR, 'config'), 'utf8'), /Host magix-system magix-system\.rigs\n {2}HostName magix-system\.tail34565a\.ts\.net/);
   const again = await ssh.syncPeers([magix()]);
   assert.deepEqual(again.replaced, []);
