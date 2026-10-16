@@ -55,6 +55,12 @@ test('clean branch is merged, pushed and rolled out', async () => {
   assert.equal(originFile('a.txt'), 'hello');
   assert.ok(events.includes('rollout'));
   assert.ok(!fs.existsSync(r.dir), 'merged worktree is removed');
+  const keep = await merge.startWork('keep me', { repo: app });
+  fs.writeFileSync(path.join(keep.dir, 'draft.txt'), 'unsaved work\n');
+  fs.symlinkSync(app, path.join(keep.dir, 'node_modules'));
+  const c = await merge.cleanupWork(keep.dir, keep.branch);
+  assert.equal(c.removed, false, 'untracked work is never deleted');
+  assert.ok(fs.existsSync(path.join(keep.dir, 'draft.txt')));
   assert.throws(() => git(app, 'rev-parse', '--verify', r.branch), 'merged branch is deleted');
 });
 
