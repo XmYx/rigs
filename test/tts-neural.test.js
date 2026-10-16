@@ -58,3 +58,10 @@ test('neural voice is skipped when opted out or when the app is down', async () 
   await apps.checkAll({ timeoutMs: 300 }); // port 9: down
   assert.equal(await tts.neuralBase(), null);
 });
+
+test('only the spoken line is said: everything after a "---" line is written-only', () => {
+  assert.equal(tts.speakable('Done, sir. Three files changed.\n---\n## Details\n- a.js\n- b.js'), 'Done, sir. Three files changed.');
+  assert.equal(tts.speakable('All good.\n  ---  \nmore'), 'All good.');
+  assert.equal(tts.speakable('No details here — just this.'), 'No details here — just this.');
+  assert.equal(tts.spokenPart('line one\nline two'), 'line one\nline two');
+});

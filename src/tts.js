@@ -120,9 +120,16 @@ export async function pickVoice(requested) {
   return '';
 }
 
-/** Plain speakable text: no code blocks, markdown or link targets; capped in length. */
+/** The part of a reply that is said aloud: everything before a "---" line (the rest is written-only). */
+export function spokenPart(text) {
+  const s = String(text ?? '');
+  const m = s.match(/(^|\n)[ \t]*-{3,}[ \t]*(\n|$)/);
+  return m ? s.slice(0, m.index) : s;
+}
+
+/** Plain speakable text: the spoken part only, no code blocks, markdown or link targets; capped in length. */
 export function speakable(text) {
-  let s = String(text ?? '');
+  let s = spokenPart(text);
   s = s.replace(/```[\s\S]*?(```|$)/g, ' ');
   s = s.replace(/`([^`]*)`/g, '$1');
   s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');

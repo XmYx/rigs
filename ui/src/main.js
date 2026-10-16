@@ -172,12 +172,12 @@ function connectEvents() {
     if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
-      if (m.speak) voice.say(m.text);
+      if (m.speak) voice.say(spokenText(m.text, true));
     } else if (m.type === 'notify') {
       const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
       toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', act ? 60000 : 9000, act);
       showSubtitle(m.text, 'jarvis');
-      if (m.speak) voice.say(m.text);
+      if (m.speak) voice.say(spokenText(m.text, true));
     }
   };
   ws.onopen = () => { if (orb.state === 'offline') setOrb('online'); };
@@ -572,10 +572,30 @@ function toggleBrainMenu(onlyNode) {
 }
 
 // ------------------------------------------------------------------ JARVIS conversation
+// A reply is a short spoken line, optionally followed by a "---" line and a written description that
+// is shown but never read out. spokenText() is what the voice says; the subtitle shows everything.
+const SEPARATOR = /(^|\n)[ \t]*-{3,}[ \t]*(\n|$)/;
+const SPOKEN_MAX = 420; // safety cap when a brain ignores the format: say the opening, show the rest
+function spokenText(text, final = false) {
+  const m = text.match(SEPARATOR);
+  let s = m ? text.slice(0, m.index) : final ? text : text.replace(/\n[ \t]*-{1,2}[ \t]*$/, ''); // hold back a half-typed "---"
+  if (s.length > SPOKEN_MAX) {
+    const cut = s.slice(0, SPOKEN_MAX).search(/[.!?](?=[^.!?]*$)/);
+    s = s.slice(0, cut > 80 ? cut + 1 : SPOKEN_MAX);
+  }
+  return s;
+}
+
 function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
   el.className = 'show ' + cls;
-  el.textContent = text.length > 600 ? '…' + text.slice(-600) : text;
+  const m = text.match(SEPARATOR);
+  el.replaceChildren();
+  if (m) {
+    el.append(h('div', { class: 'spoken' }, text.slice(0, m.index).trim()), h('div', { class: 'written' }, text.slice(m.index + m[0].length).trim()));
+    el.classList.add('has-details');
+  } else el.textContent = text;
+  el.scrollTop = el.scrollHeight;
 }
 
 function findMachine(q) {
@@ -678,6 +698,7 @@ async function ask(text, { spoken = false } = {}) {
   busy = ac;
   setOrb('thinking');
   let reply = '';
+  let fed = 0; // characters of the spoken part already handed to the voice
   const tools = [];
   try {
     if (!chatRef || chatRef.nodeId !== b.nodeId) {
@@ -690,7 +711,8 @@ async function ask(text, { spoken = false } = {}) {
         if (!reply) setOrb('speaking');
         reply += e.text;
         showSubtitle(reply, 'jarvis');
-        if (spoken || !voice.muted) voice.feed(e.text);
+        const say = spokenText(reply);
+        if ((spoken || !voice.muted) && say.length > fed) { voice.feed(say.slice(fed)); fed = say.length; }
       } else if (e.type === 'tool') {
         tools.push(e.name);
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
@@ -701,6 +723,8 @@ async function ask(text, { spoken = false } = {}) {
         if (!reply) showSubtitle(e.message, 'error');
       }
     }, ac.signal);
+    const say = spokenText(reply, true);
+    if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
     voice.feed('', true);
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
