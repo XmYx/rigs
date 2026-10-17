@@ -31,7 +31,7 @@ treat `main` as production.
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
-| `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist` |
+| `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist`. `usage-panel.js` is the ⏱ "Tokens & time" panel (mesh `/api/usage`: totals, by model/project/task, latest runs) |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
 ## Rules
