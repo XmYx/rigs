@@ -16,6 +16,8 @@ Both are **on by default on every machine** (`config.control.enabled` for access
 control). The **kill switch** stops them at once and keeps them off across restarts and updates, and a person can
 switch either one **off per machine**; only a person turns them back on (§7).
 
+From a shell on the machine: `rigs control off [reason]` is the local kill switch. It asks the running daemon to kill (`POST /api/local/control/kill`); if the daemon is down it writes the same persistent kill marker and config directly, so control stays off at the next start.
+
 ---
 
 ## 1. What RIGS can see and do today
