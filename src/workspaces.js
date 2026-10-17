@@ -196,8 +196,10 @@ export function matchMachine(phrase, nodes) {
   if (!p.trim()) return [];
   const byName = nodes.filter((n) => p.includes(n.name.toLowerCase()) || n.name.toLowerCase().split(/[-_.]/).some((part) => part.length >= 4 && p.includes(part)));
   if (byName.length) return byName.map((n) => n.name);
-  const os = /linux|ubuntu|debian|fedora|\barch\b/.test(p) ? 'linux' : /\bmac\b|macbook|\bosx\b|macos|imac/.test(p) ? 'darwin' : /windows|\bwin\b|\bpc\b/.test(p) ? 'win32' : '';
-  return os ? nodes.filter((n) => n.platform === os).map((n) => n.name) : [];
+  const os = /linux|ubuntu|debian|fedora|\barch\b/.test(p) ? 'linux' : /\bmac\b|macbook|\bosx\b|macos|imac/.test(p) ? 'mac' : /windows|\bwin\b|\bpc\b/.test(p) ? 'windows' : '';
+  // Nodes report "mac"/"linux"/"windows" (Node's own names "darwin"/"win32" are accepted too).
+  const family = (x) => (/darwin|mac/.test(x || '') ? 'mac' : /win/.test(x || '') ? 'windows' : x);
+  return os ? nodes.filter((n) => family(n.platform) === os).map((n) => n.name) : [];
 }
 
 /**

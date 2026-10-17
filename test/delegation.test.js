@@ -56,6 +56,7 @@ test('names are matched by meaning: nicknames, typos, titles; machines by OS or 
   assert.equal(cn.workspace.name, 'CyberNinja');
   assert.deepEqual(ws.matchMachine('the same machine', [{ name: 'macbookpro', platform: 'darwin' }]), [], '"machine" is not "mac"');
   assert.deepEqual(ws.matchMachine('my mac', [{ name: 'macbookpro', platform: 'darwin' }, { name: 'magix-system', platform: 'linux' }]), ['macbookpro']);
+  assert.deepEqual(ws.matchMachine('on the mac', [{ name: 'macbookpro', platform: 'mac' }, { name: 'magix-system', platform: 'linux' }]), ['macbookpro'], 'mesh platform names');
   assert.ok(!ws.resolve({ workspace: 'Zebra Tracker' }, catalog).workspace, 'no false match');
 });
 
