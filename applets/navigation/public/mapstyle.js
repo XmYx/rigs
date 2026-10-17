@@ -114,6 +114,50 @@ export function buildStyle({ tiles, glyphs }) {
   };
 }
 
+/**
+ * Street shading by congestion (0..1): a dark veil over the road stroke. Free flow leaves the normal
+ * road green alone; heavier traffic dims it toward a deep, slightly red-tinted olive, still legible on
+ * the near-black base. Rows are [congestion, veil colour, veil opacity].
+ */
+export const TRAFFIC_SHADE = [[0, '#012a17', 0], [0.25, '#012a17', 0.12], [0.5, '#0b2a12', 0.45], [0.75, '#1f2a0c', 0.7], [1, '#2a1408', 0.85]];
+
+// The veil is a little wider than the base road strokes so their bright edges can't show past it.
+const SHADE_WIDTH = { motorway: [1.4, 5.8], trunk: [1.3, 5.3], primary: [1.2, 4.8], secondary: [1, 4.3], tertiary: [0.8, 3.8], minor: [0.6, 3.2], service: [0.5, 2.5] };
+const byClass = (i) => ['match', ['get', 'class'], ...Object.entries(SHADE_WIDTH).flatMap(([c, w]) => [c, w[i]]), 1];
+
+/**
+ * Traffic layers: `shade` goes under the buildings and labels (insert before 'building-3d'); `cars`
+ * goes on top. The app adds the car icons ('nav-car', 'nav-car-slow'); feature property `b` is the
+ * heading, `c` the congestion of the car's road.
+ */
+export function trafficLayers(shadeId = 'traffic', carsId = 'traffic-cars') {
+  return {
+    shade: {
+      id: 'traffic-shade', type: 'line', source: shadeId, minzoom: 11,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['interpolate', ['linear'], ['get', 'congestion'], ...TRAFFIC_SHADE.flatMap(([c, color]) => [c, color])],
+        'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 12, byClass(0), 18, byClass(1)],
+        'line-opacity': ['interpolate', ['linear'], ['get', 'congestion'], ...TRAFFIC_SHADE.flatMap(([c, , a]) => [c, a])],
+      },
+    },
+    cars: {
+      id: 'traffic-cars', type: 'symbol', source: carsId, minzoom: 13,
+      layout: {
+        'icon-image': ['case', ['>=', ['get', 'c'], 0.5], 'nav-car-slow', 'nav-car'],
+        'icon-rotate': ['get', 'b'],
+        'icon-rotation-alignment': 'map',
+        'icon-pitch-alignment': 'map',
+        'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 13, 0.15, 18, 1.3],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        'icon-padding': 0,
+      },
+      paint: { 'icon-opacity': ['interpolate', ['linear'], ['zoom'], 13, 0.6, 15, 1] },
+    },
+  };
+}
+
 /** Layers the app adds on top for the active route (a wide blurred glow under a bright core). */
 export function routeLayers(sourceId = 'route') {
   return [

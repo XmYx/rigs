@@ -6,8 +6,10 @@ A dark, 3D, green-vector navigation map for JARVIS. It has:
 - translucent extruded buildings and a glowing green route
 - live speed readout (km/h ⇄ mph), heading compass, next-turn card and ETA
 - a follow-me camera that eases to your position and direction of travel
+- traffic: streets shaded darker where traffic is heavy, and little car silhouettes moving around you,
+  more and slower on congested roads (see [Traffic](#traffic))
 
-All data is **free and needs no API key**:
+All data is **free and needs no API key** (live traffic can use an optional free key):
 
 | What | Service | Notes |
 | --- | --- | --- |
@@ -15,9 +17,11 @@ All data is **free and needs no API key**:
 | Map engine | [MapLibre GL JS](https://maplibre.org) 5.24.0 from unpkg (fallback jsDelivr) | WebGL; renders 3D extrusions and pitch. |
 | Routing | [OSRM](https://project-osrm.org) public demo server (`router.project-osrm.org`) | Driving profile, turn-by-turn steps. |
 | Search | [Photon](https://photon.komoot.io), falling back to [Nominatim](https://nominatim.org) | Photon supports search-as-you-type; Nominatim is only asked when Photon fails. |
+| Traffic (live) | [TomTom Traffic Flow vector tiles](https://docs.tomtom.com/traffic-api/documentation/tomtom-maps/traffic-flow/vector-flow-tiles) (`relative` flow) | Only with a free TomTom key (`NAV_TOMTOM_KEY`). Free tier: 200K tiles/month, no credit card. Shown as "Traffic © TomTom". |
+| Traffic (assumed) | Synthetic model over the OpenFreeMap road network: road class × time of day × closeness to your route | No key. Used when there is no key, TomTom fails or the daily budget is spent. Choice and formulas: [`docs/traffic-source.md`](../../docs/traffic-source.md). |
 
-The browser only fetches tiles, fonts and MapLibre itself. Search and routing go through this applet's
-server, which:
+The browser only fetches tiles, fonts and MapLibre itself. Search, routing and traffic go through this
+applet's server, which:
 
 - caches results for 10 minutes
 - spaces Nominatim calls at least 1.1 s apart
@@ -26,7 +30,7 @@ server, which:
 That keeps us inside the public services' usage policies for personal, low-volume use. For heavy use,
 point the URLs at your own OSRM, Photon or Nominatim (see Configuration).
 
-![desktop](docs/screenshot-desktop.png)
+![desktop](docs/screenshot-traffic-desktop.png)
 
 ## Run
 
@@ -42,9 +46,10 @@ everything with **relative URLs**, so it works both at `/` and behind the App Cl
 | Endpoint | Returns |
 | --- | --- |
 | `GET healthz` | `{"ok":true}` |
-| `GET config.json` | `{tiles, glyphs, demo, provider}`: the public endpoints the browser loads |
+| `GET config.json` | `{tiles, glyphs, demo, traffic:{source}, provider}`: the public endpoints the browser loads; `traffic.source` is `tomtom`, `synthetic` or `off` (never the key) |
 | `GET api/search?q=…&near=lon,lat` | `{results:[{label, detail, lon, lat}]}` |
-| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}]}` |
+| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], routeId}` |
+| `GET api/traffic?bbox=w,s,e,n&z=…[&route=routeId][&tz=IANA zone][&source=synthetic][&at=ISO time]` | `{source, updated, z, clipped, segments:[{id, coords:[[lon,lat]…], class, congestion 0..1, speedKmh, oneway?}]}`, see [Traffic](#traffic) |
 
 ### Demo mode
 
@@ -57,6 +62,9 @@ simulated vehicle drives it at 5 Hz:
 
 Searching for a destination in demo mode drives there instead. If the routing service is down, the demo
 falls back to a built-in line, so it still works.
+
+The demo also shows traffic round the car. Without a TomTom key it asks the assumed-traffic model for
+the latest weekday at 17:30 (`at=`), so the evening rush is visible whenever you open it.
 
 ## Configuration
 
@@ -73,6 +81,10 @@ over the defaults:
 | `NAV_SEARCH_URL` | `searchUrl` | `https://photon.komoot.io` |
 | `NAV_NOMINATIM_URL` | `nominatimUrl` | `https://nominatim.openstreetmap.org` |
 | — | `demo.from`, `demo.to` | `[19.0548, 47.4979]` → `[19.0838, 47.5155]` (`[lon, lat]`) |
+| `NAV_TRAFFIC_SOURCE` | `trafficSource` | `auto`: TomTom when a key is set, else assumed traffic. Also `tomtom`, `synthetic`, `off` (hides the toggle) |
+| `NAV_TOMTOM_KEY` | `tomtomKey` | unset. **Secret**: stays on the server, never in `config.json`, logs or errors |
+| `NAV_TRAFFIC_DAILY_TILES` | `trafficDailyTiles` | `5000` TomTom tiles per UTC day, then assumed traffic until midnight UTC |
+| `NAV_TOMTOM_URL` | `tomtomUrl` | `https://api.tomtom.com` |
 
 ```json
 { "navigation": { "demo": { "from": [13.3777, 52.5163], "to": [13.4050, 52.5200] } } }
@@ -95,7 +107,52 @@ The style lives in `public/mapstyle.js`, built in code over the OpenMapTiles lay
 - road, place and water labels in muted green `#3fa774`
 - no POI, house-number or peak layers
 
-Change `PALETTE` there to retune it.
+Change `PALETTE` there to retune it. Traffic shading is `TRAFFIC_SHADE` in the same file.
+
+## Traffic
+
+![traffic on a phone](docs/screenshot-traffic-phone.png)
+
+- **Street shading.** A dark veil over each road stroke, by congestion. Free flow leaves the normal
+  green alone. Heavier traffic dims it toward a deep, slightly rust-tinted olive (bands at 0.25, 0.5,
+  0.75, 1). It sits under the buildings, the labels and the route, so those stay readable.
+- **Cars.** Small top-down silhouettes, drawn as a MapLibre symbol layer from one GeoJSON source and
+  updated from one `requestAnimationFrame` loop at up to 30 Hz. There are no DOM markers. Cars are
+  heading-aligned and lie flat on the map (`icon-rotation-alignment` and `icon-pitch-alignment: map`),
+  so they stay on their streets when you rotate or tilt.
+  - **Density:** `2 + 18·congestion` cars/km, halved on minor roads.
+  - **Speed:** the road's `speedKmh`, ±6% per car. Cars on heavy roads (≥ 0.5) are amber.
+  - **Movement:** cars keep right on two-way roads and turn onto connected roads at the end of a
+    segment.
+  - **Limit:** at most 260 cars (160 on phones), nearest the vehicle first.
+- **Fetching.** The browser asks for a box of about 900 m round the vehicle, snapped to a 0.005° grid,
+  so small moves reuse the last answer. It refetches when that box, the zoom band or the route changes,
+  or after 60 s. It checks on `moveend` (trailing 500 ms timer) and every 15 s, and nothing runs while
+  the tab is hidden.
+- **Toggle.** The car button under 3D turns traffic on and off. The setting is remembered in
+  `localStorage` (`nav.traffic`).
+- **Server.** `api/traffic` serves z12–14 tiles (at most 16, nearest the bbox centre first; `clipped:
+  true` says so) and keeps only the roads touching the bbox. It caches:
+
+  | What | How long |
+  | --- | --- |
+  | OpenFreeMap road lines | 24 h, decoded, in memory, at most 64 tiles; TileJSON re-read every 6 h |
+  | TomTom tiles | 60 s, in memory only (TomTom terms: ≤ 24 h) |
+
+  It also shares identical in-flight fetches. When TomTom fails it switches to assumed traffic:
+
+  | TomTom result | Assumed traffic for |
+  | --- | --- |
+  | 429 | 15 min |
+  | 401 or 403 | the rest of this run, with one log line naming `NAV_TOMTOM_KEY` |
+  | any other error, or the daily budget spent | this request (the budget resets at midnight UTC) |
+
+  If even the road geometry can't be loaded, it answers `{"source":"none","segments":[]}` and the map
+  just shows no traffic. Large answers are gzipped.
+- **Assumed traffic** is deterministic. Per road, it is a pure function of road class, local time (a
+  one-minute bucket in the browser's time zone) and distance to the active route. So polls don't
+  flicker, and the route you drive is a little busier, as the fast path usually is.
+- **Formulas, rejected sources and TomTom details:** [`docs/traffic-source.md`](../../docs/traffic-source.md).
 
 ## GPS, HTTPS and the secure-context rule
 
@@ -127,9 +184,15 @@ of an error.
 
 ## Tests and screenshots
 
-- `npm test` runs `test/navigation.test.js`. It covers the haversine maths, speed from fixes, unit
-  conversion, route progress and ETA, the style rules, config loading, and the server endpoints against a
-  fake upstream.
+- `npm test` runs `test/navigation.test.js`. It covers:
+  - the haversine maths, speed from fixes, unit conversion, route progress and ETA
+  - the style rules and config loading
+  - the server endpoints against a fake upstream
+  - traffic: the vector-tile reader on hand-built tiles, tile clipping, and the assumed-traffic model
+    by class, hour, holiday and route
+  - `api/traffic` with stubbed OpenFreeMap and TomTom (contract, caching, 429/401/budget fallback, the
+    key never leaked)
+  - the car simulator (density, speed, heading, keeping right, the car cap)
 - `node applets/navigation/scripts/screenshot.js <url> <out.png> 1440x900 --swiftshader` takes a
   headless-Chrome screenshot. It also prints speed samples, console errors and failed requests.
   `--swiftshader` gives headless Chrome a software WebGL.

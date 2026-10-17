@@ -5,13 +5,16 @@
 //   GET config.json  the free map stack the browser should use (tiles, glyphs, demo route)
 //   GET api/search   place search: Photon (komoot), falling back to Nominatim
 //   GET api/route    driving route with turn-by-turn steps from OSRM
+//   GET api/traffic  per-road congestion around a bbox: TomTom flow tiles or assumed traffic (traffic.js)
 // Search and routing go through here so the public OSM services see one polite, cached, rate-limited
 // client with a real User-Agent instead of every browser hitting them directly.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 import { HOME, log, readJsonSync } from '../../src/util.js';
+import { createTraffic, hash01, routeInfo } from './traffic.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PUBLIC_DIR = path.join(HERE, 'public');
@@ -25,12 +28,19 @@ export const DEFAULTS = {
   routingUrl: 'https://router.project-osrm.org',
   searchUrl: 'https://photon.komoot.io',
   nominatimUrl: 'https://nominatim.openstreetmap.org',
+  tomtomUrl: 'https://api.tomtom.com',
+  // Traffic: 'auto' = TomTom when a key is set, else the synthetic model. tomtomKey is a secret: it
+  // never reaches the browser or a log line.
+  trafficSource: 'auto',
+  tomtomKey: null,
+  trafficDailyTiles: 5000,
   // Demo drive: Budapest, Andrássy út from Deák tér out to Hősök tere and round the park.
   demo: { from: [19.0548, 47.4979], to: [19.0838, 47.5155] },
 };
 
-const URL_KEYS = ['tilesUrl', 'glyphsUrl', 'routingUrl', 'searchUrl', 'nominatimUrl'];
-const ENV_KEYS = { tilesUrl: 'NAV_TILES_URL', glyphsUrl: 'NAV_GLYPHS_URL', routingUrl: 'NAV_ROUTING_URL', searchUrl: 'NAV_SEARCH_URL', nominatimUrl: 'NAV_NOMINATIM_URL' };
+const URL_KEYS = ['tilesUrl', 'glyphsUrl', 'routingUrl', 'searchUrl', 'nominatimUrl', 'tomtomUrl'];
+const ENV_KEYS = { tilesUrl: 'NAV_TILES_URL', glyphsUrl: 'NAV_GLYPHS_URL', routingUrl: 'NAV_ROUTING_URL', searchUrl: 'NAV_SEARCH_URL', nominatimUrl: 'NAV_NOMINATIM_URL', tomtomUrl: 'NAV_TOMTOM_URL' };
+const TRAFFIC_SOURCES = ['auto', 'tomtom', 'synthetic', 'off'];
 
 const isHttpUrl = (s) => typeof s === 'string' && /^https?:\/\/[^\s]+$/i.test(s);
 const isLonLat = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
@@ -57,6 +67,22 @@ export function loadNavConfig({ env = process.env, configFile } = {}) {
     if (isHttpUrl(v)) cfg[k] = String(v).replace(/\/+$/, '');
     else warnings.push(`${k} must be an http(s) URL; using the default`);
   }
+  const source = env.NAV_TRAFFIC_SOURCE || fromFile.trafficSource;
+  if (source != null && source !== '') {
+    if (TRAFFIC_SOURCES.includes(source)) cfg.trafficSource = source;
+    else warnings.push(`trafficSource must be one of ${TRAFFIC_SOURCES.join(', ')}; using auto`);
+  }
+  const key = env.NAV_TOMTOM_KEY || fromFile.tomtomKey;
+  if (key != null && key !== '') {
+    if (typeof key === 'string' && /^[\w.-]{8,128}$/.test(key)) cfg.tomtomKey = key;
+    else warnings.push('tomtomKey (NAV_TOMTOM_KEY) does not look like a TomTom key; traffic uses the assumed model');
+  }
+  if (cfg.trafficSource === 'tomtom' && !cfg.tomtomKey) warnings.push('trafficSource is tomtom but NAV_TOMTOM_KEY is not set; traffic uses the assumed model');
+  const daily = env.NAV_TRAFFIC_DAILY_TILES || fromFile.trafficDailyTiles;
+  if (daily != null && daily !== '') {
+    if (Number.isInteger(Number(daily)) && Number(daily) >= 0) cfg.trafficDailyTiles = Number(daily);
+    else warnings.push('trafficDailyTiles must be a whole number; using ' + DEFAULTS.trafficDailyTiles);
+  }
   if (fromFile.demo) {
     for (const end of ['from', 'to']) {
       if (fromFile.demo[end] == null) continue;
@@ -67,9 +93,23 @@ export function loadNavConfig({ env = process.env, configFile } = {}) {
   return { cfg, warnings };
 }
 
+/** Which traffic source the applet is set up for: 'tomtom' | 'synthetic' | 'off' (never the key itself). */
+export function trafficMode(cfg) {
+  if (cfg.trafficSource === 'off') return 'off';
+  return cfg.tomtomKey && cfg.trafficSource !== 'synthetic' ? 'tomtom' : 'synthetic';
+}
+
 /** What the browser gets from config.json: only the public endpoints it loads itself. */
 export function publicConfig(cfg) {
-  return { tiles: cfg.tilesUrl, glyphs: cfg.glyphsUrl, demo: cfg.demo, provider: 'OpenStreetMap · OpenFreeMap · OSRM · Photon/Nominatim' };
+  return { tiles: cfg.tilesUrl, glyphs: cfg.glyphsUrl, demo: cfg.demo, traffic: { source: trafficMode(cfg) }, provider: 'OpenStreetMap · OpenFreeMap · OSRM · Photon/Nominatim' };
+}
+
+/** `bbox=w,s,e,n` → [w, s, e, n], or null unless 4 finite numbers with w<e and s<n. */
+export function parseBbox(s) {
+  const b = String(s || '').split(',').map(Number);
+  if (b.length !== 4 || !b.every(Number.isFinite)) return null;
+  const [w, so, e, n] = b;
+  return w < e && so < n && Math.abs(w) <= 180 && Math.abs(e) <= 180 && Math.abs(so) <= 90 && Math.abs(n) <= 90 ? b : null;
 }
 
 // ---- Upstream responses → the small shapes the UI uses ---------------------------------------------
@@ -157,7 +197,12 @@ const TYPES = {
 };
 
 function send(res, status, body, headers = {}) {
-  const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  let buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  // Traffic answers run to a few hundred KB of coordinates; they shrink ~5x gzipped.
+  if (buf.length > 8192 && headers['content-type'] == null && /\bgzip\b/.test(res.req.headers['accept-encoding'] || '')) {
+    buf = zlib.gzipSync(buf);
+    headers = { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' };
+  }
   res.writeHead(status, { 'content-length': buf.length, 'content-type': 'application/json', ...headers });
   res.end(res.req.method === 'HEAD' ? undefined : buf);
 }
@@ -167,9 +212,15 @@ function parseLonLat(s) {
   return isLonLat(p) ? p : null;
 }
 
-export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR } = {}) {
+export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now } = {}) {
   const getJson = createUpstream({ fetchImpl });
+  const traffic = createTraffic({ cfg, fetchImpl, now, log, userAgent: USER_AGENT });
   const root = path.resolve(publicDir);
+  // Recent routes by routeId, so api/traffic can bump the roads along the route without the client
+  // uploading the polyline: the last 20, for 30 min.
+  const routes = new Map();
+  const ROUTE_TTL = 30 * 60 * 1000;
+  const clock = now || Date.now;
 
   async function search(q, near) {
     const bias = near ? `&lon=${near[0]}&lat=${near[1]}` : '';
@@ -203,8 +254,25 @@ export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDi
       try {
         const data = await getJson(`${cfg.routingUrl}/route/v1/driving/${from.join(',')};${to.join(',')}?overview=full&geometries=geojson&steps=true&alternatives=false`);
         const route = normalizeOsrm(data);
-        return route ? send(res, 200, route) : send(res, 404, { error: 'no route found' });
+        if (!route) return send(res, 404, { error: 'no route found' });
+        route.routeId = Math.floor(hash01(`${from.join(',')};${to.join(',')}`) * 2 ** 32).toString(36);
+        routes.delete(route.routeId);
+        routes.set(route.routeId, { at: clock(), info: routeInfo(route.geometry) });
+        while (routes.size > 20) routes.delete(routes.keys().next().value);
+        return send(res, 200, route);
       } catch (e) { return send(res, 502, { error: 'routing unavailable: ' + e.message }); }
+    }
+    if (p === '/api/traffic') {
+      const bbox = parseBbox(url.searchParams.get('bbox'));
+      if (!bbox) return send(res, 400, { error: 'bbox must be west,south,east,north with west<east and south<north' });
+      const z = Number(url.searchParams.get('z'));
+      if (!url.searchParams.get('z') || !Number.isFinite(z) || z < 0 || z > 22) return send(res, 400, { error: 'z must be the map zoom, 0-22' });
+      const hit = routes.get(url.searchParams.get('route') || '');
+      const route = hit && clock() - hit.at < ROUTE_TTL ? hit.info : null;
+      const tz = (url.searchParams.get('tz') || '').slice(0, 64) || undefined;
+      const at = Date.parse(url.searchParams.get('at') || '');
+      const out = await traffic.get({ bbox, z, tz, route, source: url.searchParams.get('source') || undefined, at: Number.isFinite(at) ? at : undefined });
+      return send(res, 200, out, { 'cache-control': 'private, max-age=30' });
     }
     // Static files. Only public/ is served; anything resolving outside it is a 404.
     let rel;
