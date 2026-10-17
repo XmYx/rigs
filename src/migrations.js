@@ -116,6 +116,9 @@ MIGRATIONS.push({
   },
 });
 
+// Every agent learns the screen-control tools and rules (on by default, ask first, never re-enable or bypass).
+MIGRATIONS.push({ id: '2026-10-17-control-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {

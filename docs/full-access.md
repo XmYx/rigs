@@ -368,9 +368,9 @@ Every `down` is paired with an `up`: helpers track what they hold and release it
 
 Control starts on. After a kill or a person's switch-off, `enable()` is the only way to set `enabled`/`input`
 back to true:
-- The request must come from a **human surface**: the JARVIS UI on any machine, which proxies to the target,
-  or `rigs control on [--input]` in an interactive terminal on the target. The CLI refuses without a TTY, so it
-  does not work through `mesh_exec`.
+- The request must come from a **human surface**: the JARVIS UI on any machine (Access & control panel), which
+  proxies to the target. *Designed, not built yet:* `rigs control on [--input]` in an interactive terminal on the
+  target, refusing without a TTY so it does not work through `mesh_exec`.
 - Requests that carry `x-rigs-caller` (the MCP marker) are refused with `not-allowed`.
 - The body must contain `confirm: <the target machine's name>`; the UI asks the user to type or click it.
 - Every enable is announced at once: spoken to every open UI, a native notification on the target, and an
@@ -445,9 +445,9 @@ It **persists across restarts**, and only `enable()` from a human surface undoes
 
 | Where | How |
 | --- | --- |
-| Any JARVIS UI | **■ Stop** on the attention item or panel; **✋ Hands off** in Mesh control (all machines); voice "hands off" / "stop control" |
+| Any JARVIS UI | **Stop control now** and **Stop on every machine** in the Access & control panel (also on its "in control" banner). *Designed, not built yet:* a Stop button on the attention item (it carries `stop: {POST control/kill}`), **✋ Hands off** in Mesh control, voice "hands off" / "stop control" |
 | API / agents | `POST control/kill`, `POST /api/mesh/control/kill` |
-| The machine itself | *Designed, not built yet:* `rigs control off` (also works with the daemon down: edits config and kills the helper by pidfile) |
+| The machine itself | `rigs control off [reason]`: asks the daemon to kill; with the daemon down it writes the kill marker and config directly (no pidfile needed: the Linux and Windows helpers stop themselves when the daemon's pipe closes) |
 | Hotkey on the machine | *Designed, not built yet:* | GNOME/KDE: a custom shortcut **Super+Shift+Esc** → `rigs control off`, added via `gsettings` custom keybinding when control is enabled and removed when disabled. macOS: **⌃⌥⌘⎋** registered by the helper with Carbon `RegisterEventHotKey` (no Input Monitoring needed). Windows: `RegisterHotKey` in the helper. `control.killHotkey` overrides |
 | GNOME indicator | **Stop** on the top-bar sharing indicator closes the Mutter session; the helper's `closed` event is treated as a kill. A helper that merely exits (crash, logout) is not a kill: it ends the lease (`exit` event) |
 
