@@ -20,6 +20,9 @@ import { createPopups } from './popups.js';
 import { openTerminal } from './terminal.js';
 import { createVoice } from './voice.js';
 import { openWindow } from './wm.js';
+import { THEMES, applyTheme, themeId } from './themes.js';
+
+applyTheme();
 
 const $ = (s) => document.querySelector(s);
 const store = {
@@ -1103,6 +1106,10 @@ function wire() {
   const auto = $('#d-autosess');
   auto.checked = store.get('autoOpenSessions', true);
   auto.onchange = () => store.set('autoOpenSessions', auto.checked);
+  const themeSel = $('#d-theme');
+  themeSel.replaceChildren(...Object.entries(THEMES).map(([id, t]) => h('option', { value: id }, t.name)));
+  themeSel.value = themeId();
+  themeSel.onchange = () => applyTheme(themeSel.value);
   const search = $('#search');
   const results = $('#search-results');
   search.addEventListener('input', () => {

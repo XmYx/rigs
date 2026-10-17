@@ -3,6 +3,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { api, h, node, toast, wsUrl } from './api.js';
 import { openWindow } from './wm.js';
+import { currentTheme, onTheme } from './themes.js';
 
 /**
  * Terminal window on any machine. Either creates a new PTY (shell or a command) or attaches to an
@@ -20,11 +21,12 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
   const status = h('span', { class: 'term-status' }, 'connecting…');
   let ws;
   let closed = false;
-  const w = openWindow({ title: `${nodeName} — ${title || 'shell'}`, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: () => { closed = true; ws?.close(); term.dispose(); } });
+  const w = openWindow({ title: `${nodeName} — ${title || 'shell'}`, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: () => { closed = true; offTheme(); ws?.close(); term.dispose(); } });
   const term = new Terminal({
     fontFamily: 'ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace', fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: 20000,
-    theme: { background: '#05090e', foreground: '#d7e3ea', cursor: '#5eead4', selectionBackground: '#164e63', black: '#0b1218', brightBlack: '#475569', cyan: '#22d3ee', brightCyan: '#67e8f9', green: '#4ade80', magenta: '#c084fc', yellow: '#fbbf24', blue: '#60a5fa', red: '#f87171' },
+    theme: currentTheme().terminal,
   });
+  const offTheme = onTheme((t) => { term.options.theme = t.terminal; });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon());
