@@ -437,38 +437,72 @@ export const MAX_NUDGES = 3;
 const STARTING_MS = 15 * 60 * 1000;
 const PLANNING_MS = 20 * 60 * 1000;
 
-/** Start every task whose dependencies are done. */
+/**
+ * One project's state changes one at a time. Agents report (updateTask), the tick and dispatch all read-modify-write
+ * the same JSON file; without this, two writers each saved their own copy and one silently undid the other (a task
+ * "starting" again while its agent ran, a second agent cast for the same task).
+ */
+const locks = new Map();
+export function withProject(id, fn) {
+  const next = (locks.get(id) || Promise.resolve()).then(fn, fn);
+  const tail = next.catch(() => {});
+  locks.set(id, tail);
+  tail.then(() => { if (locks.get(id) === tail) locks.delete(id); });
+  return next;
+}
+
+/**
+ * Start every task whose dependencies are done. Tasks are claimed ("starting") under the lock, started outside it
+ * (a start can take minutes), and each result is written back onto the then-current project.
+ */
 export async function dispatchReady(id, ctx, { only } = {}) {
-  const p = await getProject(id);
-  if (!p) throw new Error('project not found');
-  if (!only && !['planned', 'running', 'blocked'].includes(p.status)) throw new Error(`project is ${p.status}`);
-  if (!only) p.status = 'running';
-  // Tasks that lost their machine (dispatch failed, machine offline) are placed again before starting.
-  if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) routeProject(p, await ctx.snapshot(), { onlyUnassigned: true });
+  const claim = await withProject(id, async () => {
+    const p = await getProject(id);
+    if (!p) throw new Error('project not found');
+    if (!only && !['planned', 'running', 'blocked'].includes(p.status)) throw new Error(`project is ${p.status}`);
+    if (!only) p.status = 'running';
+    // Tasks that lost their machine (dispatch failed, machine offline) are placed again before starting.
+    if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) routeProject(p, await ctx.snapshot(), { onlyUnassigned: true });
+    const ts = p.tasks.filter((x) => ready(p, x) && (!only || x.id === only));
+    for (const t of ts) { t.status = 'starting'; t.startingAt = Date.now(); }
+    await saveProject(p);
+    return { p, ts: ts.map((t) => ({ ...t })) };
+  });
   const started = [];
-  for (const t of p.tasks.filter((x) => ready(p, x) && (!only || x.id === only))) {
-    t.status = 'starting';
-    t.startingAt = Date.now();
-    await saveProject(p);
-    const workdir = t.assign.node === p.repo.node && p.repo.path ? p.repo.path : `~/rigs-work/${p.slug}`;
+  for (const t0 of claim.ts) {
+    const p0 = claim.p;
+    const workdir = t0.assign.node === p0.repo.node && p0.repo.path ? p0.repo.path : `~/rigs-work/${p0.slug}`;
+    let r = null;
+    let err = null;
     try {
-      const r = await ctx.call(t.assign.node, 'work/start', { method: 'POST', body: { project: { id: p.id, slug: p.slug, name: p.name, gitUrl: p.gitUrl }, task: t, prompt: taskPrompt(p, t), workdir, mode: p.dispatch, policy: p.policy }, timeout: 10 * 60 * 1000 });
-      t.run = { ...r, startedAt: Date.now() };
-      t.status = 'running';
-      t.summary = '';
-      t.watch = null;
-      started.push(t.id);
-      event(p, `${t.id} started on ${t.assign.node} via ${r.mode === 'openrig' ? `OpenRig seat ${r.seat}` : `${r.session.kind} ${r.session.id}`}${t.attempts ? ` (attempt ${t.attempts + 1})` : ''}`);
-    } catch (e) {
-      const r = retryOrFail(p, t, `dispatch to ${t.assign.node} failed: ${e.message}`);
-      if (r === 'retry' && !t.assign?.locked) t.assign = null; // let routing pick another machine
-      event(p, `${t.id} dispatch failed on ${t.assign?.node || 'its machine'}: ${e.message}`);
-    }
-    await saveProject(p);
+      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy }, timeout: 10 * 60 * 1000 });
+    } catch (e) { err = e; }
+    await withProject(id, async () => {
+      const p = await getProject(id);
+      const t = p?.tasks.find((x) => x.id === t0.id);
+      if (!t) return;
+      if (t.status !== 'starting') { if (r) event(p, `${t.id} started on ${t0.assign.node} after it had moved to ${t.status} — check for a stray agent`); await saveProject(p); return; }
+      if (r) {
+        t.run = { ...r, startedAt: Date.now() };
+        t.status = 'running';
+        t.summary = '';
+        t.watch = null;
+        started.push(t.id);
+        event(p, `${t.id} started on ${t.assign.node} via ${r.mode === 'openrig' ? `OpenRig seat ${r.seat}` : `${r.session.kind} ${r.session.id}`}${t.attempts ? ` (attempt ${t.attempts + 1})` : ''}`);
+      } else {
+        const rr = retryOrFail(p, t, `dispatch to ${t.assign.node} failed: ${err.message}`);
+        if (rr === 'retry' && !t.assign?.locked) t.assign = null; // let routing pick another machine
+        event(p, `${t.id} dispatch failed on ${t.assign?.node || 'its machine'}: ${err.message}`);
+      }
+      await saveProject(p);
+    });
   }
-  if (started.length) tell(ctx, p, `${p.name}: started ${started.length} task${started.length > 1 ? 's' : ''} (${started.map((x) => p.tasks.find((t) => t.id === x).assign.node).join(', ')}).`);
-  if (!only) await settle(p, ctx);
-  return p;
+  return withProject(id, async () => {
+    const p = await getProject(id);
+    if (started.length) tell(ctx, p, `${p.name}: started ${started.length} task${started.length > 1 ? 's' : ''} (${started.map((x) => p.tasks.find((t) => t.id === x).assign.node).join(', ')}).`);
+    if (!only) await settle(p, ctx);
+    return p;
+  });
 }
 
 /**
@@ -548,7 +582,13 @@ async function settle(p, ctx) {
   }
 }
 
-export async function updateTask(id, taskId, { status, summary, assign }, ctx) {
+export async function updateTask(id, taskId, change, ctx) {
+  const p = await withProject(id, () => applyUpdate(id, taskId, change, ctx));
+  if (p.status === 'running' && ctx) return dispatchReady(id, ctx);
+  return p;
+}
+
+async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
   const p = await getProject(id);
   if (!p) throw new Error('project not found');
   const t = p.tasks.find((x) => x.id === taskId);
@@ -569,8 +609,7 @@ export async function updateTask(id, taskId, { status, summary, assign }, ctx) {
     if (p.status === 'blocked' && ['todo', 'running', 'done'].includes(t.status)) p.status = 'running';
   }
   await saveProject(p);
-  if (p.status === 'running' && ctx) return dispatchReady(id, ctx);
-  if (ctx) await settle(p, ctx);
+  if (p.status !== 'running' && ctx) await settle(p, ctx);
   return p;
 }
 
@@ -619,32 +658,44 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
 export async function tick(ctx, now = Date.now()) {
   for (const s of await listProjects()) {
     if (!['running', 'planning', 'merging'].includes(s.status)) continue;
-    const p = await getProject(s.id);
-    let changed = false;
-    if (p.status === 'planning' && now - p.updatedAt > PLANNING_MS) {
-      // The planner's brain call died with the daemon (restart, update): plan again once if Sir asked for it to run.
-      const again = p.autoRun && !p.replanned;
-      p.status = 'draft';
-      p.replanned = true;
-      event(p, `planning never finished${again ? ' — planning again' : ''}`);
-      await saveProject(p);
-      if (again) planProject(p.id, ctx).then(() => dispatchReady(p.id, ctx)).catch((e) => tell(ctx, p, `Couldn't plan ${p.name}: ${e.message}`, 'error'));
-      continue;
-    }
-    if (p.status === 'merging') { await followMerge(p, ctx, now); continue; }
-    for (const t of p.tasks) {
-      if (t.status === 'starting' && now - (t.startingAt || p.updatedAt) > STARTING_MS) { t.status = 'todo'; event(p, `${t.id} never started — trying again`); changed = true; }
-    }
-    for (const t of p.tasks.filter((x) => x.status === 'running' && x.run)) {
-      try {
-        const st = await ctx.call(t.assign.node, 'work/status', { method: 'POST', body: t.run, timeout: 20000 });
-        if (await watchTask(p, t, st, ctx, now)) changed = true;
-      } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
-    }
-    if (changed) await saveProject(p);
-    if (changed || p.tasks.some((x) => ready(p, x) || (x.status === 'todo' && !x.assign))) await dispatchReady(p.id, ctx).catch((e) => log(`project ${p.id}: dispatch: ${e.message}`));
-    else await settle(p, ctx); // e.g. a task went blocked before this tick existed: nothing can move → escalate once
+    const next = await withProject(s.id, () => tickProject(s.id, ctx, now)).catch((e) => { log(`project ${s.id}: tick: ${e.message}`); return null; });
+    if (next === 'dispatch') await dispatchReady(s.id, ctx).catch((e) => log(`project ${s.id}: dispatch: ${e.message}`));
   }
+}
+
+async function tickProject(id, ctx, now) {
+  const p = await getProject(id);
+  if (!p || !['running', 'planning', 'merging'].includes(p.status)) return null;
+  let changed = false;
+  if (p.status === 'planning' && now - p.updatedAt > PLANNING_MS) {
+    // The planner's brain call died with the daemon (restart, update): plan again once if Sir asked for it to run.
+    const again = p.autoRun && !p.replanned;
+    p.status = 'draft';
+    p.replanned = true;
+    event(p, `planning never finished${again ? ' — planning again' : ''}`);
+    await saveProject(p);
+    if (again) planProject(p.id, ctx).then(() => dispatchReady(p.id, ctx)).catch((e) => tell(ctx, p, `Couldn't plan ${p.name}: ${e.message}`, 'error'));
+    return null;
+  }
+  if (p.status === 'merging') return (await followMerge(p, ctx, now)) || null;
+  for (const t of p.tasks) {
+    if (t.status !== 'starting' || now - (t.startingAt || p.updatedAt) <= STARTING_MS) continue;
+    // Its agent may well be running (the start reply was lost): adopt it rather than casting a second one.
+    const found = await ctx.call(t.assign.node, 'work/find', { method: 'POST', body: { project: { id: p.id, slug: p.slug }, task: { id: t.id, attempts: t.attempts || 0 } }, timeout: 20000 }).catch(() => null);
+    if (found?.run) { t.run = { ...found.run, startedAt: t.startingAt || now }; t.status = 'running'; t.watch = null; event(p, `${t.id} was already running (${found.run.seat || found.run.session?.id}) — adopted`); }
+    else { t.status = 'todo'; event(p, `${t.id} never started — trying again`); }
+    changed = true;
+  }
+  for (const t of p.tasks.filter((x) => x.status === 'running' && x.run)) {
+    try {
+      const st = await ctx.call(t.assign.node, 'work/status', { method: 'POST', body: t.run, timeout: 20000 });
+      if (await watchTask(p, t, st, ctx, now)) changed = true;
+    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
+  }
+  if (changed) await saveProject(p);
+  if (changed || p.tasks.some((x) => ready(p, x) || (x.status === 'todo' && !x.assign))) return 'dispatch';
+  await settle(p, ctx); // e.g. a task went blocked before this tick existed: nothing can move → escalate once
+  return null;
 }
 
 /** A finished RIGS change waits for the merge steward: merged → report; checks failed → a fix task, then propose again. */
@@ -669,7 +720,7 @@ async function followMerge(p, ctx, now) {
     p.status = 'running';
     event(p, `merge checks failed (${req.failedStage}) — added ${t.id} to fix them`);
     await saveProject(p);
-    await dispatchReady(p.id, ctx);
+    return 'dispatch'; // the caller dispatches once this project's lock is released
   } else if (['checks-failed', 'dropped'].includes(req.status) || (req.status === 'conflict' && now - (sd.proposedAt || now) > 6 * 3600000)) {
     p.status = 'blocked';
     event(p, `merge ${req.status}`);

@@ -233,6 +233,26 @@ export async function taskStatus(run_) {
   return { state: 'running' };
 }
 
+/** Is an agent already working on this task here? (a lost start reply) → its run handle, or null. */
+export async function findTask({ project, task }) {
+  const tags = [`project:${project.id}`, `task:${task.id}`];
+  if (bin('rig')) {
+    const r = await run(bin('rig'), ['queue', 'list', '--json'], { timeout: 20000 });
+    try {
+      const j = JSON.parse(r.stdout.slice(r.stdout.search(/[[{]/)));
+      const items = (Array.isArray(j) ? j : j.items || j.qitems || []).filter((q) => tags.every((x) => (q.tags || []).includes(x)) && ['in-progress', 'pending'].includes(q.state));
+      const q = items.sort((a, b) => (a.state === 'in-progress' ? -1 : 1) - (b.state === 'in-progress' ? -1 : 1) || String(b.tsCreated).localeCompare(String(a.tsCreated)))[0];
+      if (q) return { run: { mode: 'openrig', rig: q.destinationSession.split('@')[1], seat: q.destinationSession, qitem: q.qitemId, team: true, session: { kind: 'rig', id: q.destinationSession } } };
+    } catch {}
+  }
+  const t = bin('tmux');
+  if (t && !isWin && project.slug) {
+    const name = `${project.slug}-${task.id}${task.attempts ? `-r${task.attempts}` : ''}`.replace(/[^\w.-]/g, '-');
+    if ((await run(t, ['has-session', '-t', name], { timeout: 5000 })).code === 0) return { run: { mode: 'direct', session: { kind: 'tmux', id: name } } };
+  }
+  return { run: null };
+}
+
 /** The watchdog's nudge: a message typed into the agent's session (OpenRig seat or tmux). */
 export async function nudgeTask({ text, ...run_ }) {
   if (!text) throw new Error('nothing to send');
