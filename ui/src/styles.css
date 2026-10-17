@@ -679,6 +679,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   .proj-head .actions .btn { width: 100%; text-align: center; white-space: normal; }
   .proj-goal { overflow-wrap: anywhere; }
   .tr-main { flex-wrap: wrap; }
+  .tr-title, .proj-head > .muted { overflow-wrap: anywhere; }
   .tr-assign { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; }
   .tr-assign .arrow { display: none; }
   .tr-assign select, .tr-assign .path-input { width: 100%; min-width: 0; }
