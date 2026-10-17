@@ -431,6 +431,12 @@ function ready(p, t) {
   return t.status === 'todo' && t.assign && t.deps.every((d) => p.tasks.find((x) => x.id === d)?.status === 'done');
 }
 
+// Anything that was "in flight" before this process started (planning, a dispatch) cannot still be in flight:
+// it died with the old process (an update, a restart, a reboot) and is recovered right away, not after a timeout.
+export const BOOT = Date.now();
+// A seat that keeps dying is revived at most this often per task before the task is retried from scratch.
+export const MAX_REVIVES = 3;
+
 // Autonomy limits: a task gets one fresh retry; an idle agent is nudged every STALL_MS, then escalated.
 export const MAX_ATTEMPTS = 2;
 export const STALL_MS = 15 * 60 * 1000;
@@ -628,6 +634,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
     if (r === 'failed') tell(ctx, p, `${p.name}: “${t.title}” ended twice without finishing.`, 'error');
     return true;
   }
+  if (st.state === 'seat-down' || st.state === 'daemon-down') return reviveTask(p, t, st, ctx);
   if (st.needsInput) return false; // a permission/question wait — the attention feed already asks Sir
   const w = t.watch || (t.watch = { fp: '', idleSince: 0, nudges: 0, nudgedAt: 0 });
   const idle = st.idle === true || (st.fingerprint && st.fingerprint === w.fp);
@@ -652,6 +659,32 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
   return true;
 }
 
+const resumeText = (p, t) => `RIGS: this session was interrupted (a machine or agent restart) while you were working on task ${t.id} of project ${p.id} ("${t.title}").${t.run?.brief ? ` Your brief is ${t.run.brief}.` : ''} Check where you left off (files, git state, notes), then carry on and finish it; report with project_task_update (owner "${p.owner}", project "${p.id}", task "${t.id}") when done.`;
+
+/** A running task whose agent died (reboot, crash, killed session): bring the seat back and tell it to carry on. */
+async function reviveTask(p, t, st, ctx) {
+  t.revives = (t.revives || 0) + 1;
+  if (t.revives > MAX_REVIVES) {
+    const r = retryOrFail(p, t, `its agent session kept dying (${t.revives - 1} revives)`);
+    t.revives = 0;
+    event(p, `${t.id} keeps losing its agent${r === 'retry' ? ' — starting it again from its brief' : ''}`);
+    if (r === 'failed') tell(ctx, p, `${p.name}: “${t.title}” keeps losing its agent on ${t.assign?.node}.`, 'error');
+    return true;
+  }
+  try {
+    const r = await ctx.call(t.assign.node, 'work/revive', { method: 'POST', body: t.run, timeout: 6 * 60 * 1000 });
+    if (!r.ok) throw new Error(r.reason || 'revive failed');
+    await ctx.call(t.assign.node, 'work/nudge', { method: 'POST', body: { ...t.run, text: resumeText(p, t) }, timeout: 30000 }).catch(() => {});
+    t.watch = null;
+    event(p, `${t.id}: its agent was down (${st.state}) — ${r.how}; told it to carry on`);
+    tell(ctx, p, `${p.name}: “${t.title}” lost its agent on ${t.assign?.node} (${st.state === 'daemon-down' ? 'OpenRig was down' : 'the session died'}) — brought it back and it carries on.`);
+  } catch (e) {
+    event(p, `${t.id}: reviving its agent failed (${e.message}) — will try again`);
+    log(`project ${p.id} ${t.id}: revive failed: ${e.message}`);
+  }
+  return true;
+}
+
 /**
  * Background loop on the owner node: notice finished seats/sessions, retry what ended silently, nudge idle agents,
  * recover stuck planning/dispatch, follow RIGS changes through the merge steward, and start what became ready.
@@ -668,7 +701,7 @@ async function tickProject(id, ctx, now) {
   const p = await getProject(id);
   if (!p || !['running', 'planning', 'merging'].includes(p.status)) return null;
   let changed = false;
-  if (p.status === 'planning' && now - p.updatedAt > PLANNING_MS) {
+  if (p.status === 'planning' && (now - p.updatedAt > PLANNING_MS || p.updatedAt < BOOT)) {
     // The planner's brain call died with the daemon (restart, update): plan again once if Sir asked for it to run.
     const again = p.autoRun && !p.replanned;
     p.status = 'draft';
@@ -680,7 +713,8 @@ async function tickProject(id, ctx, now) {
   }
   if (p.status === 'merging') return (await followMerge(p, ctx, now)) || null;
   for (const t of p.tasks) {
-    if (t.status !== 'starting' || now - (t.startingAt || p.updatedAt) <= STARTING_MS) continue;
+    const startedAt = t.startingAt || p.updatedAt;
+    if (t.status !== 'starting' || (now - startedAt <= STARTING_MS && startedAt >= BOOT)) continue;
     // Its agent may well be running (the start reply was lost): adopt it rather than casting a second one.
     const found = await ctx.call(t.assign.node, 'work/find', { method: 'POST', body: { project: { id: p.id, slug: p.slug }, task: { id: t.id, attempts: t.attempts || 0 } }, timeout: 20000 }).catch(() => null);
     if (found?.run) { t.run = { ...found.run, startedAt: t.startingAt || now }; t.status = 'running'; t.watch = null; event(p, `${t.id} was already running (${found.run.seat || found.run.session?.id}) — adopted`); }
