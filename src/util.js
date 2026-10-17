@@ -71,8 +71,11 @@ function quoteWinArg(a) {
   return '"' + String(a).replace(/"/g, '""') + '"';
 }
 
-/** Spawn wrapper that handles Windows .cmd shims safely. */
+/** Spawn wrapper that handles Windows .cmd/.bat shims and .ps1 scripts safely. */
 export function spawnCmd(cmd, args = [], opts = {}) {
+  if (isWin && /\.ps1$/i.test(cmd || '')) {
+    return spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cmd, ...args], { windowsHide: true, ...opts });
+  }
   if (needsShell(cmd)) {
     const line = [quoteWinArg(cmd), ...args.map(quoteWinArg)].join(' ');
     return spawn(line, { ...opts, shell: true, windowsHide: true });

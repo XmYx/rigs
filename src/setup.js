@@ -75,7 +75,8 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   machine that has the tool you need.
 - **Apps / applets — ground rule**: anything you build that has a web UI must be published to the
   App Cloud, not just left running on a port. Serve it with relative URLs and a \`/healthz\`, give it
-  a launch recipe (Linux: a \`systemctl --user\` unit, enabled; elsewhere: a \`command\`), then call
+  a launch recipe per OS (Linux: a \`systemctl --user\` unit, enabled; elsewhere a \`command\`; side by side as
+  \`launch: { systemd, windows: { command, cwd }, darwin: { command } }\`), then call
   \`mesh_app_register\` (node, id, name, icon, port, healthPath, launch). It then shows up in every
   JARVIS on the mesh — in the galaxy and the Apps list — and opening it spins it up on its machine
   (\`mesh_app_start\`) and shows it in a floating window. \`mesh_apps\` lists what is published.

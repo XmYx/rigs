@@ -70,8 +70,22 @@ Every web app or applet built on the mesh is published so it opens inside JARVIS
 
 1. Serve it with **relative URLs** (it is reached under `/api/nodes/<node>/apps/<id>/`) and a cheap
    health endpoint (`/healthz`).
-2. Give it a **launch recipe**: on Linux a `systemctl --user` unit (enabled, so it survives reboots);
-   elsewhere a `command`. JARVIS uses it to spin the app up when someone opens it while it is down.
+2. Give it a **launch recipe** for every OS it can run on. JARVIS uses it to spin the app up when someone
+   opens it while it is down. `launch` takes, side by side:
+   - `systemd`: a `systemctl --user` unit (enabled, so it survives reboots), used on **Linux only**;
+   - `command` (+ optional `cwd`, default `~`, and `env`): a command line, used on any OS (on Linux only
+     when there is no `systemd`);
+   - `linux` / `darwin` / `windows`: `{ command, cwd, env }` for that OS, replacing the top-level recipe
+     there (`linux` may give `{ systemd }`).
+
+   ```json
+   "launch": { "systemd": "szuf.service", "command": "~/szuf/run.sh",
+               "windows": { "command": "python server.py --port 8787", "cwd": "~\\szuf" } }
+   ```
+   On Windows a command runs **without a POSIX shell**: its program is found on PATH (`.exe`, `.cmd`, `.bat`,
+   `.ps1` through `util.spawnCmd`); only a line with cmd.exe syntax (`&&`, `|`, `%VAR%`) goes through cmd.exe.
+   `launchFor(launch, platform)` in `src/apps.js` picks the recipe; each app's `launchHere` is the one its host runs.
+   Old `{ systemd }` / `{ command }` recipes keep working unchanged.
 3. **Register** it on its host: MCP `mesh_app_register` (or `POST /api/local/apps`, or `apps` in
    `~/.rigs/config.json` — picked up live). It appears in the galaxy (Apps), the left-panel Apps list
    and the ▦ launcher on every JARVIS; "open <name>" works by voice.

@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { CONFIG_FILE, config } from './config.js';
 
 /**
@@ -9,9 +11,17 @@ import { CONFIG_FILE, config } from './config.js';
  *     "port": 8787,                       // or "url": "http://100.82.152.1:8787" (exactly one of the two)
  *     "host": "100.82.152.1",             // optional, with "port" only; default 127.0.0.1
  *     "healthPath": "/healthz",           // optional, default "/"
- *     "launch": { "systemd": "szuf.service" }  // or { "command": "…" }; informational, used to start the app
+ *     "launch": { "systemd": "szuf.service" }  // or { "command": "…" }; used to start the app (see LAUNCH below)
  *     "rewrite": { "rootRelative": true, "basePath": "/ui", "cookies": true, "websocket": true } }  // proxy hints
  * The node name is never declared; it always comes from config().name.
+ *
+ * LAUNCH recipe, per OS: { systemd?, command?, cwd?, env?, linux?, darwin?, windows? }.
+ *   - systemd: a `systemctl --user` unit, used on Linux only. command: a command line, used on any OS (on Linux
+ *     only when there is no systemd unit). cwd (default ~) and env apply to that top-level command.
+ *   - linux | darwin | windows: the recipe for that OS, which replaces the top-level one there:
+ *     { command, cwd?, env? } (or just the command string); linux may give { systemd } instead.
+ *   e.g. { "systemd": "szuf.service", "windows": { "command": "szuf.cmd", "cwd": "~/szuf" } }.
+ * launchFor(launch, platform) picks the recipe for a platform; app.launchHere is the one this node runs.
  *
  * Health: every app is probed with GET <target><healthPath> on an interval with a timeout. Any HTTP
  * answer below 500 counts as up (a login wall still means the app runs); a network error, timeout or
@@ -52,14 +62,7 @@ export function validateApp(raw, node = config().name) {
   if (!healthPath.startsWith('/')) errors.push('healthPath must start with /');
 
   let launch = null;
-  if (raw.launch !== undefined && raw.launch !== null) {
-    const l = raw.launch;
-    const unit = l && typeof l.systemd === 'string' ? l.systemd.trim() : '';
-    const cmd = l && typeof l.command === 'string' ? l.command.trim() : '';
-    if (!l || typeof l !== 'object' || (!!unit === !!cmd)) errors.push('launch needs exactly one of systemd (unit name) or command');
-    else if (unit && !/^[\w@.:-]+$/.test(unit)) errors.push('launch.systemd is not a valid unit name');
-    else launch = unit ? { systemd: unit } : { command: cmd };
-  }
+  if (raw.launch !== undefined && raw.launch !== null) launch = validateLaunch(raw.launch, errors);
 
   let rewrite = {};
   if (raw.rewrite !== undefined && raw.rewrite !== null) {
@@ -75,9 +78,126 @@ export function validateApp(raw, node = config().name) {
   }
   if (errors.length) return { app: null, errors: errors.map((e) => `${id || '?'}: ${e}`) };
   return {
-    app: { id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, rewrite },
+    app: { id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite },
     errors: [],
   };
+}
+
+export const LAUNCH_OS = Object.freeze(['linux', 'darwin', 'windows']);
+const LAUNCH_OS_ALIAS = { win32: 'windows', mac: 'darwin', macos: 'darwin' };
+const ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The launch-recipe key for a Node platform name ('win32' → 'windows', 'darwin', anything else → 'linux'). */
+export function launchOs(platform = process.platform) {
+  return platform === 'win32' ? 'windows' : platform === 'darwin' ? 'darwin' : 'linux';
+}
+
+/** One { command, cwd?, env? } (or { systemd } where allowed) recipe; pushes errors and returns null when invalid. */
+function validateRecipe(r, field, { systemd, requireOne }, errors) {
+  if (typeof r === 'string') r = { command: r };
+  if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push(`${field} must be an object`); return null; }
+  const unit = typeof r.systemd === 'string' ? r.systemd.trim() : '';
+  const cmd = typeof r.command === 'string' ? r.command.trim() : '';
+  const before = errors.length;
+  if (r.systemd !== undefined && !systemd) errors.push(`${field}.systemd is Linux only (give a command here)`);
+  else if (r.systemd !== undefined && !unit) errors.push(`${field}.systemd must be a unit name`);
+  else if (unit && !/^[\w@.:-]+$/.test(unit)) errors.push(`${field}.systemd is not a valid unit name`);
+  if (r.command !== undefined && !cmd) errors.push(`${field}.command must be a command line`);
+  if (requireOne && !!unit === !!cmd && errors.length === before) errors.push(`${field} needs exactly one of systemd (unit name) or command`);
+  else if (!requireOne && !unit && !cmd && errors.length === before) errors.push(`${field} needs a command`);
+  if (r.cwd !== undefined && typeof r.cwd !== 'string') errors.push(`${field}.cwd must be a path`);
+  const env = {};
+  if (r.env !== undefined) {
+    if (!r.env || typeof r.env !== 'object' || Array.isArray(r.env)) errors.push(`${field}.env must be an object of NAME: "value"`);
+    else for (const [k, v] of Object.entries(r.env)) {
+      if (!ENV_RE.test(k)) errors.push(`${field}.env.${k} is not a valid variable name`);
+      else if (!['string', 'number', 'boolean'].includes(typeof v)) errors.push(`${field}.env.${k} must be a string`);
+      else env[k] = String(v);
+    }
+  }
+  if (errors.length > before) return null;
+  return { ...(unit ? { systemd: unit } : {}), ...(cmd ? { command: cmd } : {}), ...(cmd && r.cwd ? { cwd: r.cwd } : {}), ...(cmd && Object.keys(env).length ? { env } : {}) };
+}
+
+/**
+ * Validate a launch recipe (shapes in LAUNCH above). Old shapes normalize to themselves ({ systemd } / { command }).
+ * Pushes readable errors and returns the normalized recipe or null.
+ */
+export function validateLaunch(l, errors = []) {
+  if (!l || typeof l !== 'object' || Array.isArray(l)) { errors.push('launch must be an object'); return null; }
+  const before = errors.length;
+  const out = {};
+  const perOs = {};
+  for (const [k, v] of Object.entries(l)) {
+    const key = LAUNCH_OS_ALIAS[k] || k;
+    if (!LAUNCH_OS.includes(key) || v === undefined || v === null) continue;
+    if (perOs[key]) { errors.push(`launch.${k} repeats launch.${key}`); continue; }
+    perOs[key] = validateRecipe(v, `launch.${k}`, { systemd: key === 'linux', requireOne: key === 'linux' }, errors);
+  }
+  const hasTop = ['systemd', 'command'].some((k) => l[k] !== undefined && l[k] !== null && l[k] !== '');
+  if (hasTop) {
+    const top = validateRecipe({ systemd: l.systemd || undefined, command: l.command || undefined, cwd: l.cwd, env: l.env }, 'launch', { systemd: true, requireOne: false }, errors);
+    if (top) Object.assign(out, top);
+  } else if (!Object.keys(perOs).length) errors.push('launch needs systemd (unit name), command, or a per-OS recipe (linux, darwin, windows)');
+  if (errors.length > before) return null;
+  for (const k of LAUNCH_OS) if (perOs[k]) out[k] = perOs[k];
+  return out;
+}
+
+/**
+ * The recipe a node on `platform` runs: { systemd } | { command, cwd, env } | null (nothing for that OS).
+ * A per-OS entry wins; else the top-level systemd unit (Linux only), else the top-level command. Pure.
+ */
+export function launchFor(launch, platform = process.platform) {
+  if (!launch) return null;
+  const osKey = launchOs(platform);
+  const r = launch[osKey] || launch;
+  if (r.systemd && osKey === 'linux') return { systemd: r.systemd };
+  if (r.command) return { command: r.command, cwd: r.cwd || '', env: r.env || {} };
+  return null;
+}
+
+/** Split a Windows command line into argv the way CommandLineToArgvW does for the common cases ("…" quoting). Pure. */
+export function splitWinCommand(line) {
+  const args = [];
+  let cur = '';
+  let quoted = false;
+  let any = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '\\') {
+      let n = 0;
+      while (line[i] === '\\') { n++; i++; }
+      if (line[i] === '"') { cur += '\\'.repeat(Math.floor(n / 2)); if (n % 2) cur += '"'; else { quoted = !quoted; any = true; } } else { cur += '\\'.repeat(n); i--; }
+    } else if (c === '"') {
+      if (quoted && line[i + 1] === '"') { cur += '"'; i++; } else { quoted = !quoted; any = true; }
+    } else if (/\s/.test(c) && !quoted) {
+      if (cur || any) args.push(cur);
+      cur = ''; any = false;
+    } else cur += c;
+  }
+  if (cur || any) args.push(cur);
+  return args;
+}
+
+/**
+ * How to spawn a { command, cwd, env } recipe on `platform`, without running it: { cmd, args, shell, cwd, env }. Pure
+ * apart from `which`. POSIX: the command line through $SHELL (or /bin/sh), as before. Windows: never a POSIX shell —
+ * a plain command line is split into argv and its program resolved on PATH (with .exe/.cmd/.bat/.ps1 shims) for
+ * util.spawnCmd; only a line using cmd.exe syntax (& | < > ^ %VAR%) runs through cmd.exe.
+ */
+export function commandPlan(recipe, { platform = process.platform, which = () => null, home = os.homedir(), shellEnv = process.env.SHELL } = {}) {
+  const win = platform === 'win32';
+  const p = win ? path.win32 : path.posix;
+  const expand = (s) => (s === '~' ? home : /^~[\\/]/.test(s) ? p.join(home, s.slice(2)) : s);
+  const cwd = recipe.cwd ? p.resolve(home, expand(recipe.cwd)) : home;
+  const env = { ...(recipe.env || {}) };
+  if (!win) return { cmd: recipe.command, args: [], shell: shellEnv || '/bin/sh', cwd, env };
+  if (/[&|<>^%]/.test(recipe.command)) return { cmd: recipe.command, args: [], shell: true, cwd, env };
+  const [prog = '', ...args] = splitWinCommand(recipe.command);
+  const exe = expand(prog);
+  const resolved = p.isAbsolute(exe) || /[\\/]/.test(exe) ? p.resolve(cwd, exe) : which(exe) || exe;
+  return { cmd: resolved, args: args.map(expand), shell: false, cwd, env };
 }
 
 let diskMtime = 0;
@@ -249,10 +369,11 @@ const starting = new Map(); // app id → in-flight start promise (one start per
 /**
  * Spin an app up on this machine and wait until it answers its health check.
  *  - already up → { started: false, health }
- *  - launch.systemd → `systemctl --user start <unit>` (Linux user units, the default for RIGS apps)
- *  - launch.command → run detached through the login shell, output in ~/.rigs/logs/app-<id>.log
- * Throws when the app is unknown, has no launch recipe, or is not up within waitMs.
- * `deps` ({ run, spawn, probe, sleep }) is injectable for tests.
+ *  - the recipe for this OS (launchFor): systemd → `systemctl --user start <unit>` (Linux user units, the default
+ *    for RIGS apps); command → run detached (commandPlan: the shell on macOS/Linux, util.spawnCmd with PATH and
+ *    .cmd/.bat/.ps1 shims on Windows), output in ~/.rigs/logs/app-<id>.log
+ * Throws when the app is unknown, has no launch recipe for this OS, or is not up within waitMs.
+ * `deps` ({ run, spawn, spawnCmd, which, probe, sleep, platform }) is injectable for tests.
  */
 export function startApp(id, { waitMs = 60000, pollMs = 1000, deps = {} } = {}) {
   const key = String(id || '').toLowerCase();
@@ -265,29 +386,38 @@ export function startApp(id, { waitMs = 60000, pollMs = 1000, deps = {} } = {}) 
 async function doStart(id, { waitMs, pollMs, deps }) {
   const probe = deps.probe || probeApp;
   const sleep = deps.sleep || ((ms) => new Promise((ok) => setTimeout(ok, ms)));
+  const platform = deps.platform || process.platform;
   const app = loadApps().apps.find((a) => a.id === id);
   if (!app) throw Object.assign(new Error(`unknown app ${id}`), { status: 404 });
   const record = (res) => { health.set(app.id, nextHealth(health.get(app.id), res)); emitIfChanged(); return health.get(app.id); };
   const first = await probe(app);
   if (first.ok) return { started: false, health: record(first) };
   if (!app.launch) throw Object.assign(new Error(`${app.name} is down and has no launch recipe (add "launch": { "systemd": … } or { "command": … })`), { status: 409 });
+  const recipe = launchFor(app.launch, platform);
+  const osKey = launchOs(platform);
+  if (!recipe) throw Object.assign(new Error(`${app.name} is down and has no launch recipe for ${osKey} (add "launch": { "${osKey}": { "command": … } })`), { status: 409 });
 
-  if (app.launch.systemd) {
+  if (recipe.systemd) {
     const run = deps.run || (await import('./util.js')).run;
-    const r = await run('systemctl', ['--user', 'start', app.launch.systemd], { timeout: 30000 });
-    if (r.code !== 0) throw Object.assign(new Error(`systemctl --user start ${app.launch.systemd} failed: ${(r.stderr || r.stdout).trim()}`), { status: 502 });
+    const r = await run('systemctl', ['--user', 'start', recipe.systemd], { timeout: 30000 });
+    if (r.code !== 0) throw Object.assign(new Error(`systemctl --user start ${recipe.systemd} failed: ${(r.stderr || r.stdout).trim()}`), { status: 502 });
   } else {
-    const spawn = deps.spawn || (await import('node:child_process')).spawn;
+    const util = await import('./util.js');
     const { RIGS_HOME } = await import('./config.js');
-    const os = await import('node:os');
-    const path = await import('node:path');
+    const plan = commandPlan(recipe, { platform, which: deps.which || util.which });
     const logDir = path.join(RIGS_HOME, 'logs');
     fs.mkdirSync(logDir, { recursive: true });
     const fd = fs.openSync(path.join(logDir, `app-${app.id}.log`), 'a');
-    const child = spawn(app.launch.command, { shell: process.platform === 'win32' ? true : (process.env.SHELL || '/bin/sh'), cwd: os.homedir(), detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
+    const opts = { cwd: plan.cwd, env: { ...process.env, PATH: util.augmentedPath(), ...plan.env }, detached: true, stdio: ['ignore', fd, fd], windowsHide: true };
+    let child;
+    try {
+      if (plan.shell) child = (deps.spawn || (await import('node:child_process')).spawn)(plan.cmd, { ...opts, shell: plan.shell });
+      else child = (deps.spawnCmd || util.spawnCmd)(plan.cmd, plan.args, opts);
+    } catch (e) {
+      throw Object.assign(new Error(`could not start ${app.name}: ${e.message}`), { status: 502 });
+    } finally { fs.closeSync(fd); }
     child.on?.('error', () => {});
     child.unref?.();
-    fs.closeSync(fd);
   }
 
   const deadline = Date.now() + waitMs;

@@ -76,7 +76,7 @@ export function openApp(a) {
   const k = key(a);
   const existing = appWindows.get(k);
   if (existing) { existing.win.raise(); return existing; }
-  const needsStart = statusOf(a) !== 'up' && a.launch;
+  const needsStart = statusOf(a) !== 'up' && (a.launchHere !== undefined ? a.launchHere : a.launch); // launchHere: the recipe for its host's OS (older peers send only launch)
   const frame = h('iframe', { class: 'app-frame', src: needsStart ? 'about:blank' : appPath(a), allow: 'clipboard-read; clipboard-write; fullscreen; microphone; camera; geolocation' });
   const overlay = h('div', { class: 'app-overlay hidden' });
   const w = { app: a, frame, overlay, status: statusOf(a) };

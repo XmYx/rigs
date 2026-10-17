@@ -6,7 +6,7 @@ The App Store is the catalog of apps a machine can install into the App Cloud. J
 1. fetches the source
 2. creates its Python venv or installs its node deps
 3. downloads its models
-4. sets up a `systemctl --user` unit (Linux) or a launcher
+4. sets up a `systemctl --user` unit (Linux) or a launcher (macOS, Windows, Linux without a user systemd)
 5. registers it as an App Cloud app and waits until it answers its health check
 
 The code is `src/appstore.js`.
@@ -17,7 +17,8 @@ The code is `src/appstore.js`.
 - **Install location:** `~/.rigs/apps/<id>/` (config `appstore.appsDir`). It holds `app/` (the source),
   `venv/`, `install.json` (step state) and `install.log`. A `rigs` source runs in place from the RIGS
   checkout; only its venv, state and log live there.
-- **Uninstall** unregisters the app, disables its unit and moves `~/.rigs/apps/<id>` and the unit file into
+- **Uninstall** unregisters the app, disables its unit (or stops the launched process — on Windows with
+  `taskkill /T`, so a `.cmd` shim's children go too) and moves `~/.rigs/apps/<id>` and the unit file into
   `~/.rigs/trash`. Nothing is deleted. Models outside the app folder (the Hugging Face cache, absolute
   `dest`) stay and are listed.
 
@@ -73,7 +74,10 @@ The code is `src/appstore.js`.
     "unload": { "url": "http://127.0.0.1:{port}/api/unload", "body": {} },
     "busy": { "url": "http://127.0.0.1:{port}/api/busy", "method": "GET" }
   },
-  "postInstall": [{ "name": "build assets", "run": ["{python}", "scripts/build.py"], "cwd": "", "timeoutSec": 600 }],
+  "postInstall": [                                       // argv lists, never a shell line
+    { "name": "build assets", "run": ["{python}", "scripts/build.py"], "cwd": "", "timeoutSec": 600 },
+    { "name": "fix perms", "run": ["bash", "scripts/perms.sh"], "platforms": ["linux", "mac"] }  // only there
+  ],
   "rewrite": { "rootRelative": true }                     // App Cloud proxy hints, as in src/apps.js
 }
 ```
@@ -87,7 +91,7 @@ unknown placeholder is a validation error.
 | `{root}` | `~/.rigs/apps/<id>` |
 | `{appDir}` | the app's source folder |
 | `{venv}` | the app's Python venv |
-| `{python}` | the venv's Python (runtime `python`), else the system `python3` |
+| `{python}` | the venv's Python (runtime `python`: `venv/bin/python`, on Windows `venv\Scripts\python.exe`), else the system `python3` (Windows: `python` / `py`) |
 | `{node}` | the Node that runs RIGS |
 | `{port}` | the app's port |
 | `{home}` | the user's home |
@@ -119,12 +123,21 @@ changes, for steps that copy files from outside the source.
 | venv | `uv venv --seed --python X`, else `pythonX -m venv` | same Python version, venv present |
 | deps | `uv pip install` (or the venv's pip) with torch from its index; `npm ci` / `npm install` | same requirements, files and source revision |
 | models | `hf download … --local-dir` (or `snapshot_download`); URLs over HTTP with `Range` resume | each model whose files are already on disk |
-| post | `postInstall` commands with the venv on `PATH` | same commands, source and deps |
-| launch | writes `~/.config/systemd/user/<unit>` (`rigs-app-<id>` unless `launch.systemd.unit`) and enables it; else `<root>/launch.mjs` | same unit/launcher text |
+| post | `postInstall` commands for this platform (no `platforms`, or listing it) with the venv on `PATH` | same commands, source and deps |
+| launch | writes `~/.config/systemd/user/<unit>` (`rigs-app-<id>` unless `launch.systemd.unit`) and enables it; else `<root>/launch.mjs`, registered as `{ "command" }` (macOS/Linux) or `{ "windows": { "command" } }` (Windows) | same unit/launcher text |
 | register | `config.apps` entry (`installedBy: "appstore"`) and the GPU Overseer client | same entry |
 | health | starts it through the App Cloud (`startApp`) and waits for `healthPath` | never |
 
 Installing again redoes only what changed. A failed or cancelled install resumes from the failed step.
+
+**On Windows** the same job runs with native paths: every path is built with `path.join` (backslashes), the venv's
+Python is `venv\Scripts\python.exe` (and its scripts dir goes on `PATH`), placeholders that render into argv[0]
+(`{appDir}/run.cmd`) are normalized to a native path, and the launcher is registered as a
+`{ "windows": { "command": "\"node.exe\" \"…\\launch.mjs\"" } }` recipe that `src/apps.js` runs without any shell —
+no systemd unit. A `postInstall` step that needs a POSIX shell (`bash`, `sh`, a `.sh` script) fails the check step
+on Windows with a clear reason: give it `"platforms": ["linux", "mac"]` and add a Windows step (`{python}` or
+`{node}`). Hugging Face cache snapshots fall back from symlinks to hard links (then copies) when Windows refuses
+symlinks (no Developer Mode). Moves to `~/.rigs/trash` retry briefly while Windows still holds a file lock.
 
 **Install options** (body of `POST …/install`):
 
