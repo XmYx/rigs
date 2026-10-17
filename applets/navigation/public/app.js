@@ -2,7 +2,8 @@
 // heading, next turn, ETA), a follow-me 3D camera, destination search + routing through the applet
 // server, traffic (streets shaded by congestion, little cars moving around you) and ?demo=1 which
 // drives a simulated vehicle so it all works without GPS. Every drive is recorded as a trip (trips.js;
-// ?record=0 turns that off, and the demo records only with ?record=1).
+// ?record=0 turns that off, and the demo records only with ?record=1); the Trips panel (tripsui.js)
+// lists, charts, replays and maps them.
 import {
   bearing, cardinal, createMotionEstimator, formatDistance, formatDuration, kmhToMs, lerpHeading,
   maneuverArrow, maneuverText, pointAlong, cumulativeDistances, routeProgress, speedIn, zoomForSpeed,
@@ -10,6 +11,7 @@ import {
 import { buildStyle, routeLayers, trafficLayers } from './mapstyle.js';
 import { createTrafficSim, shadeFeatures } from './traffic.js';
 import { installTripRecorder } from './trips.js';
+import { createTripsUi } from './tripsui.js';
 
 const MAPLIBRE_FALLBACK = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js';
 const $ = (id) => document.getElementById(id);
@@ -31,6 +33,7 @@ const state = {
   mapLoaded: false, driving: false, fixes: 0,
   traffic: { on: store.get('traffic', '1') !== '0', source: null, segments: 0, cars: 0, updated: null },
   trip: null, // trip recorder status: {recording, id, points, outbox, …} (trips.js)
+  replay: null, // while a trip replays: {hud: {speed, heading, source}} shown instead of the live values
 };
 window.__nav = state; // inspection hook for screenshots and debugging
 
@@ -150,6 +153,8 @@ function startMap() {
     });
     vehicle = new maplibregl.Marker({ element: vehicleEl(), rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(center);
     state.mapLoaded = true;
+    tripsUi = createTripsUi({ state, map, renderHud, setFollow, status, pitch: PITCH, escapeHtml });
+    tripsUi.onTrip(state.trip);
     renderHud();
     if (DEMO) startDemo(); else startGps();
     refreshTraffic();
@@ -159,7 +164,8 @@ function startMap() {
 // ---- Position pipeline -------------------------------------------------------------------------
 
 const motion = createMotionEstimator();
-const recorder = RECORD ? installTripRecorder({ source: DEMO ? 'sim' : 'gps', onChange: (s) => { state.trip = s; } }) : null;
+let tripsUi = null;
+const recorder = RECORD ? installTripRecorder({ source: DEMO ? 'sim' : 'gps', onChange: (s) => { state.trip = s; tripsUi?.onTrip(s); } }) : null;
 if (recorder) state.trip = recorder.status();
 let vehicle = null;
 let vehicleShown = false;
@@ -180,6 +186,7 @@ function onFix(fix) {
     if (!vehicleShown) { vehicle.addTo(state.map); vehicleShown = true; }
   }
   if (state.route) updateProgress(fix);
+  if (state.replay) return; // the replay owns the camera and the HUD; recording and the live marker carry on
   if (state.follow) followCam(fix, DEMO ? DEMO_TICK_MS * 1.1 : 1000);
   renderHud();
 }
@@ -188,12 +195,21 @@ function followCam(fix, duration) {
   const map = state.map;
   const target = state.heading ?? map.getBearing();
   camHeading = camHeading == null ? target : lerpHeading(camHeading, target, 0.35);
+  const h = map.getContainer().clientHeight;
+  const sheet = sheetInset();
   map.easeTo({
     center: [fix.lon, fix.lat], bearing: camHeading, pitch: state.pitched ? PITCH : 0,
     zoom: zoomForSpeed(state.speed), duration, easing: (t) => t,
-    padding: { top: Math.round(map.getContainer().clientHeight * 0.38), bottom: 0, left: 0, right: 0 },
+    padding: { top: Math.round(h * (sheet ? 0.12 : 0.38)), bottom: sheet, left: 0, right: 0 },
     essential: true,
   });
+}
+
+/** On phones the trips sheet covers the lower half: how much, so the followed car stays above it. */
+function sheetInset() {
+  const el = $('trips');
+  if (el.hidden || !window.matchMedia('(max-width: 640px)').matches) return 0;
+  return Math.max(0, Math.round(window.innerHeight - el.getBoundingClientRect().top));
 }
 
 function setFollow(on) {
@@ -521,16 +537,17 @@ const GAUGE_MAX_KMH = 160;
 
 function renderHud() {
   const unit = state.unit;
-  const val = state.speed == null ? null : Math.min(999, Math.round(speedIn(state.speed, unit)));
+  const live = state.replay?.hud || state;
+  const val = live.speed == null ? null : Math.min(999, Math.round(speedIn(live.speed, unit)));
   const digits = val == null ? '---' : String(val).padStart(3, '0');
   const lead = val == null ? 0 : 3 - String(val).length;
   $('speed').innerHTML = `<span class="dim">${digits.slice(0, lead)}</span>${digits.slice(lead)}`;
   $('unit').textContent = unit === 'mph' ? 'MPH' : 'KM/H';
-  $('speed-src').textContent = { gps: 'GPS', derived: 'CALC', sim: 'SIM' }[state.source] || 'NO FIX';
-  const frac = state.speed == null ? 0 : Math.min(1, speedIn(state.speed, 'kmh') / GAUGE_MAX_KMH);
+  $('speed-src').textContent = { gps: 'GPS', derived: 'CALC', sim: 'SIM', replay: 'REPLAY' }[live.source] || 'NO FIX';
+  const frac = live.speed == null ? 0 : Math.min(1, speedIn(live.speed, 'kmh') / GAUGE_MAX_KMH);
   $('gauge-arc').style.strokeDashoffset = String(75 * (1 - frac));
 
-  const h = state.heading;
+  const h = live.heading;
   $('hdg').textContent = h == null ? '— ---°' : `${cardinal(h)} ${String(Math.round(h) % 360).padStart(3, '0')}°`;
   renderCompass();
 
@@ -632,7 +649,7 @@ function wireUi() {
   });
   $('clear').onclick = () => { clearRoute(); $('clear').hidden = true; q.focus(); };
   $('end-route').onclick = () => { clearRoute(); $('clear').hidden = true; };
-  $('unit').onclick = () => { state.unit = state.unit === 'kmh' ? 'mph' : 'kmh'; store.set('unit', state.unit); renderHud(); };
+  $('unit').onclick = () => { state.unit = state.unit === 'kmh' ? 'mph' : 'kmh'; store.set('unit', state.unit); renderHud(); tripsUi?.rerender(); };
   $('follow').onclick = () => setFollow(true);
   $('pitch').onclick = () => {
     state.pitched = !state.pitched;

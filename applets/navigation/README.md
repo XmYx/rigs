@@ -9,7 +9,8 @@ A dark, 3D, green-vector navigation map for JARVIS. It has:
 - traffic: streets shaded darker where traffic is heavy, and little car silhouettes moving around you,
   more and slower on congested roads (see [Traffic](#traffic))
 - trip recording: every drive while the page is open is saved on this machine with its distance,
-  speeds and accelerations (see [Trips](#trips))
+  speeds and accelerations, and a Trips panel to look back: history, each trip's route coloured by
+  speed with a speed chart, replay, and every trip on one map with the totals (see [Trips](#trips))
 
 All data is **free and needs no API key** (live traffic can use an optional free key):
 
@@ -89,6 +90,7 @@ over the defaults:
 | `NAV_TRAFFIC_DAILY_TILES` | `trafficDailyTiles` | `5000` TomTom tiles per UTC day, then assumed traffic until midnight UTC |
 | `NAV_TOMTOM_URL` | `tomtomUrl` | `https://api.tomtom.com` |
 | `NAV_DATA_DIR` | `dataDir` | `~/.rigs/navigation/trips` (under `RIGS_HOME` when set): where recorded trips are stored |
+| `NAV_REVERSE_GEOCODE` | `reverseGeocode` | `true`: name trip ends through the search service. `0`/`false` keeps every trip coordinate on this machine; the panel shows coordinates |
 
 ```json
 { "navigation": { "demo": { "from": [13.3777, 52.5163], "to": [13.4050, 52.5200] } } }
@@ -167,7 +169,50 @@ duration, average and top speed, and the hardest acceleration and braking.
   `?demo=1&record=1`, which is how you test it without driving.
 - **Data stays on this machine.** Trips are stored by the applet server in `NAV_DATA_DIR`
   (default `~/.rigs/navigation/trips`), one JSON file per trip. The browser talks only to its own
-  applet server; trip data goes to no other service.
+  applet server. The one exception: to name a trip's start and end, the Trips panel asks
+  `api/reverse`, which sends those two points, rounded to ~10 m, to the search service (Photon,
+  then Nominatim), once per trip. `reverseGeocode: false` turns that off.
+
+### The Trips panel
+
+The Trips button (the route icon under the traffic toggle) opens it. It is a side panel on wide screens and a bottom sheet
+on phones (tap the grip to make it taller). Live navigation and recording carry on underneath. While
+a trip records, a red **REC** badge sits on the button and a REC chip with the elapsed time shows in
+the panel.
+
+- **History**: trips newest first, with date and time, start → end, distance, duration, average
+  and top speed. Places are named once through `api/reverse` and saved with the trip (`PATCH`).
+  Until then the row shows coordinates. Every number follows the km/h ⇄ mph toggle.
+- **Trip**: the route on the map coloured by speed (dim green when crawling, neon in town, yellow
+  and amber faster, hot pink past 150 km/h), start and end marks, and tiles for distance, duration,
+  moving time, average and max speed, max acceleration and max braking. Below them is a speed-over-time chart (SVG):
+  hover or drag to read it, tap to replay from that moment. Delete asks first, then moves the file
+  to `trash/`.
+- **Replay**: a white car and the follow camera move along the recorded track by its real
+  timestamps, at 1×, 4×, 16× or 64×. Play/pause (Space), and scrub on the bar, which shows the trip's
+  speed profile. The speed gauge reads `REPLAY` and the compass turns with the replayed heading.
+  Dragging the map stops the camera following; ◎ resumes it. ✕ (or Esc) leaves the replay and
+  returns to live navigation.
+- **All trips**: every trip on the map at once, each in its own colour (chosen to stand out from the
+  green roads). Hover or tap a trip, or its row, to highlight it and see its numbers, then open it or
+  replay it. The totals card (`api/trips/summary`) shows trip count, distance, driving time (and total
+  time), overall average, top speed and the longest trip. **All / 7 d / 30 d** filter by start date.
+  **Trips / Speed / Heat** switch between colour per trip, all tracks coloured by speed, and a heat
+  map of where you drive most.
+
+Code: `public/tripsui.js` (panel, map layers, replay), `public/tripsview.js` (colours, replay
+interpolation, chart geometry and labels; pure, unit-tested). `window.__navTrips` exposes
+`open('list'|'all')`, `show('detail', id)`, `startReplay(seconds)`, `setRate(n)`, `seek(seconds)`,
+`exitReplay()` and `close()` for screenshots and debugging.
+
+![trips list](docs/screenshot-trips-list-desktop.png)
+![trip detail](docs/screenshot-trips-detail-desktop.png)
+![replay](docs/screenshot-trips-replay-desktop.png)
+![all trips](docs/screenshot-trips-all-desktop.png)
+
+Phone (390×844): [list](docs/screenshot-trips-list-phone.png) ·
+[detail](docs/screenshot-trips-detail-phone.png) · [replay](docs/screenshot-trips-replay-phone.png) ·
+[all trips](docs/screenshot-trips-all-phone.png)
 
 ### What gets recorded
 
@@ -240,15 +285,28 @@ All routes are relative, like the rest of the applet, and answered with `cache-c
 | `POST api/trips/:id/points` | append a chunk `{seq, points:[…], final?, reason?, source?}` → `{ok, id, status, pointCount, added}`. The body is parsed as JSON whatever its content type (beacons send `text/plain`). 410 if the trip was deleted |
 | `GET api/trips[?since=&until=]` | `{trips:[summary…]}`, newest first. A summary is the stats without `timeline`, plus `id, status, source, endReason, title, places`. `since`/`until` filter on the start time, as epoch ms or an ISO date |
 | `GET api/trips/summary[?since=&until=]` | `aggregateTrips` totals, plus the `since`/`until` used |
+| `GET api/trips/tracks[?since=&until=]` | `{tracks:[{id, startedAt, coords:[[lon, lat, v m/s]…]}]}`, newest first: every trip's track thinned to ~400 vertices (by distance, so stops cost nothing), with the stats' smoothed speed. Cached per file version. For the all-trips map |
 | `GET api/trips/:id` | the trip file (without `seqs`) with all `points` and full `stats` including `timeline` |
 | `PATCH api/trips/:id` | `{title?, places?: {start, end}}`: display labels the trips panel can cache |
 | `DELETE api/trips/:id` | moves the file to `trash/` → `{ok, trashed: id}` |
+| `GET api/reverse?lat=&lon=` | `{place, label, area}` such as `"Andrássy út, Terézváros"`: the street (or named place) and its district or town, from Photon then Nominatim. Coordinates are rounded to 4 decimals first. 404 when `reverseGeocode` is off |
 
 ```bash
 NAV_DATA_DIR=$(mktemp -d) node applets/navigation/server.js
 # open http://127.0.0.1:8731/?demo=1&record=1 for a minute, then
 curl -s http://127.0.0.1:8731/api/trips
 curl -s http://127.0.0.1:8731/api/trips/<id> | jq .stats
+```
+
+Sample trips for trying the panel without driving: eight drives round Budapest over the last six
+weeks, routed by OSRM when it is reachable (`--offline` uses built-in lines), written through the
+real store in 15-fix chunks. It never touches the real trips folder: without `NAV_DATA_DIR` it makes
+a temp dir and prints it.
+
+```bash
+NAV_DATA_DIR=/tmp/nav-trips node applets/navigation/scripts/seed-trips.js [--count=8] [--offline]
+NAV_DATA_DIR=/tmp/nav-trips node applets/navigation/server.js
+# open http://127.0.0.1:8731/?demo=1&record=1 and press the Trips button
 ```
 
 ## GPS, HTTPS and the secure-context rule
@@ -295,6 +353,14 @@ of an error.
     a rejected speed spike and position jump, noise, standing still
   - the recorder's filtering, chunking, offline outbox, crash recovery and `pagehide` beacon
   - the `api/trips` round-trip on a temp `NAV_DATA_DIR`, including delete-to-trash and stale trips
+- `test/trips-panel.test.js` covers the Trips panel:
+  - `tripsview.js`: speed and per-trip colours, speed-coloured segments without gaps, replay
+    position and heading by timestamp (held while parked), chart geometry in km/h and mph, labels
+  - `speedProfile` / `thinTrack`, `api/trips/tracks` with its `since` filter
+  - `api/reverse` against a fake Photon and Nominatim, its rounding and its off switch
+  - that every element `tripsui.js` and `app.js` address exists in `index.html`
 - `node applets/navigation/scripts/screenshot.js <url> <out.png> 1440x900 --swiftshader` takes a
   headless-Chrome screenshot. It also prints speed samples, console errors and failed requests.
+  `--eval='<js>'` runs in the page first, for example
+  `--eval="__navTrips.open('all')"` for the trips screenshots (seeded with `scripts/seed-trips.js`).
   `--swiftshader` gives headless Chrome a software WebGL.

@@ -13,7 +13,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { aggregateTrips, tripStats } from './public/tripstats.js';
+import { haversine } from './public/geo.js';
+import { aggregateTrips, speedProfile, tripStats } from './public/tripstats.js';
 
 export const TRIP_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const MAX_CHUNK_POINTS = 5000;
@@ -21,6 +22,8 @@ const MAX_BODY = 2 * 1024 * 1024;
 // A trip still "recording" with no upload for this long lost its final chunk (tab killed, phone
 // died): it is finalised the next time trips are listed.
 const STALE_MS = 10 * 60 * 1000;
+// Overview tracks (api/trips/tracks) are thinned to about this many vertices per trip.
+const TRACK_POINTS = 400;
 
 const num = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
 const httpError = (status, message) => Object.assign(new Error(message), { status });
@@ -31,6 +34,26 @@ export function normalizePoint(p) {
   const t = num(p.t), lat = num(p.lat), lon = num(p.lon);
   if (t == null || lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
   return { t, lat, lon, speed: num(p.speed), heading: num(p.heading), accuracy: num(p.accuracy), alt: num(p.alt) };
+}
+
+/**
+ * A trip's track for the all-trips map: [[lon, lat, v (m/s)], …] thinned to about `max` vertices by
+ * distance (a vertex every total/max metres, so stops and slow crawls don't eat the budget), ends kept.
+ */
+export function thinTrack(points, max = TRACK_POINTS) {
+  const prof = speedProfile(points);
+  if (prof.length < 2) return prof.map((p) => [p.lon, p.lat, Math.round(p.v * 10) / 10]);
+  let total = 0;
+  for (let i = 1; i < prof.length; i++) total += haversine(prof[i - 1], prof[i]);
+  const step = total / Math.max(1, max - 1);
+  const out = [prof[0]];
+  let since = 0;
+  for (let i = 1; i < prof.length - 1; i++) {
+    since += haversine(prof[i - 1], prof[i]);
+    if (since >= step) { out.push(prof[i]); since = 0; }
+  }
+  out.push(prof[prof.length - 1]);
+  return out.map((p) => [Math.round(p.lon * 1e5) / 1e5, Math.round(p.lat * 1e5) / 1e5, Math.round(p.v * 10) / 10]);
 }
 
 function summaryOf(trip) {
@@ -168,6 +191,22 @@ export function createTripStore({ dir, now = Date.now, staleMs = STALE_MS } = {}
     return { ...rest, stats: tripStats(trip.points) };
   }
 
+  /** The listed trips' thinned tracks (same filters as list), newest first; cached per file version. */
+  async function tracks(filter = {}) {
+    const out = [];
+    for (const s of await list(filter)) {
+      const hit = await indexed(s.id);
+      if (!hit) continue;
+      if (!hit.track) {
+        const trip = await read(s.id).catch(() => null);
+        if (!trip) continue;
+        hit.track = thinTrack(trip.points);
+      }
+      out.push({ id: s.id, startedAt: s.startedAt, coords: hit.track });
+    }
+    return out;
+  }
+
   /** Totals across the listed trips (same filters as list). */
   async function totals(filter = {}) {
     return { ...aggregateTrips(await list(filter)), since: filter.since ?? null, until: filter.until ?? null };
@@ -204,7 +243,7 @@ export function createTripStore({ dir, now = Date.now, staleMs = STALE_MS } = {}
     });
   }
 
-  return { dir, append, list, get, totals, remove, patch };
+  return { dir, append, list, get, totals, tracks, remove, patch };
 }
 
 function readBody(req, limit = MAX_BODY) {
@@ -238,6 +277,7 @@ const timeParam = (s) => {
  * The api/trips routes; null when `pathname` isn't one of them, else a promise of {status, body}:
  *   GET    api/trips[?since&until]          {trips: [summary…]} newest first
  *   GET    api/trips/summary[?since&until]  totals (aggregateTrips)
+ *   GET    api/trips/tracks[?since&until]   {tracks: [{id, startedAt, coords: [[lon, lat, v]…]}]} thinned, for the map
  *   GET    api/trips/:id                    the trip with points and stats (incl. timeline)
  *   POST   api/trips/:id/points             append a chunk {seq, points, final?, source?, reason?}
  *   PATCH  api/trips/:id                    {title?, places?: {start, end}}
@@ -250,12 +290,13 @@ export function tripsRoute(store, req, pathname, query) {
   const bad = (status, error) => ({ status, body: { error } });
   return (async () => {
     try {
-      if (parts.length === 0 || (parts.length === 1 && parts[0] === 'summary')) {
+      if (parts.length === 0 || (parts.length === 1 && (parts[0] === 'summary' || parts[0] === 'tracks'))) {
         if (m !== 'GET') return bad(405, 'method not allowed');
         const since = timeParam(query.get('since'));
         const until = timeParam(query.get('until'));
         if (since === undefined || until === undefined) return bad(400, 'since and until must be epoch ms or an ISO date');
-        if (parts.length) return { status: 200, body: await store.totals({ since, until }) };
+        if (parts[0] === 'summary') return { status: 200, body: await store.totals({ since, until }) };
+        if (parts[0] === 'tracks') return { status: 200, body: { tracks: await store.tracks({ since, until }) } };
         return { status: 200, body: { trips: await store.list({ since, until }) } };
       }
       const id = parts[0];

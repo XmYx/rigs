@@ -155,6 +155,16 @@ export function tripStats(points, { timeline = true, timelinePoints = TIMELINE_P
   return out;
 }
 
+/**
+ * The cleaned fixes with the same smoothed speed tripStats measures (m/s): [{t, lat, lon, v}]. For
+ * colouring a track by speed and for replay, so neither shows the raw GPS spikes the stats rejected.
+ */
+export function speedProfile(points) {
+  const fx = cleanFixes(points);
+  const v = fx.length < 2 ? fx.map(() => 0) : speedSeries(fx, smoothPositions(fx));
+  return fx.map((p, i) => ({ t: p.t, lat: p.lat, lon: p.lon, v: v[i] }));
+}
+
 const round = (x, dp) => { const f = 10 ** dp; return Math.round(x * f) / f; };
 
 /** Average into at most `max` equal time buckets, so a 3-hour trip charts as cheaply as a 3-minute one. */
