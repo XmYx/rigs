@@ -1,5 +1,5 @@
 import { ago, api, h, node, toast } from './api.js';
-import { openTerminal } from './terminal.js';
+import { openTerminal } from './terminal-lazy.js';
 import { openWindow } from './wm.js';
 
 const KIND_ICON = { claude: '✳', codex: '◎', tmux: '▤', rig: '⛭', pty: '⌨', chat: '💬' };

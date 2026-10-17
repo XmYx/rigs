@@ -194,3 +194,83 @@ Reports and captures: `docs/mobile-audit/after-polish/` (Lighthouse JSON + HTML,
 | Lighthouse accessibility / best practices / SEO | 100 / 100 / 82 | 100 / 100 / 91 (`meta-description` fixed; `robots-txt` remains) |
 
 Lighthouse performance stays low in absolute terms: the three.js galaxy (≈1.2 MB) must run before the first useful screen, and the run is software-rendered. The criterion is “not below baseline”: 26 → 42 (an earlier run scored 30 before the lazy chunk and FCP fix).
+
+## Review (t6)
+
+Independent review of the whole branch (t1–t5, up to 3391107) against the goal: is JARVIS more accessible and more pleasant to use on a phone?
+
+**Verdict: yes.** On a phone the galaxy now gets the screen. A header, a chat dock and a one-row toolbar are anchored to the edges. The side panel is a drawer, windows are full-screen and close with back, and every control is at least 44px. Screen-reader and keyboard semantics went from absent to complete enough that axe reports 0 serious or critical issues at phone sizes, and Lighthouse mobile accessibility rose from 91 to 100. The desktop layout at 1440×900 is unchanged. The review found and fixed six defects (below). Everything still open is listed at the end; none of it blocks the goal.
+
+### How it was checked
+
+This Mac was at load 500–800 (other agents), so Chromium crashed or timed out on most views here. The browser runs were done on `magix-system` (Ubuntu, 24 cores) from a copy of this working tree; build and tests ran on both machines.
+
+| Check | Result |
+| --- | --- |
+| `npm run build && npm test` on Linux | build OK; **121/121 pass**, including the browser test (`test/mobile-a11y.test.js`, not skipped) |
+| `npm run build && npm test` on this Mac | build OK; 119 pass, 1 skipped (browser test timed out, load ~750), 1 fail: `test/appproxy.test.js` "relayed hop". That test and `src/auth.js`/`src/proxy.js` are untouched by the branch; rerunning that file alone gave 20/0, then 17/3, so it is load-sensitive, not a regression |
+| `scripts/mobile-shots.js --out docs/mobile-audit/review --viewports 390x844,360x740,1440x900` | `CHECK overflow 0 · small touch targets 0 · page errors 0 · capture failed 0` over 44 views; 44 PNGs + `report.json` in `docs/mobile-audit/review/` |
+| axe, all 44 views | **0 serious, 0 critical**. Moderate only: `heading-order` (15 views) and `region` on `#more-sheet` (2) |
+| Lighthouse mobile, same Linux machine, baseline 5946254 vs branch head | accessibility **91 → 100**, best practices 100 → 100, SEO 82 → 91, performance 25 → 36 / 32 (two runs), TBT ≈291 s → 0.9–1.3 s, page weight 2158 → 1639 KB. Reports: `review/lighthouse.report.{html,json}`, `review/lighthouse-run2.report.json`, `review/lighthouse-baseline-5946254.report.json` |
+| Keyboard-only walkthrough (`scripts/a11y-keyboard.js`, includes reduced-motion emulation) | **16/16 PASS** (`review/keyboard-walkthrough.json`): focus ring, dialogs trap Tab, Escape closes and focus returns, menus, landmarks, live regions, still orb, no running CSS animations under reduce |
+| Keyboard activation probe | Enter on the orb now starts push-to-talk, and Enter on `#dock-target` opens the conversation. Before the fix below neither did anything |
+| Touch-feedback probe (390×844, `hover: none`) | pressing ⋯ and Fit shows the `:active` tint, and the button returns to its resting look after the tap. Before the fix below it went transparent and stayed that way |
+| Before/after at 390×844 | `review/side-by-side-390x844.png` (14 views; before = t1 baseline at 132f331) |
+| Desktop regression | `review/side-by-side-1440x900.png`: baseline 5946254 vs head, 14 views. Same layout; differences are live data, the brighter footer/muted text (contrast fix) and the new window ARIA. No desktop overflow |
+| No writes to real `~/.ssh`, `~/.claude`, `~/.codex` | tests: none (only read `~/.cache/rigs-audit` and the Playwright cache). Capture script: it **did** start `rigs serve` without `RIGS_SSH_DIR` and with OpenRig peer registration on, so it could write the managed blocks in `~/.ssh/authorized_keys` and `~/.ssh/config` and run `rig host add`. Fixed below. `~/.ssh/config` on this Mac was last modified Oct 16, before the audit, so the earlier runs did not change it |
+| No runtime dependencies added | `package.json` and `package-lock.json` are unchanged on the branch; Playwright, axe-core and Lighthouse live outside the repo |
+
+Caveats: the before shots were taken from this Mac's view of the mesh and the after shots from `magix-system`'s, so node counts, sessions and the "agent needs you" banner differ. A real iOS keyboard, notch insets, URL-bar collapse and xterm touch scrolling still cannot be shown headless. Lighthouse runs on the Linux box are not comparable to t4's Mac numbers; compare base and head only within one machine.
+
+### Fixed in this review
+
+| # | Defect | Fix |
+| --- | --- | --- |
+| R1 | `scripts/mobile-shots.js` (also run by `npm test` when Playwright is installed) started `rigs serve` without `RIGS_SSH_DIR` and with `openrig.registerPeers` on. Discovery found the live mesh, so `ssh.syncPeers` could write the real `~/.ssh/authorized_keys`/`config` and register OpenRig hosts. This breaks the AGENTS.md rule | `RIGS_SSH_DIR=<RIGS_HOME>/ssh`, and the dev `config.json` is forced to `openrig.registerPeers: false` |
+| R2 | On touch devices (`hover: none`) the t4 "hover reset" used `background: none` at the same specificity as the `:active` rules but later in the file. Pressing showed no feedback, and a tapped `.round`/`.pill`/`.btn`/… lost its resting background and the green `.on` ring until the next tap elsewhere. It also wiped `.btn.primary` and selected `.file-row.sel`/`.sess-row.sel` | the reset now restores each control's resting values, skips `:active`, `.on`, `.primary` and `.sel` (`POLISH (t4)` block) |
+| R3 | The "lazy" xterm chunk was not lazy: `ui/src/sessions.js` still imported `terminal.js` statically, so `app.js` pulled the 370 KB chunk in at startup | `sessions.js` imports `terminal-lazy.js`; `app.js` now loads only a 20 KB shared chunk eagerly, and xterm (350 KB) on the first terminal |
+| R4 | Keyboard activation was missing for every element whose click handler `main.js wire()` sets via `el.onclick = …` (orb, face, `#dock-target`, `#subtitle`). `initA11y()` patches the `onclick` setter only after `wire()` has run, so those never got `data-a11y-click`. The orb was focusable but Enter/Space did nothing, and the dock title was not focusable at all | `initA11y()` flags elements that already have an `onclick` before it scans |
+| R5 | `.file-list` failed `scrollable-region-focusable` (serious) at 390/360: rows arrive after the window opens and the container was only rechecked every 3 s | the MutationObserver rechecks the scroll container whose children changed |
+| R6 | One stalled screenshot or page load aborted the whole capture | each view is now guarded; a failure is recorded (`captureFailed`, in the `CHECK` line, fails `--strict`) and the run continues; page load timeout is 90 s |
+
+### Audit items — final status
+
+L1–L9 and T1–T5 are marked fixed in the t2 table above and were confirmed in the review captures. T6 is fixed: t2 added tap-to-Inspector and t4 added larger hit spheres on coarse pointers.
+
+| # | Status | Evidence / reason |
+| --- | --- | --- |
+| A1 | fixed | `.path-input` has `aria-label="Folder path"`; selects are auto-named (`a11y.js`); window-files has 0 axe violations |
+| A2 | fixed | sessions kind `<select>` and filter input are auto-named; sessions has 0 axe violations |
+| A3 | fixed | `aria-label` on every icon-only button; `aria-pressed` on hands-free and mute (mic is push-to-talk, not a toggle) |
+| A4 | fixed | `main`/`nav`/`aside`/`section`/`footer` landmarks with names, `h1` + `h2`; `region` remains only on `#more-sheet` (open item 3) |
+| A5 | fixed | scroll lists focusable with a label (completed by R5) |
+| A6 | fixed | windows are `role=dialog`, focus in, Tab trap, Escape, focus return (walkthrough PASS) |
+| A7 | partly | replies, errors, toasts, attention and project status are announced; orb state changes (listening/thinking/speaking) are not (open item 6) |
+| A8 | fixed | orb and face are keyboard buttons (activation completed by R4); the Top hubs list is the keyboard route into the graph, named on `<main>` |
+| A9 | fixed | global `:focus-visible` ring (walkthrough PASS) |
+| A10 | fixed | `--muted` raised, footer uses it, `.pctl` opacity raised; Lighthouse `color-contrast` passes |
+| A11 | fixed | at ≤640 CSS px (e.g. 200% zoom on a 1280px window) the phone layout applies, with no overflow |
+| M1 | fixed | orb/face/galaxy pause when hidden; galaxy sleeps when idle on low-power devices; `shadowBlur` off on low power; DPR capped |
+| M2 | partly | drawer and ⋯ sheet are solid; other panels and the chat dock still use `backdrop-filter: blur(10px)` on phones (open item 8) |
+| M3 | partly | orb, galaxy and CSS honour reduced motion; the WebGL face idle animation does not (off by default on phones) (open item 7) |
+| V1 | fixed | type scale, no text <12px on phones, 16px inputs |
+| V2 | fixed | the face is hidden on phones; orb and brain badge sit in the header |
+| V3 | deferred | graph labels still overlap and clip at the edges on phones (no collision handling or density cap). Labels can be switched off in the drawer; needs a graph.js change, low severity |
+| V4 | partly | Apps empty state has a hint ("Publish one with mesh_app_register…"). The terminal shows its live/connecting pill but a blank pane until attach; not changed |
+
+### Still open
+
+1. **Med — the "agent needs you" banner covers phone UI.** `#toasts` is `z-index: 9999` at `top: var(--hdr)`, full width. While an agent waits for input it hides the drawer's search field and the toolbar/path row of every full-screen window (seen in the first review capture of `left-panel` and `window-files` at 390×844). Choose where a persistent alert lives on a phone: a one-line chip under the header, below the drawer and windows, or a bottom sheet.
+2. **Low — `heading-order` (axe moderate, 15 views).** The ☰ Panels menu title is an `<h4>` (`ui/src/panels.js:192`) following the new `<h2>`s with no `<h3>`, and it is in the DOM on every view. Make it an `h2.sec-h` or `h3`.
+3. **Low — `region` (axe moderate) on `#more-sheet`.** It is appended to `<body>` outside any landmark. Move it inside `<nav id="bar">` or give it `role="navigation"` and a name.
+4. **Low — the phone drawer is not modal for keyboard and screen readers.** It has no `role=dialog`, no Tab trap, and the background is not `inert` while open. Esc and the backdrop close it.
+5. **Low — `#subtitle` is now a `role=button` whose name is the whole reply** (side effect of R4, which applies t3's intended "click-only elements become buttons" to it). Replies are already announced through the live region; consider `aria-label="Open the conversation"` on it, or a separate small button.
+6. **Low — orb state is not announced** (A7 remainder). Announce "listening"/"thinking" politely, or make `#orb-state` a `role=status`.
+7. **Low — WebGL face ignores `prefers-reduced-motion`** (desktop; on phones it is off until requested).
+8. **Low — `backdrop-filter` still on panels and the chat dock on phones** (M2 remainder). Use `--panel-solid` in the phone block.
+9. **Low — the orb in the 44px phone header is cramped:** the drawn "J.A.R.V.I.S." text is clipped and unreadable. Hide the text below ~60px.
+10. **Low — old `ui/dist/chunk-*.js` files accumulate** with code splitting: each self-update leaves the previous chunks behind. Not pruned on purpose: an open page may still lazy-load its old chunk. Prune chunks older than a few days in `build-ui.js`.
+11. **Low (dev tooling) — the browser test can orphan a dev server.** When `spawnSync` times out it kills `mobile-shots.js` but not the `rigs serve` it started on port 4781. The next run then reuses that stale server, built from older code. Kill it by PID in the test, or have the script refuse a server it did not start unless `--url` is given.
+12. **Low — `a11y.js` patches `Element.prototype.replaceChildren` and `HTMLElement.prototype.onclick` globally.** It works, but it is easy to trip over (R4 was one case). Long term, add the attributes where the handlers are created.
+13. **Info — Lighthouse mobile performance is still low in absolute terms** (32–36 on the Linux box): FCP ≈8.7 s and LCP ≈10 s under simulated throttling, mostly the 1.5 MB `app.js` (three.js galaxy). It improved from baseline on the same machine, but a lighter first screen would be the next step.
+14. **Not verifiable headless:** the real iOS keyboard (`--kb`), notch and home-indicator insets, URL-bar collapse, and touch scrolling inside xterm. Check them once on a real iPhone (`iphone172` is on the tailnet).

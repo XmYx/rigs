@@ -70,11 +70,13 @@ async function startServer() {
   const home = path.join(ROOT, '.rigs-dev');
   fs.mkdirSync(home, { recursive: true });
   const cfg = path.join(home, 'config.json');
-  if (!fs.existsSync(cfg)) fs.writeFileSync(cfg, JSON.stringify({ port: PORT }));
-  const port = JSON.parse(fs.readFileSync(cfg, 'utf8')).port || PORT;
+  // Live mesh data is wanted, but this throwaway node must not register OpenRig hosts or touch the real ~/.ssh
+  const c = fs.existsSync(cfg) ? JSON.parse(fs.readFileSync(cfg, 'utf8')) : { port: PORT };
+  if (c.openrig?.registerPeers !== false) { c.openrig = { ...c.openrig, registerPeers: false }; fs.writeFileSync(cfg, JSON.stringify(c)); }
+  const port = c.port || PORT;
   const url = `http://127.0.0.1:${port}/`;
   try { const r = await fetch(url); if (r.ok) return { url, stop() {} }; } catch { /* not running */ }
-  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_HOME: home, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
+  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500));
     try { const r = await fetch(url); if (r.ok) return { url, stop: () => child.kill() }; } catch { /* wait */ }
@@ -197,26 +199,33 @@ async function main() {
         const page = await ctx.newPage();
         const errors = [];
         page.on('pageerror', (e) => errors.push(String(e.message).slice(0, 200)));
-        await page.goto(server.url, { waitUntil: 'load' });
-        await sleep(2500);
-        let note = null;
-        page._obscured = [];
-        try { await view.run(page); } catch (e) { note = `interaction failed: ${String(e.message).split('\n')[0]}`; }
-        note = [note, page._obscured.length ? `obscured tap target: ${[...new Set(page._obscured)].join('; ')}` : null].filter(Boolean).join(' | ') || null;
-        await sleep(500);
         const key = `${view.name}@${w}x${h}`;
-        if (!PRIMARY_ONLY || (w === 390 && h === 844)) await page.screenshot({ path: path.join(OUT, `${key}.png`), timeout: 120000 });
-        await page.addScriptTag({ path: axePath });
-        const axe = await page.evaluate(async () => {
-          const r = await window.axe.run(document, { resultTypes: ['violations'] });
-          return r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length, targets: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));
-        });
-        const m = await page.evaluate(metrics);
-        const failures = { overflow: m.overflow.length, smallTargets: desktop ? 0 : m.smallTargets };
-        report.views.push({ view: view.name, viewport: `${w}x${h}`, desktop, screenshot: `${key}.png`, note, errors, failures, axeViolationRules: axe.length, axeViolationNodes: axe.reduce((a, v) => a + v.nodes, 0), axe, metrics: m });
-        console.log(`${key.padEnd(34)} axe rules ${String(axe.length).padStart(2)} nodes ${String(axe.reduce((a, v) => a + v.nodes, 0)).padStart(3)}  small-targets ${desktop ? '-' : m.smallTargets}  overflow ${m.overflow.length}${note ? '  (' + note + ')' : ''}`);
-        if (failures.overflow || failures.smallTargets) for (const x of [...m.overflow, ...(desktop ? [] : m.smallTargetSamples)].slice(0, 8)) console.log(`    ${JSON.stringify(x)}`);
-        await ctx.close();
+        try {
+          await page.goto(server.url, { waitUntil: 'load', timeout: 90000 });
+          await sleep(2500);
+          let note = null;
+          page._obscured = [];
+          try { await view.run(page); } catch (e) { note = `interaction failed: ${String(e.message).split('\n')[0]}`; }
+          note = [note, page._obscured.length ? `obscured tap target: ${[...new Set(page._obscured)].join('; ')}` : null].filter(Boolean).join(' | ') || null;
+          await sleep(500);
+          if (!PRIMARY_ONLY || (w === 390 && h === 844)) await page.screenshot({ path: path.join(OUT, `${key}.png`), timeout: 120000 });
+          await page.addScriptTag({ path: axePath });
+          const axe = await page.evaluate(async () => {
+            const r = await window.axe.run(document, { resultTypes: ['violations'] });
+            return r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length, targets: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));
+          });
+          const m = await page.evaluate(metrics);
+          const failures = { overflow: m.overflow.length, smallTargets: desktop ? 0 : m.smallTargets };
+          report.views.push({ view: view.name, viewport: `${w}x${h}`, desktop, screenshot: `${key}.png`, note, errors, failures, axeViolationRules: axe.length, axeViolationNodes: axe.reduce((a, v) => a + v.nodes, 0), axe, metrics: m });
+          console.log(`${key.padEnd(34)} axe rules ${String(axe.length).padStart(2)} nodes ${String(axe.reduce((a, v) => a + v.nodes, 0)).padStart(3)}  small-targets ${desktop ? '-' : m.smallTargets}  overflow ${m.overflow.length}${note ? '  (' + note + ')' : ''}`);
+          if (failures.overflow || failures.smallTargets) for (const x of [...m.overflow, ...(desktop ? [] : m.smallTargetSamples)].slice(0, 8)) console.log(`    ${JSON.stringify(x)}`);
+        } catch (e) { // a busy machine can stall one view; record it and keep going instead of losing the whole run
+          const msg = String(e.message).split('\n')[0];
+          report.views.push({ view: view.name, viewport: `${w}x${h}`, desktop, note: `capture failed: ${msg}`, errors, failures: { overflow: 0, smallTargets: 0 }, captureFailed: true });
+          console.log(`${key.padEnd(34)} CAPTURE FAILED (${msg})`);
+        } finally {
+          await ctx.close();
+        }
       }
     }
   } finally {
@@ -224,11 +233,11 @@ async function main() {
     server.stop();
   }
   const sum = (k) => report.views.reduce((a, v) => a + v.failures[k], 0);
-  report.check = { overflow: sum('overflow'), smallTargets: sum('smallTargets'), pageErrors: report.views.reduce((a, v) => a + v.errors.length, 0) };
+  report.check = { overflow: sum('overflow'), smallTargets: sum('smallTargets'), pageErrors: report.views.reduce((a, v) => a + v.errors.length, 0), captureFailed: report.views.filter((v) => v.captureFailed).length };
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 1));
   console.log(`\nwrote ${path.relative(ROOT, OUT)}/report.json`);
-  console.log(`CHECK overflow ${report.check.overflow} · small touch targets ${report.check.smallTargets} · page errors ${report.check.pageErrors}`);
-  if (STRICT && (report.check.overflow || report.check.smallTargets)) process.exitCode = 1;
+  console.log(`CHECK overflow ${report.check.overflow} · small touch targets ${report.check.smallTargets} · page errors ${report.check.pageErrors} · capture failed ${report.check.captureFailed}`);
+  if (STRICT && (report.check.overflow || report.check.smallTargets || report.check.captureFailed)) process.exitCode = 1;
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });

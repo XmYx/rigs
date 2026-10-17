@@ -666,9 +666,17 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .hub:active, .conn:active, .flt:active, .file-row:active, .sess-row:active, .wk-row:active, .app-row:active { background: rgba(45, 212, 191, .16); }
 .ibtn, .btn, .tb, .pill, .round, .app-tile { transition: transform .08s ease-out, background-color .12s, border-color .12s; }
 @media (hover: none) {
-  /* a tap must not leave a "hovered" look behind */
-  .ibtn:hover, .btn:hover, .tb:hover, .pill:hover, .round:hover, .app-tile:hover, .win-btn:hover, .win-btn.close:hover, .bm-item:hover, .pclose:hover, #dock-target:hover { border-color: var(--line); background: none; color: inherit; translate: none; }
-  .conn:hover, .hub:hover, .flt:hover, .file-row:hover, .sess-row:hover, .wk-row:hover { background: none; }
+  /* a tap must not leave a "hovered" look behind: back to each control's resting look (most have a tinted
+     background, so not `none`), and not while pressed, so the :active feedback above still shows */
+  .ibtn:hover:not(:active) { border-color: var(--line); background: rgba(45, 212, 191, .06); }
+  .btn:not(.primary):hover:not(:active) { background: rgba(45, 212, 191, .06); }
+  .tb:hover:not(:active), .pill:hover:not(:active), .round:not(.on):hover:not(:active) { border-color: var(--line); }
+  .app-tile:hover:not(:active) { border-color: var(--line); background: rgba(45, 212, 191, .04); translate: none; }
+  .wk-row:hover:not(:active) { border-color: var(--line); background: rgba(45, 212, 191, .03); }
+  .win-btn:hover:not(:active) { background: transparent; color: var(--muted); }
+  .pclose:hover:not(:active) { color: var(--muted); }
+  #dock-target:hover { color: inherit; }
+  .bm-item:hover:not(:active), .conn:hover:not(:active), .hub:hover:not(:active), .flt:hover:not(:active), .file-row:not(.sel):hover:not(:active), .sess-row:not(.sel):hover:not(:active) { background: none; }
 }
 
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {

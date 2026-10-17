@@ -172,12 +172,24 @@ export function initA11y() {
   });
   polite ||= region('polite'); // live regions exist before the first announcement so screen readers register them
   assertive ||= region('assertive');
+  // Handlers assigned before this ran (main.js wire(): the orb, face, dock title…) were not seen by the setter above
+  for (const el of document.body.querySelectorAll('*')) if (typeof el.onclick === 'function' && !nativeInteractive(el)) el.dataset.a11yClick = '1';
   scan(document.body);
   let queued = new Set();
   let raf = 0;
+  let grown = new Set(); // scroll containers whose rows just changed: they may have started to scroll
   new MutationObserver((muts) => {
-    for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) queued.add(n);
-    if (!raf && queued.size) raf = requestAnimationFrame(() => { raf = 0; const q = queued; queued = new Set(); for (const n of q) if (n.isConnected) scan(n); });
+    for (const m of muts) {
+      for (const n of m.addedNodes) if (n.nodeType === 1) queued.add(n);
+      const s = m.addedNodes.length && m.target.closest?.(SCROLLERS);
+      if (s) grown.add(s);
+    }
+    if (!raf && (queued.size || grown.size)) raf = requestAnimationFrame(() => {
+      raf = 0;
+      const q = queued; const g = grown; queued = new Set(); grown = new Set();
+      for (const n of q) if (n.isConnected) scan(n);
+      for (const s of g) if (s.isConnected) fixOne(s);
+    });
   }).observe(document.body, { childList: true, subtree: true });
   // Content that scrolls only after it fills in (lists load async) is picked up on resize/load too
   setInterval(() => { for (const el of document.querySelectorAll(SCROLLERS)) fixOne(el); }, 3000);
