@@ -1,4 +1,4 @@
-import { attnKey, bannerVisible } from './toasts.js';
+import { bannerVisible, prefs } from './toasts.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -129,9 +129,11 @@ async function refreshAttention() {
   renderAttention();
 }
 
-// Keys (key@since) of the attention items on screen when Sir closed the banner; it stays closed until a new one comes.
-let attnDismissed = new Set();
-const bannerOn = () => $('#attn')?.classList.contains('on');
+function syncNotifyChecks() {
+  const p = prefs();
+  if ($('#d-notify')) $('#d-notify').checked = p.notifications;
+  if ($('#d-attnbanner')) { $('#d-attnbanner').checked = p.attnBanner; $('#d-attnbanner').disabled = !p.notifications; }
+}
 
 function renderAttention() {
   const items = attnItems();
@@ -143,14 +145,12 @@ function renderAttention() {
   if (box.firstChild !== bar) box.prepend(bar);
   document.title = items.length ? `(${items.length}) ⚠ ${baseTitle}` : baseTitle;
   $('#orb-wrap').classList.toggle('alert', items.length > 0);
-  if (!items.length) attnDismissed = new Set();
-  if (!bannerVisible(items, attnDismissed)) { bar.replaceChildren(); bar.classList.remove('on'); return; }
-  attnDismissed = new Set();
+  if (!bannerVisible(items, prefs())) { bar.replaceChildren(); bar.classList.remove('on'); return; }
   bar.classList.add('on');
   const who = (a) => ({ claude: 'Claude', codex: 'Codex', ollama: 'Ollama' }[a] || a || 'agent');
   bar.replaceChildren(
     h('div', { class: 'attn-head' }, h('b', {}, `⚠ ${items.length} agent${items.length > 1 ? 's' : ''} need${items.length > 1 ? '' : 's'} you`),
-      h('button', { class: 'toast-x', title: 'Close (comes back when another agent needs you)', 'aria-label': 'Close attention banner', onclick: () => { attnDismissed = new Set(attnItems().map(attnKey)); renderAttention(); } }, '×')),
+      h('button', { class: 'toast-x', title: 'Close for good (questions stay in the Work panel; turn it back on under Display)', 'aria-label': 'Close attention banner', onclick: () => { prefs().attnBanner = false; syncNotifyChecks(); renderAttention(); } }, '×')),
     ...items.slice(0, 3).map((it) => h('div', { class: 'attn-row' },
       h('div', { class: 'attn-what' }, h('b', {}, `${who(it.agent)} · ${it.nodeName}`), ' ', h('span', {}, it.title || ''), h('div', { class: 'muted small' }, `${it.reason || ''}${it.since ? ' · ' + ago(it.since) : ''}${it.where && it.where !== 'tmux' ? ' · in ' + it.where : ''}`)),
       h('div', { class: 'attn-btns' }, act('⌨ Answer', () => openAttention(it), 'primary'), act('◎', () => showAttention(it), 'icon')))),
@@ -183,10 +183,10 @@ async function attentionNotify(m) {
   const it = m.action?.item ? { ...m.action.item, nodeName: m.action.node, nodeId: snap.find((e) => e.node.name === m.action.node)?.node.id } : null;
   await refreshAttention();
   if (!it) return;
-  // The banner (which re-opens for a new item) already shows it: a toast too would just repeat it.
-  if (!bannerOn()) toast(`⚠ ${m.text}`, 'attn', undefined, { label: 'Answer', run: () => openAttention(it) });
+  // No toast: it shows once, in the banner. With the banner closed or notifications off Sir asked for quiet; the
+  // Work panel's Questions, the orb and the tab title still show who is waiting.
   try {
-    if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+    if (prefs().notifications && 'Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
       const n = new Notification(`${m.from}: an agent needs you`, { body: m.text, tag: it.key, requireInteraction: true });
       n.onclick = () => { window.focus(); openAttention(it); n.close(); };
     }
@@ -224,13 +224,16 @@ function connectEvents() {
     onAppsEvent(m);
     if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.session) popups.handle(m);
-    if (m.type === 'notify' && m.level === 'attention') {
+    // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
+    if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
+    else if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
       if (m.speak) voice.say(spokenText(m.text, true));
     } else if (m.type === 'notify') {
       const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
-      toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', undefined, act);
+      // A message Sir already closed stays gone: no toast, and no subtitle or speech either.
+      if (!toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', undefined, act)) return;
       showSubtitle(m.text, 'jarvis');
       if (m.speak) voice.say(spokenText(m.text, true));
     }
@@ -1115,6 +1118,10 @@ function wire() {
     graph.setDisplay({ [k]: el.checked });
     el.onchange = () => { store.set('d-' + k, el.checked); graph.setDisplay({ [k]: el.checked }); };
   }
+  for (const [id, key] of [['#d-notify', 'notifications'], ['#d-attnbanner', 'attnBanner']]) {
+    $(id).onchange = (e) => { prefs()[key] = e.target.checked; if (!e.target.checked && key === 'notifications') $('#toasts')?.querySelectorAll('.toast').forEach((t) => t.remove()); syncNotifyChecks(); renderAttention(); };
+  }
+  syncNotifyChecks();
   const auto = $('#d-autosess');
   auto.checked = store.get('autoOpenSessions', true);
   auto.onchange = () => store.set('autoOpenSessions', auto.checked);

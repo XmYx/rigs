@@ -19,12 +19,25 @@ export function toastDuration(level = 'info', ms, hasAction = false) {
 /** After hover/focus pause: what is left, but never less than 2 s. */
 export const resumeAfter = (remaining) => Math.max(RESUME_MIN_MS, remaining);
 
-/** An attention item's identity for dismissal: the same wait again keeps its key, a new wait (new `since`) is new. */
-export const attnKey = (it) => `${it.key || `${it.nodeId}:${it.title}`}@${it.since || ''}`;
-
-/** The banner shows unless every item now waiting was already there when Sir closed it. */
-export function bannerVisible(items, dismissed) {
-  if (!items.length) return false;
-  if (!dismissed || !dismissed.size) return true;
-  return items.some((it) => !dismissed.has(attnKey(it)));
+/**
+ * Sir's notification switches, kept in localStorage (rigs.notifications, rigs.attnBanner). `notifications: false`
+ * silences everything — toasts, the attention banner and desktop alerts; the orb, tab title and the Work panel's
+ * Questions still show who is waiting. `attnBanner: false` is what the banner's × sets: closed stays closed.
+ */
+export function prefs(storage = globalThis.localStorage) {
+  const get = (k) => { try { return storage?.getItem('rigs.' + k) !== 'false'; } catch { return true; } };
+  const set = (k, v) => { try { storage?.setItem('rigs.' + k, v ? 'true' : 'false'); } catch {} };
+  return {
+    get notifications() { return get('notifications'); },
+    set notifications(v) { set('notifications', v); },
+    get attnBanner() { return get('attnBanner'); },
+    set attnBanner(v) { set('attnBanner', v); },
+  };
 }
+
+/** The banner shows only while something waits, notifications are on and Sir hasn't closed it. */
+export const bannerVisible = (items, p) => items.length > 0 && p.notifications && p.attnBanner;
+
+/** A toast Sir closed with × stays closed: the same text is not shown again in this page. */
+export const closedTexts = new Set();
+export const toastAllowed = (text, p) => p.notifications && !closedTexts.has(String(text));
