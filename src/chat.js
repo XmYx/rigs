@@ -314,7 +314,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   const threads = await ongoingThreads();
   const projects = parseProjects(opts.projects || '');
   const catalog = opts.workspaces ? await opts.workspaces().catch(() => []) : [];
-  const decision = await routeRequest(text, { rules: agentsRules(), threads, projects, catalog });
+  const decision = await routeRequest(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name });
   // Work the router bound to real folders is filed by RIGS itself (one planned project + agent team each);
   // the brain only tells Sir what was set in motion. Parts it couldn't bind are left to the brain to ask about.
   const bound = (decision.work || []).filter((w) => !w.unresolved);
@@ -335,7 +335,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   if (!chat) throw new Error('thread not found');
   let hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
   if (filed.length) {
-    hint += `\n[RIGS already filed this request as ${filed.length} project${filed.length > 1 ? 's' : ''} — the core brain is planning each with the project's own agent guide, then an OpenRig team is cast for it: ${filed.map((f, i) => `${i + 1}) ${f.name} → ${f.node}:${f.path} (project ${f.id})`).join('; ')}. Do NOT file these again (no jarvis_task or project_create for them). Tell Sir in one or two sentences what was set in motion and where; progress shows on the Work dashboard.]`;
+    hint += `\n[RIGS already filed this request as ${filed.length} project${filed.length > 1 ? 's' : ''} — the core brain is planning each with the project's own agent guide, then an OpenRig team is cast for it: ${filed.map((f, i) => `${i + 1}) ${f.name} → ${f.node}:${f.path} (project ${f.id})${f.flow ? ` running its "${f.flow}" flow` : ''}${f.note ? ` — ${f.note}` : ''}`).join('; ')}. Agents verify their own work, a final review checks it, and RIGS reports back when it is done${filed.some((f) => f.self) ? ' (RIGS changes are then merged by the merge steward, tested and rolled out to every machine)' : ''}. Do NOT file these again (no jarvis_task or project_create for them). Tell Sir in one or two sentences what was set in motion and where; progress shows on the Work dashboard.]`;
   }
   if (unclear.length) {
     hint += `\n[Could not tell which project ${unclear.length > 1 ? 'these parts mean' : 'this part means'}: ${unclear.map((u) => `"${u.goal}"${u.candidates?.length ? ` — candidates: ${u.candidates.map((c) => `${c.name} on ${c.node} (${c.path})`).join(', ')}` : ' — no matching folder found'}`).join('; ')}. Ask Sir which one before filing it.]`;
