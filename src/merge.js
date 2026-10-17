@@ -45,7 +45,7 @@ async function managedBlockPaths(cwd, range) {
   let file = '';
   for (const l of r.stdout.split('\n')) {
     if (l.startsWith('+++ b/')) file = l.slice(6);
-    else if (l.startsWith('+') && l.includes('OpenRig MANAGED BLOCK')) out.add(file);
+    else if (l.startsWith('+') && /(^|\/)(CLAUDE|AGENTS)\.md$/.test(file) && l.includes('OpenRig MANAGED BLOCK')) out.add(file);
   }
   return [...out];
 }
