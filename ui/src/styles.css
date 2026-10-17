@@ -240,6 +240,7 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 /* projects */
 .proj-split { grid-template-columns: minmax(260px, .55fr) 1.6fr; }
 .proj-detail { overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
+.proj-back { display: none; align-self: flex-start; margin-bottom: 4px; }
 .proj-head { border-bottom: 1px solid var(--line); }
 .proj-head .pv-title { display: flex; gap: 8px; align-items: center; }
 .proj-goal { margin: 8px 0; padding: 8px 10px; border-left: 2px solid #fde047; background: rgba(253, 224, 71, .05); white-space: pre-wrap; font-size: 12.5px; }
@@ -665,6 +666,25 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   /* list over detail: the list gets most of the room until something is picked, then the detail does */
   .files-split, .sess-split, .proj-split { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); }
   .files-split:has(.sel), .sess-split:has(.sel), .proj-split:has(.sel) { grid-template-rows: minmax(0, 1fr) minmax(0, 1.8fr); }
+  /* Projects: one screen at a time — the list, then a picked project full-height with a way back */
+  .proj-split { grid-template-rows: minmax(0, 1fr); }
+  .proj-split > .proj-detail { display: none; }
+  .proj-split.detail-open > .proj-list { display: none; }
+  .proj-split.detail-open > .proj-detail { display: flex; }
+  .proj-split:has(.sel) { grid-template-rows: minmax(0, 1fr); }
+  .proj-back { display: inline-flex; }
+  .proj-list { overflow-y: auto; min-width: 0; }
+  .proj-head .pv-title { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .proj-head .actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .proj-head .actions .btn { width: 100%; text-align: center; white-space: normal; }
+  .proj-goal { overflow-wrap: anywhere; }
+  .tr-main { flex-wrap: wrap; }
+  .tr-assign { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; }
+  .tr-assign .arrow { display: none; }
+  .tr-assign select, .tr-assign .path-input { width: 100%; min-width: 0; }
+  .tr-assign .path-input { grid-column: 1 / -1; }
+  .tr-assign .tb { justify-self: start; }
+  .task-add { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
   .file-list, .sess-list { border-right: 0; border-bottom: 1px solid var(--line); }
   .file-row { grid-template-columns: 24px 1fr 72px; min-height: 44px; }
   .file-row .fm { display: none; }

@@ -16,7 +16,11 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
   const right = h('div', { class: 'proj-detail' });
   let timer = null;
   const w = openWindow({ title: 'Projects — plan & delegate', icon: '📋', width: 1240, height: 680, className: 'proj-win', onClose: () => clearInterval(timer) });
-  w.body.append(h('div', { class: 'files-split proj-split' }, left, right));
+  const split = h('div', { class: 'files-split proj-split' }, left, right);
+  w.body.append(split);
+  // Phone: the list and the detail are two screens (CSS shows one); desktop shows both and ignores the class and the back button.
+  const showDetail = (on) => split.classList.toggle('detail-open', on);
+  const backBtn = () => h('button', { class: 'btn proj-back', 'aria-label': 'Back to projects', onclick: () => { current = null; showDetail(false); renderList(); renderDetail(); } }, '← Projects');
 
   const machines = () => snapshot().filter((e) => e.node.online && e.node.rigs);
   const base = () => `${node(current.owner)}/projects/${current.project.id}`;
@@ -45,6 +49,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
     try { current = { owner, project: await api(`${node(owner)}/projects/${id}`) }; } catch (e) { toast(e.message, 'error'); return; }
     renderList();
     renderDetail();
+    showDetail(true);
   }
 
   async function refreshCurrent() {
@@ -55,6 +60,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
   function newProject() {
     current = null;
     renderList();
+    showDetail(true);
     const ms = machines();
     const name = h('input', { class: 'path-input', placeholder: 'Name (optional)' });
     const goal = h('textarea', { class: 'path-input', rows: 6, placeholder: 'Goal — what should exist when this is done? Constraints, repo, quality bar…' });
@@ -65,6 +71,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
     const policy = h('select', { class: 'mini' }, ...['builtin:auto', 'builtin:standard', 'builtin:open', 'builtin:locked', 'floor', 'builtin:yolo'].map((v) => h('option', { value: v }, v)));
     const cb = coreBrain();
     right.replaceChildren(h('div', { class: 'pad settings' },
+      backBtn(),
       h('div', { class: 'pv-title' }, 'New project'),
       h('label', {}, 'Name', name), h('label', {}, 'Goal', goal),
       h('div', { class: 'grid2' }, h('label', {}, 'Repository machine', repoNode), h('label', {}, 'Dispatch', dispatch)),
@@ -174,6 +181,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
     });
     right.replaceChildren(
       h('div', { class: 'pad proj-head' },
+        backBtn(),
         h('div', { class: 'pv-title' }, p.name, h('span', { class: `chip st-${p.status === 'running' ? 'run' : p.status === 'done' ? 'ok' : p.status === 'paused' ? 'warn' : ''}` }, p.status)),
         h('div', { class: 'muted small' }, `owner ${p.owner} · repo ${p.repo.path ? `${p.repo.node}:${p.repo.path}` : '—'}${p.gitUrl ? ' · ' + p.gitUrl : ''} · dispatch ${p.dispatch} · ${p.policy}`),
         h('div', { class: 'proj-goal' }, p.goal),
@@ -185,7 +193,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
           ['running', 'blocked', 'planned'].includes(p.status) ? h('button', { class: 'btn', onclick: () => act('stop', {}, 'Paused — nothing of it runs until you resume'), title: 'Stop its agents and keep it from starting or reviving anything' }, '❚❚ Pause') : null,
           p.status === 'paused' ? h('button', { class: 'btn primary', onclick: () => act('resume', {}, 'Resumed') }, '▶ Resume') : null,
           h('button', { class: 'btn', onclick: () => onFocus?.(p) }, '◎ Galaxy'),
-          h('button', { class: 'btn danger', onclick: async () => { if (!confirm(`Delete project ${p.name}? Running agents are stopped.`)) return; await api(base(), { method: 'DELETE' }).catch(() => {}); current = null; loadList(); renderDetail(); } }, '🗑')),
+          h('button', { class: 'btn danger', onclick: async () => { if (!confirm(`Delete project ${p.name}? Running agents are stopped.`)) return; await api(base(), { method: 'DELETE' }).catch(() => {}); current = null; showDetail(false); loadList(); renderDetail(); } }, '🗑')),
         h('div', { class: 'plan-status muted small' }, Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(' · '))),
       h('div', { class: 'task-list' }, ...p.tasks.map(taskRow), h('div', { class: 'task-add' }, addTitle, addKind)),
       h('details', { class: 'pad proj-log' }, h('summary', {}, `Log (${p.log.length})`), ...p.log.slice(-40).reverse().map((l) => h('div', { class: 'small' }, h('span', { class: 'muted' }, new Date(l.ts).toLocaleTimeString() + ' '), l.text))));
