@@ -37,7 +37,7 @@ const adapter = {
     return {};
   },
 };
-const control = createControl({ home: path.join(root, 'inst'), getConfig: () => cfg, persistConfig: (v) => { cfg = v; }, adapter, permissions: async () => ({}), timeoutMs: 500 });
+const control = createControl({ platform: 'linux', home: path.join(root, 'inst'), getConfig: () => cfg, persistConfig: (v) => { cfg = v; }, adapter, permissions: async () => ({}), timeoutMs: 500 });
 const granted = [];
 const api = createControlApi({ control, access: { grant: async (p) => { granted.push(p); return { ok: true, permission: p }; } }, nodeName: () => 'test-node' });
 const feed = [];

@@ -42,7 +42,7 @@ function fixture(overrides = {}, behavior = {}) {
       return {};
     },
   };
-  const c = createControl({ home, getConfig: () => cfg, persistConfig: (v) => { cfg = v; }, adapter, now: () => time, permissions: async () => ({}), timeoutMs: 100 });
+  const c = createControl({ platform: 'linux', home, getConfig: () => cfg, persistConfig: (v) => { cfg = v; }, adapter, now: () => time, permissions: async () => ({}), timeoutMs: 100 });
   cleanups.push(() => c.kill());
   return { c, home, calls, events, adapter, config: () => cfg, advance: (n) => { time += n; } };
 }
