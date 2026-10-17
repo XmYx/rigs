@@ -27,6 +27,10 @@ treat `main` as production.
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
+| `src/control.js` | Screen access and control: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), audit log, announcements, kill switch, pure `selectBackend`. Off by default |
+| `src/control-{linux,mac,win}.js`, `src/control-api.js`, `src/control-rpc.js`, `src/control-error.js` | Per-OS adapters that start and talk to the helper, plus the HTTP routes (`/api/nodes/<id>/control/*`) and the error type |
+| `src/access.js` | OS permission probes and guided grants (screen capture, input, accessibility) with a fix hint for each |
+| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`) and `rigs-control.ps1`. The macOS helper (`macos/RigsControl.swift`) is not written yet; until it is, macOS reports no backend and fails closed |
 | `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist` |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
@@ -45,6 +49,11 @@ treat `main` as production.
   (`src/merge.js`) merges one branch at a time onto the latest main, re-runs build + tests on the
   merged tree, pushes and rolls out to every machine. Only a real conflict brings in a resolver agent
   (routing kind `merge`); failing checks come back to you. CI also runs on all three OSes after push.
+- **Screen control is opt-in and gated (`src/control.js`, design in `docs/full-access.md` §7).** Control is off by
+  default on every machine, and `config.control` is in `patchConfig`'s blocked set, so no generic settings save or
+  agent `POST config` can switch it on. Only a confirmed human surface may enable it. Do not add a route or MCP tool
+  that bypasses the gate, the lease, the audit log or the kill switch. Every refusal is audited too, and a kill
+  persists across restarts. Do not migrate anything on: existing machines stay off after an update.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test

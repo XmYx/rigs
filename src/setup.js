@@ -73,6 +73,11 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   \`project_create\` plans and routes a new goal across the mesh.
 - **Tools**: \`mesh_status\` lists each machine's tools (e.g. ComfyUI for image generation). Use the
   machine that has the tool you need.
+- **Screen access and control** (\`mesh_screen\`, \`mesh_windows\`, \`mesh_control\`, \`mesh_access\`): you can see and
+  drive a machine's desktop. Both are **off by default** and Sir switches them on per machine; you never switch
+  them on, and you never work around them (no \`screencapture\`, \`grim\` or uinput from a shell). Ask Sir before
+  using computer control unless your task brief explicitly allows it for that machine. \`mesh_access\` shows what is
+  allowed there and which OS grants are missing. Pass \`secret: true\` when typing anything credential-like.
 - **Apps / applets — ground rule**: anything you build that has a web UI must be published to the
   App Cloud, not just left running on a port. Serve it with relative URLs and a \`/healthz\`, give it
   a launch recipe (Linux: a \`systemctl --user\` unit, enabled; elsewhere: a \`command\`), then call

@@ -504,6 +504,69 @@ There are no grants. Status reports `ok: true` for capture and input when the he
 `input.detail = "elevated windows are out of reach"` when the foreground window belongs to an elevated
 process, and `no-session` when the input desktop is not the default desktop (locked, UAC).
 
+## 9. Setup steps per OS
+
+Control stays off until someone switches it on. Enabling is done from JARVIS (the 🛡 Access & control panel,
+or the machine inspector) with the machine's name typed as confirmation. An agent cannot do it. Disabling is
+`rigs control off` on the machine, or **Stop** in any JARVIS.
+
+### Linux · GNOME on Wayland (magix-system, GNOME 50)
+
+1. Turn on **Screen access**. The panel shows what is missing and which step fixes it.
+2. Grant the **GNOME capture + input** step. It installs `python3-gi`, `gir1.2-gstreamer-1.0`, `gir1.2-atspi-2.0`
+   and `gstreamer1.0-pipewire` through a root step, so the user types one password in JARVIS.
+3. Grant the **GNOME windows** step. It copies `scripts/control/gnome-extension/rigs-control@rigs.dev` to
+   `~/.local/share/gnome-shell/extensions/` and runs `gnome-extensions enable rigs-control@rigs.dev`. No root.
+4. Log out once (the **relogin** step), so GNOME Shell loads the extension.
+5. Turn on **Full control** if you want input. Input uses Mutter RemoteDesktop. `uinput` is only a fallback.
+
+### Linux · KDE Plasma on Wayland
+
+1. Turn on **Screen access**, then **Full control**.
+2. The first session shows the KDE portal dialog on the machine itself. Approve it there. The restore token is kept
+   in `~/.rigs/control-state.json`, so later sessions do not ask again. Status reads "approve on <node>" until then.
+
+### Linux · wlroots (Sway, Hyprland, river)
+
+1. Grant the **wlroots tools** step (`grim`, `wtype`, `wlrctl`) through a root step.
+2. Grant **uinput** (fallback input). Its rule is `TAG+="uaccess"`, never membership of the `input` group. The
+   `input` group can read every `/dev/input/event*`. The rule file is `/etc/udev/rules.d/60-rigs-uinput.rules`, and
+   the module loads from `/etc/modules-load.d/rigs-uinput.conf`.
+3. Turn on **Full control**. Windows come from `swaymsg`, `hyprctl` or AT-SPI, whichever is installed.
+
+### Linux · X11 (any desktop)
+
+1. Confirm `DISPLAY` and `XAUTHORITY` are set in the user session, then grant **X11** (`libxtst6`) if it is missing.
+2. Turn on **Screen access**, then **Full control**. Capture uses `import` or `scrot`. Input uses `xdotool`.
+   Windows use `wmctrl` and `xdotool`.
+3. Session type is read from `XDG_SESSION_TYPE` only when it is `wayland` or `x11`. Any other value, such as `tty`
+   over SSH, falls back to `WAYLAND_DISPLAY` or `DISPLAY` (fixed in 38cd719).
+
+### macOS (macbookpro, not verified end to end)
+
+The macOS helper is **not built yet**. Until it is, `control.status()` reports every backend as null with
+`ready: false`. Screenshot, key and type fail closed with `needs-permission: RIGS Control helper is not installed
+or running`, and kill still works. Verified on macbookpro (arm64, node 26.12.0): `npm test` passes, with 1 expected skip.
+
+Once the helper exists, the steps are:
+
+1. Build `RIGS Control.app` from `scripts/control/macos/RigsControl.swift` (`swiftc -O`, with ScreenCaptureKit
+   and ApplicationServices). Give it the bundle id `dev.rigs.control` and `LSUIElement` true, then ad-hoc sign it.
+   Install the LaunchAgent `dev.rigs.control`. Its socket and token live under `~/.rigs/run`.
+2. A human at the Mac grants **Screen Recording** and **Accessibility** to **RIGS Control**. Synthetic input cannot
+   click those prompts. The panel shows "Waiting for you on macbookpro" until the preflight is true.
+3. Restart the helper with `launchctl kickstart -k gui/<uid>/dev.rigs.control`, so the new capture rights apply.
+4. Keep **Full Disk Access** on the daemon's `node`, not on RIGS Control. Screen Recording and Accessibility must not
+   be granted to `node`, or every agent bypasses the gate. Status warns when this happens.
+5. Re-run the macOS checks: ScreenCaptureKit capture, CGEvent input, window list and focus, the grant flow, lock
+   detection, helper stop, and the ⌃⌥⌘⎋ kill hotkey. Live screen driving on macbookpro needs Sir's explicit OK.
+
+### Windows (unverified)
+
+No Windows node was online for t6 or t7. Setup is the `scripts/control/rigs-control.ps1` helper, with no grants
+required. Status reports `input.detail = "elevated windows are out of reach"` for elevated foreground windows, and
+`no-session` on the locked or UAC desktop. Treat the whole path as unverified until a Windows node runs it.
+
 ## Decisions that change the task briefs
 
 1. **GNOME uses Mutter directly, the portal is the fallback** (t3, t7). On GNOME 50, Mutter ScreenCast and
