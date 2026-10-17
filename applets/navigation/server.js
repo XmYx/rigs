@@ -4,8 +4,10 @@
 //   GET healthz      {ok:true}
 //   GET config.json  the free map stack the browser should use (tiles, glyphs, demo route)
 //   GET api/search   place search: Photon (komoot), falling back to Nominatim
+//   GET api/reverse  the street/area name at a point (trip start and end labels), same services
 //   GET api/route    driving route with turn-by-turn steps from OSRM
 //   GET api/traffic  per-road congestion around a bbox: TomTom flow tiles or assumed traffic (traffic.js)
+//   api/trips…       recorded trips: upload chunks, list, detail, totals, delete-to-trash (tripstore.js)
 // Search and routing go through here so the public OSM services see one polite, cached, rate-limited
 // client with a real User-Agent instead of every browser hitting them directly.
 import fs from 'node:fs';
@@ -13,8 +15,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
-import { HOME, log, readJsonSync } from '../../src/util.js';
+import { HOME, expandHome, log, readJsonSync } from '../../src/util.js';
 import { createTraffic, hash01, routeInfo } from './traffic.js';
+import { createTripStore, tripsRoute } from './tripstore.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PUBLIC_DIR = path.join(HERE, 'public');
@@ -34,6 +37,9 @@ export const DEFAULTS = {
   trafficSource: 'auto',
   tomtomKey: null,
   trafficDailyTiles: 5000,
+  // api/reverse names trip ends by sending their (rounded) coordinates to the search service; false
+  // keeps every trip coordinate on this machine and the trips panel shows coordinates instead.
+  reverseGeocode: true,
   // Demo drive: Budapest, Andrássy út from Deák tér out to Hősök tere and round the park.
   demo: { from: [19.0548, 47.4979], to: [19.0838, 47.5155] },
 };
@@ -55,6 +61,9 @@ export function loadNavConfig({ env = process.env, configFile } = {}) {
   const fromFile = readJsonSync(file, {})?.navigation || {};
   const warnings = [];
   const cfg = { ...DEFAULTS, demo: { ...DEFAULTS.demo } };
+  // Recorded trips (tripstore.js). Personal location history: it stays on this machine.
+  const dataDir = env.NAV_DATA_DIR || fromFile.dataDir;
+  cfg.dataDir = dataDir ? path.resolve(expandHome(String(dataDir))) : path.join(rigsHome, 'navigation', 'trips');
 
   const port = Number(env.NAV_PORT || fromFile.port || DEFAULTS.port);
   if (Number.isInteger(port) && port >= 0 && port < 65536) cfg.port = port;
@@ -83,6 +92,8 @@ export function loadNavConfig({ env = process.env, configFile } = {}) {
     if (Number.isInteger(Number(daily)) && Number(daily) >= 0) cfg.trafficDailyTiles = Number(daily);
     else warnings.push('trafficDailyTiles must be a whole number; using ' + DEFAULTS.trafficDailyTiles);
   }
+  const rev = env.NAV_REVERSE_GEOCODE ?? fromFile.reverseGeocode;
+  if (rev != null && rev !== '') cfg.reverseGeocode = !['0', 'false', 'off', 'no'].includes(String(rev).toLowerCase());
   if (fromFile.demo) {
     for (const end of ['from', 'to']) {
       if (fromFile.demo[end] == null) continue;
@@ -164,6 +175,32 @@ export function normalizeNominatim(data) {
   }).filter((r) => Number.isFinite(r.lon) && Number.isFinite(r.lat)));
 }
 
+/** A short name for a trip end: the street (or named place) plus its district or town. */
+function placeName(label, area) {
+  if (!label) return area || null;
+  return area && area !== label ? `${label}, ${area}` : label;
+}
+
+/** Photon /reverse GeoJSON → {place, label, area} or null. */
+export function normalizePhotonReverse(data) {
+  const p = (data?.features || []).find((f) => f?.properties)?.properties;
+  if (!p) return null;
+  const label = p.street || p.name || p.district || p.locality || p.city || null;
+  const area = p.district || p.locality || p.city || p.county || null;
+  const place = placeName(label, area === label ? p.city : area);
+  return place ? { place, label, area } : null;
+}
+
+/** Nominatim /reverse jsonv2 → {place, label, area} or null. */
+export function normalizeNominatimReverse(d) {
+  if (!d || d.error) return null;
+  const a = d.address || {};
+  const label = a.road || d.name || a.suburb || a.city || a.town || a.village || null;
+  const area = a.suburb || a.city_district || a.city || a.town || a.village || null;
+  const place = placeName(label, area === label ? (a.city || a.town) : area);
+  return place ? { place, label, area } : null;
+}
+
 // ---- Polite upstream client: cache + per-host spacing ------------------------------------------
 
 export function createUpstream({ fetchImpl = globalThis.fetch, minGapMs = { 'nominatim.openstreetmap.org': 1100 }, ttlMs = 10 * 60 * 1000, max = 300 } = {}) {
@@ -212,8 +249,9 @@ function parseLonLat(s) {
   return isLonLat(p) ? p : null;
 }
 
-export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now } = {}) {
+export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now, trips } = {}) {
   const getJson = createUpstream({ fetchImpl });
+  const tripStore = trips || createTripStore({ dir: cfg.dataDir || path.join(HOME, '.rigs', 'navigation', 'trips'), now });
   const traffic = createTraffic({ cfg, fetchImpl, now, log, userAgent: USER_AGENT });
   const root = path.resolve(publicDir);
   // Recent routes by routeId, so api/traffic can bump the roads along the route without the client
@@ -234,9 +272,24 @@ export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDi
     return normalizeNominatim(await getJson(`${cfg.nominatimUrl}/search?format=jsonv2&limit=6&q=${encodeURIComponent(q)}${viewbox}`));
   }
 
+  /** Point → {place, label, area}. Rounded to 4 decimals (~10 m): enough for a street, and repeat visits hit the cache. */
+  async function reverse(lat, lon) {
+    const q = `lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
+    try {
+      const out = normalizePhotonReverse(await getJson(`${cfg.searchUrl}/reverse?${q}&limit=1`));
+      if (out) return out;
+    } catch (e) {
+      log('navigation: reverse geocoding falling back to Nominatim:', e.message);
+    }
+    return normalizeNominatimReverse(await getJson(`${cfg.nominatimUrl}/reverse?format=jsonv2&zoom=17&${q}`));
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, 'http://local');
     const p = url.pathname;
+    // Trips take POST/PATCH/DELETE too; everything else below stays GET/HEAD only.
+    const trip = tripsRoute(tripStore, req, p, url.searchParams);
+    if (trip) { const r = await trip; return send(res, r.status, r.body, { 'cache-control': 'no-store' }); }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });
     if (p === '/healthz') return send(res, 200, { ok: true }, { 'cache-control': 'no-store' });
     if (p === '/config.json') return send(res, 200, publicConfig(cfg), { 'cache-control': 'no-store' });
@@ -246,6 +299,16 @@ export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDi
       const near = parseLonLat(url.searchParams.get('near'));
       try { return send(res, 200, { results: await search(q, near) }); }
       catch (e) { return send(res, 502, { error: 'search unavailable: ' + e.message }); }
+    }
+    if (p === '/api/reverse') {
+      if (cfg.reverseGeocode === false) return send(res, 404, { error: 'reverse geocoding is turned off (navigation.reverseGeocode)' });
+      const lat = Number(url.searchParams.get('lat'));
+      const lon = Number(url.searchParams.get('lon'));
+      if (!url.searchParams.get('lat') || !url.searchParams.get('lon') || !isLonLat([lon, lat])) return send(res, 400, { error: 'lat and lon must be coordinates' });
+      try {
+        const out = await reverse(lat, lon);
+        return out ? send(res, 200, out) : send(res, 404, { error: 'no place here' });
+      } catch (e) { return send(res, 502, { error: 'reverse geocoding unavailable: ' + e.message }); }
     }
     if (p === '/api/route') {
       const from = parseLonLat(url.searchParams.get('from'));

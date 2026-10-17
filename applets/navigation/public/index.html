@@ -58,6 +58,10 @@
     <button id="traffic" type="button" class="panel icon-btn" title="Traffic" aria-label="Traffic on/off" aria-pressed="true">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="8" height="15" rx="2.5" /><rect x="13" y="8.5" width="6.5" height="12" rx="2" opacity="0.55" /></svg>
     </button>
+    <button id="trips-btn" type="button" class="panel icon-btn" title="Trips" aria-label="Trips" aria-expanded="false" aria-controls="trips">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19.5c3-.5 3.5-4 6.5-4.5s4 1.5 6-1.5S16 7 19 4.5" /><circle cx="5" cy="19.5" r="2.2" /><circle cx="19" cy="4.5" r="2.2" /></svg>
+      <span id="rec" class="rec" hidden title="Recording this trip">REC</span>
+    </button>
   </div>
 
   <footer id="eta" class="panel eta" hidden>
@@ -66,6 +70,46 @@
     <div><small>DIST</small><b id="eta-dist">—</b></div>
     <button id="end-route" type="button" class="icon-btn" title="End route">✕</button>
   </footer>
+
+  <aside id="trips" class="sheet" hidden aria-label="Trips">
+    <button id="sheet-grip" type="button" class="sheet-grip" aria-label="Expand or shrink the panel"><span></span></button>
+    <header class="sheet-head">
+      <button id="trips-back" type="button" class="icon-btn" title="Back" aria-label="Back" hidden>‹</button>
+      <h2 id="trips-title">Trips</h2>
+      <span id="rec-chip" class="rec-chip" hidden title="A trip is being recorded"><i></i>REC <b id="rec-time">0:00</b></span>
+      <button id="trips-close" type="button" class="icon-btn" title="Close" aria-label="Close trips">✕</button>
+    </header>
+    <nav id="trips-tabs" class="tabs" role="tablist">
+      <button type="button" role="tab" data-view="list">History</button>
+      <button type="button" role="tab" data-view="all">All trips</button>
+    </nav>
+    <div id="trips-body" class="sheet-body"></div>
+  </aside>
+
+  <section id="replay" class="panel replay" hidden aria-label="Trip replay">
+    <div class="replay-top">
+      <button id="replay-play" type="button" class="icon-btn play" title="Play" aria-label="Play">▶</button>
+      <div class="replay-time"><b id="replay-now">0:00</b><small id="replay-total">/ 0:00</small></div>
+      <div id="replay-rates" class="chips" role="group" aria-label="Replay speed">
+        <button type="button" data-rate="1">1×</button><button type="button" data-rate="4">4×</button><button type="button" data-rate="16">16×</button><button type="button" data-rate="64">64×</button>
+      </div>
+      <button id="replay-follow" type="button" class="icon-btn" title="Follow the replay" aria-label="Follow the replay">◎</button>
+      <button id="replay-exit" type="button" class="icon-btn" title="Leave replay" aria-label="Leave replay">✕</button>
+    </div>
+    <div class="replay-scrub">
+      <svg id="replay-spark" viewBox="0 0 600 36" preserveAspectRatio="none" aria-hidden="true"><path /></svg>
+      <input id="replay-range" type="range" min="0" max="1" step="0.1" value="0" aria-label="Replay position">
+    </div>
+    <div id="replay-label" class="replay-label"></div>
+  </section>
+
+  <div id="confirm" class="modal" hidden role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-box">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="screen-actions"><button id="confirm-no" type="button" class="btn">Cancel</button><button id="confirm-yes" type="button" class="btn danger">Delete</button></div>
+    </div>
+  </div>
 
   <div id="status" class="status" role="status" hidden></div>
   <div class="demo-badge" aria-hidden="true">DEMO · SIMULATED DRIVE</div>
