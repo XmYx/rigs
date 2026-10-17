@@ -20,6 +20,7 @@
 // or a page that scrolls sideways) and, on touch viewports, `smallTargets` (visible controls under 44x44 CSS px; an
 // input inside a <label> is measured by its label). The run ends with a CHECK line.
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -65,6 +66,14 @@ function fallbackChromium() {
   return undefined;
 }
 
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+}
+
 async function startServer() {
   if (opt('url', '')) return { url: opt('url', ''), stop() {} };
   const home = path.join(ROOT, '.rigs-dev');
@@ -73,10 +82,10 @@ async function startServer() {
   // Live mesh data is wanted, but this throwaway node must not register OpenRig hosts or touch the real ~/.ssh
   const c = fs.existsSync(cfg) ? JSON.parse(fs.readFileSync(cfg, 'utf8')) : { port: PORT };
   if (c.openrig?.registerPeers !== false) { c.openrig = { ...c.openrig, registerPeers: false }; fs.writeFileSync(cfg, JSON.stringify(c)); }
-  const port = c.port || PORT;
+  // A free port per run: several worktrees run this check at once, and a fixed port made them capture (and kill) each other's server.
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}/`;
-  try { const r = await fetch(url); if (r.ok) return { url, stop() {} }; } catch { /* not running */ }
-  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
+  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_HOME: home, RIGS_PORT: String(port), RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500));
     try { const r = await fetch(url); if (r.ok) return { url, stop: () => child.kill() }; } catch { /* wait */ }

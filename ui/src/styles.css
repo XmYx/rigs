@@ -101,6 +101,7 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 #chat-dock.attached #dock-target { color: #f0abfc; }
 #subtitle { padding: 0 14px; font-size: 13px; white-space: pre-wrap; max-height: 0; overflow-y: auto; cursor: pointer; transition: max-height .3s, padding .3s; }
 #subtitle.show { max-height: var(--dock-h, 30vh); max-height: var(--dock-h, 30dvh); padding: 2px 14px 9px; }
+#subtitle:empty { visibility: hidden; } /* nothing to read: no unnamed button for assistive tech */
 #subtitle.user { color: #9fb2bf; font-style: italic; }
 #subtitle.interim { opacity: .7; }
 #subtitle.error { color: var(--danger); border-color: rgba(248, 113, 113, .4); }
