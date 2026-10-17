@@ -15,11 +15,14 @@
   --gap: 16px;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.35 var(--sans); }
 button { font: inherit; color: inherit; }
 a { color: var(--neon); }
@@ -144,7 +147,7 @@ code { font-family: var(--mono); color: var(--neon); background: rgba(0, 255, 13
   display: flex; align-items: center; gap: 22px; padding: 8px 8px 8px 20px;
 }
 .eta div { display: grid; }
-.eta small { font: 10px var(--mono); letter-spacing: 0.22em; color: var(--muted); }
+.eta small { font: 11px var(--mono); letter-spacing: 0.22em; color: var(--muted); }
 .eta b { font: 600 20px var(--mono); color: #eafff4; white-space: nowrap; }
 .status {
   position: fixed; z-index: 3; top: calc(76px + var(--safe-t)); left: 50%; transform: translateX(-50%);
@@ -219,4 +222,31 @@ body.demo .demo-badge { display: block; }
   .controls { top: auto; bottom: calc(256px + var(--safe-b)); transform: none; }
   .maplibregl-ctrl-group { display: none; }
   body.demo .demo-badge { display: none; } /* the speed panel's SIM tag says it on phones */
+}
+
+/* ---- Phone in landscape (and any short screen): a compact HUD hugging the edges, map in the
+   middle. Side gaps include the notch, which sits left or right after the screen turns. ---- */
+@media (max-height: 500px) and (orientation: landscape) {
+  :root { --gap: 8px; }
+  .search { left: calc(var(--gap) + var(--safe-l)); right: auto; width: min(360px, 44vw); height: 40px; transform: none; top: calc(var(--gap) + var(--safe-t)); }
+  .turn { left: calc(var(--gap) + var(--safe-l)); right: auto; width: min(360px, 44vw); top: calc(var(--gap) + 48px + var(--safe-t)); padding: 6px 10px; gap: 8px; }
+  .turn-arrow { font-size: 30px; width: 34px; }
+  .turn-dist { font-size: 20px; }
+  .turn-text { font-size: 14px; }
+  .turn-then { font-size: 11px; }
+  .status { top: calc(var(--gap) + var(--safe-t)); left: auto; right: calc(var(--gap) + 84px + var(--safe-r)); transform: none; max-width: min(380px, 44vw); }
+  .turn:not([hidden]) ~ .status { top: calc(var(--gap) + var(--safe-t)); }
+  .compass { top: calc(var(--gap) + var(--safe-t)); bottom: auto; right: calc(var(--gap) + var(--safe-r)); width: 72px; height: 72px; }
+  .needle { top: 12px; border-bottom-width: 10px; }
+  .hdg { font-size: 11px; margin-top: 10px; }
+  .ring .e, .ring .w { display: none; }
+  .compass { width: 80px; height: 80px; }
+  .speed { left: calc(var(--gap) + var(--safe-l)); bottom: calc(var(--gap) + var(--safe-b)); width: 124px; height: 124px; }
+  .speed-digits { font-size: 38px; }
+  .unit { padding: 1px 8px; }
+  .controls { top: auto; bottom: calc(var(--gap) + var(--safe-b)); right: calc(var(--gap) + var(--safe-r)); transform: none; grid-auto-flow: column; }
+  .eta { left: calc(var(--gap) + 136px + var(--safe-l)); right: calc(var(--gap) + 116px + var(--safe-r)); transform: none; bottom: calc(var(--gap) + var(--safe-b)); justify-content: space-between; gap: 8px; padding: 4px 4px 4px 12px; }
+  .eta b { font-size: 16px; }
+  .maplibregl-ctrl-group { display: none; }
+  body.demo .demo-badge { display: none; }
 }
