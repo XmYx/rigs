@@ -6,6 +6,7 @@
 //   GET api/search   place search: Photon (komoot), falling back to Nominatim
 //   GET api/route    driving route with turn-by-turn steps from OSRM
 //   GET api/traffic  per-road congestion around a bbox: TomTom flow tiles or assumed traffic (traffic.js)
+//   api/trips…       recorded trips: upload chunks, list, detail, totals, delete-to-trash (tripstore.js)
 // Search and routing go through here so the public OSM services see one polite, cached, rate-limited
 // client with a real User-Agent instead of every browser hitting them directly.
 import fs from 'node:fs';
@@ -13,8 +14,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
-import { HOME, log, readJsonSync } from '../../src/util.js';
+import { HOME, expandHome, log, readJsonSync } from '../../src/util.js';
 import { createTraffic, hash01, routeInfo } from './traffic.js';
+import { createTripStore, tripsRoute } from './tripstore.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PUBLIC_DIR = path.join(HERE, 'public');
@@ -55,6 +57,9 @@ export function loadNavConfig({ env = process.env, configFile } = {}) {
   const fromFile = readJsonSync(file, {})?.navigation || {};
   const warnings = [];
   const cfg = { ...DEFAULTS, demo: { ...DEFAULTS.demo } };
+  // Recorded trips (tripstore.js). Personal location history: it stays on this machine.
+  const dataDir = env.NAV_DATA_DIR || fromFile.dataDir;
+  cfg.dataDir = dataDir ? path.resolve(expandHome(String(dataDir))) : path.join(rigsHome, 'navigation', 'trips');
 
   const port = Number(env.NAV_PORT || fromFile.port || DEFAULTS.port);
   if (Number.isInteger(port) && port >= 0 && port < 65536) cfg.port = port;
@@ -212,8 +217,9 @@ function parseLonLat(s) {
   return isLonLat(p) ? p : null;
 }
 
-export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now } = {}) {
+export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now, trips } = {}) {
   const getJson = createUpstream({ fetchImpl });
+  const tripStore = trips || createTripStore({ dir: cfg.dataDir || path.join(HOME, '.rigs', 'navigation', 'trips'), now });
   const traffic = createTraffic({ cfg, fetchImpl, now, log, userAgent: USER_AGENT });
   const root = path.resolve(publicDir);
   // Recent routes by routeId, so api/traffic can bump the roads along the route without the client
@@ -237,6 +243,9 @@ export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDi
   async function handle(req, res) {
     const url = new URL(req.url, 'http://local');
     const p = url.pathname;
+    // Trips take POST/PATCH/DELETE too; everything else below stays GET/HEAD only.
+    const trip = tripsRoute(tripStore, req, p, url.searchParams);
+    if (trip) { const r = await trip; return send(res, r.status, r.body, { 'cache-control': 'no-store' }); }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });
     if (p === '/healthz') return send(res, 200, { ok: true }, { 'cache-control': 'no-store' });
     if (p === '/config.json') return send(res, 200, publicConfig(cfg), { 'cache-control': 'no-store' });

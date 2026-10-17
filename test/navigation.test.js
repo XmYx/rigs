@@ -240,7 +240,7 @@ test('server: /healthz, /config.json and the UI with relative URLs only', async 
     assert.match(page.headers.get('content-type'), /text\/html/);
     const html = await page.text();
     assert.doesNotMatch(html, /(?:src|href)="\/(?!\/)/, 'no root-relative URLs in index.html');
-    for (const f of ['app.js', 'geo.js', 'mapstyle.js', 'traffic.js', 'style.css']) {
+    for (const f of ['app.js', 'geo.js', 'mapstyle.js', 'traffic.js', 'trips.js', 'tripstats.js', 'style.css']) {
       const r = await fetch(base + '/' + f);
       assert.equal(r.status, 200, f);
       const text = await r.text();

@@ -1,18 +1,21 @@
 // Navigation applet UI: MapLibre GL over free OpenStreetMap vector tiles, a JARVIS-style HUD (speed,
 // heading, next turn, ETA), a follow-me 3D camera, destination search + routing through the applet
 // server, traffic (streets shaded by congestion, little cars moving around you) and ?demo=1 which
-// drives a simulated vehicle so it all works without GPS.
+// drives a simulated vehicle so it all works without GPS. Every drive is recorded as a trip (trips.js;
+// ?record=0 turns that off, and the demo records only with ?record=1).
 import {
   bearing, cardinal, createMotionEstimator, formatDistance, formatDuration, kmhToMs, lerpHeading,
   maneuverArrow, maneuverText, pointAlong, cumulativeDistances, routeProgress, speedIn, zoomForSpeed,
 } from './geo.js';
 import { buildStyle, routeLayers, trafficLayers } from './mapstyle.js';
 import { createTrafficSim, shadeFeatures } from './traffic.js';
+import { installTripRecorder } from './trips.js';
 
 const MAPLIBRE_FALLBACK = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo') && params.get('demo') !== '0';
+const RECORD = DEMO ? params.get('record') === '1' : params.get('record') !== '0';
 const DEMO_TICK_MS = 200;
 const PITCH = 60;
 
@@ -27,6 +30,7 @@ const state = {
   route: null, dest: null, progress: null, offRoute: 0, lastReroute: 0,
   mapLoaded: false, driving: false, fixes: 0,
   traffic: { on: store.get('traffic', '1') !== '0', source: null, segments: 0, cars: 0, updated: null },
+  trip: null, // trip recorder status: {recording, id, points, outbox, …} (trips.js)
 };
 window.__nav = state; // inspection hook for screenshots and debugging
 
@@ -155,6 +159,8 @@ function startMap() {
 // ---- Position pipeline -------------------------------------------------------------------------
 
 const motion = createMotionEstimator();
+const recorder = RECORD ? installTripRecorder({ source: DEMO ? 'sim' : 'gps', onChange: (s) => { state.trip = s; } }) : null;
+if (recorder) state.trip = recorder.status();
 let vehicle = null;
 let vehicleShown = false;
 let destMarker = null;
@@ -162,6 +168,7 @@ let camHeading = null;
 
 function onFix(fix) {
   state.fixes++;
+  recorder?.addFix(fix);
   const m = motion.update(fix);
   state.pos = fix;
   state.speed = m.speed;
@@ -220,7 +227,7 @@ function watchGps() {
   status('Waiting for GPS…', { sticky: true });
   navigator.geolocation.watchPosition((p) => {
     if (state.fixes === 0) status('');
-    onFix({ lat: p.coords.latitude, lon: p.coords.longitude, t: p.timestamp || Date.now(), speed: p.coords.speed, heading: p.coords.heading, accuracy: p.coords.accuracy });
+    onFix({ lat: p.coords.latitude, lon: p.coords.longitude, t: p.timestamp || Date.now(), speed: p.coords.speed, heading: p.coords.heading, accuracy: p.coords.accuracy, alt: p.coords.altitude });
   }, (err) => {
     if (err.code === 1) gpsDenied();
     else if (err.code === 2) status('No GPS signal yet — keep the page open.', { sticky: true });

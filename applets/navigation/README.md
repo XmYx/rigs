@@ -8,6 +8,8 @@ A dark, 3D, green-vector navigation map for JARVIS. It has:
 - a follow-me camera that eases to your position and direction of travel
 - traffic: streets shaded darker where traffic is heavy, and little car silhouettes moving around you,
   more and slower on congested roads (see [Traffic](#traffic))
+- trip recording: every drive while the page is open is saved on this machine with its distance,
+  speeds and accelerations (see [Trips](#trips))
 
 All data is **free and needs no API key** (live traffic can use an optional free key):
 
@@ -50,6 +52,7 @@ everything with **relative URLs**, so it works both at `/` and behind the App Cl
 | `GET api/search?q=…&near=lon,lat` | `{results:[{label, detail, lon, lat}]}` |
 | `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], routeId}` |
 | `GET api/traffic?bbox=w,s,e,n&z=…[&route=routeId][&tz=IANA zone][&source=synthetic][&at=ISO time]` | `{source, updated, z, clipped, segments:[{id, coords:[[lon,lat]…], class, congestion 0..1, speedKmh, oneway?}]}`, see [Traffic](#traffic) |
+| `api/trips…` | recorded trips: upload, list, detail, totals, delete, see [Trips](#trips) |
 
 ### Demo mode
 
@@ -85,6 +88,7 @@ over the defaults:
 | `NAV_TOMTOM_KEY` | `tomtomKey` | unset. **Secret**: stays on the server, never in `config.json`, logs or errors |
 | `NAV_TRAFFIC_DAILY_TILES` | `trafficDailyTiles` | `5000` TomTom tiles per UTC day, then assumed traffic until midnight UTC |
 | `NAV_TOMTOM_URL` | `tomtomUrl` | `https://api.tomtom.com` |
+| `NAV_DATA_DIR` | `dataDir` | `~/.rigs/navigation/trips` (under `RIGS_HOME` when set): where recorded trips are stored |
 
 ```json
 { "navigation": { "demo": { "from": [13.3777, 52.5163], "to": [13.4050, 52.5200] } } }
@@ -154,6 +158,99 @@ Change `PALETTE` there to retune it. Traffic shading is `TRAFFIC_SHADE` in the s
   flicker, and the route you drive is a little busier, as the fast path usually is.
 - **Formulas, rejected sources and TomTom details:** [`docs/traffic-source.md`](../../docs/traffic-source.md).
 
+## Trips
+
+Every drive is recorded while the navigation page is open, so you can look back at it later: distance,
+duration, average and top speed, and the hardest acceleration and braking.
+
+- **On by default** with GPS. `?record=0` turns it off for that page. The demo records only with
+  `?demo=1&record=1`, which is how you test it without driving.
+- **Data stays on this machine.** Trips are stored by the applet server in `NAV_DATA_DIR`
+  (default `~/.rigs/navigation/trips`), one JSON file per trip. The browser talks only to its own
+  applet server; trip data goes to no other service.
+
+### What gets recorded
+
+The recorder (`public/trips.js`) sits on the same position stream as the HUD:
+
+| Rule | Value |
+| --- | --- |
+| Drop a fix | accuracy worse than 50 m; or moved under 3 m while under 1 km/h (GPS wobble while parked) |
+| Keep rate | at most one fix per ~second (the 5 Hz demo is thinned to 1 Hz) |
+| A trip starts | above 5 km/h, including the ~10 s before as pre-roll. Without `coords.speed`, speed is the displacement over ≥ 5 s |
+| A trip ends | after 5 minutes without moving (> 3 km/h), or when the page closes (`pagehide`) |
+
+Fixes are stored as `{t, lat, lon, speed, heading, accuracy, alt}`. `t` is in epoch ms, speeds in m/s.
+
+### Nothing lost offline
+
+- Every ~15 s the new fixes become a numbered chunk in an outbox in `localStorage`
+  (`nav.trips.outbox`). Chunks are posted in order.
+- If the server is unreachable or answers 5xx, the chunks wait there, across reloads, and go out
+  once it answers (every 5 s, and on the browser's `online` event).
+- When the tab is hidden or the page closes, the outbox goes out with `navigator.sendBeacon`, up to
+  60 KB. The rest waits for the next visit.
+- Fixes not yet in a chunk are saved with the open trip (`nav.trips.current`). If the page is killed
+  without `pagehide`, the next visit closes that trip with them.
+- The server ignores a chunk `seq` it already has and merges points by timestamp, so resending is
+  always safe.
+- A trip that never got its final chunk is closed by the server after 10 minutes without uploads
+  (`endReason: "timeout"`).
+
+### Storage
+
+`<NAV_DATA_DIR>/<id>.json` (id like `20261017-143706-k3f9`, UTC start time) holds:
+
+```json
+{ "v": 1, "id": "…", "status": "recording|done", "source": "gps|sim", "createdAt": 0, "updatedAt": 0,
+  "endReason": "stopped|closed|timeout", "seqs": [0, 1], "points": [{ "t": 0, "lat": 0, "lon": 0, "speed": 0, "heading": 0, "accuracy": 0, "alt": null }],
+  "summary": { "distance": 0, "maxSpeed": 0, "…": "tripStats without the timeline, cached when the trip ends" },
+  "title": null, "places": null }
+```
+
+- Every write goes to a temp file and is renamed into place, one write at a time per trip.
+- `DELETE` never removes data. It moves the file to `<NAV_DATA_DIR>/trash/`. To restore a trip, move
+  the file back.
+
+### Stats
+
+`public/tripstats.js` is plain ESM. The browser and the server use the same code, so the numbers
+match everywhere.
+
+| Stat | How |
+| --- | --- |
+| Clean-up | fixes sorted and de-duplicated; a fix implying more than 324 km/h from the last good one is dropped |
+| `distance` | haversine over 1-2-1-smoothed positions, counting only segments while moving (≥ 0.8 m/s) |
+| `duration`, `movingTime` | first → last fix; time spent moving |
+| `avgSpeed` | `distance / movingTime` |
+| `maxSpeed` | per fix: `coords.speed` if plausible, else derived from the positions; then a 3 s median (rejects spikes) and a 3 s mean |
+| `maxAccel`, `maxBrake` | m/s², the speed change across a 2.5 s window; values beyond 12 m/s² are discarded |
+| `timeline` | at most 300 `{t s, d m, v m/s, a m/s²}` entries for charts |
+| also | `bbox` `[w, s, e, n]`, `start`, `end`, `pointCount` |
+
+`aggregateTrips` gives the totals: trip count, distance, duration, moving time, overall average
+(total distance / total moving time), top speed and its trip, max accel/brake, and the longest trip.
+
+### API
+
+All routes are relative, like the rest of the applet, and answered with `cache-control: no-store`.
+
+| Endpoint | Does |
+| --- | --- |
+| `POST api/trips/:id/points` | append a chunk `{seq, points:[…], final?, reason?, source?}` → `{ok, id, status, pointCount, added}`. The body is parsed as JSON whatever its content type (beacons send `text/plain`). 410 if the trip was deleted |
+| `GET api/trips[?since=&until=]` | `{trips:[summary…]}`, newest first. A summary is the stats without `timeline`, plus `id, status, source, endReason, title, places`. `since`/`until` filter on the start time, as epoch ms or an ISO date |
+| `GET api/trips/summary[?since=&until=]` | `aggregateTrips` totals, plus the `since`/`until` used |
+| `GET api/trips/:id` | the trip file (without `seqs`) with all `points` and full `stats` including `timeline` |
+| `PATCH api/trips/:id` | `{title?, places?: {start, end}}`: display labels the trips panel can cache |
+| `DELETE api/trips/:id` | moves the file to `trash/` → `{ok, trashed: id}` |
+
+```bash
+NAV_DATA_DIR=$(mktemp -d) node applets/navigation/server.js
+# open http://127.0.0.1:8731/?demo=1&record=1 for a minute, then
+curl -s http://127.0.0.1:8731/api/trips
+curl -s http://127.0.0.1:8731/api/trips/<id> | jq .stats
+```
+
 ## GPS, HTTPS and the secure-context rule
 
 Browsers only allow `navigator.geolocation` in a **secure context**: `https://…` or `http://localhost`.
@@ -193,6 +290,11 @@ of an error.
   - `api/traffic` with stubbed OpenFreeMap and TomTom (contract, caching, 429/401/budget fallback, the
     key never leaked)
   - the car simulator (density, speed, heading, keeping right, the car cap)
+- `test/trips.test.js` covers trips:
+  - `tripstats.js` on synthetic tracks: known distance and speed, acceleration and braking steps,
+    a rejected speed spike and position jump, noise, standing still
+  - the recorder's filtering, chunking, offline outbox, crash recovery and `pagehide` beacon
+  - the `api/trips` round-trip on a temp `NAV_DATA_DIR`, including delete-to-trash and stale trips
 - `node applets/navigation/scripts/screenshot.js <url> <out.png> 1440x900 --swiftshader` takes a
   headless-Chrome screenshot. It also prints speed samples, console errors and failed requests.
   `--swiftshader` gives headless Chrome a software WebGL.
