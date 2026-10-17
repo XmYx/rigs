@@ -127,3 +127,13 @@ test("OpenRig's managed blocks never reach the repo: refused on propose, strippe
   const d = await merge.describe(w.dir);
   assert.equal(d.commits.length, 3);
 });
+
+test('checkOutput: a failed run sends back the failing test blocks, not only the tail', () => {
+  const block = ['# Subtest: flaky one', 'not ok 7 - flaky one', '  ---', '  error: |-', '    boom', '  ...'];
+  const passing = Array.from({ length: 200 }, (_, i) => `ok ${i + 8} - fine ${i}`);
+  const out = merge.checkOutput([...block, ...passing, '# tests 207', '# pass 206', '# fail 1'].join('\n'));
+  assert.match(out, /not ok 7 - flaky one\n {2}---\n {2}error: \|-\n {4}boom/);
+  assert.match(out, /# fail 1$/);
+  assert.ok(out.length <= 4000);
+  assert.equal(merge.checkOutput('build failed\nline 2'), 'build failed\nline 2', 'no TAP: just the tail');
+});
