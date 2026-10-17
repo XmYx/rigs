@@ -38,17 +38,23 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
     ctx.stroke();
   }
 
+  // prefers-reduced-motion: a still ring (no rotation, pulse or wobble) redrawn only when state or level changes
+  const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  const calm = () => !!mq?.matches;
+
   function frame(now) {
-    const t = (now - t0) / 1000;
-    for (let i = 0; i < 3; i++) color[i] += (target[i] - color[i]) * 0.08;
+    if (document.hidden) { setTimeout(() => requestAnimationFrame(frame), 500); return; }
+    const still = calm();
+    const t = still ? 0 : (now - t0) / 1000;
+    for (let i = 0; i < 3; i++) color[i] += (target[i] - color[i]) * (still ? 1 : 0.08);
     const w = canvas.clientWidth;
     const hgt = canvas.clientHeight;
     const cx = w / 2;
     const cy = hgt / 2;
     const R = Math.min(w, hgt) / 2 - 4;
     ctx.clearRect(0, 0, w, hgt);
-    const speed = state === 'thinking' ? 3.2 : state === 'speaking' ? 1.6 : state === 'listening' ? 1.2 : 0.5;
-    const pulse = state === 'speaking' || state === 'listening' ? level : 0.15 + Math.sin(t * 1.6) * 0.05;
+    const speed = still ? 0 : state === 'thinking' ? 3.2 : state === 'speaking' ? 1.6 : state === 'listening' ? 1.2 : 0.5;
+    const pulse = still ? 0.15 : state === 'speaking' || state === 'listening' ? level : 0.15 + Math.sin(t * 1.6) * 0.05;
 
     // glow
     const g = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R);
@@ -83,7 +89,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
     ctx.beginPath();
     for (let i = 0; i <= 96; i++) {
       const a = (i / 96) * Math.PI * 2;
-      const wob = state === 'speaking' || state === 'listening' ? Math.sin(a * 6 + t * 8) * level * R * 0.05 : 0;
+      const wob = !still && (state === 'speaking' || state === 'listening') ? Math.sin(a * 6 + t * 8) * level * R * 0.05 : 0;
       const x = cx + Math.cos(a) * (ir + wob);
       const y = cy + Math.sin(a) * (ir + wob);
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
@@ -100,7 +106,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
     ctx.shadowBlur = 12;
     ctx.fillText(label, cx, cy);
     ctx.shadowBlur = 0;
-    requestAnimationFrame(frame);
+    if (still) setTimeout(() => requestAnimationFrame(frame), 400); else requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 

@@ -1,4 +1,5 @@
 import { api, h } from './api.js';
+import { announce } from './a11y.js';
 
 // The work dashboard: a floating panel with everything working right now across the mesh — agent
 // sessions (model, tokens, context, todo progress), JARVIS answers in progress, projects with their
@@ -39,9 +40,16 @@ export function createWork(el, { onOpenSession, onOpenTask, onOpenProject } = {}
   let timer = null;
   let active = true;
   let last = null;
+  const seenStatus = new Map(); // task/project key → status line, to announce changes to screen readers
 
   function render(w) {
     last = w;
+    for (const n of w.nodes || []) for (const pj of n.projects || []) {
+      const key = `${n.node}/${pj.name}`;
+      const line = `${pj.done} of ${pj.total} tasks done${pj.blocked ? `, ${pj.blocked} stuck` : ''}`;
+      if (seenStatus.has(key) && seenStatus.get(key) !== line) announce(`Project ${pj.name}: ${line}`);
+      seenStatus.set(key, line);
+    }
     const p = w.plan || {};
     const lims = [];
     if (p.session) lims.push(bar('5-hour session', p.session.pct, until(p.session.resetsAt)));

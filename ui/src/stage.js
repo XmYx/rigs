@@ -21,7 +21,7 @@ function ensure() {
 export function showOnStage(text, { title = '' } = {}) {
   if (!/```visual/.test(text)) return;
   const w = ensure();
-  const card = h('section', { class: 'stage-card' }, title ? h('div', { class: 'stage-title' }, title) : '', h('div', { class: 'stage-body' }));
+  const card = h('section', { class: 'stage-card', 'aria-label': title || 'Visual card' }, title ? h('div', { class: 'stage-title' }, title) : '', h('div', { class: 'stage-body' }));
   renderReply(card.querySelector('.stage-body'), text);
   feed.prepend(card);
   w.raise();

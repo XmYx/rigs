@@ -151,7 +151,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     .linkColor((l) => linkColor(l))
     .linkOpacity(0.32)
     .linkWidth((l) => (isLit(l) ? 0.9 : l.kind === 'mesh' ? 0.6 : 0.15))
-    .linkDirectionalParticles((l) => (state.particles && (l.kind === 'live' || l.kind === 'mesh') ? (l.kind === 'live' ? 3 : 2) : 0))
+    .linkDirectionalParticles((l) => (state.particles && !calm() && (l.kind === 'live' || l.kind === 'mesh') ? (l.kind === 'live' ? 3 : 2) : 0))
     .linkDirectionalParticleWidth((l) => (l.kind === 'mesh' ? 1.4 : 1.1))
     .linkDirectionalParticleSpeed((l) => (l.kind === 'mesh' ? 0.004 : 0.01))
     .linkDirectionalParticleColor((l) => (l.kind === 'mesh' ? '#5eead4' : '#f9a8d4'))
@@ -261,14 +261,19 @@ export function createGraph(el, { onSelect, onBackground }) {
   }
 
   // Animate rings + pulse + attention halos + slow auto-rotation.
+  // prefers-reduced-motion: no spinning rings, pulsing, blinking halos, orbit or link particles
+  const calmMq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  const calm = () => !!calmMq?.matches;
+  calmMq?.addEventListener?.('change', () => Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()));
   (function loop() {
+    const still = calm();
     const t = performance.now() / 1000;
-    const blink = 0.5 + 0.5 * Math.sin(t * 6.5);
+    const blink = still ? 1 : 0.5 + 0.5 * Math.sin(t * 6.5);
     for (const n of state.data.nodes) {
       const g = n.__group;
       if (!g) continue;
-      for (const c of g.children) if (c.userData.spin) c.rotation.z += 0.004;
-      if (g.userData.pulse) { const s = 1 + Math.sin(t * 3 + (n.x || 0)) * 0.25; g.scale.set(s, s, s); }
+      for (const c of g.children) if (c.userData.spin && !still) c.rotation.z += 0.004;
+      if (g.userData.pulse && !still) { const s = 1 + Math.sin(t * 3 + (n.x || 0)) * 0.25; g.scale.set(s, s, s); }
       const alert = state.attention.has(n.id) && !state.hidden.has(n.type);
       if (alert && !g.userData.halo) g.add((g.userData.halo = makeHalo(n)));
       const halo = g.userData.halo;
@@ -278,14 +283,14 @@ export function createGraph(el, { onSelect, onBackground }) {
         if (alert) {
           halo.children[0].material.opacity = 0.08 + 0.55 * blink;
           halo.children[1].material.opacity = 0.25 + 0.75 * blink;
-          halo.children[1].rotation.z += 0.03;
-          const s = 1 + 0.3 * blink;
+          if (!still) halo.children[1].rotation.z += 0.03;
+          const s = still ? 1 : 1 + 0.3 * blink;
           halo.scale.set(s, s, s);
         }
       }
     }
     const controls = Graph.controls();
-    if (controls) controls.autoRotate = state.rotate && !state.focus && !state.hover;
+    if (controls) controls.autoRotate = state.rotate && !still && !state.focus && !state.hover;
     requestAnimationFrame(loop);
   })();
 
