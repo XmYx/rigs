@@ -116,8 +116,21 @@ Xcode 13.3 (Swift 5.6, macOS 12.3 SDK). Dev daemon: `RIGS_HOME=<worktree>/.rigs-
 | Accessibility | RIGS Control | `windows`, `focus`, `pointer`, `key`, `type` (AX + `CGEventPost`) | `AXIsProcessTrustedWithOptions(prompt)` adds the entry; System Settings > Privacy & Security > Accessibility |
 | Automation, Input Monitoring, Full Disk Access | — | not needed by the helper | |
 
-Each was switched on by Sir at the Mac. Nothing in RIGS clicks a TCC prompt or edits TCC.db; the only TCC call RIGS
-makes is `tccutil reset … dev.rigs.control` after a rebuild (its own stale entries).
+Screen Recording was switched on by Sir at the Mac and is verified live. Accessibility has not been switched on for
+RIGS Control yet (see "Live check status"), so its row lists what the code and macOS require, not a live observation.
+Nothing in RIGS clicks a TCC prompt or edits TCC.db; the only TCC call RIGS makes is `tccutil reset … dev.rigs.control`
+after a rebuild (its own stale entries).
+
+### Live check status (2026-10-17, through `http://127.0.0.1:4791/api/local/control/*`)
+
+| Check | Result |
+| --- | --- |
+| `npm test` on macOS | 446 pass, 0 fail, 1 skipped |
+| Screenshot | works: `/tmp/rigs-mac-shot.png`, 3360×2100 PNG of the real desktop; downscaled `maxWidth=1400` shots too |
+| Screen Recording across a helper restart | kept (bootout + bootstrap without a rebuild, new pid 68840) |
+| Accessibility missing → status | `ready {see: true, act: false}`; `input` and `accessibility` `ok: false` with `fix.kind: settings`, the `Privacy_Accessibility` pane URL, the app path and "switch on RIGS Control … not to node" |
+| Accessibility missing → actions | `GET windows` and `POST type` → 412 `needs-permission` with the same fix |
+| Window list, focus, pointer, typing into TextEdit | **not yet verified**: they need Accessibility, which no build of RIGS Control has held so far (the audit log has no successful `windows`, `focus`, `pointer`, `key` or `type`). Pending Sir switching it on |
 
 ### Findings
 
