@@ -287,6 +287,47 @@ export async function send(kind, id, text) {
   throw new Error(`cannot type into a ${kind} session`);
 }
 
+/**
+ * The numbered choice dialog on a live tmux/OpenRig screen ("❯ 1. Yes / 2. No" under a question), so the
+ * chat can offer its answers without anyone attaching a terminal. Only a block at the bottom of the
+ * screen counts: numbered lines in the middle of a reply are just text.
+ */
+export async function promptOptions(kind, id) {
+  const t = bin('tmux');
+  if (!t || (kind !== 'tmux' && kind !== 'rig') || !id) return null;
+  const r = await run(t, ['capture-pane', '-p', '-J', '-t', id, '-S', '-40'], { timeout: 4000 });
+  if (r.code !== 0) return null;
+  const lines = r.stdout.split('\n').map((l) => l.replace(/\s+$/, ''));
+  const opt = /^\s*(?:[❯>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
+  let end = lines.length - 1;
+  while (end >= 0 && !lines[end].trim()) end--;
+  while (end >= 0 && !opt.test(lines[end])) end--;
+  if (end < 0) return null;
+  // Below the options only the dialog's footer ("Esc to cancel", key hints) may follow.
+  const tail = lines.slice(end + 1).filter((l) => l.trim());
+  if (tail.some((l) => !/esc|enter|tab|cancel|↑|↓|select|navigate/i.test(l))) return null;
+  let start = end;
+  while (start > 0 && opt.test(lines[start - 1])) start--;
+  const options = [];
+  for (let i = start; i <= end; i++) { const m = lines[i].match(opt); options.push({ n: Number(m[1]), label: m[2].trim().slice(0, 120) }); }
+  if (options.length < 2 || options.some((o, i) => o.n !== i + 1)) return null;
+  let question = '';
+  for (let i = start - 1; i >= 0 && i >= start - 8; i--) if (lines[i].trim()) { question = lines[i].replace(/^[│|\s]+|[│|\s]+$/g, '').trim(); break; }
+  return { question: question.slice(0, 300), options };
+}
+
+/** Pick an option in a live tmux/OpenRig dialog: Claude Code and Codex take the option's number as a keypress. */
+export async function answerOption(kind, id, choice) {
+  const t = bin('tmux');
+  if (!t) throw new Error('tmux not available');
+  if (kind !== 'tmux' && kind !== 'rig') throw new Error(`cannot answer a ${kind} session here`);
+  const n = String(choice ?? '').trim();
+  if (!/^\d{1,2}$/.test(n)) throw new Error('choice must be an option number');
+  const a = await run(t, ['send-keys', '-t', id, '-l', n], { timeout: 5000 });
+  if (a.code !== 0) throw new Error(a.stderr.trim() || 'tmux send-keys failed');
+  return { ok: true, delivered: 'tmux' };
+}
+
 // Stored Claude Code / Codex sessions are continued headlessly: `claude -p --resume <id>` and
 // `codex exec resume <id>` append the turn to the same session, so its transcript (and the JARVIS chat
 // dock attached to it) shows the reply. One turn at a time per session.

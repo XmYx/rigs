@@ -338,6 +338,8 @@ export async function startServer() {
     }
     if (sub === 'sessions/send' && method === 'POST') { const b = await body(); return sessions.send(b.kind, b.id, b.text); }
     if (sub === 'sessions/state') return sessions.resumeState(q.get('kind'), q.get('id'));
+    if (sub === 'sessions/prompt') return sessions.promptOptions(q.get('kind'), q.get('id'));
+    if (sub === 'sessions/answer' && method === 'POST') { const b = await body(); return sessions.answerOption(b.kind, b.id, b.choice); }
     if (sub === 'sessions/attach' && method === 'POST') { const b = await body(); return sessions.attach(b.kind, b.id, b); }
     if (sub === 'agents/start' && method === 'POST') return sessions.startAgent(await body());
 
