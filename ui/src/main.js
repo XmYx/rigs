@@ -3,6 +3,7 @@ import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
+import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
 import { initMobile, revealInspector, isPhone } from './mobile.js';
@@ -245,6 +246,7 @@ function connectEvents() {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
     onAppsEvent(m);
+    if (m.type === 'appstore') onAppStoreEvent(m);
     if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.session) popups.handle(m);
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
@@ -282,8 +284,10 @@ function renderAppList() {
     const st = a.health?.status || 'unknown';
     return h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${a.launch ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
       h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node));
-  }) : [h('div', { class: 'muted small' }, 'No apps yet.')]));
+  }) : [h('div', { class: 'muted small' }, 'No apps yet.')]), h('div', { class: 'hub app-row store-row', title: 'App Store — install new apps', onclick: () => openAppStore() }, h('i', { style: { background: 'var(--accent)' } }), h('span', {}, '🛍 App Store'), h('em', {}, 'install')));
 }
+
+initAppStore({ machines: () => snap });
 
 const inside = (cwd, root) => !!cwd && !!root && (cwd === root || cwd.startsWith(root.replace(/[\\/]+$/, '') + (root.includes('\\') ? '\\' : '/')));
 const pinSessions = (e, p) => (e.sessions || []).filter((s) => s.live !== false && inside(s.cwd, p.path));
@@ -862,6 +866,7 @@ async function intent(text) {
     return true;
   }
   if (/^(?:show |open )?(?:my )?projects$/i.test(t)) { projectsWindow(); say('Your projects.'); return true; }
+  if (/^(?:show |open |launch |start )?(?:the |my )?(?:app ?store|apps? catalog|app shop)$/i.test(t)) { openAppStore(); say('The App Store.'); return true; }
   if (/^(?:show |open |list )?(?:my |the )?(?:apps|applets|app cloud)$/i.test(t)) { openApps(); say('Your apps.'); return true; }
   if ((m = t.match(/^(?:open|launch|show|start|run)\s+(?:the |my )?(.+?)(?: app| applet)?$/i))) {
     await refreshApps();
