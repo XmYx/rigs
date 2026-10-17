@@ -748,6 +748,7 @@ function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
   if (/\b(jarvis|error)\b/.test(cls)) announce(text.replace(SEPARATOR, '. '), { assertive: cls.includes('error'), delay: 1200 }); // screen readers: once, when the reply settles
   el.className = 'show ' + cls;
+  el.removeAttribute('aria-label'); // the empty subtitle is named in index.html; once it has text, the text is its name
   const m = text.match(SEPARATOR);
   el.replaceChildren();
   if (m) {
