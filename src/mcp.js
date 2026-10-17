@@ -8,16 +8,44 @@ import { config } from './config.js';
 
 const base = () => `http://127.0.0.1:${config().port}`;
 
+/** Who is calling, for the screen-control gate and audit log: this agent session, not a person at the UI. */
+export function callerHeader(env = process.env, cwd = process.cwd()) {
+  const agent = env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT ? 'claude' : env.CODEX_HOME || env.CODEX_SESSION_ID || env.CODEX_THREAD_ID ? 'codex' : 'agent';
+  const c = {
+    agent, session: env.CLAUDE_CODE_SESSION_ID || env.CODEX_SESSION_ID || env.CODEX_THREAD_ID || '',
+    seat: env.OPENRIG_SESSION_NAME || env.OPENRIG_SESSION || '', cwd, pid: process.pid,
+  };
+  // Header values must be ASCII.
+  return JSON.stringify(c).replace(/[^\x20-\x7e]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+const CALLER = callerHeader();
+
+function failure(data, status) {
+  const e = new Error((data && data.error) || `HTTP ${status}`);
+  if (data?.code) e.code = data.code;
+  if (data?.fix) { e.fix = data.fix; e.message += ` (fix: ${data.fix.text || JSON.stringify(data.fix)})`; }
+  return e;
+}
+
 async function api(path, { method = 'GET', body, timeout = 60000 } = {}) {
   const r = await fetch(base() + path, {
-    method, headers: { 'content-type': 'application/json', 'x-rigs-token': config().meshToken },
+    method, headers: { 'content-type': 'application/json', 'x-rigs-token': config().meshToken, 'x-rigs-caller': CALLER },
     body: body !== undefined ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout),
   });
   const text = await r.text();
   let data;
   try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  if (!r.ok) throw failure(data, r.status);
   return data;
+}
+
+/** A screenshot: the image bytes plus the headers that say how to map image pixels back to the screen. */
+async function apiImage(path, timeout = 60000) {
+  const r = await fetch(base() + path, { headers: { 'x-rigs-token': config().meshToken, 'x-rigs-caller': CALLER }, signal: AbortSignal.timeout(timeout) });
+  if (!r.ok) { const t = await r.text(); let d; try { d = JSON.parse(t); } catch { d = t; } throw failure(d, r.status); }
+  const h = (k) => r.headers.get(k);
+  const meta = { shot: h('x-rigs-shot'), scale: Number(h('x-rigs-scale')) || 1, display: h('x-rigs-display'), width: Number(h('x-rigs-width')) || undefined, height: Number(h('x-rigs-height')) || undefined, region: h('x-rigs-region') ? JSON.parse(h('x-rigs-region')) : undefined };
+  return { mime: h('content-type') || 'image/png', data: Buffer.from(await r.arrayBuffer()), meta };
 }
 
 const n = (node) => encodeURIComponent(node || 'self');
@@ -269,6 +297,46 @@ const TOOLS = [
     run: () => api('/api/mesh/update', { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
+    name: 'mesh_screen', description: 'Screenshot of a machine\'s screen (returned as an image). Only works when Sir has switched screen access on for that machine; every call is announced and logged. The result says `shot` and `scale` (screen pixels per image pixel): pass `shot` to mesh_control so x/y given in this image land on the right spot. maxWidth defaults to 1568.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string' }, display: { type: 'string' }, window: { type: 'string', description: 'window id from mesh_windows' }, region: { type: 'string', description: 'x,y,width,height in screen pixels' }, maxWidth: { type: 'number' }, format: { type: 'string', enum: ['png', 'jpeg'] } }, required: ['node'] },
+    run: async (a) => {
+      const q = new URLSearchParams({ maxWidth: String(a.maxWidth || 1568) });
+      for (const k of ['display', 'window', 'region', 'format']) if (a[k]) q.set(k, a[k]);
+      const { mime, data, meta } = await apiImage(`/api/nodes/${n(a.node)}/control/screenshot?${q}`);
+      return { content: [{ type: 'image', data: data.toString('base64'), mimeType: mime.split(';')[0] }, { type: 'text', text: JSON.stringify(meta) }] };
+    },
+  },
+  {
+    name: 'mesh_windows', description: 'List the windows on a machine (id, title, app, bounds, focused). Needs screen access on for that machine.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string' } }, required: ['node'] },
+    run: (a) => api(`/api/nodes/${n(a.node)}/control/windows`),
+  },
+  {
+    name: 'mesh_control', description: 'Drive a machine\'s screen: move/click/double/right/scroll/drag the pointer, type text, press a key combo, or focus a window. Needs input control switched on for that machine by Sir; this tool can never switch it on. One agent holds the screen at a time. Coordinates are in the pixels of the screenshot you took (pass its `shot`). Ask Sir before using it unless the task says you may. Pass secret:true for anything credential-like.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string' }, action: { type: 'string', enum: ['move', 'click', 'double', 'right', 'scroll', 'drag', 'type', 'key', 'focus'] }, x: { type: 'number' }, y: { type: 'number' }, shot: { type: 'string', description: 'the shot id from mesh_screen' }, display: { type: 'string' }, dx: { type: 'number' }, dy: { type: 'number' }, to: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, text: { type: 'string' }, secret: { type: 'boolean' }, combo: { type: 'string', description: 'e.g. ctrl+shift+t, mod+c, enter' }, id: { type: 'string', description: 'window id (focus)' } }, required: ['node', 'action'] },
+    run: (a) => {
+      const { node, action, ...rest } = a;
+      const base_ = `/api/nodes/${n(node)}/control`;
+      if (action === 'type') return api(`${base_}/type`, { method: 'POST', body: { text: rest.text, secret: rest.secret } });
+      if (action === 'key') return api(`${base_}/key`, { method: 'POST', body: { combo: rest.combo } });
+      if (action === 'focus') return api(`${base_}/focus`, { method: 'POST', body: { id: rest.id } });
+      const kind = { move: { action: 'move' }, click: { action: 'click' }, double: { action: 'click', count: 2 }, right: { action: 'click', button: 'right' }, scroll: { action: 'scroll' }, drag: { action: 'drag' } }[action];
+      if (!kind) throw new Error(`unknown action ${action}`);
+      const { text, secret, combo, id, ...point } = rest;
+      if (/^\d+$/.test(point.display ?? '')) point.display = Number(point.display);
+      return api(`${base_}/pointer`, { method: 'POST', body: { ...point, ...kind } });
+    },
+  },
+  {
+    name: 'mesh_access', description: 'What this agent may do on a machine\'s desktop: screen access/control switches, killed state, and the permissions behind them (screen capture, input, accessibility) with a fix hint for each missing one. grant:"<permission>" (input, screenCapture, accessibility, automation, fullDiskAccess) starts that grant step on the machine (opens the macOS Settings pane, or queues the Linux uinput root step); a person still has to confirm it there. It cannot turn screen access or control on.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string' }, grant: { type: 'string' } }, required: ['node'] },
+    run: async (a) => {
+      const granted = a.grant ? await api(`/api/nodes/${n(a.node)}/control/grant`, { method: 'POST', body: { permission: a.grant } }) : undefined;
+      const s = await api(`/api/nodes/${n(a.node)}/control?force=${a.grant ? 1 : 0}`);
+      return { enabled: s.enabled, input: s.input, killed: s.killed, ready: s.ready, session: s.session, backend: s.backend, permissions: s.permissions, ...(granted ? { grant: granted } : {}) };
+    },
+  },
+  {
     name: 'mesh_notify', description: 'Show (and speak) a message in every open JARVIS UI across the mesh — use it to report finished work. Keep it to one or two spoken sentences; put any longer description after a line containing only "---" (shown, never spoken). When no UI is open anywhere, it is spoken aloud on this machine\'s speakers instead; aloud: true always speaks it here too.',
     inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' }, aloud: { type: 'boolean', description: 'Also speak through this machine\'s speakers' } }, required: ['text'] },
     run: (a) => api('/api/mesh/notify', { method: 'POST', body: { ...a, from: `${config().name} agent` } }),
@@ -294,7 +362,7 @@ export function startMcp() {
         if (!tool) return fail(-32602, 'unknown tool ' + params?.name);
         try {
           const result = await tool.run(params.arguments || {});
-          reply({ content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }] });
+          reply(Array.isArray(result?.content) ? result : { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }] });
         } catch (e) {
           const hint = /ECONNREFUSED|fetch failed/.test(String(e.cause?.code || e.message)) ? ' (is the RIGS daemon running? `rigs start`)' : '';
           reply({ content: [{ type: 'text', text: `error: ${e.message}${hint}` }], isError: true });

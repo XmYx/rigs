@@ -223,8 +223,11 @@ test('rig resolves outside the service PATH: RIGS\'s pinned wrapper first, then 
     fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true }); fs.writeFileSync(path.join(home, '.local', 'bin', 'rig'), '#!/bin/sh\\n', { mode: 0o755 });
     const { clearWhichCache } = await import(${JSON.stringify(path.join(ROOT, 'src/util.js'))}); clearWhichCache();
     console.log(JSON.stringify([a, bin('rig')]));`;
+  // augmentedPath() appends dirname(process.execPath); a node that lives beside a real `rig` (nvm) would win, so run a lone copy.
+  const nodeDir = path.join(home, 'node-only'); fs.mkdirSync(nodeDir);
+  const nodeBin = path.join(nodeDir, 'node'); fs.copyFileSync(process.execPath, nodeBin);
   const out = await new Promise((res) => {
-    const p = spawn(process.execPath, ['--input-type=module', '-e', script], { env: { HOME: home, PATH: '/usr/bin:/bin', RIGS_HOME: path.join(home, '.rigs') } });
+    const p = spawn(nodeBin, ['--input-type=module', '-e', script], { env: { HOME: home, PATH: '/usr/bin:/bin', RIGS_HOME: path.join(home, '.rigs') } });
     let o = ''; p.stdout.on('data', (d) => (o += d)); p.stderr.on('data', (d) => (o += d)); p.on('close', () => res(o));
   });
   const [a, b] = JSON.parse(out.trim().split('\n').at(-1));
