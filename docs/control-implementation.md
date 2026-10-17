@@ -97,3 +97,45 @@ Other limits are explicit errors, never silent substitutions:
 Reference for the compositor distinction: [Mutter ScreenCast interface](https://github.com/GNOME/mutter/blob/main/data/dbus-interfaces/org.gnome.Mutter.ScreenCast.xml)
 describes stream parameters in compositor coordinates. Input/capture effects above were measured locally;
 the private Mutter API can differ between versions.
+
+## macOS helper (project 8eb2687046, task t1)
+
+RIGS Control.app: `scripts/control/macos/RigsControl.swift` (+ `Info.plist`, `build.sh`), installed by
+`src/control-mac-helper.js` (boot setup, the Grant button, or `rigs control helper install`). It speaks the socket
+protocol above (`probe` also returns `grants` and `helper`; plus `hello`, `displays` and `grant {permission}`).
+Verified on macbookpro, macOS 26.3.1 (25D2128), Apple M1, one display 1680×1050 pt @2x (3360×2100 px), toolchain
+Xcode 13.3 (Swift 5.6, macOS 12.3 SDK). Dev daemon: `RIGS_HOME=<worktree>/.rigs-dev/mac`, port 4791,
+`RIGS_NO_MIGRATIONS=1 RIGS_NO_AUTOUPDATE=1 RIGS_NO_OPENRIG=1`; helper job `dev.rigs.control.6c5a13de`.
+
+### Grants needed (recorded live)
+
+| Grant | To | Needed for | Prompt / where |
+| --- | --- | --- | --- |
+| Screen Recording | RIGS Control | `screenshot` (and window titles) | `CGRequestScreenCaptureAccess()` adds the entry; System Settings > Privacy & Security > Screen Recording |
+| "Bypass the system private window picker" | RIGS Control | `screencapture`-based capture on macOS 15+/26 | a system dialog on the first capture after the grant (Allow / Open System Settings). Capture already worked while it was still open; macOS may ask again periodically |
+| Accessibility | RIGS Control | `windows`, `focus`, `pointer`, `key`, `type` (AX + `CGEventPost`) | `AXIsProcessTrustedWithOptions(prompt)` adds the entry; System Settings > Privacy & Security > Accessibility |
+| Automation, Input Monitoring, Full Disk Access | — | not needed by the helper | |
+
+Each was switched on by Sir at the Mac. Nothing in RIGS clicks a TCC prompt or edits TCC.db; the only TCC call RIGS
+makes is `tccutil reset … dev.rigs.control` after a rebuild (its own stale entries).
+
+### Findings
+
+- **Responsible process.** The same binary started from a terminal reported every grant as true (it inherits the
+  terminal's grants: the bypass this design prevents). Started by launchd as its own LaunchAgent it reported its
+  own state: all false before the grants. A dev daemon started from that terminal also triggers the `nodeGrants`
+  warning, correctly.
+- **Grants apply without a restart.** After Screen Recording was switched on, the running helper (same pid) reported
+  `screen: true` through a fresh `--preflight` child, and captures (spawned `screencapture`) worked.
+- **Grants survive restarts.** `rigs control helper stop` (bootout) then `install` (bootstrap, no rebuild) started a
+  new pid that still had Screen Recording. A rebuild (new cdhash) loses them: the grant flow reset the old entries.
+- **Bug found and fixed (f630aa3): "Quit & Reopen".** Switching on Screen Recording makes System Settings offer
+  "Quit & Reopen". The first build quit (exit 0, so launchd's crash-only KeepAlive left the job stopped) and macOS
+  reopened the bundle through LaunchServices without `--home`, so it served `~/.rigs/run/control.sock` (the
+  installed daemon's path). It was stopped within minutes and its two files removed; the installed daemon never
+  used it (no `~/.rigs/logs/control.jsonl`). The helper now declines quit requests, derives its home from its
+  location, and exits when another instance already answers.
+- **Fix hints.** Helper not running → every permission and action error is `needs-permission` (412) with
+  `fix.kind: helper` ("click Grant or run `rigs control helper install`"). Grant missing → 412 with the System
+  Settings pane URL, the app path and "switch on RIGS Control … not to node". `ready.see/act` now also require the
+  grants (they read true before).
