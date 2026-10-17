@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Krea Studio</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon.svg" alt=""><span>Krea Studio</span></div>
+  <nav class="modes" role="tablist" aria-label="Mode">
+    <button role="tab" data-mode="txt2img" aria-selected="true">Generate</button>
+    <button role="tab" data-mode="img2img" aria-selected="false">Image → Image</button>
+    <button role="tab" data-mode="upscale" aria-selected="false">Upscale</button>
+  </nav>
+  <button id="conn" class="conn" title="ComfyUI connection — open settings"><i class="dot"></i><span id="connText">Connecting…</span></button>
+  <button id="openSettings" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+</header>
+
+<main class="layout">
+  <section class="stage" aria-label="Result">
+    <div id="frame" class="frame">
+      <img id="result" alt="" hidden>
+      <img id="preview" class="preview" alt="" hidden>
+      <div id="empty" class="empty">
+        <div class="empty-mark">✦</div>
+        <p id="emptyText">Describe an image and press Generate.</p>
+        <button id="emptySettings" class="ghost" hidden>Connect your ComfyUI</button>
+      </div>
+      <div id="progress" class="progress" hidden>
+        <div class="bar"><i id="bar"></i></div>
+        <div class="progress-row"><span id="stageText">Queued</span><button id="cancel" class="link">Cancel</button></div>
+      </div>
+      <div id="error" class="error" role="alert" hidden>
+        <strong id="errorTitle">Something went wrong</strong>
+        <p id="errorText"></p>
+        <button id="errorAction" class="ghost" hidden>Open settings</button>
+      </div>
+    </div>
+    <div class="result-bar">
+      <span id="resultInfo" class="muted"></span>
+      <div id="actions" class="actions" hidden>
+        <button id="keep" class="ghost" hidden title="Save this realtime result to the history">Keep</button>
+        <a id="download" class="ghost btn" download>Download</a>
+        <button id="toImg2img" class="ghost" title="Send to Image → Image">→ Img2Img</button>
+        <button id="toUpscale" class="ghost">Upscale</button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="controls" aria-label="Controls">
+    <div class="prompt-box">
+      <textarea id="prompt" rows="3" placeholder="A lighthouse on a cliff at golden hour, waves crashing…" aria-label="Prompt"></textarea>
+      <div class="prompt-row">
+        <label class="switch" id="realtimeSwitch" title="Regenerate as you type (debounced); stale jobs are cancelled"><input type="checkbox" id="realtime"><span></span>Realtime</label>
+        <button id="go" class="primary">Generate</button>
+      </div>
+    </div>
+
+    <div id="srcPanel" class="panel" hidden>
+      <div class="seg" role="tablist" aria-label="Input">
+        <button data-src="upload" aria-selected="true">Upload</button>
+        <button data-src="sketch" aria-selected="false">Sketch</button>
+      </div>
+      <div id="uploadBox">
+        <label id="drop" class="drop">
+          <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <img id="srcImg" alt="" hidden>
+          <span id="dropText">Drop an image or tap to choose</span>
+        </label>
+      </div>
+      <div id="sketchBox" hidden>
+        <canvas id="sketch" width="768" height="768" aria-label="Sketch canvas"></canvas>
+        <div class="tools">
+          <input type="color" id="brushColor" value="#1f2937" aria-label="Brush colour">
+          <input type="range" id="brushSize" min="2" max="80" value="14" aria-label="Brush size">
+          <button id="eraser" class="ghost small" aria-pressed="false">Eraser</button>
+          <button id="undo" class="ghost small">Undo</button>
+          <button id="clearSketch" class="ghost small">Clear</button>
+        </div>
+      </div>
+      <label class="field">Strength <output id="strengthOut">0.65</output>
+        <input type="range" id="strength" min="0.05" max="1" step="0.01" value="0.65">
+      </label>
+    </div>
+
+    <div id="upPanel" class="panel" hidden>
+      <label id="upDrop" class="drop small-drop">
+        <input type="file" id="upFile" accept="image/png,image/jpeg,image/webp" hidden>
+        <img id="upImg" alt="" hidden>
+        <span id="upText">Use a result's Upscale button, or tap to choose an image</span>
+      </label>
+      <div class="row2">
+        <label class="field">Scale
+          <select id="scale"><option value="1.5">1.5×</option><option value="2" selected>2×</option><option value="3">3×</option><option value="4">4×</option></select>
+        </label>
+        <label class="field">Upscaler <select id="upscaler"><option value="">Lanczos (no model)</option></select></label>
+      </div>
+      <label class="field">Enhance <output id="enhanceOut">off</output>
+        <input type="range" id="enhance" min="0" max="0.6" step="0.05" value="0">
+      </label>
+    </div>
+
+    <div class="panel" id="stylePanel">
+      <div class="label">Style</div>
+      <div id="styles" class="chips"></div>
+    </div>
+
+    <div class="panel" id="modelPanel">
+      <label class="field" id="presetField">Model <select id="preset"></select></label>
+      <div id="sizeRow">
+        <div class="label" id="aspectLabel">Aspect</div>
+        <div id="aspects" class="chips"></div>
+        <label class="field">Size <select id="size"></select></label>
+      </div>
+      <div class="seed-row" id="seedRow">
+        <label class="field">Seed <input id="seed" type="number" min="0" placeholder="random"></label>
+        <button id="dice" class="ghost small" title="New random seed">🎲</button>
+        <label class="check"><input type="checkbox" id="seedLock">Lock</label>
+      </div>
+    </div>
+
+    <details class="panel" id="advanced">
+      <summary>Advanced</summary>
+      <div class="row2">
+        <label class="field">Steps <input id="steps" type="number" min="1" max="150"></label>
+        <label class="field">CFG <input id="cfg" type="number" min="0" max="30" step="0.1"></label>
+      </div>
+      <div class="row2">
+        <label class="field">Sampler <select id="sampler"></select></label>
+        <label class="field">Scheduler <select id="scheduler"></select></label>
+      </div>
+      <label class="field">Negative prompt <input id="negative" placeholder="blurry, low quality"></label>
+      <div class="row2">
+        <label class="field">LoRA <select id="lora"><option value="">None</option></select></label>
+        <label class="field">LoRA strength <input id="loraStrength" type="number" min="-4" max="4" step="0.05" value="0.8"></label>
+      </div>
+      <label class="field">Images per run <select id="batch"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+    </details>
+  </aside>
+
+  <section class="gallery" aria-label="History">
+    <div class="gallery-head"><h2>History</h2><span id="galleryCount" class="muted"></span></div>
+    <div id="galleryGrid" class="grid"></div>
+    <p id="galleryEmpty" class="muted">Your images appear here.</p>
+  </section>
+</main>
+
+<dialog id="settings" aria-labelledby="settingsTitle">
+  <form method="dialog" id="settingsForm">
+    <h2 id="settingsTitle">ComfyUI connection</h2>
+    <label class="field">Connector machine
+      <select id="node"><option value="">This machine</option></select>
+      <small class="muted">The machine whose RIGS keeps these settings and runs the jobs.</small>
+    </label>
+    <label class="field">ComfyUI URL
+      <input id="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8188">
+      <small id="urlNote" class="muted"></small>
+    </label>
+    <button type="button" id="useDetected" class="ghost small" hidden>Use detected</button>
+    <label class="field">Auth header (optional)
+      <input id="auth" type="password" autocomplete="off" spellcheck="false" placeholder="Authorization: Bearer …">
+      <small id="authNote" class="muted">Sent with every request to ComfyUI. Stored on that machine only and never shown again.</small>
+    </label>
+    <label class="check" id="clearAuthRow" hidden><input type="checkbox" id="clearAuth">Remove the saved auth header</label>
+    <label class="field">GPU overseer
+      <select id="overseer"><option value="auto">Auto (local ComfyUI → localhost:8195)</option><option value="off">Off</option><option value="custom">Custom URL…</option></select>
+      <input id="overseerUrl" type="text" placeholder="http://127.0.0.1:8195" hidden>
+    </label>
+    <div id="testResult" class="test-result" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" id="test" class="ghost">Test connection</button>
+      <span class="spacer"></span>
+      <button type="button" id="closeSettings" class="ghost">Close</button>
+      <button type="button" id="save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

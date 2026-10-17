@@ -20,6 +20,7 @@ treat `main` as production.
 | `src/work.js` | Runs one task on this machine: the pinned project's hub rig, the project's OpenRig team (seat per role + model) + queue item, or a direct agent session where OpenRig is unavailable |
 | `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
+| `src/comfyui.js`, `src/comfyui-workflows.js` | Shared connector to a user-provided ComfyUI (`/api/local/comfyui/*`): per-machine URL + secret auth header in `config.comfyui`, test, models, txt2img/img2img/upscale templates, jobs over `/prompt` + `/ws` with lanes, GPU-overseer leases. Every graph is checked against `/object_info` first — never `/prompt` a missing model (some installs auto-download it). Used by `applets/krea-studio` |
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |

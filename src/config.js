@@ -143,7 +143,8 @@ export function saveConfig(cfg = current) {
 /** Shallow-safe patch used by the settings API; never lets the UI change identity or secrets. */
 export function patchConfig(patch) {
   const cfg = config();
-  const blocked = new Set(['nodeId', 'meshToken', 'desktop']);
+  // comfyui holds a secret and has its own validated endpoint (/api/local/comfyui/config).
+  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui']);
   for (const k of Object.keys(patch || {})) if (blocked.has(k)) delete patch[k];
   const next = merge(cfg, patch);
   saveConfig(next);
