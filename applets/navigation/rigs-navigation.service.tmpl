@@ -1,0 +1,17 @@
+[Unit]
+Description=RIGS navigation applet (dark 3D green-vector map)
+After=network-online.target
+
+[Service]
+# Template: src/store.js (installPlan) fills in the double-brace placeholders with this machine's paths.
+# The applet imports ../../src/util.js, so it runs from the RIGS checkout.
+WorkingDirectory={{INSTALL_DIR}}
+ExecStart={{NODE}} {{INSTALL_DIR}}/applets/navigation/server.js
+Environment=NAV_PORT={{PORT}} NAV_HOST=127.0.0.1 NAV_DATA_DIR={{DATA_DIR}}
+# Optional secret, never written here: put NAV_TOMTOM_KEY=… in this file to enable live traffic.
+EnvironmentFile=-{{ENV_FILE}}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

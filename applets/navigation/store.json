@@ -1,0 +1,45 @@
+{
+  "$comment": "App-store manifest for the navigation applet. Documented in README.md → 'Install from the app store'. Kept generic (no navigation-specific fields outside id/port/settings) so the catalog can adopt it; src/store.js turns it into an install plan.",
+  "schema": 1,
+  "id": "navigation",
+  "name": "Navigation",
+  "description": "Dark 3D green-vector navigation map with routing, search, traffic and trip recording. Free OpenStreetMap data, no API key needed.",
+  "icon": "🧭",
+  "iconFile": "applets/navigation/public/icon.svg",
+  "version": "0.1.0",
+  "category": "maps",
+  "platforms": ["linux", "darwin", "win32"],
+  "runtime": { "node": ">=22" },
+  "requirements": { "gpu": false, "diskMB": 50 },
+  "python": null,
+  "venv": false,
+  "models": [],
+  "notes": "Navigation needs no Python venv and no model download: the generic venv and model steps of an installer are skipped.",
+  "port": 8731,
+  "healthPath": "healthz",
+  "entry": "applets/navigation/server.js",
+  "install": [
+    { "step": "check-node", "min": "22" },
+    { "step": "mkdir", "path": "{{DATA_DIR}}" },
+    { "step": "write-launch" },
+    { "step": "register" }
+  ],
+  "launch": {
+    "linux": { "systemd": { "unit": "rigs-navigation.service", "template": "applets/navigation/rigs-navigation.service.tmpl", "scope": "user" } },
+    "darwin": { "command": "{{NODE}} {{INSTALL_DIR}}/applets/navigation/server.js", "cwd": "{{INSTALL_DIR}}" },
+    "win32": { "command": "\"{{NODE}}\" \"{{INSTALL_DIR}}\\applets\\navigation\\server.js\"", "cwd": "{{INSTALL_DIR}}" }
+  },
+  "env": { "NAV_PORT": "{{PORT}}", "NAV_HOST": "127.0.0.1", "NAV_DATA_DIR": "{{DATA_DIR}}" },
+  "data": { "dir": "{{RIGS_HOME}}/navigation/trips", "keepOnUninstall": true, "purgeFlag": "--purge" },
+  "settings": [
+    { "key": "NAV_TOMTOM_KEY", "label": "TomTom traffic key", "secret": true, "optional": true, "description": "Free key for live traffic. Without it traffic is assumed from road class and time of day." }
+  ],
+  "uninstall": {
+    "steps": [
+      { "step": "stop-launch" },
+      { "step": "remove-launch" },
+      { "step": "unregister" },
+      { "step": "remove-data", "only": "purge" }
+    ]
+  }
+}
