@@ -11,6 +11,7 @@ import { createWork } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
+import { controlEvent, openControl } from './control.js';
 import { openProjects } from './projects.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
@@ -193,6 +194,7 @@ function connectEvents() {
     if (m.type === 'mesh') refresh();
     onAppsEvent(m);
     if (m.type === 'apps') refresh();
+    if (m.type === 'control') controlEvent(m);
     if (m.type === 'notify' && m.level === 'attention') {
       attentionNotify(m);
       showSubtitle(m.text, 'jarvis');
@@ -335,6 +337,7 @@ function renderInspector(id) {
       up ? act('⌨ Terminal', () => openTerminal({ nodeId: d.id, nodeName: d.name })) : null,
       up ? act('📁 Files', () => filesOn(d)) : null,
       act('🖥 Desktop', () => desktopTo(d)),
+      up ? act('🛡 Access & control', () => openControl({ machine: d })) : null,
       up ? act('💬 Sessions', () => sessionsWindow(d.name)) : null,
       up ? act('◆ Use as brain', () => pickBrainOn(d)) : null,
       act('🔐 SSH', () => sshTo(d)),
