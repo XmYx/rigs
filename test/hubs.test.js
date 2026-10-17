@@ -143,6 +143,7 @@ test('tasks enter via rig queue; a follow-up goes to the seat that holds the con
   assert.equal(rig.cmds('queue create').length, queued, 'no new queue item for a follow-up');
   // A follow-up to a seat that is busy with other work is queued instead (it would interrupt).
   rig.nodes.find((n) => n.canonicalSessionName === r.seat).assignedWorkCount = 1;
+  openrig.invalidate();
   const g = await hubs.dispatchTask({ pin, project, task: task('t4', 'code', 'claude-opus-5-5', { followUp: r.seat }), dir: PROJ, brief, pointer: 'p' });
   assert.equal(g.via, 'queue');
   // "Send to lead" from the project window types into the lead.

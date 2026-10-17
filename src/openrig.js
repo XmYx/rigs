@@ -11,6 +11,9 @@ let runner = run;
 /** Tests swap the process runner for a fake `rig` (cross-platform, no real OpenRig needed). */
 export function _setRunner(fn) { runner = fn || run; cache = { at: 0, value: null }; inflight = null; }
 
+/** Something changed outside `rig` (or a test changed its fake): the next status() reads it again. */
+export function invalidate() { cache.at = 0; }
+
 const rigBin = () => bin('rig') || (runner !== run ? 'rig' : null);
 
 /**
