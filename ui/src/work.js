@@ -41,6 +41,7 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
   let active = true;
   let last = null;
   let typing = false; // don't redraw the questions while Sir is typing an answer
+  let waiting = []; // [{ g, it }] every question now, so a project row can lead straight to its agent
 
   function renderLimits(w) {
     const p = w.plan || {};
@@ -57,8 +58,11 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
     const rows = [];
     for (const n of w.nodes || []) {
       for (const pj of n.projects || []) {
-        rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
-          h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), pj.name, h('b', {}, `${pj.pct}%`)),
+        const asks = waiting.filter((q) => q.it.project?.id === pj.id);
+        rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : '') + (asks.length ? ' asks' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
+          h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), pj.name,
+            asks.length ? h('button', { class: 'wk-ask', title: 'An agent on this project is asking you — open its session', onclick: (e) => { e.stopPropagation(); onOpenQuestion?.(asks[0].g, asks[0].it); } }, `? ${asks.length > 1 ? asks.length + ' questions' : 'question'}`) : null,
+            h('b', {}, `${pj.pct}%`)),
           progress(pj.pct)));
       }
     }
@@ -77,6 +81,8 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
   }
 
   function renderQuestions(groups) {
+    waiting = (groups || []).flatMap((g) => (g.items || []).map((it) => ({ g, it })));
+    if (last) renderProjects(last);
     if (typing) return;
     const cards = [];
     for (const g of groups || []) {
@@ -85,7 +91,9 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
         const canType = it.session && ['tmux', 'rig', 'pty'].includes(it.session.kind);
         const input = canType ? h('input', { class: 'wk-reply', placeholder: 'Type an answer…', onfocus: () => { typing = true; }, onblur: () => { if (!input.value) typing = false; },
           onkeydown: (e) => { if (e.key === 'Enter' && input.value.trim()) answer(g, it, { text: input.value.trim() }, 'send'); } }) : null;
-        cards.push(h('div', { class: 'wk-q' },
+        // Clicking the question (anything but its buttons and reply box) goes straight to the agent's session.
+        const open = (e) => { if (!e.target.closest('button, input')) onOpenQuestion?.(g, it); };
+        cards.push(h('div', { class: 'wk-q', title: 'Open the session', onclick: open },
           h('div', { class: 'wk-qhead' }, h('b', {}, `${who} · ${g.node}`), ' ', h('span', {}, it.title || '')),
           h('div', { class: 'wk-qtext' }, it.question || it.reason || 'Waiting for you'),
           it.options?.length ? h('div', { class: 'wk-qopts' }, ...it.options.map((o) => h('button', { class: 'btn', title: o.label, onclick: () => answer(g, it, { choice: o.n }, 'answer') }, `${o.n}. ${o.label}`))) : null,
