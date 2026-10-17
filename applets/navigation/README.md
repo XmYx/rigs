@@ -102,8 +102,12 @@ Change `PALETTE` there to retune it.
 Browsers only allow `navigator.geolocation` in a **secure context**: `https://…` or `http://localhost`.
 
 - **Plain-HTTP tailnet address** (for example `http://100.x.y.z:4719`): the page can't read your
-  location. It says so and offers the demo. To use GPS from a phone, reach JARVIS over HTTPS, for
-  example with Tailscale's `tailscale serve` HTTPS proxy in front of the RIGS port.
+  location. It says so and offers the demo. To use GPS from a phone, reach JARVIS over HTTPS with
+  Tailscale's own certificate:
+  1. Tailscale admin console → DNS → enable MagicDNS and **HTTPS Certificates** (once per tailnet).
+  2. On the RIGS machine: `tailscale serve --bg --https=443 http://127.0.0.1:4719`.
+  3. On the phone open `https://<machine>.<tailnet>.ts.net/`. This is tailnet-only, not public.
+     Machine names do show up in public certificate-transparency logs.
 - **Inside JARVIS**: the app window's iframe grants `geolocation` (`ui/src/apps.js`), so the permission
   prompt comes from the JARVIS page.
 - **Speed source**: the readout uses `coords.speed` when the device reports it (tagged `GPS`). Otherwise

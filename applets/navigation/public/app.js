@@ -115,6 +115,12 @@ function startMap() {
     if (Date.now() - lastMapError > 10000) { lastMapError = Date.now(); status('Map data hiccup: ' + (e.error?.message || 'tile request failed')); }
   });
   map.on('rotate', renderCompass);
+  // Rotation and fullscreen can change the size without a resize MapLibre sees in time (iframes,
+  // mobile toolbars collapsing), so resize again once the viewport settles.
+  const settle = () => { map.resize(); setTimeout(() => { map.resize(); if (state.follow && state.pos) followCam(state.pos, 0); }, 350); };
+  for (const ev of ['orientationchange', 'resize']) window.addEventListener(ev, settle);
+  document.addEventListener('fullscreenchange', settle);
+  window.visualViewport?.addEventListener('resize', settle);
   for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) {
     map.on(ev, (e) => { if (e.originalEvent) setFollow(false); });
   }
@@ -173,19 +179,33 @@ function setFollow(on) {
   if (on && state.pos) followCam(state.pos, 600);
 }
 
-function startGps() {
+// Mobile Chrome may skip the location prompt unless a tap asked for it (and always does once it was
+// dismissed), so unless permission is already granted, GPS starts from an "Enable GPS" button.
+async function startGps() {
   if (!('geolocation' in navigator)) {
     return status('This browser has no geolocation. <a href="?demo=1">Try the demo drive</a>.', { sticky: true, html: true });
   }
   if (!window.isSecureContext) {
     return status('GPS needs a secure page (HTTPS or localhost). <a href="?demo=1">Try the demo drive</a> or see the README.', { sticky: true, html: true });
   }
+  const perm = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state, () => null);
+  if (perm === 'granted') return watchGps();
+  if (perm === 'denied') return gpsDenied();
+  status('<button id="gps-go" type="button" class="btn primary">Enable GPS</button> or <a href="?demo=1">try the demo drive</a>', { sticky: true, html: true });
+  $('gps-go').addEventListener('click', watchGps, { once: true });
+}
+
+function gpsDenied() {
+  status('Location is blocked for this site. Tap the lock icon in the address bar → Permissions → Location → Allow, then reload. Or <a href="?demo=1">try the demo drive</a>.', { sticky: true, html: true });
+}
+
+function watchGps() {
   status('Waiting for GPS…', { sticky: true });
   navigator.geolocation.watchPosition((p) => {
     if (state.fixes === 0) status('');
     onFix({ lat: p.coords.latitude, lon: p.coords.longitude, t: p.timestamp || Date.now(), speed: p.coords.speed, heading: p.coords.heading, accuracy: p.coords.accuracy });
   }, (err) => {
-    if (err.code === 1) status('Location permission was denied. Allow it in the browser, or <a href="?demo=1">try the demo drive</a>.', { sticky: true, html: true });
+    if (err.code === 1) gpsDenied();
     else if (err.code === 2) status('No GPS signal yet — keep the page open.', { sticky: true });
     // code 3 (timeout) just means no new fix yet; watchPosition keeps trying.
   }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
