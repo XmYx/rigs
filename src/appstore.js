@@ -490,7 +490,8 @@ function hasIncomplete(dir) {
 
 /**
  * Move a file or folder into ~/.rigs/trash (never delete). When the trash is on another disk the folder goes to
- * <appsDir>/.trash instead, rather than copying an app with its models (tens of GB) across disks.
+ * <appsDir>/.trash instead, rather than copying an app with its models (tens of GB) across disks; only when that
+ * is a different disk again is the item copied into the trash and removed from its old place.
  */
 async function moveToTrash(src, name) {
   const dir = path.join(RIGS_HOME, 'trash');
@@ -500,8 +501,11 @@ async function moveToTrash(src, name) {
   const near = path.join(appsDir(), '.trash');
   await fsp.mkdir(near, { recursive: true });
   const alt = path.join(near, `${Date.now()}-${name}`);
-  await fsp.rename(src, alt);
-  return alt;
+  try { await fsp.rename(src, alt); return alt; } catch (e) { if (e.code !== 'EXDEV') throw e; }
+  // A third disk (e.g. the systemd unit dir on /home while RIGS_HOME and the apps are elsewhere): copy, verify, remove.
+  await fsp.cp(src, dest, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+  await fsp.rm(src, { recursive: true, force: true });
+  return dest;
 }
 
 function writeFileAtomic(file, text) {
