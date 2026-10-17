@@ -1,0 +1,14 @@
+[Unit]
+Description=RIGS Krea Studio applet (image studio on your own ComfyUI)
+After=network-online.target
+
+[Service]
+# %h = home; the applet imports ../../src/util.js and talks to this machine's RIGS daemon, so it runs from the RIGS checkout.
+WorkingDirectory=%h/.rigs/app
+ExecStart=/usr/bin/node %h/.rigs/app/applets/krea-studio/server.js
+Environment=KREA_PORT=8732 KREA_HOST=127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
