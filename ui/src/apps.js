@@ -1,5 +1,6 @@
 import { api, h, toast } from './api.js';
 import { openWindow } from './wm.js';
+import { openAppStore } from './appstore.js';
 
 // App Cloud: web apps hosted anywhere on the mesh, opened in floating windows through the daemon's
 // proxy (/api/nodes/<node>/apps/<id>/). The catalog refreshes on its own: on 'apps'/'mesh' events
@@ -53,7 +54,7 @@ export function openApps() {
   if (launcher) { launcher.raise(); refreshApps(); return launcher; }
   launcher = openWindow({ title: 'Apps', icon: '▦', width: 560, height: 380, onClose: () => { launcher = null; ensurePoll(); } });
   launcher.grid = h('div', { class: 'apps-grid' });
-  launcher.body.append(launcher.grid);
+  launcher.body.append(h('div', { class: 'apps-bar' }, h('button', { class: 'btn primary', onclick: () => openAppStore() }, '🛍 App Store')), launcher.grid);
   ensurePoll();
   renderLauncher();
   refreshApps();
@@ -62,11 +63,13 @@ export function openApps() {
 
 function renderLauncher() {
   if (!launcher) return;
-  launcher.grid.replaceChildren(...(catalog.length ? catalog.map((a) => h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
+  const store = h('button', { class: 'app-tile store-tile', title: 'App Store — install new apps on any machine', onclick: () => openAppStore() },
+    h('span', { class: 'app-icon' }, '🛍'), h('span', { class: 'app-name' }, 'App Store'), h('span', { class: 'app-node' }, 'install apps'));
+  launcher.grid.replaceChildren(store, ...(catalog.length ? catalog.map((a) => h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
     h('span', { class: 'app-icon' }, a.icon || '▦'),
     h('span', { class: 'app-name' }, a.name),
     h('span', { class: 'app-node' }, h('i', { class: 'app-dot' }), a.node)))
-    : [h('div', { class: 'muted apps-empty' }, 'No apps yet. Publish one with mesh_app_register (or "apps" in ~/.rigs/config.json); it appears here on its own.')]));
+    : [h('div', { class: 'muted apps-empty' }, 'No apps installed yet. Get one from the App Store, or publish your own with mesh_app_register; it appears here on its own.')]));
 }
 
 export function openApp(a) {

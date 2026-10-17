@@ -73,6 +73,37 @@ const TOOLS = [
     run: async (a) => { const { node, ...app } = a; const r = await api(`/api/nodes/${n(node)}/apps`, { method: 'POST', body: app }); return { apps: r.apps.map((x) => ({ id: x.id, name: x.name, target: x.target })), errors: r.errors }; },
   },
   {
+    name: 'appstore_list', description: 'The App Store on a machine: apps that can be installed into the App Cloud (with their Python venv / node deps and model downloads), whether each fits that machine (platform, GPU/VRAM, disk) and its install state: not-installed | external (registered by hand) | installing (step, percent) | installed (version) | failed (error, log tail). Omit node for this machine.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine to look at; "self" (default) for this one' } } },
+    run: async (a) => {
+      const r = await api(`/api/nodes/${n(a.node)}/appstore`, { timeout: 30000 });
+      return {
+        node: r.node, platform: r.platform, freeGB: r.freeGB, gpus: r.gpus, errors: r.errors,
+        apps: r.apps.map((x) => ({ id: x.id, name: x.name, description: x.description, version: x.version, runtime: x.runtime, downloadGB: x.downloadGB, needs: x.needs, fits: x.fit.ok, why: x.fit.reasons.join('; ') || undefined, install: x.install })),
+      };
+    },
+  },
+  {
+    name: 'appstore_install', description: 'Install an App Store app on a machine: fetch its source, create its Python venv (uv or venv) and install its dependencies, download its models (Hugging Face or HTTP, resumable), set up its systemd --user unit (Linux) or launch command, register it in the App Cloud and wait until it is healthy. Resumable and idempotent: calling it again after a failure continues where it stopped, and while it runs it returns the running job. Returns the job (steps, percent, log tail). wait:true blocks until it ends (up to waitSec, default 600). dryRun:true only checks and plans. uninstall:true removes it instead (unregistered, unit disabled, files moved to ~/.rigs/trash).',
+    inputSchema: { type: 'object', properties: {
+      node: { type: 'string', description: 'machine to install on; "self" (default) for this one' }, id: { type: 'string', description: 'app id from appstore_list' },
+      wait: { type: 'boolean' }, waitSec: { type: 'number' }, dryRun: { type: 'boolean' }, port: { type: 'number', description: 'listen on another port than the manifest\'s' },
+      uninstall: { type: 'boolean' },
+    }, required: ['id'] },
+    run: async (a) => {
+      const base = `/api/nodes/${n(a.node)}/appstore/${encodeURIComponent(a.id)}`;
+      if (a.uninstall) return api(`${base}/uninstall`, { method: 'POST', body: {}, timeout: 120000 });
+      const brief = (j) => ({ id: j.id, state: j.state, step: j.stepLabel || j.step, percent: j.percent, error: j.error || undefined, steps: j.steps?.map((s) => `${s.status === 'done' ? '✓' : s.status === 'skipped' ? '·' : s.status === 'failed' ? '✗' : s.status === 'running' ? '…' : ' '} ${s.label}${s.detail ? `: ${s.detail}` : ''}`), log: (j.log || []).slice(-25) });
+      let job = await api(`${base}/install`, { method: 'POST', body: { dryRun: !!a.dryRun, ...(a.port ? { port: a.port } : {}) }, timeout: 30000 });
+      const until = Date.now() + Math.min(3000, a.waitSec || 600) * 1000;
+      while (a.wait && job.state === 'running' && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await api(`${base}/job`, { timeout: 30000 });
+      }
+      return brief(job);
+    },
+  },
+  {
     name: 'mesh_pin_project', description: 'Pin a project folder (it stays on its machine) in JARVIS\'s Top hubs on every UI: shows live sessions inside it and opens a project window to start Claude / a terminal there. remove:true unpins.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine that holds the project; "self" for this one' }, path: { type: 'string' }, name: { type: 'string' }, remove: { type: 'boolean' } }, required: ['node', 'path'] },
     run: async (a) => (await api(`/api/nodes/${n(a.node)}/pins`, { method: 'POST', body: { path: a.path, name: a.name, remove: a.remove } })),
