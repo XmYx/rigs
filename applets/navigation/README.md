@@ -70,6 +70,31 @@ falls back to a built-in line, so it still works.
 The demo also shows traffic round the car. Without a TomTom key it asks the assumed-traffic model for
 the latest weekday at 17:30 (`at=`), so the evening rush is visible whenever you open it.
 
+## Install from the app store
+
+`store.json` is the app-store manifest: id `navigation`, port `8731`, health path `healthz`, Node `>=22`,
+about 50 MB, no GPU. **Navigation needs no Python venv and no model download** (`python: null`,
+`venv: false`, `models: []`), so an installer skips its generic venv and model steps.
+
+`installPlan(manifest, {platform, installDir, rigsHome, nodePath, unitTemplate})` in
+[`src/store.js`](../../src/store.js) is a pure function (no fs, no spawn) that turns the manifest into:
+
+- **Linux**: a `systemd --user` unit generated from `rigs-navigation.service.tmpl` with the real install
+  path, Node binary and data dir (nothing machine-specific), written to `~/.config/systemd/user/` and
+  started with `systemctl --user enable --now rigs-navigation.service`
+- **macOS / Windows**: a launch command and working directory
+- the app registration payload (`mesh_app_register` / `POST /api/local/apps`), for example
+  `{id:'navigation', port:8731, healthPath:'/healthz', launch:{systemd:'rigs-navigation.service'}}`
+- the trips data dir, `<RIGS_HOME>/navigation/trips`. **Uninstall keeps it** unless purged.
+
+Optional setting: `NAV_TOMTOM_KEY` (secret) for live traffic. The unit reads it from
+`<RIGS_HOME>/navigation/env` (`EnvironmentFile=-…`), so the key is never written into the unit or the repo.
+Without it traffic is assumed.
+
+`test/navigation-store.test.js` validates the manifest, checks the plans for linux, darwin and win32, and
+does a scratch install in a temp `RIGS_HOME` that starts `server.js` from the generated command and
+expects `{ok:true}` from `/healthz`.
+
 ## Configuration
 
 Everything is optional. Environment variables win over `~/.rigs/config.json` → `navigation`, which wins
