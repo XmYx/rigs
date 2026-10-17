@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ACE-Step Studio: a web front-end for ACE-Step 1.5 music generation (the model MadMaxUnity's radio used).
 
-Run with ACE-Step's own venv:
-    ~/PycharmProjects/MadMaxUnity/audio/ace15/.venv/bin/python server.py [--port 8191]
+Run with ACE-Step's own venv, from a studio/ folder inside the ACE-Step 1.5 checkout (or set ACESTEP_ROOT):
+    <ace-step>/.venv/bin/python <ace-step>/studio/server.py [--port 8191]
 
 Every GenerationParams / GenerationConfig field is exposed: the schema is read from the dataclasses at
 startup (types, defaults, and the descriptions from their docstring and inline comments), so new ACE-Step
@@ -14,7 +14,8 @@ import argparse, dataclasses, inspect, json, os, re, shutil, sys, threading, tim
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACE = os.environ.get("ACESTEP_ROOT", "/home/magix/PycharmProjects/MadMaxUnity/audio/ace15")
+ACE = os.path.abspath(os.path.expanduser(os.environ.get("ACESTEP_ROOT") or os.path.dirname(HERE)))
+OVERSEER_CLIENT = os.environ.get("GPU_OVERSEER_CLIENT", "acestep-studio")
 OUT = os.path.join(HERE, "outputs")
 UPLOADS = os.path.join(HERE, "uploads")
 HISTORY = os.path.join(HERE, "history.json")
@@ -219,11 +220,11 @@ def gpu_make_room(need_mb):
     base = os.environ.get("GPU_OVERSEER", "http://127.0.0.1:8195")
     models.update(status="loading", message="asking the GPU overseer for VRAM…")
     try:
-        req = urllib.request.Request(base + "/api/acquire", data=json.dumps({"client": "acestep-studio", "need_mb": need_mb, "timeout": 180}).encode(),
+        req = urllib.request.Request(base + "/api/acquire", data=json.dumps({"client": OVERSEER_CLIENT, "need_mb": need_mb, "timeout": 180}).encode(),
                                      headers={"content-type": "application/json"})
         with urllib.request.urlopen(req, timeout=200) as r:
             res = json.load(r)
-        urllib.request.urlopen(urllib.request.Request(base + "/api/release", data=b'{"client": "acestep-studio"}',
+        urllib.request.urlopen(urllib.request.Request(base + "/api/release", data=json.dumps({"client": OVERSEER_CLIENT}).encode(),
                                                       headers={"content-type": "application/json"}), timeout=10).close()
         if not res.get("ok"):
             raise RuntimeError(f"GPU busy: only {res.get('free_mb')} MB free and nothing idle to unload")

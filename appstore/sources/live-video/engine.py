@@ -35,7 +35,8 @@ import torch  # noqa: E402
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-HF = Path.home() / ".cache/huggingface/hub/models--Lightricks--LTX-Video/snapshots"
+LTX = "Lightricks/LTX-Video"
+REVISION = os.environ.get("LTX_REVISION") or None  # pin the snapshot the App Store downloaded; default: main
 BF16 = torch.bfloat16
 CHECKPOINT = "ltxv-2b-0.9.6-distilled-04-25.safetensors"
 FPS = 24
@@ -147,9 +148,19 @@ class TextEncoder:
                 self.proc.kill()
 
 
+def repo_dir():
+    """The LTX-Video snapshot in the Hugging Face cache (HF_HOME is honoured); fetched if it is missing."""
+    from huggingface_hub import snapshot_download
+    kw = dict(revision=REVISION, allow_patterns=["scheduler/*", "tokenizer/*", "text_encoder/*"])
+    try:
+        return Path(snapshot_download(LTX, local_files_only=True, **kw))
+    except Exception:
+        return Path(snapshot_download(LTX, **kw))
+
+
 class Engine:
     def __init__(self):
-        self.repo = next(iter(sorted(HF.glob("*"))))
+        self.repo = repo_dir()
         self.settings = dict(DEFAULTS)
         self.lock = threading.Condition()  # RLock-based: helpers may re-enter it
         self.running = False
@@ -178,7 +189,7 @@ class Engine:
         from huggingface_hub import hf_hub_download
         status("loading", detail="loading LTX-Video 2B to the GPU")
         t = time.perf_counter()
-        ckpt = hf_hub_download("Lightricks/LTX-Video", CHECKPOINT)
+        ckpt = hf_hub_download(LTX, CHECKPOINT, revision=REVISION)
         tr = LTXVideoTransformer3DModel.from_single_file(ckpt, torch_dtype=BF16)
         vae = AutoencoderKLLTXVideo.from_single_file(ckpt, torch_dtype=BF16)
         sched = FlowMatchEulerDiscreteScheduler.from_pretrained(

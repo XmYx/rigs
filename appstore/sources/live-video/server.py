@@ -23,12 +23,13 @@ from pathlib import Path
 from aiohttp import web
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+ROOT = Path(os.environ.get("LIVEVIDEO_ROOT") or HERE)  # recordings (api/record) must stay inside it
 VENV_PY = HERE / ".venv/bin/python"
 LOGS = HERE / "logs"
 STOPPED_UNITS = LOGS / "stopped_units.json"
-OVERSEER = "http://127.0.0.1:8195"
-CLIENT = "live-video"
+OVERSEER = os.environ.get("GPU_OVERSEER", "http://127.0.0.1:8195")
+CLIENT = os.environ.get("GPU_OVERSEER_CLIENT", "live-video")
+OLLAMA = os.environ.get("OLLAMA_HOST_URL", "http://127.0.0.1:11434")
 RESOLUTIONS = ["1280x704", "960x544", "768x448", "704x480", "512x320"]
 MAX_FPS = 24.0
 SETTING_KEYS = {"auto_segments", "auto_seconds", "drift_check", "drift_threshold", "prompt_mode"}
@@ -105,9 +106,9 @@ class Overseer:
 
 def free_ollama():
     try:
-        ps = http_json("http://127.0.0.1:11434/api/ps", timeout=3)
+        ps = http_json(OLLAMA + "/api/ps", timeout=3)
         for m in ps.get("models", []):
-            http_json("http://127.0.0.1:11434/api/generate", {"model": m["name"], "keep_alive": 0}, timeout=30)
+            http_json(OLLAMA + "/api/generate", {"model": m["name"], "keep_alive": 0}, timeout=30)
             log(f"unloaded Ollama model {m['name']}")
     except Exception as e:
         log(f"ollama unload skipped: {e}")

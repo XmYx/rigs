@@ -513,6 +513,78 @@ test('built-in navigation manifest: runs in place from the RIGS checkout, node, 
   assert.ok(!fs.existsSync(root('navigation')), 'a dry run creates nothing');
 });
 
+test('built-in catalog: Live Video, ACE-Step Studio, Krea Studio and Navigation, each model pinned, sized and placed', () => {
+  const { apps, errors } = S.loadCatalog([S.CATALOG_DIR]);
+  assert.deepEqual(errors, []);
+  const by = Object.fromEntries(apps.map((a) => [a.id, a]));
+  for (const id of ['live-video', 'acestep-studio', 'krea-studio', 'navigation']) assert.ok(by[id], `${id} is in the catalog`);
+  const rigsApp = path.resolve(S.CATALOG_DIR, '..', '..');
+  for (const id of ['live-video', 'acestep-studio', 'krea-studio']) {
+    const m = by[id];
+    assert.equal(m.needs.gpu, 'nvidia', id);
+    assert.ok(m.models.length > 0, `${id} lists its models`);
+    for (const x of m.models) {
+      assert.ok(x.sizeGB > 0.1, `${id}: ${x.name} has a size`);
+      assert.match(x.revision, /^[0-9a-f]{40}$/, `${id}: ${x.name} is pinned to a commit`);
+      assert.equal(x.gated, false, `${id}: ${x.name} needs no Hugging Face login`);
+    }
+    if (m.runtime.type === 'python') {
+      assert.match(m.needs.python, /^3\.\d+$/, `${id} pins its Python`);
+      assert.match(m.runtime.torch?.index || '', /^https:\/\/download\.pytorch\.org\/whl\/cu\d+$/, `${id} names its torch CUDA index`);
+      for (const a of m.runtime.pipArgs.filter((v) => v.startsWith('{rigsApp}/'))) assert.ok(fs.existsSync(a.replace('{rigsApp}', rigsApp)), `${id}: ${a} exists`);
+    }
+    if (m.source.type === 'rigs') {
+      const dir = path.join(rigsApp, m.source.path);
+      assert.ok(fs.existsSync(path.join(dir, 'server.py')), `${id}: vendored source in ${m.source.path}`);
+      for (const r of m.runtime.requirements || []) assert.ok(fs.existsSync(path.join(dir, r)), `${id}: ${r} is in the source`);
+    } else assert.match(m.source.ref, /^[0-9a-f]{40}$/, `${id}: git source pinned to a commit`);
+  }
+  const files = [...fs.readdirSync(S.CATALOG_DIR).map((n) => path.join(S.CATALOG_DIR, n))];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : files.push(path.join(d, e.name))));
+  walk(path.join(rigsApp, 'appstore', 'sources'));
+  for (const f of files) assert.ok(!fs.readFileSync(f, 'utf8').includes('/home/magix'), `${path.relative(rigsApp, f)} has no machine-specific path`);
+});
+
+test('built-in GPU apps: a dry run plans every step on a 24 GB NVIDIA machine', async () => {
+  for (const id of ['live-video', 'acestep-studio', 'krea-studio']) {
+    const job = await installAndWait(id, { dryRun: true, gpuOverseer: false }, world({ systemd: false }));
+    assert.equal(job.state, 'done', `${id}: ${job.error}`);
+    assert.match(job.steps.find((s) => s.id === 'models').detail, /dry run: would download|already on disk/, id);
+    assert.ok(!fs.existsSync(root(id)), `${id}: a dry run creates nothing`);
+  }
+});
+
+test('copy source: a re-install copies the RIGS folder again only when its files changed', async () => {
+  const rel = `test/fixtures/.tmp-appstore-copy-${process.pid}`;
+  const src = new URL(`../${rel}/`, import.meta.url);
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(new URL('server.mjs', src), '// v1\n');
+  try {
+    putManifest({ id: 'copied', name: 'Copied', version: '1', source: { type: 'rigs', path: rel, copy: true }, runtime: { type: 'none' }, port: 18223, launch: { command: ['{node}', '{appDir}/server.mjs'] } });
+    const w = world({ systemd: false });
+    assert.equal((await installAndWait('copied', {}, w)).state, 'done');
+    const again = await installAndWait('copied', {}, w);
+    assert.equal(again.steps.find((s) => s.id === 'fetch').status, 'skipped', 'unchanged: not copied again');
+    fs.writeFileSync(new URL('server.mjs', src), '// v2\n');
+    const updated = await installAndWait('copied', {}, w);
+    assert.equal(updated.steps.find((s) => s.id === 'fetch').status, 'done', 'changed in RIGS: copied again');
+    assert.equal(fs.readFileSync(path.join(root('copied'), 'app', 'server.mjs'), 'utf8'), '// v2\n');
+    await S.uninstall('copied', w.deps);
+  } finally { fs.rmSync(src, { recursive: true, force: true }); }
+});
+
+test('runtime.pipArgs: placeholders are rendered (e.g. a constraints file shipped in RIGS) and checked', async () => {
+  assert.match(S.validateManifest(studio({ runtime: { type: 'python', pipArgs: ['-c', '{nope}/c.txt'] } })).errors.join(' | '), /runtime\.pipArgs\[1\] uses unknown placeholder \{nope\}/);
+  putManifest(studio({ id: 'pinned', port: 18224, runtime: { type: 'python', requirements: ['requirements.txt'], pipArgs: ['--constraint', '{rigsApp}/appstore/sources/acestep-studio/constraints.txt'] } }));
+  const w = world();
+  const job = await installAndWait('pinned', { until: 'deps' }, w);
+  assert.equal(job.state, 'done', job.error);
+  assert.equal(S.statusFor('pinned').state, 'partial');
+  const pip = w.calls.find((c) => c.name === 'uv' && c.args[0] === 'pip');
+  const i = pip.args.indexOf('--constraint');
+  assert.equal(pip.args[i + 1], path.join(path.resolve(S.CATALOG_DIR, '..', '..'), 'appstore', 'sources', 'acestep-studio', 'constraints.txt'));
+});
+
 // ---------------------------------------------------------------- uninstall, status, list
 
 test('uninstall: unregisters, disables the unit and moves everything to the trash — nothing is deleted', async () => {

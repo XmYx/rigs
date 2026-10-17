@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Krea Studio: a tiny web front-end for Krea 2 Turbo on the local ComfyUI.
 
-Run:  python3 server.py  [--port 8190] [--comfy http://127.0.0.1:8188]
+Run:  python3 server.py  [--port 8190] [--comfy http://127.0.0.1:8188]   (COMFYUI_DIR: the ComfyUI folder, default ~/ai/ComfyUI)
 Stdlib only. History lives in history.json next to this file; images stay in
 ComfyUI's output/krea_studio folder and are served through /img/<file>.
 All URLs are relative so the page works behind a path-prefix proxy (JARVIS App Cloud).
@@ -11,7 +11,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.json")
-COMFY_DIR = "/home/magix/ai/ComfyUI"
+COMFY_DIR = os.path.expanduser(os.environ.get("COMFYUI_DIR") or "~/ai/ComfyUI")  # images are read from its output/
 OUT_SUBDIR = "krea_studio"
 OUT_DIR = os.path.join(COMFY_DIR, "output", OUT_SUBDIR)
 lock = threading.Lock()

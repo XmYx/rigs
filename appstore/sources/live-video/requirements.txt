@@ -1,0 +1,14 @@
+# Live Video: direct dependencies, pinned to what runs on magix-system (ComfyUI's comfyenv, Python 3.14.4,
+# 2026-10-17). torch comes from the CUDA 13.0 index (runtime.torch in appstore/catalog/live-video.json).
+aiohttp==3.13.5
+diffusers==0.37.1
+transformers==5.9.0
+huggingface-hub==1.16.1
+accelerate==1.13.0
+safetensors==0.7.0
+sentencepiece==0.2.1
+protobuf==5.29.6
+numpy==2.4.6
+opencv-python-headless==4.13.0.92
+pillow==12.2.0
+-c constraints.txt

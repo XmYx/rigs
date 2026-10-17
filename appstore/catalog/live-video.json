@@ -1,0 +1,65 @@
+{
+  "id": "live-video",
+  "name": "Live Video",
+  "icon": "🎬",
+  "description": "Live text-to-video stream: type a prompt and LTX-Video 2B plays a continuous 720p video in the browser, continuing each segment from the last frame until you change the prompt or cut.",
+  "version": "1.0.0",
+  "homepage": "appstore/sources/live-video",
+  "license": "LTX-Video weights: LTX-Video Open Weights License 0.X (LTX-Video-Open-Weights-License-0.X.txt in Lightricks/LTX-Video)",
+  "notes": "1280x704 leases 16.5 GB VRAM (peaks at ~18 GB); 960x544 and smaller need less. The T5-XXL prompt encoder runs on the CPU and holds ~10 GB of RAM, so plan on 32 GB of system RAM. Needs an NVIDIA driver for CUDA 13.0 (580 or newer) and a C compiler (gcc) for torch.compile. Recording to mp4 (api/record) needs ffmpeg on PATH. Optional: the GPU Overseer on port 8195 (VRAM leases); without it the app runs without a lease.",
+  "platforms": ["linux"],
+  "needs": { "gpu": "nvidia", "vramGB": 18, "diskGB": 6, "python": "3.14" },
+  "source": { "type": "rigs", "path": "appstore/sources/live-video", "copy": true },
+  "runtime": {
+    "type": "python",
+    "requirements": ["requirements.txt"],
+    "torch": { "index": "https://download.pytorch.org/whl/cu130", "packages": ["torch==2.12.0"] }
+  },
+  "models": [
+    {
+      "name": "LTX-Video 2B 0.9.6 distilled",
+      "kind": "hf",
+      "repo": "Lightricks/LTX-Video",
+      "files": ["ltxv-2b-0.9.6-distilled-04-25.safetensors"],
+      "revision": "8984fa25007f376c1a299016d0957a37a2f797bb",
+      "sizeGB": 5.905
+    },
+    {
+      "name": "T5-XXL text encoder, tokenizer and scheduler (LTX-Video)",
+      "kind": "hf",
+      "repo": "Lightricks/LTX-Video",
+      "files": [
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "text_encoder/model-00001-of-00004.safetensors",
+        "text_encoder/model-00002-of-00004.safetensors",
+        "text_encoder/model-00003-of-00004.safetensors",
+        "text_encoder/model-00004-of-00004.safetensors",
+        "text_encoder/model.safetensors.index.json",
+        "tokenizer/added_tokens.json",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/spiece.model",
+        "tokenizer/tokenizer_config.json"
+      ],
+      "revision": "8984fa25007f376c1a299016d0957a37a2f797bb",
+      "sizeGB": 17.742
+    }
+  ],
+  "port": 8211,
+  "healthPath": "/healthz",
+  "healthTimeoutSec": 60,
+  "env": {
+    "HF_HOME": "{hfHome}",
+    "LTX_REVISION": "8984fa25007f376c1a299016d0957a37a2f797bb",
+    "LIVEVIDEO_ROOT": "{appDir}"
+  },
+  "launch": {
+    "command": ["{python}", "{appDir}/server.py", "--host", "127.0.0.1", "--port", "{port}"],
+    "systemd": { "after": ["network-online.target", "gpu-overseer.service"], "service": { "KillMode": "mixed", "TimeoutStopSec": 30 } }
+  },
+  "gpuOverseer": {
+    "match": "{appDir}/engine.py",
+    "unload": { "url": "http://127.0.0.1:{port}/api/unload", "body": {} },
+    "busy": { "url": "http://127.0.0.1:{port}/api/busy", "method": "GET" }
+  }
+}

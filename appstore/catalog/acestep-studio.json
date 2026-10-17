@@ -1,0 +1,58 @@
+{
+  "id": "acestep-studio",
+  "name": "ACE-Step Studio",
+  "icon": "🎵",
+  "description": "Music generation with ACE-Step 1.5: songs from a caption and lyrics, covers, repaint and a jukebox, with every generation parameter exposed.",
+  "version": "1.0.0",
+  "homepage": "https://github.com/ace-step/ACE-Step-1.5",
+  "license": "ACE-Step 1.5: code and weights MIT",
+  "notes": "The XL turbo DiT (~12.3 GB) plus the 1.7B LM (~5 GB) need ~18 GB VRAM; the smaller turbo DiT is included and selectable in the UI. The studio UI is shipped in RIGS (appstore/sources/acestep-studio) and copied into the ACE-Step checkout as studio/. Prompt enhancement uses ANTHROPIC_API_KEY or the claude CLI when present (optional). Optional: the GPU Overseer on port 8195; without it the app loads anyway.",
+  "platforms": ["linux"],
+  "needs": { "gpu": "nvidia", "vramGB": 18, "diskGB": 9, "python": "3.12" },
+  "source": { "type": "git", "url": "https://github.com/ace-step/ACE-Step-1.5.git", "ref": "ca1e85fe9430179831e6bc6be790c332190a3866" },
+  "runtime": {
+    "type": "python",
+    "project": true,
+    "torch": { "index": "https://download.pytorch.org/whl/cu128", "packages": ["torch==2.10.0", "torchvision==0.25.0", "torchaudio==2.10.0"] },
+    "pipArgs": ["--constraint", "{rigsApp}/appstore/sources/acestep-studio/constraints.txt"]
+  },
+  "models": [
+    {
+      "name": "ACE-Step 1.5 (turbo DiT, VAE, Qwen3-Embedding-0.6B, 5Hz LM 1.7B)",
+      "kind": "hf",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "dest": "checkpoints",
+      "sizeGB": 9.399
+    },
+    {
+      "name": "ACE-Step 1.5 XL turbo DiT",
+      "kind": "hf",
+      "repo": "ACE-Step/acestep-v15-xl-turbo",
+      "revision": "d4a0b288b83ebb7e25a8c0b32c573c22e134e8ee",
+      "dest": "checkpoints/acestep-v15-xl-turbo",
+      "sizeGB": 18.583
+    }
+  ],
+  "port": 8191,
+  "healthPath": "/healthz",
+  "healthTimeoutSec": 120,
+  "env": { "ACESTEP_ROOT": "{appDir}" },
+  "launch": {
+    "command": ["{python}", "{appDir}/studio/server.py", "--host", "127.0.0.1", "--port", "{port}"],
+    "cwd": "{appDir}/studio",
+    "systemd": { "after": ["network-online.target", "gpu-overseer.service"] }
+  },
+  "gpuOverseer": {
+    "match": "{appDir}/studio/server.py",
+    "unload": { "url": "http://127.0.0.1:{port}/api/unload", "body": {} },
+    "busy": { "url": "http://127.0.0.1:{port}/api/status", "method": "GET" }
+  },
+  "postInstall": [
+    {
+      "name": "copy the studio UI into the ACE-Step checkout",
+      "run": ["{python}", "-c", "import shutil, sys; shutil.copytree(sys.argv[1], sys.argv[2], dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))", "{rigsApp}/appstore/sources/acestep-studio", "{appDir}/studio"],
+      "timeoutSec": 60
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "id": "krea-studio",
+  "name": "Krea Studio",
+  "icon": "🎨",
+  "description": "Text-to-image with Krea 2 Turbo on the local ComfyUI: prompt, optional prompt enhancement by the Qwen3-VL text encoder, a gallery and history.",
+  "version": "1.0.0",
+  "homepage": "https://huggingface.co/Comfy-Org/Krea-2",
+  "license": "Krea 2 weights: Krea license (LICENSE.pdf in Comfy-Org/Krea-2)",
+  "notes": "Needs ComfyUI (v0.35.0 or newer, with the krea2 CLIPLoader type and the TextGenerate node) running on 127.0.0.1:8188 and installed in ~/ai/ComfyUI: the models are downloaded into ~/ai/ComfyUI/models and generated images are read from ~/ai/ComfyUI/output/krea_studio. ComfyUI elsewhere: copy this manifest to ~/.rigs/appstore/catalog/krea-studio.json and change the model dests and COMFYUI_DIR. ComfyUI holds the VRAM (~18 GB, asked of the GPU Overseer as client comfyui); Krea Studio itself is stdlib Python and needs no venv.",
+  "platforms": ["linux"],
+  "needs": { "gpu": "nvidia", "vramGB": 18, "diskGB": 0.01 },
+  "source": { "type": "rigs", "path": "appstore/sources/krea-studio", "copy": true },
+  "runtime": { "type": "none" },
+  "models": [
+    {
+      "name": "Krea 2 Turbo (fp8 scaled)",
+      "kind": "hf",
+      "repo": "Comfy-Org/Krea-2",
+      "files": ["diffusion_models/krea2_turbo_fp8_scaled.safetensors"],
+      "revision": "1171f4dc7e325bf3734586942e737872506c73e1",
+      "dest": "{home}/ai/ComfyUI/models",
+      "sizeGB": 12.239
+    },
+    {
+      "name": "Qwen3-VL 4B text encoder (fp8 scaled)",
+      "kind": "hf",
+      "repo": "Comfy-Org/Krea-2",
+      "files": ["text_encoders/qwen3vl_4b_fp8_scaled.safetensors"],
+      "revision": "1171f4dc7e325bf3734586942e737872506c73e1",
+      "dest": "{home}/ai/ComfyUI/models",
+      "sizeGB": 4.882
+    },
+    {
+      "name": "Qwen-Image VAE",
+      "kind": "hf",
+      "repo": "Comfy-Org/Krea-2",
+      "files": ["vae/qwen_image_vae.safetensors"],
+      "revision": "1171f4dc7e325bf3734586942e737872506c73e1",
+      "dest": "{home}/ai/ComfyUI/models",
+      "sizeGB": 0.236
+    }
+  ],
+  "port": 8190,
+  "healthPath": "/healthz",
+  "healthTimeoutSec": 30,
+  "env": { "COMFYUI_DIR": "{home}/ai/ComfyUI" },
+  "launch": {
+    "command": ["{python}", "{appDir}/server.py", "--host", "127.0.0.1", "--port", "{port}", "--comfy", "http://127.0.0.1:8188"],
+    "systemd": { "after": ["network-online.target", "comfyui.service"], "wants": ["comfyui.service"] }
+  }
+}

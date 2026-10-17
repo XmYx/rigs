@@ -269,6 +269,7 @@ export function validateManifest(raw, { file = '' } = {}) {
   for (const [k, v] of Object.entries(env)) scan(`env.${k}`, v);
   postInstall.forEach((p, i) => { p.run.forEach((a) => scan(`postInstall[${i}].run`, a)); scan(`postInstall[${i}].cwd`, p.cwd); });
   models.forEach((x, i) => scan(`models[${i}].dest`, x.dest));
+  if (runtime.type === 'python') runtime.pipArgs.forEach((a, i) => scan(`runtime.pipArgs[${i}]`, a));
   if (gpuOverseer) for (const [k, v] of [['match', gpuOverseer.match], ['unload.url', gpuOverseer.unload.url], ['busy.url', gpuOverseer.busy?.url]]) scan(`gpuOverseer.${k}`, v);
 
   if (errors.length) return { manifest: null, errors: errors.map((e) => `${id || file || '?'}: ${e}`) };
@@ -454,6 +455,25 @@ function dirSize(p) {
   try { const st = fs.statSync(p); if (st.isFile()) return st.size; } catch { return 0; }
   walk(p);
   return total;
+}
+
+/** Content hash of a folder (relative paths + bytes), skipping __pycache__ and node_modules. '' if missing. */
+function treeHash(dir) {
+  const h = crypto.createHash('sha256');
+  const walk = (d, rel) => {
+    let ents;
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.name === '__pycache__' || e.name === 'node_modules') continue;
+      const f = path.join(d, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(f, r);
+      else if (e.isFile()) { h.update(`${r}\0`); try { h.update(fs.readFileSync(f)); } catch {} h.update('\0'); }
+    }
+  };
+  if (!exists(dir)) return '';
+  walk(dir, '');
+  return h.digest('hex').slice(0, 16);
 }
 
 /** A Hugging Face --local-dir download left half-finished files behind. */
@@ -832,7 +852,9 @@ const STEP_IMPL = {
   async fetch(ctx) {
     const { m, inst, d } = ctx;
     const src = m.source;
-    const key = keyOf(src);
+    // A copied RIGS folder changes with RIGS updates: its content is part of the key, so the copy is refreshed.
+    const tree = src.type === 'rigs' && src.copy ? treeHash(path.join(APP_DIR, src.path)) : '';
+    const key = keyOf(tree ? { ...src, tree } : src);
     if (src.type === 'rigs' && !src.copy) {
       if (!exists(inst.appDir)) throw new Error(`${src.path} is missing from this RIGS checkout`);
       ctx.ensureRoot();
@@ -875,7 +897,7 @@ const STEP_IMPL = {
       await fsp.cp(path.join(APP_DIR, src.path), tmp, { recursive: true });
       await trashOld();
       fs.renameSync(tmp, appRoot);
-      ctx.state.sourceRev = '';
+      ctx.state.sourceRev = tree;
     } else {
       const ext = /\.zip($|\?)/i.test(src.url) ? '.zip' : /\.(tar\.xz|txz)($|\?)/i.test(src.url) ? '.tar.xz' : '.tar.gz';
       const archive = path.join(inst.root, 'downloads', `source-${keyOf(src.url)}${ext}`);
@@ -925,7 +947,10 @@ const STEP_IMPL = {
       const what = [...rt.requirements, ...(rt.torch?.packages || []), ...rt.packages].join(', ') || 'the project';
       if (ctx.dryRun && !exists(inst.appDir)) return { skipped: true, detail: `dry run: would install ${what}${rt.torch ? ` (torch index ${rt.torch.index})` : ''}` };
       for (const [i, r] of reqs.entries()) if (!exists(r)) throw new Error(`${rt.requirements[i]} is not in the app source`);
-      const key = keyOf({ rt, reqs: reqs.map(readText), venv: ctx.state.steps?.venv?.at || 0, rev: ctx.state.sourceRev || '' });
+      const pipArgs = rt.pipArgs.map((a) => render(a, ctx.vars));
+      // A file named in pipArgs (e.g. --constraint {rigsApp}/…/constraints.txt) counts like a requirements file.
+      const argFiles = pipArgs.filter((a) => path.isAbsolute(a) && exists(a)).map(readText);
+      const key = keyOf({ rt, reqs: reqs.map(readText), argFiles, venv: ctx.state.steps?.venv?.at || 0, rev: ctx.state.sourceRev || '' });
       if (done(ctx, 'deps', key) && exists(venvPython(inst.venv))) return { skipped: true, key, detail: 'already installed' };
       const items = [...(rt.torch?.packages || []), ...reqs.flatMap((r) => ['-r', r]), ...rt.packages];
       if (rt.project || rt.extras.length) items.push(rt.extras.length ? `${inst.appDir}[${rt.extras.join(',')}]` : inst.appDir);
@@ -934,7 +959,7 @@ const STEP_IMPL = {
       const pip = pipInstaller(ctx);
       const args = [...pip.args, ...items];
       if (rt.torch) { args.push('--extra-index-url', rt.torch.index); if (pip.uv) args.push('--index-strategy', 'unsafe-best-match'); }
-      args.push(...rt.pipArgs);
+      args.push(...pipArgs);
       await ctx.sh(pip.cmd, args, { cwd: inst.appDir, env: { PIP_DISABLE_PIP_VERSION_CHECK: '1', VIRTUAL_ENV: inst.venv }, timeout: 2 * 60 * 60 * 1000 });
       return { key, detail: `${what} installed${pip.uv ? ' (uv)' : ''}` };
     }
@@ -986,7 +1011,8 @@ const STEP_IMPL = {
   async post(ctx) {
     const { m, inst } = ctx;
     if (!m.postInstall.length) return { skipped: true, key: 'none', detail: 'none' };
-    const key = keyOf({ post: m.postInstall, rev: ctx.state.sourceRev || '', deps: ctx.state.steps?.deps?.at || 0, port: inst.port });
+    // The version is in the key so a new release reruns steps that copy files from outside the source.
+    const key = keyOf({ post: m.postInstall, rev: ctx.state.sourceRev || '', deps: ctx.state.steps?.deps?.at || 0, port: inst.port, version: m.version });
     if (done(ctx, 'post', key)) return { skipped: true, key, detail: 'already done' };
     if (ctx.dryRun) return { skipped: true, key, detail: `dry run: would run ${m.postInstall.map((p) => p.name).join(', ')}` };
     for (const [i, p] of m.postInstall.entries()) {
