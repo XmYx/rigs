@@ -271,3 +271,16 @@ test('a task stuck "starting" whose agent is in fact running is adopted, not cas
   assert.equal(t.run.qitem, 'q-live');
   assert.equal(c.calls.filter((x) => x.sub === 'work/start').length, starts, 'no second agent');
 });
+
+test('the installed checkout stays clean: no agents run in it, injected guide blocks are removed', async () => {
+  const { isInstall } = await import('../src/work.js');
+  const { APP_DIR } = await import('../src/util.js');
+  const { cleanInjectedGuides } = await import('../src/updater.js');
+  assert.ok(isInstall(APP_DIR) && isInstall(path.join(APP_DIR, 'ui')));
+  assert.ok(!isInstall(path.join(ROOT, 'wt')));
+  const dir = fs.mkdtempSync(path.join(ROOT, 'install-'));
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Claude Code instructions\n\nRead AGENTS.md.\n\n\n<!-- BEGIN OpenRig MANAGED BLOCK: openrig-start.md -->\n# OpenRig Start\n<!-- END OpenRig MANAGED BLOCK: openrig-start.md -->\n');
+  assert.deepEqual(cleanInjectedGuides(dir), ['CLAUDE.md']);
+  assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), '# Claude Code instructions\n\nRead AGENTS.md.\n');
+  assert.deepEqual(cleanInjectedGuides(dir), []);
+});

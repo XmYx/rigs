@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { bin } from './tools.js';
+import { stripManaged } from './merge.js';
 import { APP_DIR, log, readJsonSync, run, writeJsonAtomic } from './util.js';
 
 /**
@@ -24,8 +25,27 @@ export function isCheckout() {
   return fs.existsSync(path.join(APP_DIR, '.git'));
 }
 
+/**
+ * An OpenRig seat started in this folder writes its managed blocks into CLAUDE.md / AGENTS.md. That is not anyone's
+ * work, but it makes the install look edited and would stop this machine from ever updating: take them back out.
+ */
+export function cleanInjectedGuides(dir = APP_DIR) {
+  const cleaned = [];
+  for (const f of ['CLAUDE.md', 'AGENTS.md']) {
+    const p = path.join(dir, f);
+    try {
+      const text = fs.readFileSync(p, 'utf8');
+      const clean = stripManaged(text);
+      if (clean !== text) { fs.writeFileSync(p, clean); cleaned.push(f); }
+    } catch {}
+  }
+  if (cleaned.length) log(`updater: removed OpenRig managed blocks from ${cleaned.join(', ')} in the install`);
+  return cleaned;
+}
+
 export async function version() {
   if (!isCheckout()) return { sha: 'dev', short: 'dev', branch: '', dirty: false };
+  cleanInjectedGuides();
   const [sha, branch, dirty, subject] = await Promise.all([
     git(['rev-parse', 'HEAD'], 5000), git(['rev-parse', '--abbrev-ref', 'HEAD'], 5000), git(['status', '--porcelain', '--untracked-files=no'], 8000), git(['log', '-1', '--format=%s|%ct'], 5000),
   ]);
