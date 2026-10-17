@@ -28,10 +28,11 @@ treat `main` as production.
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools (incl. `mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`; no tool can enable control) |
 | `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
-| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: gate, lease, rate limits, audit (`logs/control.jsonl`), persistent kill (`control-state.json`). Design: `docs/full-access.md` |
+| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), lease, rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`. Design: `docs/full-access.md` |
 | `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
 | `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, Linux uinput root step, GNOME extension) |
-| `src/control-{linux,mac,win}.js`, `src/control-rpc.js` | Platform adapters and the JSON-lines helper transport; helpers in `scripts/control/` (Linux python + GNOME extension, Windows PowerShell) |
+| `src/control-{linux,mac,win}.js`, `src/control-rpc.js`, `src/control-error.js` | Platform adapters that start and talk to the helper, the JSON-lines helper transport and the error type |
+| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`) and `rigs-control.ps1`. The macOS helper (`macos/RigsControl.swift`) is not written yet; until it is, macOS reports no backend and fails closed |
 | `src/access.js` | Permission status per OS (files, screen capture, input, accessibility) with fix hints and the guided grant |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
@@ -58,6 +59,12 @@ treat `main` as production.
 - **Playbooks** (`docs/playbooks/*.md`): proven methods for recurring RIGS changes. A JARVIS request whose goal matches a
   playbook's `match` regex skips LLM planning: one agent follows it, then the final review. When a kind of request
   repeats, write one (front matter `title`, `match`, `size`; then the files, steps and checks). Example: `ui-theme.md`.
+- **Screen control is gated (`src/control.js`, design in `docs/full-access.md` §7).** Control is on by default, and
+  a person or the kill switch switches it off per machine. `config.control` is in `patchConfig`'s blocked set, so no
+  generic settings save or agent `POST config` can switch it back on. Only a confirmed human surface may do that. Do
+  not add a route or MCP tool that bypasses the gate, the lease, the audit log or the kill switch. Every refusal is
+  audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
+  or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test
