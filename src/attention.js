@@ -45,7 +45,9 @@ function claudeWaiting() {
       key: `claude:${s.sessionId || s.pid}`, agent: 'claude', kind: 'waiting',
       title: s.name || path.basename(s.cwd || '') || 'Claude Code', cwd: s.cwd,
       reason: 'waiting for your answer (permission or question)', since: s.statusUpdatedAt || s.updatedAt || Date.now(),
-      session: tmuxRef(s.tmux) || { kind: 'claude', id: s.sessionId }, where: s.entrypoint === 'claude-desktop' ? 'Claude app' : s.tmux ? 'tmux' : 'terminal',
+      // OpenRig launches seats with a clean environment (no TMUX in the self-report) but names the session after the seat.
+      session: tmuxRef(s.tmux) || (/^[\w.-]+@[\w.-]+$/.test(s.name || '') ? { kind: 'rig', id: s.name } : { kind: 'claude', id: s.sessionId }),
+      where: s.entrypoint === 'claude-desktop' ? 'Claude app' : s.tmux || /@/.test(s.name || '') ? 'tmux' : 'terminal',
     });
   }
   return out;
