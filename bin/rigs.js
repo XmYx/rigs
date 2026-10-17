@@ -90,6 +90,7 @@ const commands = {
     const s = argv.indexOf('--summary');
     const r = await daemonFetch('/api/local/dev/propose', { method: 'POST', body: JSON.stringify({ dir: process.cwd(), title: t >= 0 ? argv[t + 1] : undefined, summary: s >= 0 ? argv[s + 1] : undefined }), timeout: 60000 });
     if (r.error) { console.error(r.error); process.exit(1); }
+    if (r.empty) { console.log(`nothing to propose: ${r.branch} has no commits ahead of origin/main`); return; }
     console.log(`proposed ${r.branch} → merge steward ${r.steward} (request ${r.id}, ${r.status}). Watch: rigs merge`);
   },
   async merge() {

@@ -200,7 +200,7 @@ const TOOLS = [
     run: (a) => askBrain(a.node, a.prompt, a.brain, a.model),
   },
   {
-    name: 'project_task_update', description: 'Report progress on a RIGS project task you were assigned: status done | blocked | failed (or running), with a summary of what you did / where the result is / what you need. Your task brief names the owner machine, project id and task id.',
+    name: 'project_task_update', description: 'Report progress on a RIGS project task you were assigned: status done | blocked | failed (or running), with a summary of what you did / where the result is / what you need. Your task brief names the owner machine, project id and task id. A "blocked" report is answered automatically with the safe default (Sir pre-approved non-destructive work) and the task keeps running; "failed" is retried with a stronger model.',
     inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, task: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'blocked', 'failed'] }, summary: { type: 'string' } }, required: ['owner', 'project', 'task', 'status'] },
     run: async (a) => {
       const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/tasks/${encodeURIComponent(a.task)}`, { method: 'POST', body: { status: a.status, summary: a.summary || '' }, timeout: 120000 });
@@ -267,6 +267,11 @@ const TOOLS = [
     run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/resume`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
+    name: 'project_feedback', description: "Store Sir's answer to a finished project's \"How did it work out, sir?\" on that project (the report names owner and project). Use his words; one call per answer.",
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, text: { type: 'string', description: "Sir's answer, verbatim or closely summarized" } }, required: ['owner', 'project', 'text'] },
+    run: async (a) => { const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/feedback`, { method: 'POST', body: { text: a.text, by: 'Sir' }, timeout: 30000 }); return { ok: true, project: p.id, feedback: (p.feedback || []).length }; },
+  },
+  {
     name: 'rigs_dev_start', description: 'Start a change to RIGS (or the repo checked out at `repo`): creates a git worktree on branch work/<this machine>/<topic> from the latest origin/main and returns its path. Work and commit ONLY there — never on main or in the installed checkout.',
     inputSchema: { type: 'object', properties: { topic: { type: 'string' }, repo: { type: 'string' } }, required: ['topic'] },
     run: (a) => api('/api/local/dev/start', { method: 'POST', body: a, timeout: 120000 }),
@@ -282,7 +287,7 @@ const TOOLS = [
     run: () => api('/api/mesh/merge', { timeout: 20000 }),
   },
   {
-    name: 'rigs_merge_resolved', description: 'Resolver only: call after committing the conflict resolution in the steward worktree; the steward re-checks and pushes.',
+    name: 'rigs_merge_resolved', description: 'Resolver only: call after resolving every conflict in the steward worktree and `git add`-ing the files (do not commit): it commits the merge, then the steward re-checks and pushes.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     run: async (a) => {
       const m = await api('/api/mesh/merge', { timeout: 20000 });

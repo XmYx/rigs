@@ -154,11 +154,11 @@ async function waitFor(session, tries = 30) {
   return false;
 }
 
-/** Relaunch one dead seat with a fresh occupant (the seat keeps its id, cwd, runtime and model). */
+/** Relaunch one dead seat with a fresh occupant (the seat keeps its id, cwd, runtime and model). A cold start can take minutes. */
 async function relaunch(session) {
   await openrig.rigRun(['seat', 'clean', session], { timeout: 60000 });
   await openrig.rigRun(['seat', 'launch', session], { timeout: 300000 });
-  return waitFor(session);
+  return waitFor(session, 90);
 }
 
 /**
@@ -227,8 +227,12 @@ export async function ensureWorker({ rig, cwd, kind, assign, policy }) {
   const session = sessionOf(id, rig);
   if (n && !GONE.test(n.status || '')) return { seat: session, created: false };
   if (n) {
-    if (!(await relaunch(session))) throw new Error(`worker ${session} did not come back`);
-    return { seat: session, created: true };
+    if (await relaunch(session)) return { seat: session, created: true };
+    // The stopped seat won't come back (the same wait would fail again on a retry): give the task a sibling seat.
+    let k = 2;
+    while (seat(`${base}-${k}`) && k < 9) k++;
+    if (seat(`${base}-${k}`)) throw new Error(`worker ${session} did not come back`);
+    id = `${base}-${k}`;
   }
   return { seat: await addSeat(rig, memberFor({ id, kind, assign, cwd, policy })), created: true };
 }
