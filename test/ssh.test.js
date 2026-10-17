@@ -14,7 +14,7 @@ const SSH_DIR = path.join(ROOT, 'ssh');
 const HOST_KEY_DIR = path.join(ROOT, 'etc-ssh');
 Object.assign(process.env, {
   RIGS_HOME: path.join(ROOT, '.rigs'), RIGS_SSH_DIR: SSH_DIR, RIGS_SSH_HOST_KEY_DIR: HOST_KEY_DIR,
-  RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NAME: 'test-node', RIGS_PEERS: '',
+  RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_NAME: 'test-node', RIGS_PEERS: '',
 });
 const ssh = await import('../src/ssh.js');
 const { sshServerEnabled } = await import('../src/tailscale.js');

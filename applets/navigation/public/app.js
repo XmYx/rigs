@@ -1,11 +1,13 @@
 // Navigation applet UI: MapLibre GL over free OpenStreetMap vector tiles, a JARVIS-style HUD (speed,
 // heading, next turn, ETA), a follow-me 3D camera, destination search + routing through the applet
-// server, and ?demo=1 which drives a simulated vehicle so it all works without GPS.
+// server, traffic (streets shaded by congestion, little cars moving around you) and ?demo=1 which
+// drives a simulated vehicle so it all works without GPS.
 import {
   bearing, cardinal, createMotionEstimator, formatDistance, formatDuration, kmhToMs, lerpHeading,
   maneuverArrow, maneuverText, pointAlong, cumulativeDistances, routeProgress, speedIn, zoomForSpeed,
 } from './geo.js';
-import { buildStyle, routeLayers } from './mapstyle.js';
+import { buildStyle, routeLayers, trafficLayers } from './mapstyle.js';
+import { createTrafficSim, shadeFeatures } from './traffic.js';
 
 const MAPLIBRE_FALLBACK = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js';
 const $ = (id) => document.getElementById(id);
@@ -24,6 +26,7 @@ const state = {
   follow: true, pitched: true, pos: null, speed: null, heading: null, source: null,
   route: null, dest: null, progress: null, offRoute: 0, lastReroute: 0,
   mapLoaded: false, driving: false, fixes: 0,
+  traffic: { on: store.get('traffic', '1') !== '0', source: null, segments: 0, cars: 0, updated: null },
 };
 window.__nav = state; // inspection hook for screenshots and debugging
 
@@ -107,6 +110,7 @@ function startMap() {
     canvasContextAttributes: { antialias: true },
   });
   state.map = map;
+  $('traffic').hidden = cfg.traffic?.source === 'off';
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
 
   let lastMapError = 0;
@@ -126,12 +130,25 @@ function startMap() {
   }
 
   map.on('load', () => {
+    const tl = trafficLayers('traffic', 'traffic-cars');
+    map.addSource('traffic', { type: 'geojson', data: emptyLine(), attribution: cfg.traffic?.source === 'tomtom' ? 'Traffic © TomTom' : undefined });
+    map.addSource('traffic-cars', { type: 'geojson', data: emptyLine() });
+    map.addImage('nav-car', carIcon('#6dffb4', 'rgba(0, 255, 136, 0.9)'), { pixelRatio: 2 });
+    map.addImage('nav-car-slow', carIcon('#e2d36a', 'rgba(230, 170, 40, 0.8)'), { pixelRatio: 2 });
+    map.addLayer(tl.shade, 'building-3d');
     map.addSource('route', { type: 'geojson', data: emptyLine() });
     for (const l of routeLayers('route')) map.addLayer(l);
+    map.addLayer(tl.cars);
+    for (const id of ['traffic-shade', 'traffic-cars']) map.setLayoutProperty(id, 'visibility', state.traffic.on ? 'visible' : 'none');
+    map.on('moveend', () => {
+      // The follow camera eases every tick, so this is a trailing timer rather than a resetting one.
+      if (!trafficTimer) trafficTimer = setTimeout(() => { trafficTimer = null; refreshTraffic(); }, 500);
+    });
     vehicle = new maplibregl.Marker({ element: vehicleEl(), rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(center);
     state.mapLoaded = true;
     renderHud();
     if (DEMO) startDemo(); else startGps();
+    refreshTraffic();
   });
 }
 
@@ -234,6 +251,7 @@ function setRoute(route) {
   $('eta').hidden = false;
   if (state.pos) updateProgress(state.pos);
   renderHud();
+  refreshTraffic(); // the route changes the assumed traffic along it
 }
 
 function clearRoute() {
@@ -364,6 +382,132 @@ async function startDemo() {
   sim.drive(route, { fromStart: true });
 }
 
+// ---- Traffic -----------------------------------------------------------------------------------
+
+// Streets shaded by congestion and car silhouettes around the vehicle, from api/traffic (TomTom flow
+// or the server's assumed-traffic model). One GeoJSON source for all cars, updated from one
+// requestAnimationFrame loop at up to 30 Hz; nothing runs while the tab is hidden or traffic is off.
+const TRAFFIC_RADIUS_M = 900;   // cars and shading this far round the vehicle
+const TRAFFIC_GRID = 0.005;     // bbox snapped outward to this grid (°), so small moves reuse the last answer
+const TRAFFIC_POLL_MS = 60000;
+const TRAFFIC_FRAME_MS = 33;
+const carSim = createTrafficSim({ maxCars: window.matchMedia('(max-width: 640px)').matches ? 160 : 260 });
+let trafficTimer = null;
+let trafficKey = '';
+let trafficAt = 0;
+let trafficAbort = null;
+let carRaf = 0;
+let carLast = 0;
+
+const trafficEnabled = () => state.traffic.on && state.mapLoaded && state.cfg.traffic?.source !== 'off';
+
+function trafficArea() {
+  const c = state.pos ? [state.pos.lon, state.pos.lat] : state.map.getCenter().toArray();
+  const dLat = TRAFFIC_RADIUS_M / 110540;
+  const dLon = TRAFFIC_RADIUS_M / (111320 * Math.cos((c[1] * Math.PI) / 180));
+  const snap = (v, round) => (round(v / TRAFFIC_GRID) * TRAFFIC_GRID).toFixed(3);
+  const zoom = state.map.getZoom();
+  return {
+    center: c,
+    bbox: [snap(c[0] - dLon, Math.floor), snap(c[1] - dLat, Math.floor), snap(c[0] + dLon, Math.ceil), snap(c[1] + dLat, Math.ceil)].join(','),
+    z: zoom < 13 ? 12 : zoom < 15 ? 14 : 16, // only the class filter changes between these
+  };
+}
+
+/** Fetch traffic for the area round the vehicle when it changed or the last answer is a minute old. */
+async function refreshTraffic() {
+  if (!trafficEnabled() || document.hidden) return;
+  const a = trafficArea();
+  const routeId = state.route?.routeId || '';
+  const key = `${a.bbox}|${a.z}|${routeId}`;
+  if (key === trafficKey && Date.now() - trafficAt < TRAFFIC_POLL_MS) return;
+  trafficKey = key;
+  trafficAt = Date.now();
+  trafficAbort?.abort();
+  trafficAbort = new AbortController();
+  const q = new URLSearchParams({ bbox: a.bbox, z: String(a.z) });
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz) q.set('tz', tz);
+  if (routeId) q.set('route', routeId);
+  if (DEMO) q.set('at', demoRushHour());
+  try {
+    const r = await fetch('api/traffic?' + q, { signal: trafficAbort.signal });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status);
+    if (!state.traffic.on) return;
+    state.map.getSource('traffic').setData(shadeFeatures(data.segments));
+    carSim.setData(data.segments, a.center);
+    Object.assign(state.traffic, { source: data.source, segments: data.segments.length, cars: carSim.cars.length, updated: data.updated });
+    $('traffic').title = data.source === 'tomtom' ? 'Traffic: live (TomTom)' : data.source === 'synthetic' ? 'Traffic: assumed from road type and time of day' : 'Traffic: no data here';
+    startCars();
+  } catch (e) {
+    // No error screen for traffic: keep what is drawn and try again in 10 s.
+    if (e.name !== 'AbortError') { trafficAt = Date.now() - TRAFFIC_POLL_MS + 10000; console.warn('traffic:', e.message); }
+  }
+}
+
+/** The demo shows weekday evening rush hour (17:30 local, the latest weekday) so the effect is always visible. */
+function demoRushHour() {
+  const d = new Date();
+  d.setHours(17, 30, 0, 0);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d.toISOString();
+}
+
+function carFrame(t) {
+  carRaf = 0;
+  if (!trafficEnabled() || document.hidden) return;
+  if (!carLast || t - carLast >= TRAFFIC_FRAME_MS) {
+    carSim.step(carLast ? Math.min(0.25, (t - carLast) / 1000) : 0);
+    carLast = t;
+    // Below the car layer's minzoom the cars still move, but nothing is drawn, so skip the upload.
+    if (state.map.getZoom() >= 13) state.map.getSource('traffic-cars').setData(carSim.features());
+  }
+  carRaf = requestAnimationFrame(carFrame);
+}
+
+function startCars() {
+  if (carRaf || !trafficEnabled() || document.hidden) return;
+  carLast = 0;
+  carRaf = requestAnimationFrame(carFrame);
+}
+
+function setTraffic(on) {
+  state.traffic.on = on;
+  store.set('traffic', on ? '1' : '0');
+  $('traffic').classList.toggle('on', on);
+  $('traffic').setAttribute('aria-pressed', String(on));
+  if (!state.mapLoaded) return;
+  for (const id of ['traffic-shade', 'traffic-cars']) state.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+  if (on) { trafficKey = ''; refreshTraffic(); startCars(); }
+  else { cancelAnimationFrame(carRaf); carRaf = 0; trafficAbort?.abort(); }
+}
+
+/** A top-down car silhouette (pointing north) with a soft glow, for map.addImage at pixelRatio 2. */
+function carIcon(body, glow) {
+  const r = 2, w = 22, h = 40;
+  const c = document.createElement('canvas');
+  c.width = w * r; c.height = h * r;
+  const g = c.getContext('2d');
+  g.scale(r, r);
+  const rr = (x, y, rw, rh, rad) => { g.beginPath(); g.roundRect(x, y, rw, rh, rad); g.fill(); };
+  g.shadowColor = glow; g.shadowBlur = 6;
+  g.fillStyle = body;
+  rr(5, 4, 12, 32, 4);
+  g.shadowBlur = 0;
+  g.fillStyle = 'rgba(1, 4, 3, 0.85)';
+  rr(7, 11, 8, 5, 1.5);  // windscreen
+  rr(7.5, 27, 7, 3.5, 1.2); // rear window
+  return { width: c.width, height: c.height, data: g.getImageData(0, 0, c.width, c.height).data };
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { cancelAnimationFrame(carRaf); carRaf = 0; return; }
+  refreshTraffic();
+  startCars();
+});
+setInterval(refreshTraffic, 15000); // cheap: it only fetches when the answer is a minute old
+
 // ---- HUD ---------------------------------------------------------------------------------------
 
 const GAUGE_MAX_KMH = 160;
@@ -489,6 +633,9 @@ function wireUi() {
     state.map?.easeTo({ pitch: state.pitched ? PITCH : 0, duration: 500 });
   };
   $('compass').onclick = () => { if (!state.follow) state.map?.easeTo({ bearing: 0, duration: 500 }); };
+  $('traffic').onclick = () => setTraffic(!state.traffic.on);
+  $('traffic').classList.toggle('on', state.traffic.on);
+  $('traffic').setAttribute('aria-pressed', String(state.traffic.on));
   if (DEMO) document.body.classList.add('demo');
 }
 

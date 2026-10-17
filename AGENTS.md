@@ -37,7 +37,7 @@ treat `main` as production.
 - Everything must work on macOS, Ubuntu (Wayland) and Windows. Use `src/util.js` helpers (`run`,
   `spawnCmd`, `which`) — they handle Windows `.cmd` shims and PATH for services.
 - Never write to a user's real `~/.ssh`, `~/.claude*`, or `~/.codex` from tests; use `RIGS_HOME`,
-  `RIGS_SSH_DIR`, `RIGS_NO_MIGRATIONS=1` and `RIGS_NO_AUTOUPDATE=1` (see `test/smoke.test.js`).
+  `RIGS_SSH_DIR`, `RIGS_NO_MIGRATIONS=1` and `RIGS_NO_AUTOUPDATE=1`, plus `RIGS_NO_OPENRIG=1` for any test or scratch server (otherwise it talks to the real OpenRig and queues fake "Sir: Dark mode" items into the live JARVIS overseer) (see `test/smoke.test.js`).
 - New one-time steps for existing machines go in `src/migrations.js` (append-only); anything needing
   root goes through `src/rootsteps.js` so the user types one password in JARVIS.
 - **Change policy — never commit to `main`.** `rigs dev <topic>` (MCP `rigs_dev_start`) gives you a

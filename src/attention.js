@@ -62,7 +62,7 @@ async function openrigNeeds() {
 }
 
 export function rigNeeds(nodes) {
-  return nodes.filter((n) => !RIG_GONE.test(n.status || '') && (/needs?_input|blocked/i.test(n.activity || '') || /attention|needs?_input/i.test(n.startupStatus || '')))
+  return nodes.filter((n) => !RIG_GONE.test(n.status || '') && (/needs?_input/i.test(n.activity || '') || /attention|needs?_input/i.test(n.startupStatus || '')))
     .map((n) => ({
       key: `rig:${n.session}`, agent: n.runtime === 'codex' ? 'codex' : 'claude', kind: 'needs-input',
       title: n.title, reason: n.reason || n.startupStatus || 'needs input', since: Date.now(),
@@ -77,7 +77,7 @@ export const CHROME = [
   /trust this folder\?|do you trust the (contents|files)/i, /hooks? needs? review/i, /enter (confirm|continue) · esc/i,
 ];
 
-/** The approval/trust line a tmux session is showing, if any (used to explain what a seat is waiting for). */
+/** The approval/trust line a tmux session is showing (null: can't look; false: looked, none). */
 async function promptLine(session) {
   const t = bin('tmux');
   if (!t || isWin) return null;
@@ -85,7 +85,7 @@ async function promptLine(session) {
   if (cap.code !== 0) return null;
   const lines = cap.stdout.split('\n').filter((l) => l.trim()).slice(-14).reverse();
   const hit = lines.find((l) => CHROME.some((re) => re.test(l)));
-  return hit ? 'prompt on screen: ' + hit.trim().slice(0, 100) : null;
+  return hit ? 'prompt on screen: ' + hit.trim().slice(0, 100) : false; // false: looked, nothing to approve
 }
 
 async function paneChrome(skip) {
@@ -139,8 +139,15 @@ async function compute({ projects } = {}) {
   const claude = claudeWaiting();
   // Claude's own report is the better one for a seat it runs in; OpenRig's only fills the gaps.
   const claudeSessions = new Set(claude.map((x) => x.session?.id));
-  const rig = (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id));
-  for (const x of rig) { const line = await promptLine(x.session.id); if (line) x.reason = line; }
+  // An activity string alone is not a question: a seat in auto mode reports needs_input while it keeps working.
+  // When its screen can be read, only a real approval prompt counts.
+  const rig = [];
+  for (const x of (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id))) {
+    const line = await promptLine(x.session.id);
+    if (line === false) continue;
+    if (line) x.reason = line;
+    rig.push(x);
+  }
   const covered = new Set([...claude, ...rig, ...codexPending.values()].map((x) => x.session?.id).filter(Boolean));
   const panes = await paneChrome(covered);
   const active = (p) => !['done', 'stopped', 'draft'].includes(p.status);

@@ -26,7 +26,7 @@ export async function listProjects() {
   return all.map((p) => ({
     id: p.id, name: p.name, goal: truncate(p.goal, 200), status: p.status, owner: p.owner, updatedAt: p.updatedAt,
     main: !!p.main,
-    tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign, run: t.run ? { mode: t.run.mode, seat: t.run.seat || '', rig: t.run.rig || '', session: t.run.session || null, startedAt: t.run.startedAt } : null })),
+    tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, status: t.status, stalled: !!t.stalled, assign: t.assign, run: t.run ? { mode: t.run.mode, seat: t.run.seat || '', rig: t.run.rig || '', session: t.run.session || null, startedAt: t.run.startedAt } : null })),
   })).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -662,14 +662,16 @@ async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
   if (assign) { t.assign = { ...t.assign, ...assign, locked: true }; t.reason = 'set by hand'; }
   if (status) {
     event(p, `${t.id} → ${status}${summary ? ': ' + truncate(summary, 160) : ''}`);
+    const was = t.status;
     if (status === 'failed' && ctx && retryOrFail(p, t, summary || 'the agent reported failure') === 'retry') {
       tell(ctx, p, `${p.name}: “${t.title}” failed — trying once more with what went wrong.`);
     } else {
       t.status = status;
+      t.stalled = false; // an agent's own report replaces the watchdog's verdict
       if (summary !== undefined) t.summary = truncate(summary, 4000);
       if (status === 'todo') { t.run = null; t.attempts = 0; }
       if (status === 'done') tell(ctx, p, `${p.name}: task “${t.title}” finished on ${t.assign?.node}${summary ? ' — ' + truncate(summary, 600) : '.'}`, 'info', { keep: true });
-      if (status === 'blocked' || status === 'failed') tell(ctx, p, `${p.name}: task “${t.title}” is ${status}${summary ? ' — ' + truncate(summary, 140) : ''}.`, 'error');
+      if ((status === 'blocked' || status === 'failed') && was !== status) tell(ctx, p, `${p.name}: task “${t.title}” is ${status}${summary ? ' — ' + truncate(summary, 140) : ''}.`, 'error');
     }
     // Sir (or an agent) moving a task again un-blocks the project.
     if (p.status === 'blocked' && ['todo', 'running', 'done'].includes(t.status)) p.status = 'running';
@@ -680,6 +682,18 @@ async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
 }
 
 const nudgeText = (p, t, idleMin) => `RIGS watchdog: you have been idle for ${idleMin} min on task ${t.id} of project ${p.id} without reporting. If a background job is running, wait for it and carry on. If the task is done, verify it against its acceptance criteria and call project_task_update (owner "${p.owner}", project "${p.id}", task "${t.id}", status "done", with the evidence). If you cannot finish, call it with status "failed" or "blocked" and say exactly why.`;
+
+/** Does the status show an agent that is working: mid-turn, or a transcript/session that moved within the stall window? */
+export const isActive = (st, now = Date.now()) => st.busy === true || (st.activityAt > 0 && now - st.activityAt < STALL_MS);
+
+/** A task the watchdog blocked as stalled: back to running once its agent shows life again; the project recovers with it. */
+export function recoverStalled(p, t, st, now = Date.now()) {
+  if (!t.stalled || t.status !== 'blocked' || !isActive(st, now)) return false;
+  t.status = 'running'; t.stalled = false; t.summary = ''; t.watch = null;
+  if (p.status === 'blocked' && !p.tasks.some((x) => ['failed', 'blocked'].includes(x.status))) p.status = 'running';
+  event(p, `${t.id} → running (agent active again)`);
+  return true;
+}
 
 /** One running task: finished? ended silently? idle without reporting (nudge, then escalate)? Returns true if changed. */
 export async function watchTask(p, t, st, ctx, now = Date.now()) {
@@ -696,7 +710,8 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
   if (st.state === 'seat-down' || st.state === 'daemon-down') return reviveTask(p, t, st, ctx);
   if (st.needsInput) return false; // a permission/question wait — the attention feed already asks Sir
   const w = t.watch || (t.watch = { fp: '', idleSince: 0, nudges: 0, nudgedAt: 0 });
-  const idle = st.idle === true || (st.fingerprint && st.fingerprint === w.fp);
+  // Idle only when nothing shows life: not busy, no transcript/session activity within the stall window.
+  const idle = !isActive(st, now) && (st.idle === true || (st.fingerprint && st.fingerprint === w.fp));
   let changed = false;
   if (st.fingerprint) w.fp = st.fingerprint;
   if (!idle) { if (w.idleSince) { w.idleSince = 0; w.nudges = 0; changed = true; } return changed; }
@@ -704,6 +719,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
   if (now - w.idleSince < STALL_MS || now - w.nudgedAt < STALL_MS) return false;
   if (w.nudges >= MAX_NUDGES) {
     t.status = 'blocked';
+    t.stalled = true;
     t.summary = `stalled: idle ${Math.round((now - w.idleSince) / 60000)} min without a report after ${w.nudges} nudges — check its session`;
     event(p, `${t.id} → blocked (stalled)`);
     tell(ctx, p, `${p.name}: “${t.title}” has stalled on ${t.assign?.node} and does not respond to nudges.`, 'error');
@@ -756,7 +772,7 @@ async function reviveTask(p, t, st, ctx) {
  */
 export async function tick(ctx, now = Date.now()) {
   for (const s of await listProjects()) {
-    if (!['running', 'planning', 'merging'].includes(s.status)) continue;
+    if (!['running', 'planning', 'merging'].includes(s.status) && !(s.status === 'blocked' && s.tasks?.some((t) => t.stalled))) continue;
     const next = await withProject(s.id, () => tickProject(s.id, ctx, now)).catch((e) => { log(`project ${s.id}: tick: ${e.message}`); return null; });
     if (next === 'dispatch') await dispatchReady(s.id, ctx).catch((e) => log(`project ${s.id}: dispatch: ${e.message}`));
   }
@@ -764,8 +780,15 @@ export async function tick(ctx, now = Date.now()) {
 
 async function tickProject(id, ctx, now) {
   const p = await getProject(id);
-  if (!p || !['running', 'planning', 'merging'].includes(p.status)) return null;
+  if (!p || !['running', 'planning', 'merging', 'blocked'].includes(p.status)) return null;
   let changed = false;
+  for (const t of p.tasks.filter((x) => x.stalled && x.status === 'blocked' && x.run)) {
+    try {
+      const st = await ctx.call(t.assign.node, 'work/status', { method: 'POST', body: t.run, timeout: 20000 });
+      if (st.state === 'done' ? await watchTask(p, t, st, ctx, now) : recoverStalled(p, t, st, now)) changed = true;
+    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
+  }
+  if (p.status === 'blocked') { if (changed) await saveProject(p); return null; }
   if (p.status === 'planning' && (now - p.updatedAt > PLANNING_MS || p.updatedAt < BOOT)) {
     // The planner's brain call died with the daemon (restart, update): plan again once if Sir asked for it to run.
     const again = p.autoRun && !p.replanned;

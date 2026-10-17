@@ -18,7 +18,7 @@ const root = document.documentElement;
 // Short labels for the buttons in the ⋯ sheet (the toolbar shows icons only).
 const SHEET = [
   ['btn-hands', 'Hands-free'], ['btn-term', 'Terminal'], ['btn-files', 'Files'], ['btn-desk', 'Desktop'],
-  ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-ask', 'Questions'], ['btn-work', 'Active projects'], ['btn-apps', 'Apps'],
+  ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-ask', 'Questions'], ['btn-agents', 'Active agents'], ['btn-work', 'Active projects'], ['btn-apps', 'Apps'],
   ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'], ['panels-btn', 'Layout'],
 ];
 

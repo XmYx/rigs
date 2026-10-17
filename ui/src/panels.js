@@ -114,7 +114,7 @@ function setCollapsed(id, collapsed) {
 }
 
 /** Make a fixed element draggable and closable. The grip goes at the start of `into` (default: el). */
-export function makeFloating(el, { id, title, into = el, keep = [], onToggle, closedOnPhone = false }) {
+export function makeFloating(el, { id, title, into = el, keep = [], onToggle, closedOnPhone = false, closedByDefault = false }) {
   if (!el) return;
   for (const k of keep) k?.classList.add('keep');
   const grip = h('span', { class: 'pgrip', 'aria-hidden': 'true', title: `Drag to move ${title} · double-click to reset` }, '⠿');
@@ -151,7 +151,7 @@ export function makeFloating(el, { id, title, into = el, keep = [], onToggle, cl
   grip.addEventListener('click', (e) => e.stopPropagation());
 
   // On a phone some panels start closed (until shown once), so the galaxy is not buried on first load.
-  if (closedOnPhone && !state[id] && isPhone()) state[id] = { closed: true };
+  if ((closedByDefault || (closedOnPhone && isPhone())) && !state[id]) state[id] = { closed: true };
   const s = state[id];
   if (s?.pos) {
     if (s.pos.width) el.style.width = s.pos.width;
