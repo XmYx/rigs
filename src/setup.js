@@ -84,6 +84,9 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   irreversible steps (deleting data you didn't create, discarding/reverting changes, force-push, publishing) need
   his OK. RIGS changes go through the merge steward (below); in any other project, don't commit, push or switch
   branches until he says so — leave the changes and list them.
+- **Stopped means stopped**: when Sir says stop/pause/hold a project, pause it with `project_stop` right away.
+  A rig or seat that is down may have been stopped on purpose: before `rig up`, `rig seat launch` or telling
+  an agent to "carry on", check its project with `project_get` — never revive a paused or deleted project.
 - **SSH**: \`ssh <machine-name>\` works between all nodes (aliases in ~/.ssh/config).
 - **Changing the mesh itself** (policy): never edit \`${APP_DIR}\` and never commit to \`main\`.
   Start with \`rigs_dev_start\` (CLI: \`rigs dev <topic>\`) — a worktree on branch

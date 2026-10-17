@@ -195,6 +195,19 @@ const TOOLS = [
     run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
   },
   {
+    name: 'project_stop', description: "Pause a project NOW because Sir said stop / pause / hold / \"consider it done\" / \"leave it for now\": its running agents are stopped (uncommitted edits stay in the tree) and nothing of it is dispatched, nudged or revived until project_resume. Sir's word overrides \"don't interrupt a working agent\" — never wait for a task to finish first.",
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, reason: { type: 'string', description: "Sir's words" } }, required: ['owner', 'project'] },
+    run: async (a) => {
+      const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/stop`, { method: 'POST', body: { reason: a.reason || '', by: 'JARVIS for Sir' }, timeout: 10 * 60 * 1000 });
+      return { ok: true, project: p.id, status: p.status, tasks: p.tasks.map((t) => `${t.id} ${t.status}`) };
+    },
+  },
+  {
+    name: 'project_resume', description: 'Resume a paused project (only when Sir asks): it goes back to running and its ready tasks start.',
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' } }, required: ['owner', 'project'] },
+    run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/resume`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
+  },
+  {
     name: 'rigs_dev_start', description: 'Start a change to RIGS (or the repo checked out at `repo`): creates a git worktree on branch work/<this machine>/<topic> from the latest origin/main and returns its path. Work and commit ONLY there — never on main or in the installed checkout.',
     inputSchema: { type: 'object', properties: { topic: { type: 'string' }, repo: { type: 'string' } }, required: ['topic'] },
     run: (a) => api('/api/local/dev/start', { method: 'POST', body: a, timeout: 120000 }),

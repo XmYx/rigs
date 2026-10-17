@@ -601,7 +601,8 @@ export async function startServer() {
       return planner.saveProject(pr);
     }
     if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
-    if ((mm = m(/^projects\/([\w-]+)\/stop$/)) && method === 'POST') return planner.stopProject(mm[1], plannerCtx);
+    if ((mm = m(/^projects\/([\w-]+)\/(stop|pause)$/)) && method === 'POST') { const b = await body().catch(() => ({})); return planner.stopProject(mm[1], plannerCtx, { reason: b?.reason, by: b?.by }); }
+    if ((mm = m(/^projects\/([\w-]+)\/resume$/)) && method === 'POST') return planner.resumeProject(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
       if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
       return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;
