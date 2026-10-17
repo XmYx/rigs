@@ -623,7 +623,15 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #more-sheet .round.dim { opacity: .6; }
   #panels-menu { left: calc(var(--sal) + var(--gap)); right: calc(var(--sar) + var(--gap)); bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px); max-height: var(--room); overflow-y: auto; z-index: 36; background: var(--panel-solid); }
 
-  /* Chat dock: full width above the toolbar */
+    /* Active agents: a sheet under the header, like the work dashboard */
+  #agents { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
+  .ag-head { min-height: 44px; }
+  .ag-row { min-height: 52px; }
+  .ag-chat { width: 44px; height: 44px; }
+  #agents .pctl > :not(.pclose:last-child) { display: none; }
+  #agents > .ag-head > .pctl { display: inline-flex !important; opacity: 1; }
+
+/* Chat dock: full width above the toolbar */
   #chat-dock { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px) !important; top: auto !important; transform: none !important; width: auto !important; height: auto !important; min-width: 0; max-height: var(--room); }
   #chat-dock.floating #subtitle.show, #chat-dock.floating #subtitle.show.has-details { max-height: min(32dvh, 300px); flex: 0 1 auto; }
   .dock-head { min-height: 44px; padding: 0 0 0 12px; }
@@ -795,3 +803,29 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 :root[data-theme="atari"] body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;
   background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, .22) 0 1px, transparent 1px 3px); }
 :root[data-theme="atari"] .win-title-text { font-size: 9px; }
+
+/* Active agents panel (agents.js) */
+#agents { position: fixed; right: 12px; top: 80px; width: 320px; max-height: max(180px, calc(100dvh - 200px)); padding: 10px 12px; overflow-y: auto; z-index: 11; scrollbar-width: thin; }
+.ag-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: default; }
+.ag-title { font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); flex: 1; }
+.ag-meta { font: 10px var(--mono); color: var(--accent); }
+#agents > .ag-head > .pctl { order: 2; }
+.ag-list { display: flex; flex-direction: column; gap: 6px; }
+.ag-row { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line); background: rgba(var(--accent-rgb), .03); cursor: pointer; transition: border-color .15s, background .15s; animation: panel-reveal .25s ease both; }
+.ag-row:hover, .ag-row:focus-visible { border-color: var(--accent); background: rgba(var(--accent-rgb), .08); }
+.ag-row.waiting { border-color: #fbbf24; }
+.ag-ico { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: rgba(255, 255, 255, .05); font-size: 13px; flex: none; }
+.ag-main { flex: 1; min-width: 0; }
+.ag-line { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; white-space: nowrap; overflow: hidden; }
+.ag-line b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ag-kind { font: 10px var(--mono); color: var(--muted); flex: none; }
+.ag-sub { font: 10.5px var(--mono); color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.ag-state.working { color: #4ade80; }
+.ag-state.waiting { color: #fbbf24; }
+.ag-chat { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: transparent; font-size: 13px; display: grid; place-items: center; }
+.ag-chat:hover { border-color: var(--accent); }
+.ag-empty { font-size: 12px; color: var(--muted); padding: 6px 2px; line-height: 1.5; }
+#btn-agents { position: relative; }
+.ag-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #4ade80; color: #04120a; font: 700 10px/16px var(--mono); text-align: center; }
+.ag-badge.warn { background: #fbbf24; }
+.ag-badge[hidden] { display: none; }

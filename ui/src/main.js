@@ -14,6 +14,7 @@ import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
 import { openProjects } from './projects.js';
+import { createAgents } from './agents.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
 import { lowPower } from './perf.js';
@@ -204,6 +205,7 @@ async function refresh() {
     graph.setData(buildGraph(snap));
     graph.setAttention(attentionGraphIds());
     renderCounts();
+    agentsPanel?.update();
     renderHubs();
     renderAppList();
     renderFilters();
@@ -526,6 +528,9 @@ function filesOn(m, path = '~') {
   openFiles({ nodeId: m.id, nodeName: m.name, path, machines, onTerminalHere: (p) => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: p }) });
 }
 
+// Active agents panel (agents.js): live agent sessions, one click to attach
+let agentsPanel = null;
+
 let sessWin = null;
 function sessionsWindow(filter = '', show = null) {
   sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat, onAttached: popups.mark });
@@ -533,11 +538,16 @@ function sessionsWindow(filter = '', show = null) {
   if (show) sessWin.showSession(show.node, show.s);
 }
 
+const attached = new Map(); // `${node}:${kind}:${id}` → terminal window already open for that session
 async function attachSession(m, s) {
+  const key = `${m.id}:${s.kind}:${s.id}`;
+  const open = attached.get(key)?.el;
+  if (open?.isConnected && !open.classList.contains('win-leave')) { open.classList.remove('panel-closed'); attached.get(key).raise(); open.querySelector('.xterm-helper-textarea')?.focus(); return; } // one window per session
   try {
     const r = await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id, cwd: s.cwd } });
     popups.mark(m.id, s.kind, s.id);
-    openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+    const t = await openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+    if (t?.window) attached.set(key, t.window);
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -796,6 +806,7 @@ async function intent(text) {
     const pin = allPins().find((p) => p.name.toLowerCase() === q) || allPins().find((p) => q.length > 2 && p.name.toLowerCase().includes(q));
     if (pin) { projectWindow(pin); say(`${pin.name}, on ${pin.node.name}.`); return true; }
   }
+  if (/^(?:show|list|open)(?: me)?(?: the| all| my)?(?: live| running)? (?:active )?agents(?: panel)?$|^(?:active|live|running) agents$/i.test(t)) { showPanel('agents'); agentsPanel?.update(); say('The active agents, on every machine.'); return true; }
   if (/^(?:show |list |open )?(?:all |my )?(?:sessions|chats|conversations|coding sessions)\b/i.test(t)) { sessionsWindow(); say('Every session on every machine.'); return true; }
   if (/^(?:mesh |system )?status( report)?$|^how are (?:the |my )?(?:rigs|machines|systems)/i.test(t)) { say(meshStatusLine()); showOnStage(meshVisualText(snap), { title: 'Status' }); return true; }
   if (/^(?:update|upgrade|deploy|roll ?out)(?: the)?(?: mesh| all| everything| every machine)?$/i.test(t)) { meshWindow(); say(`Opening mesh control. Confirm the rollout there, ${persona.address}.`); return true; }
@@ -1118,11 +1129,18 @@ function wire() {
   });
   makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
+  agentsPanel = createAgents($('#agents'), {
+    snapshot: () => snap, onAttach: attachSession, onChat: attachChat,
+    onCount: (n, waiting) => { const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
+  });
+  makeFloating($('#agents'), { id: 'agents', title: 'Active agents', into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
+  agentsPanel.update();
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   $('#btn-work').onclick = () => togglePanel('work');
+  $('#btn-agents').onclick = () => togglePanel('agents');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();
