@@ -351,7 +351,7 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
     let providers = [suggested, first, rule.provider, ...PROVIDER_ORDER].filter((x, i, a) => x && a.indexOf(x) === i);
     if (t.kind === 'private') providers = ['ollama'];
     // A retry stepped up the model ladder: that provider/model/effort, on whichever machine can run it.
-    if (t.escalate?.provider) providers = [t.escalate.provider];
+    if (t.escalate?.provider && t.kind !== 'private') providers = [t.escalate.provider];
     providers = providers.filter((x) => !avoided().includes(x));
     let best = null;
     for (const provider of providers) {
@@ -622,7 +622,8 @@ export function retryOrFail(p, t, why, { escalate = true, delayMs = 0, now = Dat
   if (t.attempts < max) {
     t.status = 'todo';
     let how = '';
-    const nx = A.enabled && escalate ? autonomy.nextAssign(t.assign, A.ladder) : null;
+    // A "private" task stays on local models: the ladder (cloud models) never applies to it.
+    const nx = A.enabled && escalate && t.kind !== 'private' ? autonomy.nextAssign(t.assign, A.ladder) : null;
     if (nx && !(nx.provider === t.assign?.provider && nx.model === t.assign?.model && nx.effort === t.assign?.effort)) {
       t.escalate = { provider: nx.provider, model: nx.model, effort: nx.effort };
       // A different model needs a fresh seat; the same provider stays on its machine, another one is routed again.
@@ -856,7 +857,10 @@ export function recoverStalled(p, t, st, now = Date.now()) {
 
 /** One running task: finished? ended silently? idle without reporting (nudge, then escalate)? Returns true if changed. */
 export async function watchTask(p, t, st, ctx, now = Date.now()) {
-  if (st.state === 'done') {
+  // A seat that reported "blocked" may close its queue item as blocked/denied/canceled/escalated: that is not the
+  // task finishing. Under the loop it was answered (or will be nudged) and must still report — keep watching it.
+  const unfinished = st.state === 'done' && /^(blocked_on|denied|canceled|escalation)$/.test(st.closure || '') && autonomy.settings(p).enabled;
+  if (st.state === 'done' && !unfinished) {
     t.status = 'done'; t.summary ||= `queue item closed (${st.closure || 'done'})`; event(p, `${t.id} → done (OpenRig queue)`);
     return true;
   }
@@ -1036,7 +1040,8 @@ async function followMerge(p, ctx, now) {
   } else if (req.status === 'conflict' && A.enabled) {
     // A conflict belongs to a resolver agent (routing kind "merge"). One that failed, stalled or never started is
     // replaced by re-queuing the request (the steward merges again and casts a new resolver); one Sir paused stays.
-    const resolver = req.resolver?.project ? await ctx.call(sd.steward, `projects/${req.resolver.project}`, { timeout: 20000 }).catch(() => null) : null;
+    // A resolver Sir deleted counts as one he paused: it is never replaced (an unreachable steward is not "deleted").
+    const resolver = req.resolver?.project ? await ctx.call(sd.steward, `projects/${req.resolver.project}`, { timeout: 20000 }).catch((e) => (/project not found/.test(e.message) ? { status: 'deleted' } : null)) : null;
     const act = conflictAction(req, resolver, sd, now, A);
     if (act === 'retry') {
       try {
@@ -1049,7 +1054,7 @@ async function followMerge(p, ctx, now) {
       await saveProject(p);
     } else if (act === 'paused' && !sd.resolverPaused) {
       p.selfDev = { ...sd, resolverPaused: true };
-      event(p, `merge conflict: its resolver ${req.resolver.project} was paused by Sir — left as it is`);
+      event(p, `merge conflict: its resolver ${req.resolver.project} was ${resolver?.status === 'deleted' ? 'deleted' : 'paused'} by Sir — left as it is`);
       await saveProject(p);
     } else if (act === 'exhausted') {
       p.status = 'blocked';
@@ -1080,11 +1085,11 @@ async function followMerge(p, ctx, now) {
 
 /**
  * What to do about a merge request parked in "conflict", given its resolver project (null if unknown/missing):
- * 'wait' (a resolver is on it, or is just being cast), 'paused' (Sir paused the resolver — never revived),
+ * 'wait' (a resolver is on it, or is just being cast), 'paused' (Sir paused or deleted the resolver — never revived),
  * 'retry' (no working resolver: re-queue the request) or 'exhausted' (the budget of resolver attempts is spent).
  */
 export function conflictAction(req, resolver, sd = {}, now = Date.now(), A = autonomy.settings()) {
-  if (resolver?.status === 'paused') return 'paused';
+  if (['paused', 'deleted'].includes(resolver?.status)) return 'paused';
   if (resolver && ['draft', 'planning', 'planned', 'running', 'merging'].includes(resolver.status)) return 'wait';
   // No resolver recorded yet: the steward may be casting it right now.
   if (!resolver && !req.resolver?.error && now - (req.updatedAt || 0) < 10 * 60000) return 'wait';

@@ -259,7 +259,7 @@ const TOOLS = [
     run: () => api('/api/mesh/merge', { timeout: 20000 }),
   },
   {
-    name: 'rigs_merge_resolved', description: 'Resolver only: call after committing the conflict resolution in the steward worktree; the steward re-checks and pushes.',
+    name: 'rigs_merge_resolved', description: 'Resolver only: call after resolving every conflict in the steward worktree and `git add`-ing the files (do not commit): it commits the merge, then the steward re-checks and pushes.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     run: async (a) => {
       const m = await api('/api/mesh/merge', { timeout: 20000 });

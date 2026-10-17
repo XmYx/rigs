@@ -214,6 +214,47 @@ test('a merge conflict whose resolver Sir paused is left alone; a failed resolve
   }
 });
 
+test('a merge conflict whose resolver Sir deleted is never replaced by a new resolver', async () => {
+  const c = ctx({ propose: async () => ({ id: 'mdel', steward: 'macbookpro' }) });
+  const p = await project(c, [{ id: 't1', title: 'Change' }], { selfDev: { branch: 'work/macbookpro/del' } });
+  await P.updateTask(p.id, 't1', { status: 'done', summary: 'ok' }, c);
+  c.merge = { id: 'mdel', status: 'conflict', resolver: { project: 'gone1' }, updatedAt: 0 }; // no such project any more
+  await P.tick(c, Date.now() + 3600000);
+  assert.equal(c.calls.filter((x) => /^merge\/mdel\/(retry|resolved)$/.test(x.sub)).length, 0);
+  const after = await P.getProject(p.id);
+  assert.equal(after.status, 'merging');
+  assert.ok(after.log.some((l) => /deleted by Sir — left as it is/.test(l.text)));
+});
+
+// ---------------------------------------------------------------- what a retry may not change
+
+test('a "private" task (local models only) is retried on its local model, never escalated to the cloud ladder', () => {
+  const local = [machine('macbookpro', 'mac', ['claude', 'ollama'])];
+  local[0].brains[1].models = ['llama3.2'];
+  const p = { id: 'pv', name: 'PV', owner: 'macbookpro', repo: { node: 'macbookpro', path: '/x' }, gitUrl: '', log: [], tasks: [
+    { id: 't1', title: 'Summarize my notes', kind: 'private', size: 'M', status: 'running', deps: [], needs: { platform: 'any', gpu: false, tool: '' }, suggest: {},
+      assign: { node: 'macbookpro', provider: 'ollama', model: 'llama3.2', effort: 'off' }, run: { mode: 'direct' } },
+  ] };
+  assert.equal(P.retryOrFail(p, p.tasks[0], 'model gave up'), 'retry');
+  assert.equal(p.tasks[0].escalate, undefined);
+  assert.equal(p.tasks[0].assign.provider, 'ollama');
+  // Even a stale escalation on a private task does not route it to another provider.
+  p.tasks[0].escalate = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' };
+  p.tasks[0].assign = null;
+  P.routeProject(p, local, { onlyUnassigned: true });
+  assert.equal(p.tasks[0].assign.provider, 'ollama');
+});
+
+test('an OpenRig queue item closed as blocked/denied is not the task finishing; a normal closure still is', async () => {
+  const c = ctx();
+  const p = project0();
+  const t = p.tasks[0];
+  assert.equal(await P.watchTask(p, t, { state: 'done', closure: 'blocked_on', idle: false, busy: true }, c), false);
+  assert.equal(t.status, 'running', 'still owes a report');
+  await P.watchTask(p, t, { state: 'done', closure: 'no-follow-on' }, c);
+  assert.equal(t.status, 'done');
+});
+
 // ---------------------------------------------------------------- deadlocks
 
 test('dependency deadlocks are re-queued: a cycle loses its closing edge, a blocked task is retried', () => {

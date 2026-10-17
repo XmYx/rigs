@@ -245,3 +245,55 @@ Fixes (code-level enforcement rather than prompt text):
 * "Running for a long time" on macbookpro: the four `running` projects there started at 20:29-20:33 (minutes
   old) and are healthy at the snapshot (t1 `running`, seats live). The only long-stranded `running` projects are on
   magix-system plus `8eb2687046`'s unassigned t2 (cause 1).
+
+## Status after the completion loop (t2 `f3f9e4f`) and the review (t3)
+
+Each root cause above is either **fixed** (with where) or **deferred** (with why). "Deferred" means that the loop
+now bounds it (the project ends with one report to Sir instead of hanging), but the underlying cause is still there.
+
+| Cause | Status | Where / why |
+| --- | --- | --- |
+| 1 Stranded unassigned `todo` | **Fixed** | `placeUnassigned` drops an unmeetable `needs.platform` once (logged as `t.relaxed`) and routes again. A task that still has no machine after 10 min counts as stuck in `settle()`, which ends the loop with one report. |
+| 1 `updatedAt` masking staleness | Deferred | Cosmetic. The stranded case now ends the loop, so a stale `running` project no longer hides. |
+| 1 Planner prompt: platform needs on folder-bound projects | Deferred | `placeUnassigned` covers the effect. A prompt change would need its own planning eval. |
+| 2 Agent `blocked` is terminal | **Fixed** | `applyUpdate` → `selfAnswer` (the safe default typed into the seat, the question logged, at most `maxSelfAnswers`), then a retry. `requeueDeadlocks` retries `blocked` tasks and breaks dependency cycles. `autonomyBrief` defines "destructive" narrowly; a classifier denial means take another route. |
+| 2 `needsInput` waits never escalated | **Fixed** | `answerWait`: after `answerAfterSec` the prompt is declined (Escape) and answered; after `maxSelfAnswers` the attempt fails into the retry. |
+| 3 Empty propose ("no commits ahead") | **Fixed** | `merge.describe` returns `{empty:true}`, and `settle()` marks the project done. |
+| 3 Propose errors flip to `blocked` at once | **Fixed** | Retried up to `maxAttempts` with backoff, then one report. |
+| 3 Dirty tree on propose / branch already merged by the agents themselves | Deferred | Retrying a dirty tree fails the same way each time, so after the retries it ends in one report. Adopting an already-merged request and making `proposeBranch` idempotent per branch remain open (see A5). |
+| 3 Conflict parked, resolver failed or missing | **Fixed** | `followMerge` + `conflictAction` re-queue the request for a new resolver (at most `maxAttempts`), keep a resolver's finished work, and end with one report. |
+| 4 tmux session-name collision | **Fixed** | `work.sessionName` includes the project id. |
+| 4 Hub worker relaunch times out | **Fixed** | `relaunch` waits up to 3 min, then `ensureWorker` falls back to a sibling seat (`-2`…). |
+| 4 Single immediate retry | **Fixed** | Up to `maxAttempts` (3). A dispatch failure is retried on the same model after `retryDelaySec`. An agent failure goes one rung up the ladder. |
+| 5 `project_stop` pauses resolvers, conflicts orphaned | **Deferred, deliberately** | "Stopped means stopped": a resolver Sir paused, or (since t3) deleted, is never replaced or revived. The parent stays `merging` and sends no report. Warn-on-stop and `archive` (which drops the request) are the planned follow-up. |
+| 6 Planning lost on restart, replanned once | **Fixed** | Up to 3 replans (`p.replans`), then `tell()`. |
+| 7 Revives exhaust with no change of strategy | **Fixed** | After `MAX_REVIVES` the task goes through `retryOrFail`, which escalates. |
+| 7 `needsInput` regex covers tmux only | **Fixed** | OpenRig seats use `liveness.needsInput` (with its `reason` as the question). |
+
+Git-write paths (the "commits outside a dev worktree" list):
+
+| Path | Status |
+| --- | --- |
+| A1 `commitOtherProjects='branch'` | **Fixed**: removed from the brief. Every brief is passed through `guardBrief`. |
+| A2 Agents in the user's real folder | **Partly fixed.** Directly started Claude agents get `--disallowedTools Bash(git commit/push/checkout/…:*)`, and a RIGS change outside a dev worktree is refused. **Open:** OpenRig/hub seats, Codex and Ollama agents get only the guarded brief, with no harness-level deny; that needs an OpenRig permission policy or Codex profile that carries the rules. The deny rules match by prefix, so `git -C <dir> commit` or `git -c k=v commit` would likely get past them (not tested against the CLI). |
+| A3 Resolver brief contradicts autonomyBrief | **Fixed**: the resolver only `git add`s; `rigs_merge_resolved` commits. The MCP description was aligned in t3. |
+| A4 `fixN` brief rebases/commits | Accepted: it runs inside the dev worktree, where commits are allowed and push/checkout/switch are denied. |
+| A5 `rigs_dev_start` / `rigs_propose` accept any repo or dir | Deferred: restricting them needs caller identity in `mcp.js`/`server.js`. |
+| A6 `rigs_merge_resolved` callable by any agent | Deferred, same reason as A5. Its effect is limited to a steward worktree with no unmerged files. |
+| A7 Lead/overseer seats unrestricted | Deferred, with A2's OpenRig policy. |
+| C1, C2, C4, C7, C8 | Intended RIGS writes. Unchanged. |
+| C3 `stripManagedBlocks` commits in any `dir` | Deferred with A5. |
+| C5 `cleanupWork` takes `dir`/`branch` from the body | Deferred with A5. It stays guarded by the clean/merged checks. |
+| C6 `git pull --ff-only` in the user's folder | **Fixed**: only RIGS's own clones under the work root are pulled. |
+
+Found and fixed in the t3 review:
+- **A retry sent "private" tasks to the cloud.** A failing `kind: "private"` task (local models only) was escalated onto the Claude ladder, and `routeProject` honoured it. Private tasks now never escalate (`retryOrFail`, `routeProject`).
+- **A closed queue item could count as done.** An OpenRig seat that reports "blocked" and closes its queue item as `blocked_on`/`denied`/`canceled`/`escalation` was counted as **done**, which became more likely once "blocked" tasks stay running for the self-answer. `watchTask` now keeps watching such a task, so it either reports or is failed into a retry by the stall watchdog.
+- **Deleted resolvers were recast.** A resolver project Sir deleted was replaced by a new one. It is now left alone, like a paused one.
+- **A hubs test depended on the machine.** It failed wherever `rig` sits next to the running Node. It now expects whatever the real lookup order finds.
+
+Other open items noticed in review, all bounded:
+- Each replacement resolver is its own project and sends its own report, so one stubborn conflict can produce several "How did it work out" messages: one per resolver plus the parent.
+- A hand-locked assignment to another provider (for example Codex) is switched to Claude on an escalated retry.
+- `maxAttempts` is per task, not per project, so a project's worst case is about 3 attempts × tasks.
+- Resuming a paused project that was `merging` sends it back to `running` and proposes again. This predates the branch.
