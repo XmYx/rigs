@@ -51,6 +51,11 @@ const TOOLS = [
     },
   },
   {
+    name: 'mesh_workspaces', description: 'The code projects on every machine (git repos, Unity/Godot/Unreal projects, folders with AGENTS.md/CLAUDE.md): name, title from their guide, kinds, nested parts (e.g. the Unity project inside), path. With query (a name as the user said it, fuzzy: "MadMikeUnity") and optional machine ("the linux machine", a node name) it resolves to the best match.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, machine: { type: 'string' }, rescan: { type: 'boolean' } } },
+    run: (a) => api(`/api/mesh/workspaces?${new URLSearchParams({ ...(a.query ? { q: a.query } : {}), ...(a.machine ? { machine: a.machine } : {}), ...(a.rescan ? { force: '1' } : {}) })}`, { timeout: 90000 }),
+  },
+  {
     name: 'mesh_apps', description: 'List the web apps hosted across the mesh (App Cloud): id, name, node, health (up/down/unknown, latency), and the proxy path JARVIS opens them at. Optional node filter.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'only apps hosted on this machine' } } },
     run: async (a) => {

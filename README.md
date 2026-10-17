@@ -18,6 +18,13 @@ can act on all of them.
 - **Choose the brain: machine, provider, exact model, effort.** The core brain defaults to
   Claude Opus 5.5 at high effort. It is JARVIS's voice and the project planner. Any Claude,
   Codex or Ollama model on any machine can be picked from the badge under the orb.
+- **Say it once, across projects and machines.** Every machine indexes its code projects (git repos,
+  Unity/Godot/Unreal projects, folders with an AGENTS.md or CLAUDE.md) with the title from their guide.
+  The router splits a request into its parts and binds each to a folder on a machine, nicknames and
+  typos included. "Improve the fps on MadMikeUnity on the linux machine and outline the OpenRig project
+  for CyberNinja on the same machine" becomes two projects on that machine. Each is planned against the
+  project's own AGENTS.md and staffed by one OpenRig team that adds seats as roles are needed. A part
+  that matches no folder isn't filed: JARVIS asks which one you meant.
 - **Plan projects and delegate every task.** Describe a goal and the core brain breaks it into
   tasks with dependencies. RIGS routes each task to a machine, provider, model and effort by
   policy:
