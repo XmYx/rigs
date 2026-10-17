@@ -90,6 +90,7 @@ const commands = {
     const s = argv.indexOf('--summary');
     const r = await daemonFetch('/api/local/dev/propose', { method: 'POST', body: JSON.stringify({ dir: process.cwd(), title: t >= 0 ? argv[t + 1] : undefined, summary: s >= 0 ? argv[s + 1] : undefined }), timeout: 60000 });
     if (r.error) { console.error(r.error); process.exit(1); }
+    if (r.empty) { console.log(`nothing to propose: ${r.branch} has no commits ahead of origin/main`); return; }
     console.log(`proposed ${r.branch} → merge steward ${r.steward} (request ${r.id}, ${r.status}). Watch: rigs merge`);
   },
   async merge() {
@@ -151,6 +152,20 @@ const commands = {
     const r = argv[0] === 'uninstall' ? await s.uninstallService() : await s.installService();
     console.log(JSON.stringify(r, null, 2));
   },
+  async control() {
+    const [sub, ...rest] = argv;
+    if (sub !== 'off') { console.log('usage: rigs control off [reason]   — local kill switch: stop OS control (screen + input) on this machine and keep it off until a person re-enables it in JARVIS'); process.exit(sub ? 1 : 0); }
+    const reason = rest.join(' ') || 'rigs control off';
+    const caller = { via: 'cli', who: 'cli' };
+    let r;
+    try { r = await daemonFetch('/api/local/control/kill', { method: 'POST', body: JSON.stringify({ reason }), timeout: 15000 }); } catch {}
+    if (r?.ok) { console.log('OS control is off on this machine (daemon stopped it). It stays off until switched on in JARVIS → Access & control.'); return; }
+    if (r && r.error) console.error(`daemon refused: ${r.error?.message || r.error}; killing locally`);
+    // Daemon not running: write the persistent kill marker + config directly (fails closed on next start).
+    const { createControl } = await import('../src/control.js');
+    try { await createControl().kill({ reason }, caller); } catch (e) { console.error(`kill: ${e.message}`); process.exit(1); }
+    console.log('OS control is off on this machine (daemon not running; kill recorded, it stays off at next start).');
+  },
   async help() {
     console.log(`rigs — RIGS OS mesh node  (changes: rigs dev <topic> → commit → rigs propose; never main)
 
@@ -169,6 +184,7 @@ const commands = {
   rigs dev <topic>     start a change: worktree on branch work/<machine>/<topic> off the latest main
   rigs propose [--title T]  hand the committed branch (cwd) to the merge steward
   rigs merge           merge steward + queue status
+  rigs control off [reason]  kill switch: stop OS control (screen + input) on this machine, stays off
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

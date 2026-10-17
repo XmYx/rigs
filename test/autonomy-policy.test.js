@@ -15,7 +15,10 @@ test('other projects: non-destructive steps pre-approved, no commits without Sir
   assert.match(b, /Pre-approved by Sir: everything non-destructive/);
   assert.match(b, /overrides any saved\s+habit of confirming/);
   assert.match(b, /Do not commit, push, merge, rebase or switch branches/);
-  assert.match(b, /report status "blocked"/);
+  // A destructive step is skipped and listed, a classifier denial means another route — neither parks the task.
+  assert.match(b, /finish everything else, report "done" and list the skipped step/);
+  assert.match(b, /classifier denial means: take another route/);
+  assert.doesNotMatch(b, /report status "blocked"/);
 });
 
 test('RIGS self-changes commit in their worktree for the merge steward', () => {
@@ -24,8 +27,11 @@ test('RIGS self-changes commit in their worktree for the merge steward', () => {
   assert.doesNotMatch(b, /Do not commit/);
 });
 
-test('commitOtherProjects: "branch" lets agents commit on a branch of their own', () => {
+test('commitOtherProjects: "branch" no longer lets task agents commit outside a dev worktree', () => {
   config().agents.commitOtherProjects = 'branch';
-  try { assert.match(autonomyBrief({ repo: {} }), /commit on a work branch of your own \(never main\/master, never push\)/); }
-  finally { config().agents.commitOtherProjects = 'ask'; }
+  try {
+    const b = autonomyBrief({ repo: {} });
+    assert.match(b, /Do not commit, push, merge, rebase or switch branches/);
+    assert.doesNotMatch(b, /commit on a work branch of your own/);
+  } finally { config().agents.commitOtherProjects = 'ask'; }
 });

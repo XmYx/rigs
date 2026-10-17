@@ -198,6 +198,29 @@ test('helper closed event persistently kills control', async () => {
   assert.equal((await f.c.status()).killed.reason, 'helper closed');
 });
 
+test('a helper that exits on its own (crash, logout) ends the lease but is not a kill', async () => {
+  const f = fixture();
+  await f.c.listWindows(alice);
+  assert.ok((await f.c.status()).lease);
+  f.events.emit('event', { event: 'exit', reason: 'helper disconnected' });
+  await new Promise((r) => setImmediate(r));
+  const st = await f.c.status();
+  assert.deepEqual([st.enabled, st.input, st.killed, st.lease], [true, true, null, null]);
+  assert.equal(f.config().control.enabled, true);
+  assert.deepEqual(await f.c.listWindows(bob), [{ id: 'opaque:2', title: 'Scratch', focused: true }], 'the next caller gets a fresh lease');
+
+  // The transport reports an unexpected disconnect as 'exit', a deliberate close as nothing.
+  let onClose;
+  const rpc = new ControlRPC({ connect: async () => ({ read: new PassThrough(), write: new PassThrough(), destroy: () => {}, onClose: (fn) => { onClose = fn; } }) });
+  const seen = [];
+  rpc.on('event', (m) => seen.push(m.event));
+  await rpc.open();
+  onClose();
+  await rpc.open();
+  rpc.close();
+  assert.deepEqual(seen, ['exit']);
+});
+
 test('Linux runner receives literal Unicode/text args and X11 window focus validates ids', async () => {
   const calls = [];
   const adapter = createLinuxAdapter({ runner: async (...args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; }, find: () => true, environment: () => ({ DISPLAY: ':test' }), refresh: async () => {} });

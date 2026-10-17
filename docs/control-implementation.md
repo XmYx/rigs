@@ -5,7 +5,8 @@ Task `t3`, project `2ed3c75b03`, 2026-10-17. Public API: `src/control.js`.
 The default instance uses the current configuration and `RIGS_HOME`. `createControl()` accepts isolated
 configuration, a clock, permission probes and an adapter for tests. The adapter owns platform operations;
 the public module owns authorization, the lease, deadlines, rate limits, screenshot transforms and audit.
-Configuration defaults remain off. This task never enabled the installed daemon's control configuration.
+Configuration defaults were off during t3; since project d902921162 control is on by default (docs/full-access.md §7).
+This task never enabled the installed daemon's control configuration.
 
 ## Integration contracts for t4–t6
 
@@ -38,7 +39,8 @@ Configuration defaults remain off. This task never enabled the installed daemon'
   `windows`, `focus {windowId}`, `move {x,y,display?}`, `button {button,down}`, `scroll {dx,dy}`,
   `key {key,down}`, `type {text,delayMs}`, `release`, and `stop`. Linux also receives `configure` with
   selected backends, known displays and the portal restore token. Helpers may emit `closed`, `hotkey`,
-  `locked`, or `restore-token` events; the first three kill control, the last persists the token.
+  `locked`, or `restore-token` events; the first three kill control, the last persists the token. The transport
+  emits `exit` when a helper process goes away on its own (crash, logout): that ends the lease, it is not a kill.
 
 ## Verification evidence
 

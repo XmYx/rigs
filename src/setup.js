@@ -73,6 +73,11 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   \`project_create\` plans and routes a new goal across the mesh.
 - **Tools**: \`mesh_status\` lists each machine's tools (e.g. ComfyUI for image generation). Use the
   machine that has the tool you need.
+- **Screen control**: \`mesh_screen\`, \`mesh_windows\` and \`mesh_control\` see and drive a machine's desktop;
+  \`mesh_access\` shows what is allowed there and which OS grants are missing. It is on by default; Sir can
+  switch it off per machine or stop it (\`rigs control off\`). Ask Sir before using it unless your task brief
+  explicitly allows it for that machine. Never switch it back on or work around it (no \`screencapture\`, \`grim\`
+  or uinput from a shell), and pass \`secret: true\` when typing anything credential-like.
 - **Apps / applets — ground rule**: anything you build that has a web UI must be published to the
   App Cloud, not just left running on a port. Serve it with relative URLs and a \`/healthz\`, give it
   a launch recipe (Linux: a \`systemctl --user\` unit, enabled; elsewhere: a \`command\`), then call
@@ -84,9 +89,9 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   irreversible steps (deleting data you didn't create, discarding/reverting changes, force-push, publishing) need
   his OK. RIGS changes go through the merge steward (below); in any other project, don't commit, push or switch
   branches until he says so — leave the changes and list them.
-- **Stopped means stopped**: when Sir says stop/pause/hold a project, pause it with `project_stop` right away.
-  A rig or seat that is down may have been stopped on purpose: before `rig up`, `rig seat launch` or telling
-  an agent to "carry on", check its project with `project_get` — never revive a paused or deleted project.
+- **Stopped means stopped**: when Sir says stop/pause/hold a project, pause it with \`project_stop\` right away.
+  A rig or seat that is down may have been stopped on purpose: before \`rig up\`, \`rig seat launch\` or telling
+  an agent to "carry on", check its project with \`project_get\` — never revive a paused or deleted project.
 - **SSH**: \`ssh <machine-name>\` works between all nodes (aliases in ~/.ssh/config).
 - **Changing the mesh itself** (policy): never edit \`${APP_DIR}\` and never commit to \`main\`.
   Start with \`rigs_dev_start\` (CLI: \`rigs dev <topic>\`) — a worktree on branch

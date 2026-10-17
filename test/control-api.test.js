@@ -175,14 +175,14 @@ test('MCP sends an ASCII-only caller header naming the agent and seat', () => {
   assert.equal(JSON.parse(callerHeader({ CODEX_THREAD_ID: 't' }, '/x')).agent, 'codex');
 });
 
-// ---- smoke: a real node with the default (off) configuration ----
+// ---- smoke: a real node with the default (on) configuration ----
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-test-'));
 const PORT = 20000 + Math.floor(Math.random() * 20000);
 const BASE = `http://127.0.0.1:${PORT}`;
 let server;
 
-before(async () => {
-  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
+async function startNode() {
+  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
   server = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'serve'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   server.stdout.on('data', (d) => { out += d; });
@@ -192,26 +192,54 @@ before(async () => {
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error('server did not start:\n' + out);
-});
-after(() => { server?.kill(); fs.rmSync(HOME, { recursive: true, force: true }); });
+}
+async function stopNode() {
+  if (!server || server.exitCode != null) return;
+  const exited = new Promise((r) => server.once('exit', r));
+  server.kill();
+  await exited;
+}
+before(startNode);
+after(async () => { await stopNode(); fs.rmSync(HOME, { recursive: true, force: true }); });
 
-test('smoke: a fresh node has control off; its routes refuse, also through /api/nodes/self, and settings cannot enable it', async () => {
+const json = { 'content-type': 'application/json' };
+const controlStatus = async () => (await fetch(`${BASE}/api/local/control`)).json();
+
+test('smoke: a fresh node has control on; settings and agents cannot change it; a kill refuses every route and survives a restart', async () => {
   await fetch(`${BASE}/api/nodes`); // the first mesh scan registers this node, so /api/nodes/self resolves
-  const s = await (await fetch(`${BASE}/api/local/control`)).json();
-  assert.equal(s.enabled, false);
-  assert.equal(s.input, false);
-  for (const [method, p, body] of [['GET', '/screenshot'], ['GET', '/windows'], ['POST', '/pointer', { action: 'click', x: 1, y: 1 }], ['POST', '/type', { text: 'x' }], ['POST', '/key', { combo: 'enter' }]]) {
-    for (const prefix of ['/api/local/control', '/api/nodes/self/control']) {
-      const r = await fetch(BASE + prefix + p, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-      assert.equal(r.status, 403, `${method} ${prefix}${p}`);
-      assert.equal((await r.json()).code, 'off');
-    }
-  }
-  const agent = await fetch(`${BASE}/api/local/control/enable`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-rigs-caller': '{"agent":"claude"}' }, body: JSON.stringify({ enabled: true, input: true, confirm: 'test-node' }) });
-  assert.equal(agent.status, 403);
-  await fetch(`${BASE}/api/local/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ control: { enabled: true, input: true } }) });
-  assert.equal((await (await fetch(`${BASE}/api/local/control`)).json()).enabled, false, 'a generic settings save cannot switch control on');
-  const k = await fetch(`${BASE}/api/local/control/kill`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"reason":"smoke"}' });
+  const s = await controlStatus();
+  assert.equal(s.enabled, true);
+  assert.equal(s.input, true);
+  assert.equal(s.killed, null);
+  // Only status is read while on: action routes would act on the desktop of the machine running the tests.
+  await fetch(`${BASE}/api/local/config`, { method: 'POST', headers: json, body: JSON.stringify({ control: { enabled: false, input: false, allowFrom: ['x'] } }) });
+  const patched = await controlStatus();
+  assert.deepEqual([patched.enabled, patched.input], [true, true], 'a generic settings save cannot change control');
+  const agentOff = await fetch(`${BASE}/api/local/control/enable`, { method: 'POST', headers: { ...json, 'x-rigs-caller': '{"agent":"claude"}' }, body: JSON.stringify({ enabled: true, input: true, confirm: 'test-node' }) });
+  assert.equal(agentOff.status, 403, 'no agent may (re-)enable control');
+
+  const k = await fetch(`${BASE}/api/local/control/kill`, { method: 'POST', headers: json, body: '{"reason":"smoke"}' });
   assert.equal(k.status, 200);
-  assert.equal((await (await fetch(`${BASE}/api/local/control`)).json()).killed.reason, 'smoke');
+  const refused = async () => {
+    for (const [method, p, body] of [['GET', '/screenshot'], ['GET', '/windows'], ['POST', '/pointer', { action: 'click', x: 1, y: 1 }], ['POST', '/type', { text: 'x' }], ['POST', '/key', { combo: 'enter' }]]) {
+      for (const prefix of ['/api/local/control', '/api/nodes/self/control']) {
+        const r = await fetch(BASE + prefix + p, { method, headers: json, body: body ? JSON.stringify(body) : undefined });
+        assert.equal(r.status, 403, `${method} ${prefix}${p}`);
+        assert.equal((await r.json()).code, 'off');
+      }
+    }
+  };
+  let st = await controlStatus();
+  assert.deepEqual([st.enabled, st.input, st.killed?.reason], [false, false, 'smoke']);
+  await refused();
+  await fetch(`${BASE}/api/local/config`, { method: 'POST', headers: json, body: JSON.stringify({ control: { enabled: true, input: true } }) });
+  assert.equal((await controlStatus()).enabled, false, 'a generic settings save cannot undo a kill');
+
+  // Restart: the kill marker and the off config are on disk, so the node comes back killed.
+  await stopNode();
+  await startNode();
+  await fetch(`${BASE}/api/nodes`);
+  st = await controlStatus();
+  assert.deepEqual([st.enabled, st.input, st.killed?.reason], [false, false, 'smoke']);
+  await refused();
 });

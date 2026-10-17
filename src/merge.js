@@ -110,7 +110,8 @@ export async function describe(dir) {
   if (branch === 'main') throw new Error('changes go on a work branch, not main — run `rigs dev <topic>` first');
   if (st.stdout.trim()) throw new Error('commit your changes first (git status is not clean)');
   const commits = logr.stdout.trim().split('\n').filter(Boolean);
-  if (!commits.length) throw new Error('nothing to propose: no commits ahead of origin/main');
+  // Nothing committed (the work was an action, or it already landed): not an error — there is just nothing to merge.
+  if (!commits.length) return { branch, base: base.stdout.trim(), commits, empty: true };
   const managed = await managedBlockPaths(dir, 'origin/main...HEAD');
   if (managed.length) throw new Error(`the branch commits OpenRig's managed blocks into ${managed.join(', ')} (seats inject them into their folder's guide) — run \`rigs propose\` via RIGS, or remove the <!-- BEGIN/END OpenRig MANAGED BLOCK --> sections and commit`);
   const bad = await forbiddenPaths(dir, 'origin/main...HEAD');

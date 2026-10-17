@@ -249,8 +249,8 @@ function connectEvents() {
     onAppsEvent(m);
     if (m.type === 'appstore') onAppStoreEvent(m);
     if (m.type === 'apps') refresh();
-    if (m.type === 'control') controlEvent(m);
     if (m.type === 'notify' && m.session) popups.handle(m);
+    if (m.type === 'control') controlEvent(m);
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
     if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
     else if (m.type === 'notify' && m.level === 'attention') {

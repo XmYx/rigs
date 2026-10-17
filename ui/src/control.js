@@ -2,7 +2,8 @@ import { ago, api, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 
 // Access & Control panel for one machine: what RIGS may see and do on its screen, the grants it is
-// missing, the opt-in "full control" switch, a live "in control" indicator and a stop button.
+// missing, the access and full-control switches (on by default; kill switch and per-machine off), a live
+// "in control" indicator and a stop button.
 
 const PERMS = [
   ['screenCapture', 'Screen capture', 'See the screen'],
@@ -83,9 +84,16 @@ export function openControl({ machine }) {
       return h('div', { class: 'ctl-perm' }, dot(ok ?? null),
         h('div', { class: 'ctl-perm-t' }, h('b', {}, label), h('span', { class: 'muted small' }, ' ' + what),
           p.via || p.detail ? h('div', { class: 'muted small' }, [p.via ? `via ${p.via}` : '', p.partial ? 'partial' : '', p.detail].filter(Boolean).join(' · ')) : null,
-          ok !== true && p.fix ? h('div', { class: 'small ctl-fix' }, p.fix) : null),
+          ok !== true && p.fix ? h('div', { class: 'small ctl-fix' }, typeof p.fix === 'string' ? p.fix : p.fix.text || '') : null),
         fixable ? h('button', { class: 'btn', onclick: () => run('Grant', () => api(`${node(id)}/control/grant`, { method: 'POST', body: { permission: k } })) }, 'Grant') : null);
     });
+
+    // macOS: the two grants a person must give once in System Settings (TCC ignores synthetic clicks).
+    const macMissing = st.platform === 'mac' ? [['screenCapture', 'Screen Recording'], ['accessibility', 'Accessibility']].filter(([k]) => ac?.[k]?.ok !== true) : [];
+    const macGuide = macMissing.length ? h('div', { class: 'ctl-guide' },
+      h('b', {}, `Finish setup on ${machine.name}`),
+      h('div', { class: 'small' }, 'Control is on, but macOS needs you to allow it once. Click each button: System Settings opens on the right page and the RIGS program is shown in Finder. Switch it on in the list (drag it in if it is missing), then restart RIGS.'),
+      h('div', { class: 'ctl-stopbar' }, ...macMissing.map(([k, label]) => h('button', { class: 'btn', onclick: () => run('Grant', () => api(`${node(id)}/control/grant`, { method: 'POST', body: { permission: k } })) }, `Open ${label}`)))) : null;
 
     const img = h('img', { class: 'ctl-shot', alt: 'screen preview', style: shotUrl ? {} : { display: 'none' }, src: shotUrl || '' });
     const prevBtn = h('button', { class: 'btn', disabled: !st.ready?.see, title: st.ready?.see ? 'Takes one screenshot (logged and announced)' : 'Needs screen access on, an unlocked screen and a capture backend', onclick: (e) => preview(img, e.currentTarget) }, '📷 Preview');
@@ -93,10 +101,12 @@ export function openControl({ machine }) {
 
     body.replaceChildren(...[
       lease ? h('div', { class: 'ctl-live' }, h('i', { class: 'ctl-pulse' }), h('div', {}, h('b', {}, 'JARVIS is in control'), h('div', { class: 'small' }, `${lease.holder?.agent || lease.holder?.who || 'an agent'}${lease.holder?.from ? ' on ' + lease.holder.from : ''} · ${lease.actions || 0} actions · since ${ago(lease.since)}`)), h('button', { class: 'btn danger', onclick: stop }, '■ Stop'))
-        : st.killed ? h('div', { class: 'warnbox small' }, `Control was stopped ${ago(Date.parse(st.killed.at))}${st.killed.reason ? ': ' + st.killed.reason : ''}. Switching it on again clears this.`) : null,
+        : st.killed ? h('div', { class: 'warnbox small' }, `Control was stopped ${ago(Date.parse(st.killed.at))}${st.killed.reason ? ': ' + st.killed.reason : ''}. It stays off, across restarts and updates, until you switch it on again.`) : null,
+      macGuide,
+      h('div', { class: 'muted small' }, 'On by default on every machine. Stop it at once with the kill switch, or switch it off for this machine below.'),
       h('div', { class: 'ctl-modes' },
         modeRow('Screen access', 'Agents can take screenshots and list windows.', st.enabled, (v) => setMode({ enabled: v })),
-        modeRow('Full control', 'Agents can also move the pointer, click and type. Off by default.', st.input, (v) => setMode({ input: v }), !st.enabled)),
+        modeRow('Full control', 'Agents can also move the pointer, click and type.', st.input, (v) => setMode({ input: v }), !st.enabled)),
       h('div', { class: 'ctl-stopbar' },
         h('button', { class: 'btn danger', disabled: !st.enabled && !lease, onclick: stop }, '■ Stop control now'),
         h('button', { class: 'btn', onclick: stopAll, title: 'Switch screen control off on every online machine' }, 'Stop on every machine')),
