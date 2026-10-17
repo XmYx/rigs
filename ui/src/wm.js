@@ -1,4 +1,6 @@
 import { h } from './api.js';
+import { isPhone } from './mobile.js';
+import { dialogify } from './a11y.js';
 
 // Minimal floating window manager: drag by the title bar, resize from the corner,
 // click to raise, maximize, close. Terminals, file browsers and session viewers live here.
@@ -6,6 +8,11 @@ import { h } from './api.js';
 let z = 100;
 let cascade = 0;
 const windows = new Set();
+// Phones: windows open full-screen (styles.css, MOBILE LAYOUT) and each owns a history entry, so the
+// browser/OS back gesture closes the top one instead of leaving JARVIS.
+const backStack = []; // close() of phone windows that pushed a history entry, oldest first
+let skipPop = 0;
+window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } backStack.pop()?.({ fromBack: true }); });
 
 export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [] }) {
   const body = h('div', { class: 'win-body' });
@@ -15,8 +22,8 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
       h('span', { class: 'win-icon' }, icon),
       titleEl,
       h('span', { class: 'win-tools' }, ...tools),
-      h('button', { class: 'win-btn', title: 'Maximize', onclick: () => win.classList.toggle('max') }, '▢'),
-      h('button', { class: 'win-btn close', title: 'Close', onclick: () => close() }, '✕')),
+      h('button', { class: 'win-btn', title: 'Maximize', 'aria-label': 'Maximize', 'aria-pressed': 'false', onclick: (e) => { e.currentTarget.setAttribute('aria-pressed', String(win.classList.toggle('max'))); } }, '▢'),
+      h('button', { class: 'win-btn close', title: 'Close', 'aria-label': 'Close', onclick: () => close() }, '✕')),
     body);
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -28,13 +35,14 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   document.body.append(win);
   requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove('win-enter'))); // fade/scale in
   windows.add(win);
+  const dlg = dialogify(win, { label: title, onClose: () => close() }); // role=dialog, focus in, Tab trap, Esc closes, focus returns on close
 
   const raise = () => { win.style.zIndex = ++z; };
   win.addEventListener('pointerdown', raise);
 
   const bar = win.querySelector('.win-bar');
   bar.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button,select,input') || win.classList.contains('max')) return;
+    if (e.target.closest('button,select,input') || win.classList.contains('max') || isPhone()) return;
     const sx = e.clientX;
     const sy = e.clientY;
     const ox = win.offsetLeft;
@@ -54,17 +62,21 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   ro.observe(body);
 
   let closing = false;
-  function close() {
+  function close({ fromBack = false } = {}) {
     if (closing) return;
     closing = true;
+    const i = backStack.indexOf(close);
+    if (i >= 0) { backStack.splice(i, 1); if (!fromBack) { skipPop++; history.back(); } }
     ro.disconnect();
     windows.delete(win);
     onClose?.();
+    dlg.release();
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { win.remove(); return; }
     win.classList.add('win-leave'); // fade/scale out, then gone
     setTimeout(() => win.remove(), 180);
   }
-  return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
+  if (isPhone()) { history.pushState({ rigsWin: true }, ''); backStack.push(close); }
+  return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }

@@ -41,7 +41,7 @@ import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
-const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.map': 'application/json' };
+const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 
@@ -924,7 +924,7 @@ export async function startServer() {
         fs.createReadStream(idx).pipe(res);
         return;
       }
-      res.writeHead(200, { 'content-type': STATIC_TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': rel.startsWith('/dist/') ? 'no-cache' : 'no-store' });
+      res.writeHead(200, { 'content-type': STATIC_TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': rel.startsWith('/dist/') ? 'no-cache' : /\.(png|svg|webmanifest)$/.test(rel) ? 'public, max-age=3600' : 'no-store' });
       fs.createReadStream(file).pipe(res);
     });
   }

@@ -1,0 +1,4513 @@
+{
+ "generated": "2026-10-17T11:09:42.938Z",
+ "url": "http://127.0.0.1:4781/",
+ "views": [
+  {
+   "view": "orb-home",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "orb-home@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "galaxy-graph",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "galaxy-graph@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 17,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "left-panel",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "left-panel@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#topbar",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#orb-wrap",
+      "w": 143,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#chat-dock",
+      "w": 327,
+      "h": 125
+     },
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 327,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#drawer-backdrop",
+      "w": 335,
+      "h": 844
+     },
+     {
+      "a": "#topbar",
+      "b": "#drawer-backdrop",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#drawer-backdrop",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "#drawer-backdrop",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "#drawer-backdrop",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "more-sheet",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "more-sheet@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "region",
+     "impact": "moderate",
+     "help": "All page content should be contained by landmarks",
+     "nodes": 1,
+     "targets": [
+      "#more-sheet"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#chat-dock",
+      "b": "#more-sheet",
+      "w": 374,
+      "h": 125
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "panels-menu",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "panels-menu@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#chat-dock",
+      "b": "#panels-menu",
+      "w": 374,
+      "h": 125
+     }
+    ],
+    "textUnder12px": 19,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "brain-menu",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "brain-menu@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "window-files",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "window-files@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.files-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.files-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.files-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.files-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "terminal",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "terminal@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.term-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.term-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.term-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.term-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "projects",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "projects@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.proj-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.proj-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.proj-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.proj-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "work-dashboard",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "work-dashboard@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 23,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "sessions",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "sessions@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.sess-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.sess-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.sess-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.sess-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "apps-launcher",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "apps-launcher@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "mesh-settings",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "mesh-settings@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.mesh-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.mesh-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.mesh-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.mesh-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 22,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "stage-visual-cards",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "stage-visual-cards@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.stage-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.stage-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.stage-win",
+      "w": 374,
+      "h": 102
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.stage-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 22,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "voice-controls",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "voice-controls@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "orb-home",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "orb-home@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "galaxy-graph",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "galaxy-graph@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 17,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "left-panel",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "left-panel@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#topbar",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#orb-wrap",
+      "w": 118,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#chat-dock",
+      "w": 302,
+      "h": 125
+     },
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 302,
+      "h": 44
+     },
+     {
+      "a": "#left",
+      "b": "#drawer-backdrop",
+      "w": 310,
+      "h": 740
+     },
+     {
+      "a": "#topbar",
+      "b": "#drawer-backdrop",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#drawer-backdrop",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "#drawer-backdrop",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "#drawer-backdrop",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "more-sheet",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "more-sheet@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "region",
+     "impact": "moderate",
+     "help": "All page content should be contained by landmarks",
+     "nodes": 1,
+     "targets": [
+      "#more-sheet"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#chat-dock",
+      "b": "#more-sheet",
+      "w": 344,
+      "h": 125
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "panels-menu",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "panels-menu@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#chat-dock",
+      "b": "#panels-menu",
+      "w": 344,
+      "h": 125
+     }
+    ],
+    "textUnder12px": 19,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "brain-menu",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "brain-menu@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "window-files",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "window-files@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.files-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.files-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.files-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.files-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "terminal",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "terminal@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.term-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.term-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.term-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.term-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "projects",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "projects@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.proj-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.proj-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.proj-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.proj-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "work-dashboard",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "work-dashboard@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 23,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "sessions",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "sessions@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.sess-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.sess-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.sess-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.sess-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "apps-launcher",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "apps-launcher@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "mesh-settings",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "mesh-settings@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.mesh-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.mesh-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.mesh-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.mesh-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 22,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "stage-visual-cards",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "stage-visual-cards@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.stage-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.stage-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.stage-win",
+      "w": 344,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.stage-win",
+      "w": 344,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 22,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "voice-controls",
+   "viewport": "360x740",
+   "desktop": false,
+   "screenshot": "voice-controls@360x740.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 360,
+     "h": 740
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 360,
+     "h": 740
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 18,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "orb-home",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "orb-home@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 54,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions49"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 73,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "galaxy-graph",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "galaxy-graph@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 18,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse JARVIS face"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close JARVIS face"
+     },
+     {
+      "sel": "#brain-badge",
+      "w": 190,
+      "h": 25,
+      "label": "Switch brain (model + machine)"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Toolbar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Toolbar"
+     },
+     {
+      "sel": "#ask",
+      "w": 420,
+      "h": 39,
+      "label": "Ask JARVIS"
+     },
+     {
+      "sel": "#btn-mic",
+      "w": 34,
+      "h": 34,
+      "label": "Push to talk"
+     },
+     {
+      "sel": "#btn-hands",
+      "w": 34,
+      "h": 34,
+      "label": "Hands-free — just say “Jarvis…"
+     },
+     {
+      "sel": "#btn-term",
+      "w": 34,
+      "h": 34,
+      "label": "Terminal on the focused machin"
+     },
+     {
+      "sel": "#btn-files",
+      "w": 34,
+      "h": 34,
+      "label": "Files on the focused machine"
+     },
+     {
+      "sel": "#btn-desk",
+      "w": 34,
+      "h": 34,
+      "label": "Remote desktop to the focused "
+     },
+     {
+      "sel": "#btn-sess",
+      "w": 34,
+      "h": 34,
+      "label": "All sessions on all machines"
+     },
+     {
+      "sel": "#btn-proj",
+      "w": 34,
+      "h": 34,
+      "label": "Projects — plan and delegate w"
+     },
+     {
+      "sel": "#btn-work",
+      "w": 34,
+      "h": 34,
+      "label": "Work — everything running acro"
+     },
+     {
+      "sel": "#btn-apps",
+      "w": 34,
+      "h": 34,
+      "label": "Apps — web apps hosted on your"
+     },
+     {
+      "sel": "#btn-mesh",
+      "w": 34,
+      "h": 34,
+      "label": "Mesh control, updates, setting"
+     },
+     {
+      "sel": "#btn-mute",
+      "w": 34,
+      "h": 34,
+      "label": "Mute voice output"
+     },
+     {
+      "sel": "#panels-btn",
+      "w": 28,
+      "h": 28,
+      "label": "Panels"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 22,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "left-panel",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "left-panel@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 61,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "SSH from mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "SSH from mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "SSH from mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "wayland-and-macos-full-access-"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "# AGENTS.md instructions for /"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.conn",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 73,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "panels-menu",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "panels-menu@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 63,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions49"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#panels-menu",
+      "w": 166,
+      "h": 241
+     }
+    ],
+    "textUnder12px": 75,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "brain-menu",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "brain-menu@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 55,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions49"
+     }
+    ],
+    "overflow": [],
+    "clipped": [
+     {
+      "sel": "#brain-menu",
+      "left": 1104,
+      "top": 842,
+      "right": 1424,
+      "bottom": 1110
+     }
+    ],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 74,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "window-files",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "window-files@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 65,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions49"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#left",
+      "b": "div.win.files-win",
+      "w": 132,
+      "h": 560
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 106,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "terminal",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "terminal@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 56,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system92"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions49"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#left",
+      "b": "div.win.term-win",
+      "w": 92,
+      "h": 540
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 74,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "projects",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "projects@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 58,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#left",
+      "b": "div.win.proj-win",
+      "w": 262,
+      "h": 680
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.proj-win",
+      "w": 26,
+      "h": 298
+     },
+     {
+      "a": "#work",
+      "b": "div.win.proj-win",
+      "w": 132,
+      "h": 210
+     }
+    ],
+    "textUnder12px": 73,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "work-dashboard",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "work-dashboard@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 52,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     }
+    ],
+    "textUnder12px": 53,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "sessions",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "sessions@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 59,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#left",
+      "b": "div.win.sess-win",
+      "w": 192,
+      "h": 620
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     },
+     {
+      "a": "#work",
+      "b": "div.win.sess-win",
+      "w": 62,
+      "h": 210
+     }
+    ],
+    "textUnder12px": 167,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "apps-launcher",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "apps-launcher@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 56,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 73,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "mesh-settings",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "mesh-settings@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 72,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#left",
+      "b": "div.win.mesh-win",
+      "w": 182,
+      "h": 640
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     },
+     {
+      "a": "#work",
+      "b": "div.win.mesh-win",
+      "w": 52,
+      "h": 210
+     }
+    ],
+    "textUnder12px": 121,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "stage-visual-cards",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "stage-visual-cards@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 56,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 84,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  },
+  {
+   "view": "voice-controls",
+   "viewport": "1440x900",
+   "desktop": true,
+   "screenshot": "voice-controls@1440x900.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "heading-order",
+     "impact": "moderate",
+     "help": "Heading levels should only increase by one",
+     "nodes": 1,
+     "targets": [
+      "h4"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 1440,
+     "h": 900
+    },
+    "smallTargets": 54,
+    "smallTargetSamples": [
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Side panel"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Side panel"
+     },
+     {
+      "sel": "#search",
+      "w": 244,
+      "h": 35,
+      "label": "Search the mesh"
+     },
+     {
+      "sel": "div.hub",
+      "w": 244,
+      "h": 23,
+      "label": "magix-system94"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mikloss-macbook-pro"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "mix-macbookpro-m1"
+     },
+     {
+      "sel": "div.hub.off",
+      "w": 244,
+      "h": 23,
+      "label": "iphone172"
+     },
+     {
+      "sel": "#repel",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#linklen",
+      "w": 244,
+      "h": 20,
+      "label": ""
+     },
+     {
+      "sel": "#d-labels",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-particles",
+      "w": 57,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "#d-rotate",
+      "w": 51,
+      "h": 19,
+      "label": ""
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Top bar"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Top bar"
+     },
+     {
+      "sel": "#fit",
+      "w": 60,
+      "h": 26,
+      "label": "Fit the whole mesh"
+     },
+     {
+      "sel": "#refresh",
+      "w": 31,
+      "h": 26,
+      "label": "Rescan the tailnet"
+     },
+     {
+      "sel": "button.pclose.pcollapse",
+      "w": 11,
+      "h": 10,
+      "label": "Collapse Filters"
+     },
+     {
+      "sel": "button.pclose",
+      "w": 15,
+      "h": 11,
+      "label": "Close Filters"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Tailnet1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Machines1"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Agents2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Skills2"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Models8"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Projects9"
+     },
+     {
+      "sel": "label.flt",
+      "w": 148,
+      "h": 23,
+      "label": "Sessions47"
+     }
+    ],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#left",
+      "b": "#bar",
+      "w": 21,
+      "h": 39
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "#work",
+      "w": 190,
+      "h": 118
+     }
+    ],
+    "textUnder12px": 73,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": true
+   }
+  }
+ ],
+ "check": {
+  "overflow": 0,
+  "smallTargets": 0,
+  "pageErrors": 0,
+  "captureFailed": 0
+ }
+}
