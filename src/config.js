@@ -97,6 +97,13 @@ function defaults() {
     // Change policy: work branches merged by one steward. steward: '' = auto (first machine that can push).
     merge: { steward: '' },
     desktop: { sunshineUser: 'rigs', sunshinePass: crypto.randomBytes(12).toString('base64url') },
+    // Full access (enabled: screenshots + window list) and full control (input: pointer, keys, focus) of this
+    // machine's screen, see docs/full-access.md and src/control.js. Off by default; only control.enable() from a
+    // human surface switches it on, never the settings patch. backend: 'auto' or a forced one (mutter, portal, …).
+    control: {
+      enabled: false, input: false, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
+      maxActionsPerMin: 120, maxShotsPerMin: 30, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+    },
   };
 }
 
@@ -146,8 +153,9 @@ export function saveConfig(cfg = current) {
 /** Shallow-safe patch used by the settings API; never lets the UI change identity or secrets. */
 export function patchConfig(patch) {
   const cfg = config();
-  // comfyui holds a secret and has its own validated endpoint (/api/local/comfyui/config).
-  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui']);
+  // comfyui holds a secret and has its own validated endpoint (/api/local/comfyui/config);
+  // control is changed only through the gated /api/local/control/* routes.
+  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui', 'control']);
   for (const k of Object.keys(patch || {})) if (blocked.has(k)) delete patch[k];
   const next = merge(cfg, patch);
   saveConfig(next);
@@ -161,5 +169,6 @@ export function publicConfig() {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
     models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects,
+    control: { ...c.control },
   };
 }
