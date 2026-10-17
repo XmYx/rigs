@@ -1,4 +1,5 @@
 import { api, h, toast } from './api.js';
+import { announce } from './a11y.js';
 
 // The work dashboard: a floating panel with everything working right now across the mesh — agent
 // sessions (model, tokens, context, todo progress), JARVIS answers in progress, projects with their
@@ -42,6 +43,7 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
   let last = null;
   let typing = false; // don't redraw the questions while Sir is typing an answer
   let waiting = []; // [{ g, it }] every question now, so a project row can lead straight to its agent
+  const seenStatus = new Map(); // project key → progress line, to announce changes to screen readers
 
   function renderLimits(w) {
     const p = w.plan || {};
@@ -58,6 +60,10 @@ export function createWork(el, { onOpenProject, onOpenQuestion } = {}) {
     const rows = [];
     for (const n of w.nodes || []) {
       for (const pj of n.projects || []) {
+        const key = `${n.node}/${pj.id}`;
+        const line = `${pj.pct}% done${pj.blocked ? ', stuck' : ''}`;
+        if (seenStatus.has(key) && seenStatus.get(key) !== line) announce(`Project ${pj.name}: ${line}`);
+        seenStatus.set(key, line);
         const asks = waiting.filter((q) => q.it.project?.id === pj.id);
         rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : '') + (asks.length ? ' asks' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
           h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), pj.name,

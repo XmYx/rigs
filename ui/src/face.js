@@ -175,9 +175,11 @@ function holoMaterial(color, { points = false, alpha = 0.5 } = {}) {
   });
 }
 
+import { lowPower } from './perf.js';
+
 export function createFace(container) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setPixelRatio(Math.min(lowPower() ? 1.5 : 2, window.devicePixelRatio || 1));
   container.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);

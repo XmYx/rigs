@@ -5,6 +5,7 @@ import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { initMobile, revealInspector } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
@@ -15,9 +16,11 @@ import { openMesh } from './mesh.js';
 import { openProjects } from './projects.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
+import { lowPower } from './perf.js';
+import { announce, initA11y, initPopovers, prefersReducedMotion } from './a11y.js';
 import { openSessions } from './sessions.js';
 import { createPopups } from './popups.js';
-import { openTerminal } from './terminal.js';
+import { openTerminal } from './terminal-lazy.js';
 import { createVoice } from './voice.js';
 import { openWindow } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
@@ -52,14 +55,18 @@ let chatTarget = store.get('chatTarget', null);
 let busy = null;
 
 // ------------------------------------------------------------------ boot
-const graph = createGraph($('#graph'), { onSelect: (n) => select(n.id), onBackground: () => {} });
+const graph = createGraph($('#graph'), { onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {} });
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
-try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
-if (localStorage.getItem('rigs.face') === '0') $('#face').classList.add('off');
+// The face is the heaviest WebGL scene after the galaxy, so it is created lazily: on low-power devices only once
+// the user asks for it ("show your face"), elsewhere unless they hid it.
+function makeFace() {
+  try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
+}
+{ const pref = localStorage.getItem('rigs.face'); if (pref === '1' || (pref == null && !lowPower())) makeFace(); else $('#face').classList.add('off'); }
 $('#face').onclick = () => $('#face').classList.toggle('big');
-function showFace(on) { $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
+function showFace(on) { if (on && !face) makeFace(); $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
 // The face's emotion for each line JARVIS says (LocalJev on the mesh decides; see src/senses.js)
 let feelSeq = 0;
 function feel(text) {
@@ -85,7 +92,7 @@ function setOrb(s) {
   orb.setState(s);
   face?.setState(s);
   const label = { online: 'ONLINE', listening: 'LISTENING', thinking: 'THINKING', speaking: 'SPEAKING', error: 'ERROR', offline: 'OFFLINE' }[s] || s.toUpperCase();
-  $('#orb-state').innerHTML = `<i class="dot s-${s}"></i>${label}`;
+  $('#orb-state').innerHTML = `<i class="dot s-${s}" aria-hidden="true"></i>${label}`;
 }
 
 const machines = () => snap.filter((e) => e.node.online && e.node.rigs).map((e) => e.node);
@@ -130,9 +137,9 @@ function renderAttention() {
   const items = attnItems();
   // The banner heads the toast column, so toasts stack under it instead of on top of it.
   let box = document.getElementById('toasts');
-  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   let bar = $('#attn');
-  if (!bar) bar = h('div', { id: 'attn' });
+  if (!bar) bar = h('div', { id: 'attn', role: 'alert' });
   if (box.firstChild !== bar) box.prepend(bar);
   document.title = items.length ? `(${items.length}) ⚠ ${baseTitle}` : baseTitle;
   $('#orb-wrap').classList.toggle('alert', items.length > 0);
@@ -636,6 +643,7 @@ function shortModel(b) {
 function renderBrainBadge() {
   const b = currentBrain();
   $('#brain-badge').innerHTML = b ? `◆ ${shortModel(b).toUpperCase()}${b.effort ? ` <small>· ${b.effort}</small>` : ''} <small>· ${b.nodeName}</small> ▾` : '◆ NO BRAIN ▾';
+  $('#brain-badge').removeAttribute('aria-label'); // the visible text is its name (the title only described it before it filled in)
 }
 
 function setBrain(b, { quiet = false } = {}) {
@@ -678,6 +686,7 @@ function spokenText(text, final = false) {
 
 function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
+  if (/\b(jarvis|error)\b/.test(cls)) announce(text.replace(SEPARATOR, '. '), { assertive: cls.includes('error'), delay: 1200 }); // screen readers: once, when the reply settles
   el.className = 'show ' + cls;
   const m = text.match(SEPARATOR);
   el.replaceChildren();
@@ -1057,11 +1066,12 @@ function wire() {
     onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
     onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }),
   });
-  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
+  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
+  initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   $('#btn-work').onclick = () => togglePanel('work');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
@@ -1072,6 +1082,7 @@ function wire() {
   $('#btn-hands').onclick = () => {
     const on = voice.toggleHandsFree();
     $('#btn-hands').classList.toggle('on', on);
+    $('#btn-hands').setAttribute('aria-pressed', String(on));
     if (on) { toast('Hands-free: just say “Jarvis, …”'); voice.say(`Listening, ${persona.address}.`); }
   };
   $('#btn-term').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; const m = n || machineById(selfId); if (m) openTerminal({ nodeId: m.id, nodeName: m.name }); };
@@ -1081,8 +1092,10 @@ function wire() {
   $('#btn-mesh').onclick = meshWindow;
   $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-apps').onclick = () => openApps();
-  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; };
+  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); };
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
+  $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
+  $('#btn-mute').setAttribute('aria-label', 'Mute voice output');
   $('#subtitle').onclick = conversationWindow;
   $('#brain-badge').onclick = () => toggleBrainMenu();
   $('#back').onclick = clearSelection;
@@ -1098,7 +1111,7 @@ function wire() {
   len.oninput = () => { store.set('linklen', Number(len.value)); graph.setForces({ linkLength: Number(len.value) }); };
   for (const k of ['labels', 'particles', 'rotate']) {
     const el = $('#d-' + k);
-    el.checked = store.get('d-' + k, true);
+    el.checked = store.get('d-' + k, k === 'particles' || k === 'rotate' ? !lowPower() : true);
     graph.setDisplay({ [k]: el.checked });
     el.onchange = () => { store.set('d-' + k, el.checked); graph.setDisplay({ [k]: el.checked }); };
   }
@@ -1127,6 +1140,8 @@ function wire() {
 }
 
 wire();
+initA11y();
+initPopovers();
 setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
@@ -1134,8 +1149,9 @@ api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholde
 await refresh();
 graph.fit();
 connectEvents();
-setInterval(refresh, 15000);
-setInterval(refreshAttention, 4000);
+setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
 refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
 

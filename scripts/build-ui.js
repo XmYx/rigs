@@ -24,6 +24,8 @@ const ctx = await esbuild.context({
   entryPoints: [path.join(root, 'ui/src/main.js')],
   bundle: true,
   format: 'esm',
+  splitting: true, // lazy chunks (terminal/xterm) load on first use
+  chunkNames: 'chunk-[hash]',
   minify: !watch,
   sourcemap: true,
   target: ['es2022'],

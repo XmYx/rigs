@@ -1,0 +1,705 @@
+{
+ "generated": "2026-10-17T08:58:33.044Z",
+ "url": "http://127.0.0.1:4781/",
+ "views": [
+  {
+   "view": "orb-home",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "orb-home@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "galaxy-graph",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "galaxy-graph@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 0,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "left-panel",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "left-panel@390x844.png",
+   "note": "obscured tap target: #search not tappable",
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 20,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "more-sheet",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "more-sheet@390x844.png",
+   "note": "obscured tap target: #btn-more not tappable",
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 20,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "panels-menu",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "panels-menu@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#chat-dock",
+      "b": "#panels-menu",
+      "w": 374,
+      "h": 125
+     }
+    ],
+    "textUnder12px": 28,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "brain-menu",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "brain-menu@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "window-files",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "window-files@390x844.png",
+   "note": null,
+   "errors": [
+    "Cannot read properties of undefined (reading 'id')"
+   ],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "terminal",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "terminal@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.term-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.term-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.term-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.term-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "projects",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "projects@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.proj-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.proj-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.proj-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.proj-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "work-dashboard",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "work-dashboard@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 30,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "sessions",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "sessions@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 1,
+   "axeViolationNodes": 1,
+   "axe": [
+    {
+     "id": "landmark-unique",
+     "impact": "moderate",
+     "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
+     "nodes": 1,
+     "targets": [
+      "#subtitle"
+     ]
+    }
+   ],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.sess-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.sess-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.sess-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.sess-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "apps-launcher",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "apps-launcher@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "mesh-settings",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "mesh-settings@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.mesh-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.mesh-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.mesh-win",
+      "w": 374,
+      "h": 125
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.mesh-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "stage-visual-cards",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "stage-visual-cards@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [
+     {
+      "a": "#topbar",
+      "b": "div.win.stage-win",
+      "w": 160,
+      "h": 44
+     },
+     {
+      "a": "#orb-wrap",
+      "b": "div.win.stage-win",
+      "w": 190,
+      "h": 44
+     },
+     {
+      "a": "#chat-dock",
+      "b": "div.win.stage-win",
+      "w": 374,
+      "h": 102
+     },
+     {
+      "a": "#bar",
+      "b": "div.win.stage-win",
+      "w": 374,
+      "h": 44
+     }
+    ],
+    "textUnder12px": 31,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "voice-controls",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "voice-controls@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 27,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  }
+ ],
+ "check": {
+  "overflow": 0,
+  "smallTargets": 0,
+  "pageErrors": 1
+ }
+}

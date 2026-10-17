@@ -1,6 +1,7 @@
 import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { lowPower, onPowerChange, pixelRatio } from './perf.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { currentTheme, onTheme } from './themes.js';
 
@@ -144,7 +145,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     .nodeVal((n) => n.val)
     .nodeRelSize(2.6)
     .nodeOpacity(0.92)
-    .nodeResolution(16)
+    .nodeResolution(lowPower() ? 8 : 16)
     .nodeVisibility((n) => !state.hidden.has(n.type))
     .linkVisibility((l) => !state.hidden.has(l.source.type ?? '') && !state.hidden.has(l.target.type ?? ''))
     .nodeColor((n) => colorFor(n))
@@ -152,7 +153,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     .linkColor((l) => linkColor(l))
     .linkOpacity(0.32)
     .linkWidth((l) => (isLit(l) ? 0.9 : l.kind === 'mesh' ? 0.6 : 0.15))
-    .linkDirectionalParticles((l) => (state.particles && (l.kind === 'live' || l.kind === 'mesh') ? (l.kind === 'live' ? 3 : 2) : 0))
+    .linkDirectionalParticles((l) => (state.particles && !calm() && !lowPower() && (l.kind === 'live' || l.kind === 'mesh') ? (l.kind === 'live' ? 3 : 2) : 0))
     .linkDirectionalParticleWidth((l) => (l.kind === 'mesh' ? 1.4 : 1.1))
     .linkDirectionalParticleSpeed((l) => (l.kind === 'mesh' ? 0.004 : 0.01))
     .linkDirectionalParticleColor((l) => (l.kind === 'mesh' ? '#5eead4' : '#f9a8d4'))
@@ -162,7 +163,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     .onNodeHover((n) => { el.style.cursor = n ? 'pointer' : 'grab'; state.hover = n; })
     .onBackgroundClick(() => onBackground?.())
     .onEngineStop(() => { if (!state.fitted) { state.fitted = true; Graph.zoomToFit(800, 30); } })
-    .cooldownTicks(400)
+    .cooldownTicks(lowPower() ? 150 : 400)
     .warmupTicks(30);
 
   Graph.d3Force('charge').strength(-120);
@@ -173,6 +174,35 @@ export function createGraph(el, { onSelect, onBackground }) {
   const bloom = new UnrealBloomPass(new THREE.Vector2(el.clientWidth, el.clientHeight), 0.8, 0.4, 0.22);
   Graph.postProcessingComposer().addPass(bloom);
 
+  // Budget for phones / low power (perf.js): pixel ratio 1, no bloom, fewer stars. Re-applied when the viewport class changes.
+  function applyBudget() {
+    const low = lowPower();
+    const pr = pixelRatio();
+    Graph.renderer().setPixelRatio(pr);
+    Graph.postProcessingComposer().setPixelRatio?.(pr);
+    bloom.enabled = !low;
+    stars.setDrawRange(0, low ? 800 : 3000);
+    Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
+    Graph.width(el.clientWidth).height(el.clientHeight);
+  }
+  // Nothing to draw while the tab is hidden: stop the render loop and the layout simulation, resume on return.
+  document.addEventListener('visibilitychange', () => { if (document.hidden) Graph.pauseAnimation(); else { asleep = false; lastActive = performance.now(); Graph.resumeAnimation(); } });
+
+  // On a low-power device a galaxy that is not moving (no orbit, no alerts, no pulsing nodes, no input for a
+  // few seconds) is not redrawn: the render loop sleeps until the next touch, key press or data change.
+  let asleep = false;
+  let lastActive = performance.now();
+  function wake() {
+    lastActive = performance.now();
+    if (asleep && !document.hidden) { asleep = false; Graph.resumeAnimation(); }
+  }
+  for (const ev of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) el.addEventListener(ev, wake, { passive: true });
+  function maybeSleep() {
+    if (asleep || document.hidden || !lowPower() || state.rotate || state.attention.size || performance.now() - lastActive < 6000) return;
+    asleep = true;
+    Graph.pauseAnimation();
+  }
+
   // Starfield backdrop.
   const stars = new THREE.BufferGeometry();
   const pts = new Float32Array(3000 * 3);
@@ -181,6 +211,8 @@ export function createGraph(el, { onSelect, onBackground }) {
   const starMat = new THREE.PointsMaterial({ color: currentTheme().graph.stars, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.7 });
   Graph.scene().add(new THREE.Points(stars, starMat));
   onTheme((t) => { Graph.backgroundColor(t.graph.background); starMat.color.set(t.graph.stars); });
+  applyBudget();
+  onPowerChange(applyBudget);
 
   function colorFor(n) {
     const base = TYPES[n.type]?.color || '#94a3b8';
@@ -218,6 +250,11 @@ export function createGraph(el, { onSelect, onBackground }) {
       group.add(obj);
       n.__label = div;
       styleLabel(n);
+    }
+    if (window.matchMedia?.('(pointer: coarse)').matches) {
+      // Touch: a fingertip is ~10mm, a node a few px. An invisible, larger sphere widens the tap target (hover/click walk up to the node).
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(Math.cbrt(n.val) * 2.6 * 2.2, 7), 8, 6), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      group.add(hit);
     }
     if (n.type === 'machine' || n.type === 'offline') {
       const r = Math.cbrt(n.val) * 2.6;
@@ -264,14 +301,22 @@ export function createGraph(el, { onSelect, onBackground }) {
   }
 
   // Animate rings + pulse + attention halos + slow auto-rotation.
+  // prefers-reduced-motion: no spinning rings, pulsing, blinking halos, orbit or link particles
+  const calmMq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  const calm = () => !!calmMq?.matches;
+  calmMq?.addEventListener?.('change', () => Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()));
   (function loop() {
+    if (document.hidden || asleep) { setTimeout(() => requestAnimationFrame(loop), 500); return; }
+    maybeSleep();
+    const still = calm();
+    const low = lowPower(); // low power: active nodes stay at rest instead of pulsing, so an idle galaxy can sleep
     const t = performance.now() / 1000;
-    const blink = 0.5 + 0.5 * Math.sin(t * 6.5);
+    const blink = still ? 1 : 0.5 + 0.5 * Math.sin(t * 6.5);
     for (const n of state.data.nodes) {
       const g = n.__group;
       if (!g) continue;
-      for (const c of g.children) if (c.userData.spin) c.rotation.z += 0.004;
-      if (g.userData.pulse) { const s = 1 + Math.sin(t * 3 + (n.x || 0)) * 0.25; g.scale.set(s, s, s); }
+      for (const c of g.children) if (c.userData.spin && !still) c.rotation.z += 0.004;
+      if (g.userData.pulse && !still && !low) { const s = 1 + Math.sin(t * 3 + (n.x || 0)) * 0.25; g.scale.set(s, s, s); }
       const alert = state.attention.has(n.id) && !state.hidden.has(n.type);
       if (alert && !g.userData.halo) g.add((g.userData.halo = makeHalo(n)));
       const halo = g.userData.halo;
@@ -281,14 +326,14 @@ export function createGraph(el, { onSelect, onBackground }) {
         if (alert) {
           halo.children[0].material.opacity = 0.08 + 0.55 * blink;
           halo.children[1].material.opacity = 0.25 + 0.75 * blink;
-          halo.children[1].rotation.z += 0.03;
-          const s = 1 + 0.3 * blink;
+          if (!still) halo.children[1].rotation.z += 0.03;
+          const s = still ? 1 : 1 + 0.3 * blink;
           halo.scale.set(s, s, s);
         }
       }
     }
     const controls = Graph.controls();
-    if (controls) controls.autoRotate = state.rotate && !state.focus && !state.hover;
+    if (controls) controls.autoRotate = state.rotate && !still && !state.focus && !state.hover;
     requestAnimationFrame(loop);
   })();
 
@@ -340,6 +385,7 @@ export function createGraph(el, { onSelect, onBackground }) {
       const sig = (d) => d.nodes.map((n) => n.id + n.type + (n.session?.live ? 1 : 0) + (n.task?.status || '')).join('|') + d.links.map((l) => `${l.source.id ?? l.source}>${l.target.id ?? l.target}`).join('|');
       const changed = sig({ nodes, links: data.links }) !== state.sig;
       state.sig = sig({ nodes, links: data.links });
+      if (changed) wake();
       for (const old of state.data.nodes) if (!state.byId.has(old.id)) old.__label?.remove();
       state.data = { nodes, links: data.links };
       if (changed) Graph.graphData(state.data);
@@ -349,7 +395,10 @@ export function createGraph(el, { onSelect, onBackground }) {
     get(id) { return state.byId.get(id); },
     /** Graph node ids that need the user (machine planets, sessions, tasks) — they blink until resolved. */
     setAttention(ids) {
-      state.attention = new Set(ids);
+      const next = new Set(ids);
+      if (next.size === state.attention.size && [...next].every((i) => state.attention.has(i))) return; // polled every few seconds: unchanged must not wake the idle sleep
+      wake();
+      state.attention = next;
       for (const n of state.data.nodes) styleLabel(n);
     },
     nodes() { return state.data.nodes; },
@@ -395,6 +444,8 @@ export function createGraph(el, { onSelect, onBackground }) {
     get depth() { return state.depth; },
   };
   window.addEventListener('resize', () => api.resize());
+  // Anything that changes the scene (every API method) or touches the galaxy wakes the idle sleep below.
+  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['get', 'nodes', 'neighbors', 'setAttention', 'setData'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
   return api;
 }
 

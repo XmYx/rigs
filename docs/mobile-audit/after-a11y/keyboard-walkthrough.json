@@ -1,0 +1,86 @@
+{
+  "generated": "2026-10-17T08:15:18.758Z",
+  "url": "http://127.0.0.1:4781/",
+  "results": [
+    {
+      "name": "Tab reaches real controls with a visible focus ring (first 12 stops)",
+      "ok": true,
+      "detail": "Collapse Side panel › Close Side panel › Search the mesh › macbookpro51 › iphone172 › magix-system › mikloss-macbook-pro › repel › linklen › d-labels › d-particles › d-rotate"
+    },
+    {
+      "name": "Shift+Tab moves backwards",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "#btn-files (Files on the focused machine): opens a role=dialog, focus moves in, Tab stays inside, Escape closes, focus returns to the button",
+      "ok": true,
+      "detail": "dialogs=1 focusInside=true tabEscaped=false remaining=0 focusOn=#btn-files"
+    },
+    {
+      "name": "#btn-sess (All sessions on all machines): opens a role=dialog, focus moves in, Tab stays inside, Escape closes, focus returns to the button",
+      "ok": true,
+      "detail": "dialogs=1 focusInside=true tabEscaped=false remaining=0 focusOn=#btn-sess"
+    },
+    {
+      "name": "#btn-proj (Projects — plan and delegate work across machines and models): opens a role=dialog, focus moves in, Tab stays inside, Escape closes, focus returns to the button",
+      "ok": true,
+      "detail": "dialogs=1 focusInside=true tabEscaped=false remaining=0 focusOn=#btn-proj"
+    },
+    {
+      "name": "#btn-apps (Apps — web apps hosted on your machines, opened right here): opens a role=dialog, focus moves in, Tab stays inside, Escape closes, focus returns to the button",
+      "ok": true,
+      "detail": "dialogs=1 focusInside=true tabEscaped=false remaining=0 focusOn=#btn-apps"
+    },
+    {
+      "name": "#btn-mesh (Mesh control, updates, settings): opens a role=dialog, focus moves in, Tab stays inside, Escape closes, focus returns to the button",
+      "ok": true,
+      "detail": "dialogs=1 focusInside=true tabEscaped=false remaining=0 focusOn=#btn-mesh"
+    },
+    {
+      "name": "#btn-work (Work — everything running across the mesh, progress, tokens and plan limits) toggles the work panel from the keyboard",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "☰ panels menu opens with Enter, Escape closes it and focus returns",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Brain menu opens with Enter, Escape closes it and focus returns",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Orb canvas is a focusable button named “Talk to JARVIS”",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Click-only rows (hubs, connections, app rows) are role=button with tabindex 0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Landmarks: one <main>, one <h1>, every <aside>/<nav> named",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Live regions exist for replies (status) and alerts",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "prefers-reduced-motion: the orb does not animate (identical frames 0.9s apart)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "prefers-reduced-motion: no running CSS animations",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

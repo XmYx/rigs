@@ -1,4 +1,5 @@
 import { h } from './api.js';
+import { prefersReducedMotion } from './a11y.js';
 
 // Visual replies: the brain can put a fenced ```visual block (JSON) in its written part and JARVIS draws it
 // as an animated card instead of plain text. Kinds: weather, code, metrics, steps, status, bars.
@@ -34,6 +35,7 @@ const SVG = (w, h2, ...kids) => { const s = document.createElementNS('http://www
 const el = (tag, attrs = {}) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 
 function countUp(node, to, { decimals = 0, suffix = '', ms = 900 } = {}) {
+  if (prefersReducedMotion()) { node.textContent = to.toFixed(decimals) + suffix; return; }
   const t0 = performance.now();
   const step = (now) => {
     const k = Math.min(1, (now - t0) / ms);
@@ -64,8 +66,9 @@ function code(s) {
   const body = h('pre', { class: 'vz-code' });
   const cap = h('div', { class: 'vz-cap' }, h('span', {}, s.file || s.language || 'code'), s.language && s.file ? h('i', {}, s.language) : '');
   let i = 0;
-  const type = () => { if (i < lines.length) { body.append(h('div', { class: `vz-line ${markLine(lines[i])}` }, lines[i] || ' ')); i++; setTimeout(type, 35); } };
-  setTimeout(type, 120);
+  const still = prefersReducedMotion();
+  const type = () => { if (i < lines.length) { body.append(h('div', { class: `vz-line ${markLine(lines[i])}` }, lines[i] || ' ')); i++; if (still) type(); else setTimeout(type, 35); } };
+  if (still) type(); else setTimeout(type, 120);
   return h('div', { class: 'vz-card vz-codecard' }, cap, body);
 }
 const markLine = (l) => (/^\s*(\+|add)/i.test(l) ? 'add' : /^\s*-(?!-)/.test(l) ? 'del' : /^\s*(\/\/|#)/.test(l) ? 'com' : '');
@@ -100,11 +103,33 @@ function bars(s) {
 
 const RENDER = { weather, code, metrics, steps, status, bars };
 
-/** Build the card for one visual spec, or a text fallback. */
+/** Plain-text equivalent of a card (its accessible name): everything the card shows, none of the animation. */
+export function describe(spec) {
+  const kind = String(spec.kind || spec.type || '').toLowerCase();
+  const items = (spec.items || []).slice(0, 16);
+  const list = (f) => items.map(f).filter(Boolean).join('; ');
+  const body = {
+    weather: () => `${spec.place || ''} ${spec.condition || ''} ${spec.temp ?? ''}${spec.unit || '°'}${spec.detail ? ', ' + spec.detail : ''}.${spec.forecast?.length ? ' Forecast: ' + spec.forecast.slice(0, 7).map((d) => `${d.day} ${d.condition || ''} high ${d.high ?? ''} low ${d.low ?? ''}`).join('; ') : ''}`,
+    code: () => `${spec.file || spec.language || 'code'}:\n${String(spec.code || '').slice(0, 1200)}`,
+    metrics: () => list((m) => `${m.label || ''} ${m.value ?? 0}${m.unit || ''}${m.max ? ' of ' + m.max : ''}`),
+    steps: () => list((t, i) => `${i + 1}. ${t.text || t.label || ''} (${t.done === true || t.status === 'done' ? 'done' : t.status === 'running' ? 'running' : 'pending'})`),
+    status: () => list((it) => `${it.name || ''} ${it.value || it.state || ''}`),
+    bars: () => list((d) => `${d.label || ''} ${d.value ?? 0}`),
+  }[kind];
+  const title = spec.title || spec.place || kind || 'visual';
+  return `${title}${kind ? ' (' + kind + ')' : ''}: ${(body ? body() : '').replace(/\s+/g, ' ').trim()}`.trim();
+}
+
+/** Build the card for one visual spec, or a text fallback. Cards are images to assistive tech, named by describe(). */
 export function renderVisual(spec) {
   const fn = RENDER[String(spec.kind || spec.type || '').toLowerCase()];
   if (!fn) return h('div', { class: 'vz-card vz-fallback' }, JSON.stringify(spec, null, 1));
-  try { return fn(spec); } catch { return h('div', { class: 'vz-card vz-fallback' }, 'visual unavailable'); }
+  try {
+    const card = fn(spec);
+    card.setAttribute('role', 'img');
+    card.setAttribute('aria-label', describe(spec));
+    return card;
+  } catch { return h('div', { class: 'vz-card vz-fallback' }, 'visual unavailable'); }
 }
 
 /** Replace the children of `box` with the text and cards of `text`. */

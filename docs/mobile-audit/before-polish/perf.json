@@ -1,0 +1,41 @@
+{
+  "generated": "2026-10-17T08:43:06.147Z",
+  "url": "http://127.0.0.1:4781/",
+  "viewport": "390x844 @3x, 4x CPU throttle",
+  "bundle": {
+    "app.js": {
+      "kb": 1876,
+      "gzipKb": 516.5
+    },
+    "app.css": {
+      "kb": 48.9,
+      "gzipKb": 11.9
+    }
+  },
+  "loadMs": 5208,
+  "idle": {
+    "seconds": 10,
+    "fps": 3.4,
+    "longTasks": 34,
+    "longTaskMs": 10341,
+    "maxLongTaskMs": 673,
+    "taskMs": 11319,
+    "scriptMs": 843,
+    "cpuBusyPct": 113
+  },
+  "hiddenTab": {
+    "seconds": 4,
+    "rafFrames": 10,
+    "taskMs": 4687,
+    "cpuBusyPct": 117
+  },
+  "page": {
+    "canvases": [
+      "780x1688",
+      "380x380",
+      "132x132"
+    ],
+    "dpr": 3,
+    "nodes": 28
+  }
+}
