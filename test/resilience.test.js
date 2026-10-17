@@ -46,3 +46,17 @@ test('planning that was in flight when the daemon stopped is recovered at once, 
   assert.equal(p.status, 'draft');
   assert.match(p.log.at(-1).text, /planning never finished/);
 });
+
+test('a seat that turns out alive (a slow daemon, or only OpenRig itself restarted) is not nudged', async () => {
+  const calls = [];
+  const ctx = { call: async (n, p) => { calls.push(p); return p === 'work/revive' ? { ok: true, restored: false, how: 'the seat was alive' } : {}; }, notify: () => {} };
+  const p = project(); const t = task();
+  assert.equal(await planner.watchTask(p, t, { state: 'seat-down' }, ctx), false);
+  assert.deepEqual(calls, ['work/revive'], 'no nudge');
+  assert.equal(t.revives, 0, 'a false alarm does not count');
+  assert.equal(p.log.length, 0);
+  ctx.call = async (n, path) => { calls.push(path); return path === 'work/revive' ? { ok: true, restored: false, how: 'OpenRig was down — restarted it; the agent was unaffected' } : {}; };
+  assert.equal(await planner.watchTask(p, t, { state: 'daemon-down' }, ctx), true);
+  assert.match(p.log.at(-1).text, /restarted it; the agent was unaffected/);
+  assert.ok(!calls.includes('work/nudge'));
+});

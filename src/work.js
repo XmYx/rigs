@@ -219,6 +219,7 @@ export async function ensureDaemon() {
   if (!rig || isWin) return { skipped: true };
   const st = await openrig.status(true);
   if (st.daemon === 'running') return { running: true };
+  if (st.daemon !== 'stopped') return { unknown: true }; // slow to answer is not down: never start a second daemon
   const r = await run(rig, ['daemon', 'start'], { timeout: 120000 });
   const after = await openrig.status(true);
   return { started: after.daemon === 'running', output: (r.stdout + r.stderr).trim().slice(-200) };
@@ -227,7 +228,8 @@ export async function ensureDaemon() {
 /** Is this OpenRig seat's session alive? (false after a reboot, a killed tmux session, a crashed daemon) */
 async function seatAlive(seat) {
   const st = await openrig.status(true);
-  if (st.daemon !== 'running') return null;
+  if (st.daemon === 'stopped') return null;
+  if (st.daemon !== 'running' || !st.nodesOk) return true; // can't tell right now: assume alive, look again next tick
   const n = (st.nodes || []).find((x) => x.session === seat);
   return !!n && !GONE.test(n.status || '');
 }
@@ -241,23 +243,26 @@ export async function reviveTask(run_) {
   if (run_.mode !== 'openrig' || !run_.seat) return { ok: false, reason: 'not an OpenRig seat' };
   const rig = bin('rig');
   const d = await ensureDaemon();
-  if (await seatAlive(run_.seat)) return { ok: true, how: d.started ? 'daemon restarted; seat was alive' : 'alive' };
+  // Nothing to bring back: the agent is fine (a daemon that was down and is up again doesn't kill its seats).
+  if (await seatAlive(run_.seat)) return { ok: true, restored: false, how: d.started ? 'OpenRig was down — restarted it; the agent was unaffected' : 'the seat was alive' };
   const team = ((await openrig.status(true)).nodes || []).filter((n) => n.rig === run_.rig);
   const anyLive = team.some((n) => !GONE.test(n.status || ''));
   let how;
+  let out = { stdout: '', stderr: '' };
   if (!anyLive) {
-    const r = await run(rig, ['up', run_.rig, '--existing', '--yes', '--json'], { timeout: 300000 });
-    how = `restored the team (${r.code === 0 ? 'conversations resumed' : 'restore said: ' + (r.stdout + r.stderr).trim().slice(-160)})`;
+    out = await run(rig, ['up', run_.rig, '--existing', '--yes', '--json'], { timeout: 300000 });
+    how = 'restored the team from its snapshot (conversations resumed)';
   } else {
     await run(rig, ['seat', 'clean', run_.seat], { timeout: 60000 });
-    const r = await run(rig, ['seat', 'launch', run_.seat], { timeout: 300000 });
-    how = `fresh occupant for the seat (${r.code === 0 ? 'launched' : (r.stdout + r.stderr).trim().slice(-160)})`;
+    out = await run(rig, ['seat', 'launch', run_.seat], { timeout: 300000 });
+    how = 'gave the seat a fresh occupant';
   }
+  // Success is the seat being live again (the CLI can exit non-zero on warnings while the restore worked).
   for (let i = 0; i < 45; i++) {
-    if (await seatAlive(run_.seat)) { await sleep(5000); return { ok: true, how }; }
+    if (await seatAlive(run_.seat)) { await sleep(5000); return { ok: true, restored: true, how }; }
     await sleep(2000);
   }
-  return { ok: false, how, reason: 'the seat did not come back' };
+  return { ok: false, how, reason: 'the seat did not come back: ' + (out.stdout + out.stderr).trim().slice(-200) };
 }
 
 export async function taskStatus(run_) {

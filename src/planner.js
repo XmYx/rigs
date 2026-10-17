@@ -674,6 +674,12 @@ async function reviveTask(p, t, st, ctx) {
   try {
     const r = await ctx.call(t.assign.node, 'work/revive', { method: 'POST', body: t.run, timeout: 6 * 60 * 1000 });
     if (!r.ok) throw new Error(r.reason || 'revive failed');
+    if (r.restored === false) {
+      // A false alarm (a slow daemon) or only OpenRig itself was down: the agent kept working — don't interrupt it.
+      t.revives = Math.max(0, t.revives - 1);
+      if (/restarted/.test(r.how || '')) event(p, `${t.id}: ${r.how}`);
+      return /restarted/.test(r.how || '');
+    }
     await ctx.call(t.assign.node, 'work/nudge', { method: 'POST', body: { ...t.run, text: resumeText(p, t) }, timeout: 30000 }).catch(() => {});
     t.watch = null;
     event(p, `${t.id}: its agent was down (${st.state}) — ${r.how}; told it to carry on`);
