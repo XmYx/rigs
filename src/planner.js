@@ -75,15 +75,32 @@ function meshBrief(snapshot) {
   }).join('\n');
 }
 
-function planningPrompt(p, snapshot) {
+/** What the planner and every agent should know about the folder a project is bound to. */
+export function workspaceBrief(p) {
+  const w = p.workspace;
+  if (!w) return '';
+  const unity = (w.parts || []).filter((x) => x.kind === 'unity').map((x) => `${x.rel || '.'} (Unity ${x.version})`);
+  if (w.unity) unity.unshift(`. (Unity ${w.unity})`);
+  const repos = (w.parts || []).filter((x) => x.kind === 'git').map((x) => x.rel);
+  if ((w.kinds || []).includes('git') && !repos.includes('.')) repos.unshift('.');
+  return [
+    `- Folder: ${p.repo.path} on ${p.repo.node}${w.title ? ` — "${w.title}"` : ''}`,
+    `- Kinds: ${(w.kinds || []).join(', ') || 'unknown'}`,
+    unity.length ? `- Unity project(s): ${unity.join('; ')}` : '',
+    repos.length ? `- Git repositories: ${repos.join(', ')}` : '',
+    w.guides?.length ? `- Agent guide(s): ${w.guides.join(', ')} in that folder — they define how work is done there.` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function planningPrompt(p, snapshot, guide = '') {
   const rules = config().routing.rules.map((r) => `${r.kind}${r.size ? '/' + r.size : ''}${r.tool ? ' [needs ' + r.tool + ']' : ''} → ${r.provider} ${r.model || '(default)'} effort=${r.effort || 'default'}`).join('; ');
   return `You are the planning brain of RIGS, a mesh of the user's workstations with coding agents on each.
 Break this project into concrete, independently executable tasks for coding agents.
 
 PROJECT: ${p.name}
-GOAL: ${p.goal}
+GOAL: ${p.goal}${p.request && p.request !== p.goal ? `\nTHE USER'S WHOLE REQUEST (other parts go to other projects): ${p.request}` : ''}
 REPOSITORY: ${p.repo.path ? `${p.repo.path} on machine ${p.repo.node}` : 'none given'}${p.gitUrl ? ` (git: ${p.gitUrl})` : ''}
-
+${p.workspace ? `\nWORKSPACE:\n${workspaceBrief(p)}\n` : ''}${guide ? `\nTHE PROJECT'S OWN AGENT GUIDE (authoritative for how work is done in this folder — roles, which model does what, how to verify, what not to touch; shape the tasks and suggested providers/models to it):\n<<<\n${guide}\n>>>\n` : ''}
 MACHINES:
 ${meshBrief(snapshot)}
 
@@ -91,6 +108,12 @@ ROUTING POLICY (task kind → provider/model/effort; machines are chosen by RIGS
 
 Rules:
 - 2 to 12 tasks. Each must be doable by one agent in one session and have a verifiable outcome.
+- Size the plan to the goal: an outline or survey is 1-3 tasks; a measurable improvement is measure → change → verify.
+- Unity (or any live editor): only ONE agent can drive the running editor at a time — chain editor-bound tasks with deps,
+  and let other tasks work on files, data or analysis. Measure before and after (the guide may name fps/profiling hooks).
+- OpenRig vocabulary: an "OpenRig project" is an OpenRig project workspace — SPEC.md (intent), project.yaml (install:
+  intent/context/skills/worlds), missions/ — plus the rig spec of the team (pods, seats, runtimes, models, edges) that
+  works on it. Agents can read \`rig context get reference/project-workspace.md\` and \`reference/rig-spec.md\`.
 - kind is one of: ${KINDS.join(', ')}. Use "review" for an independent check of another task's output (list it in deps).
   Use "reverse-engineer" when existing software/binaries must be understood (agents have REA for that).
   Use "text" for simple writing/transformation, "docs" for documentation, "media" for image/video/audio generation
@@ -130,6 +153,17 @@ function normalizeTasks(raw) {
   return tasks;
 }
 
+/** The project's AGENTS.md / CLAUDE.md (first ~9k chars), read from the machine the folder is on. */
+async function readGuide(p, ctx) {
+  const g = p.workspace?.guides?.[0];
+  if (!g || !p.repo.path) return '';
+  const sep = p.repo.path.includes('\\') && !p.repo.path.includes('/') ? '\\' : '/';
+  try {
+    const r = await ctx.call(p.repo.node, `files/read?path=${encodeURIComponent(p.repo.path.replace(/[\\/]$/, '') + sep + g)}`, { timeout: 20000 });
+    return truncate(r.text || '', 9000);
+  } catch { return ''; }
+}
+
 /** Ask the planner brain for tasks. Runs on the owner node; the brain may be on any machine. */
 export async function planProject(id, ctx, { brain } = {}) {
   const p = await getProject(id);
@@ -137,7 +171,8 @@ export async function planProject(id, ctx, { brain } = {}) {
   const b = brain?.provider ? brain : p.planner || coreBrain();
   p.planner = b;
   const snapshot = await ctx.snapshot();
-  const prompt = planningPrompt(p, snapshot);
+  const guide = await readGuide(p, ctx);
+  const prompt = planningPrompt(p, snapshot, guide);
   p.status = 'planning';
   event(p, `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
   await saveProject(p);
@@ -187,7 +222,8 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
   const load = new Map(live.map((e) => [e.node.name, 0]));
   for (const t of p.tasks) if (t.assign && (onlyUnassigned || t.status !== 'todo')) load.set(t.assign.node, (load.get(t.assign.node) || 0) + 1);
   const max = config().routing.maxTasksPerMachine || 4;
-  const codeLocal = (t) => ['code', 'test', 'review'].includes(t.kind) && p.repo.path && !p.gitUrl;
+  // A folder that exists only on one machine (no git URL to clone): everything that works on it runs there.
+  const codeLocal = (t) => !['media', 'private'].includes(t.kind) && p.repo.path && !p.gitUrl;
 
   for (const t of p.tasks) {
     if (t.status !== 'todo') continue;
@@ -280,7 +316,12 @@ You are one agent in a RIGS project run across the user's machines.
 - Project goal: ${p.goal}
 - Your task id: \`${t.id}\` · kind: ${t.kind} · size: ${t.size}
 - You run on \`${t.assign.node}\` as ${t.assign.provider}${t.assign.model ? ' ' + t.assign.model : ''}${t.assign.effort ? ' (effort ' + t.assign.effort + ')' : ''}
-
+${p.workspace ? `
+## Workspace
+${workspaceBrief(p)}
+- Read the project's ${p.workspace.guides?.length ? p.workspace.guides.join(' / ') : 'README'} first and follow it — it overrides the generic notes below.
+- The folder may hold uncommitted work by the user or other agents: never revert, stash, reset or commit changes you didn't make.
+` : ''}
 ## Task
 ${t.description}
 

@@ -7,7 +7,7 @@ import { CODEX_AUTO_PROFILE, codexAutoProfileReady, wrapperTarget } from './agen
 import * as openrig from './openrig.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
-import { HOME, expandHome, isWin, run } from './util.js';
+import { HOME, expandHome, isWin, run, sleep } from './util.js';
 
 /**
  * Runs ONE planned task on THIS machine. Called by the project's owner node through the mesh.
@@ -55,12 +55,13 @@ async function prepareWorkdir(workdir, gitUrl) {
 
 export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto' }) {
   const dir = await prepareWorkdir(workdir, project.gitUrl);
-  // The full brief lives on disk; agents get a short pointer to it (robust quoting on every OS).
-  const briefDir = path.join(dir, '.rigs', 'tasks');
+  // The full brief lives on disk — under ~/.rigs, never inside the user's project folder; agents get a short
+  // pointer to it (robust quoting on every OS), OpenRig seats get it as their queue item.
+  const briefDir = path.join(RIGS_HOME, 'briefs', project.slug);
   await fsp.mkdir(briefDir, { recursive: true });
   const brief = path.join(briefDir, `${project.slug}-${task.id}.md`);
   await fsp.writeFile(brief, prompt);
-  const pointer = `Read ${path.relative(dir, brief).split(path.sep).join('/')} and carry out the task it describes. Report back with the project_task_update tool when you are done.`;
+  const pointer = `Read ${brief.split(path.sep).join('/')} and carry out the task it describes. Report back with the project_task_update tool when you are done.`;
   const a = task.assign;
   const rigOk = ['claude', 'codex', 'stub'].includes(a.provider) && !isWin && openrigAgentsDir() && (await openrig.status(true)).daemon === 'running';
   const useRig = mode === 'openrig' ? rigOk : mode === 'direct' ? false : rigOk;
@@ -69,54 +70,115 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   return startDirect({ project, task, dir, pointer });
 }
 
-async function startOpenRig({ project, task, dir, brief, policy }) {
-  const a = task.assign;
-  const agents = openrigAgentsDir();
-  const rigName = `${project.slug}-${task.id}`.slice(0, 40);
-  const member = slug(task.kind || 'work', 16);
-  const specDir = path.join(RIGS_HOME, 'rigs', rigName);
-  await fsp.mkdir(specDir, { recursive: true });
-  const runtime = a.provider === 'codex' ? 'codex' : a.provider === 'stub' ? 'stub' : 'claude-code';
-  const yaml = [
-    'version: "0.2"',
-    `name: ${rigName}`,
-    `summary: ${JSON.stringify(`RIGS project ${project.name}: ${task.title}`)}`,
-    ...(policy && policy !== 'floor' ? [`permission_policy: ${policy}`] : []),
-    'pods:',
-    '  - id: task',
-    `    label: ${JSON.stringify(task.title.slice(0, 60))}`,
-    '    members:',
-    `      - id: ${member}`,
-    `        agent_ref: ${JSON.stringify('path:' + path.join(agents, AGENT_REF[task.kind] || AGENT_REF.code))}`,
-    `        runtime: ${runtime}`,
-    '        profile: default',
-    `        cwd: ${JSON.stringify(dir)}`,
-    ...(a.model ? [`        model: ${JSON.stringify(a.model)}`] : []),
-    ...(a.effort ? [`        effort: ${JSON.stringify(a.effort)}`] : []),
+/** A short, stable tag for a seat id: claude-opus-5-5 → opus, gpt-6.1-sol → codex. */
+export function modelTag(a) {
+  const m = String(a.model || '').toLowerCase();
+  const fam = (m.match(/opus|sonnet|haiku|fable/) || [])[0];
+  if (fam) return fam;
+  if (a.provider === 'codex' || a.provider === 'stub') return a.provider;
+  return slug(m || a.provider || 'agent', 10);
+}
+
+function memberYaml(mb, indent = '') {
+  return [
+    `${indent}id: ${mb.id}`,
+    `${indent}agent_ref: ${JSON.stringify('path:' + mb.agentRef)}`,
+    `${indent}runtime: ${mb.runtime}`,
+    `${indent}profile: default`,
+    `${indent}cwd: ${JSON.stringify(mb.cwd)}`,
+    ...(mb.model ? [`${indent}model: ${JSON.stringify(mb.model)}`] : []),
+    ...(mb.effort ? [`${indent}effort: ${JSON.stringify(mb.effort)}`] : []),
     // Codex has no auto mode of its own; under builtin:auto OpenRig launches it "at the floor", which with a named
     // profile means `-p rigs-auto`: workspace-write + network, asking only to escalate (see agentmodes.js).
-    ...(runtime === 'codex' && policy !== 'builtin:yolo' && codexAutoProfileReady() ? [`        codex_config_profile: ${CODEX_AUTO_PROFILE}`] : []),
-    `        role: ${slug(task.kind || 'builder', 20)}`,
+    ...(mb.codexProfile ? [`${indent}codex_config_profile: ${mb.codexProfile}`] : []),
+    `${indent}role: ${mb.role}`,
+  ];
+}
+
+function specYaml(rigName, summary, policy, members) {
+  return [
+    'version: "0.2"',
+    `name: ${rigName}`,
+    `summary: ${JSON.stringify(summary)}`,
+    ...(policy && policy !== 'floor' ? [`permission_policy: ${policy}`] : []),
+    'pods:',
+    '  - id: team',
+    `    label: ${JSON.stringify('team')}`,
+    '    members:',
+    ...members.flatMap((mb) => memberYaml(mb, '        ').map((l, i) => (i === 0 ? '      - ' + l.trimStart() : l))),
     '    edges: []',
     'edges: []',
     '',
   ].join('\n');
-  const spec = path.join(specDir, 'rig.yaml');
-  await fsp.writeFile(spec, yaml);
+}
+
+const GONE = /detached|stopped|exited|dead|failed/i;
+
+/**
+ * One OpenRig team per project on each machine: rig `<project>-<id>`, pod `team`, one seat per role + model
+ * (`team-code-opus@…`). A task goes to an idle seat of its kind; a new role — or every same-role seat busy —
+ * adds a seat with `rig add`. Seats keep their context between tasks, like colleagues on the project.
+ */
+async function startOpenRig({ project, task, dir, brief, policy }) {
+  const a = task.assign;
+  const agents = openrigAgentsDir();
   const rig = bin('rig');
-  const v = await run(rig, ['spec', 'validate', spec], { timeout: 30000 });
-  if (v.code !== 0) throw new Error('rig spec invalid: ' + (v.stdout + v.stderr).trim().slice(-400));
-  const up = await run(rig, ['up', spec, '--yes', '--json'], { timeout: 300000 });
-  let upJson = null;
-  try { upJson = JSON.parse(up.stdout.slice(up.stdout.indexOf('{'))); } catch {}
-  const node = upJson?.stages?.flatMap((s) => s.detail?.nodes || [])[0];
-  if (up.code !== 0 || !node?.sessionName) throw new Error('rig up failed: ' + (up.stdout + up.stderr).trim().slice(-400));
-  const seat = node.sessionName;
+  const rigName = slug(`${project.slug}-${String(project.id || '').slice(0, 4)}`, 40);
+  const runtime = a.provider === 'codex' ? 'codex' : a.provider === 'stub' ? 'stub' : 'claude-code';
+  const base = slug(`${task.kind || 'work'}-${modelTag(a)}`, 22);
+  const member = (id) => ({
+    id, agentRef: path.join(agents, AGENT_REF[task.kind] || AGENT_REF.code), runtime, cwd: dir, model: a.model, effort: a.effort,
+    role: slug(task.kind || 'builder', 20), codexProfile: runtime === 'codex' && policy !== 'builtin:yolo' && codexAutoProfileReady() ? CODEX_AUTO_PROFILE : '',
+  });
+  const specDir = path.join(RIGS_HOME, 'rigs', rigName);
+  await fsp.mkdir(specDir, { recursive: true });
+
+  let seats = (await openrig.status(true)).nodes?.filter((n) => n.rig === rigName) || [];
+  if (seats.length && seats.every((n) => GONE.test(n.status || ''))) {
+    // The team was stopped (or the machine restarted): start it fresh rather than half-restoring it.
+    await run(rig, ['down', rigName, '--delete', '--force', '--json'], { timeout: 120000 });
+    seats = [];
+  }
+  const live = (id) => seats.find((n) => n.session === `team-${id}@${rigName}` && !GONE.test(n.status || ''));
+  let id = base;
+  for (let k = 2; live(id) && live(id).work > 0 && k <= 4; k++) id = `${base}-${k}`;
+  let seat = live(id)?.session;
+
+  if (!seats.length) {
+    const spec = path.join(specDir, 'rig.yaml');
+    await fsp.writeFile(spec, specYaml(rigName, `RIGS project ${project.name}`, policy, [member(id)]));
+    const v = await run(rig, ['spec', 'validate', spec], { timeout: 30000 });
+    if (v.code !== 0) throw new Error('rig spec invalid: ' + (v.stdout + v.stderr).trim().slice(-400));
+    const up = await run(rig, ['up', spec, '--yes', '--json'], { timeout: 300000 });
+    let upJson = null;
+    try { upJson = JSON.parse(up.stdout.slice(up.stdout.indexOf('{'))); } catch {}
+    const node = upJson?.stages?.flatMap((s) => s.detail?.nodes || [])[0];
+    if (up.code !== 0 || !node?.sessionName) throw new Error('rig up failed: ' + (up.stdout + up.stderr).trim().slice(-400));
+    seat = node.sessionName;
+  } else if (!seat) {
+    const frag = path.join(specDir, `${id}.member.yaml`);
+    await fsp.writeFile(frag, memberYaml(member(id)).join('\n') + '\n');
+    const add = await run(rig, ['add', rigName, 'team', frag, '--json'], { timeout: 300000 });
+    let addJson = null;
+    try { addJson = JSON.parse(add.stdout.slice(add.stdout.indexOf('{'))); } catch {}
+    seat = addJson?.result?.node?.sessionName;
+    if (!seat) {
+      // The CLI gives up on the daemon after a few seconds while the seat is still launching ("outcome UNKNOWN"):
+      // look for the seat itself before calling it a failure.
+      const want = `team-${id}@${rigName}`;
+      for (let i = 0; i < 30 && !seat; i++) {
+        await sleep(2000);
+        if ((await openrig.status(true)).nodes?.some((n) => n.session === want && !GONE.test(n.status || ''))) seat = want;
+      }
+    }
+    if (!seat) throw new Error('rig add failed: ' + (add.stdout + add.stderr).trim().slice(-400));
+  }
+
   const qc = await run(rig, ['queue', 'create', '--source', `rigs-planner@${config().name}`, '--destination', seat, '--body-file', brief,
     '--summary', task.title.slice(0, 120), '--tags', `project:${project.id},task:${task.id}`, '--tier', task.size === 'L' ? 'deep' : 'routine'], { timeout: 60000 });
   const qitem = (qc.stdout.match(/qitem-[\w-]+/) || [])[0];
   if (!qitem) throw new Error('rig queue create failed: ' + (qc.stdout + qc.stderr).trim().slice(-300));
-  return { mode: 'openrig', rig: rigName, seat, qitem, cwd: dir, session: { kind: 'rig', id: seat } };
+  return { mode: 'openrig', rig: rigName, seat, qitem, cwd: dir, team: true, session: { kind: 'rig', id: seat } };
 }
 
 async function startDirect({ project, task, dir, pointer }) {

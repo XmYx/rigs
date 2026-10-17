@@ -35,6 +35,7 @@ import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
 import { APP_DIR, isWin, log, run, truncate } from './util.js';
 import * as work from './work.js';
+import * as workspaces from './workspaces.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -236,6 +237,51 @@ export async function startServer() {
     return [...results, ...offline];
   }
 
+  /** Folders agents recently worked in (so a project outside the usual roots is still found). */
+  async function sessionDirs() {
+    const list = await sessions.listSessions({ chats: [] }).catch(() => []);
+    return [...new Set(list.map((s) => s.cwd).filter(Boolean))];
+  }
+
+  /** Every machine's workspaces: [{ node, platform, items }] (a first scan on a machine can take a few seconds). */
+  async function meshWorkspaces({ force = false } = {}) {
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    return Promise.all(nodes.map((n) => (n.self ? sessionDirs().then((extraDirs) => workspaces.list({ force, extraDirs })) : peerJson(n, `workspaces${force ? '?force=1' : ''}`, { timeout: 45000 }))
+      .then((items) => ({ node: n.name, platform: n.platform, items: Array.isArray(items) ? items : [] }))
+      .catch((e) => ({ node: n.name, platform: n.platform, items: [], error: e.message }))));
+  }
+
+  /** "Mad Mike's Garage — Codex developer guide" → "Mad Mike's Garage"; a heading that is just a guide's name → the folder name. */
+  function workspaceLabel(ws) {
+    const head = String(ws.title || '').split(/\s+[—–-]\s+/)[0].trim();
+    return head && !/agents\.md|claude\.md|readme|guide/i.test(head) && head.length <= 40 ? head : ws.name;
+  }
+
+  /**
+   * The router bound parts of a request to workspaces: one project per part, bound to that folder on that
+   * machine, planned by the core brain with the project's own agent guide, then dispatched (an OpenRig team
+   * per project). Returns at once; planning and casting run in the background and report via notify.
+   */
+  async function fileWork(items) {
+    const out = [];
+    for (const it of items) {
+      const ws = it.workspace;
+      const name = truncate(`${workspaceLabel(ws)} · ${it.title || 'work'}`, 60);
+      let p = await planner.createProject({ name, goal: it.goal, repoNode: it.node, repoPath: ws.path });
+      p.workspace = { name: ws.name, title: ws.title, label: workspaceLabel(ws), kinds: ws.kinds, parts: ws.parts, guides: ws.guides, unity: ws.unity };
+      p.request = it.request || '';
+      p = await planner.saveProject(p);
+      out.push({ id: p.id, name: p.name, owner: p.owner, node: it.node, path: ws.path, workspace: p.workspace.label });
+      (async () => {
+        await planner.planProject(p.id, plannerCtx);
+        const d = await planner.dispatchReady(p.id, plannerCtx);
+        if (!d.tasks.some((t) => t.status === 'running')) plannerCtx.notify(`${p.name}: planned ${d.tasks.length} tasks, but none could start — open it on the Work dashboard.`, 'error');
+      })().catch((e) => { log('work:', e.message); plannerCtx.notify(`Couldn't start "${name}": ${e.message}`, 'error'); });
+    }
+    projCache.at = 0;
+    return out;
+  }
+
   /** Mesh-wide app catalog: this node's apps plus every online peer's, with health (src/apps.js). */
   async function meshApps() {
     const nodes = discovery.list().filter((n) => n.online && n.rigs);
@@ -328,6 +374,7 @@ export async function startServer() {
 
     // sessions & agents
     if (sub === 'sessions') return sessions.listSessions({ chats: await chat.listChats() });
+    if (sub === 'workspaces' && method === 'GET') return workspaces.list({ force: q.get('force') === '1', extraDirs: await sessionDirs() });
     if (sub === 'sessions/transcript') {
       const kind = q.get('kind');
       const id = q.get('id');
@@ -359,7 +406,7 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
       const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork });
       } catch (e) {
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
       } finally { clearInterval(hb); res.end(); }
@@ -661,6 +708,12 @@ export async function startServer() {
       return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
+    if (p === '/api/mesh/workspaces') {
+      const catalog = await meshWorkspaces({ force: url.searchParams.get('force') === '1' });
+      const query = url.searchParams.get('q');
+      if (!query) return catalog;
+      return workspaces.resolve({ workspace: query, machine: url.searchParams.get('machine') || '' }, catalog);
+    }
     if (p === '/api/mesh/attention') {
       const nodes = discovery.list().filter((n) => n.online && n.rigs);
       return Promise.all(nodes.map((n) => (n.self ? Promise.resolve(attention.list()) : peerJson(n, 'attention', { timeout: 5000 }))
@@ -865,6 +918,8 @@ export async function startServer() {
     await attention.refresh({ projects });
   };
   setTimeout(() => attentionTick().catch(() => {}), 3000).unref();
+  // Warm the workspace index so the first routed request doesn't wait for a scan.
+  setTimeout(() => sessionDirs().then((extraDirs) => workspaces.list({ extraDirs })).catch(() => {}), 10000).unref();
   setInterval(() => attentionTick().catch((e) => log('attention:', e.message)), 5000).unref();
 
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).

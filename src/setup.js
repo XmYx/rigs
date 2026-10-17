@@ -60,6 +60,7 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   \`mesh_write_file\` act on any machine; \`mesh_sessions\` / \`mesh_session_transcript\` / \`mesh_send\`
   read and drive Claude Code, Codex, OpenRig and chat sessions anywhere; \`mesh_start_agent\` starts a
   new agent on any machine; \`mesh_ask\` asks another machine's brain (e.g. a local Ollama model);
+  \`mesh_workspaces\` finds a code project by (nick)name across all machines ("MadMikeUnity" on "the linux machine");
   \`mesh_notify\` speaks to the user through the JARVIS UI.
 - **REA — Reverse Engineer Anything** (\`rea\` MCP, or \`npx -y rea-agents@latest <command>\`): use it
   whenever asked how an app, binary, Electron/JS bundle, .NET assembly, APK or website works, and to
