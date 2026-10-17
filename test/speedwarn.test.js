@@ -108,6 +108,44 @@ test('warningState: every state, tolerance, camera limit overrides the road limi
   assert.equal(w(), 'none');
 });
 
+test('speedHud: the sign shows the road limit, the camera limit once it counts, nothing when unknown', () => {
+  assert.deepEqual(W.speedHud({ speedKmh: 45, limitKmh: 50 }), { state: 'none', limit: 50, distanceM: null, cameraLimit: null });
+  assert.deepEqual(W.speedHud({ speedKmh: 65, limitKmh: 50 }), { state: 'speeding', limit: 50, distanceM: null, cameraLimit: null });
+  assert.deepEqual(W.speedHud({ speedKmh: 65, limitKmh: 50, camera: { maxspeed: 40 }, distanceM: 300 }), { state: 'camera-speeding', limit: 40, distanceM: 300, cameraLimit: 40 });
+  assert.deepEqual(W.speedHud({ speedKmh: 38, limitKmh: 50, camera: { maxspeed: 40 }, distanceM: 200 }), { state: 'camera-near', limit: 40, distanceM: 200, cameraLimit: 40 });
+  assert.deepEqual(W.speedHud({ speedKmh: 60, limitKmh: 50, camera: { maxspeed: null }, distanceM: 200 }), { state: 'camera-speeding', limit: 50, distanceM: 200, cameraLimit: null }, 'a camera without its own limit keeps the road limit');
+  assert.equal(W.speedHud({ speedKmh: 40, limitKmh: 50, camera: { maxspeed: 30 }, distanceM: 700 }).limit, 50, 'a camera beyond the warning radius does not count yet');
+  assert.equal(W.speedHud({ speedKmh: 52, limitKmh: 50, camera: { maxspeed: 50 }, distanceM: 200 }).state, 'camera-near', 'at the limit (within tolerance) the light is off');
+  assert.equal(W.speedHud({ speedKmh: 90 }).limit, null);
+  assert.equal(W.speedHud().state, 'none');
+});
+
+test('demoCamera and cameraOnRoute: a made-up camera on the longest straight, right-hand side, enforcing the route', () => {
+  // 2 km due north from pos; a turn at 300 m, so the longest stretch is 300 → 2000 m.
+  const north = (m) => [pos.lon, pos.lat + m / M_PER_DEG_LAT];
+  const route = {
+    geometry: [0, 300, 1000, 2000].map(north),
+    steps: [{ type: 'depart', location: north(0) }, { type: 'turn', modifier: 'left', location: north(300) }, { type: 'arrive', location: north(2000) }],
+  };
+  const cam = W.demoCamera(route, [30, 70, 70]);
+  assert.ok(cam.along >= 900 && cam.along <= 1920, `placed with a run-up inside the long stretch (${cam.along})`);
+  assert.ok(cam.lon > pos.lon, 'on the right-hand side of a northbound road');
+  assert.equal(cam.direction, 0);
+  assert.equal(cam.maxspeed, 70, 'the road limit where it stands');
+  assert.equal(W.demoCamera(route, null).maxspeed, 50, 'the fallback when the limit is unknown');
+  assert.equal(W.demoCamera(route, null, { fallbackKmh: 40 }).maxspeed, 40);
+  assert.equal(W.demoCamera({ geometry: [north(0)] }, null), null);
+  assert.ok(W.cameraOnRoute(route, cam));
+  assert.ok(W.cameraOnRoute(route, { ...cam, direction: null }), 'no direction counts both ways');
+  assert.ok(!W.cameraOnRoute(route, { ...cam, direction: 180 }), 'enforcing the other carriageway');
+  assert.ok(!W.cameraOnRoute(route, camAt(1000, 200)), '200 m off the road');
+  // Driving the route towards it: found once within 800 m, gone once passed.
+  const at = (m) => ({ lat: pos.lat + m / M_PER_DEG_LAT, lon: pos.lon });
+  assert.equal(W.nearestCameraAhead(at(cam.along - 900), 0, [cam]), null);
+  assert.ok(Math.abs(W.nearestCameraAhead(at(cam.along - 400), 0, [cam]).distanceM - 400) < 2);
+  assert.equal(W.nearestCameraAhead(at(cam.along + 30), 0, [cam]), null);
+});
+
 test('normalizeCameras: nodes, enforcement relations, direction, no red-light cameras', () => {
   const cams = C.normalizeCameras({ elements: [
     { type: 'node', id: 1, lat: 47.5, lon: 19.05, tags: { highway: 'speed_camera', maxspeed: '50', direction: '90' } },

@@ -1,6 +1,6 @@
 // Speed limits and speed-camera warnings: pure functions shared by the browser (app.js), the server
 // (maxspeed parsing for the Overpass fallback) and the unit tests. No DOM, no network.
-import { angleDelta, bearing, haversine } from './geo.js';
+import { angleDelta, bearing, cumulativeDistances, haversine, pointAlong, projectOnLine, stepOffsets } from './geo.js';
 
 const KMH_PER_MPH = 1.609344;
 
@@ -106,4 +106,53 @@ export function warningState({ speedKmh, limitKmh, camera, distanceM } = {}) {
   const speeding = Number.isFinite(speedKmh) && Number.isFinite(limit) && limit > 0 && speedKmh > limit + speedTolerance(limit);
   if (inRange) return speeding ? 'camera-speeding' : 'camera-near';
   return speeding ? 'speeding' : 'none';
+}
+
+/**
+ * What the HUD shows for one moment: the warning `state`, the `limit` on the round sign (the camera's
+ * own once it counts, else the road's; null = no sign), and while a camera counts its `distanceM` and
+ * `cameraLimit`. Same input as warningState.
+ */
+export function speedHud(input = {}) {
+  const state = warningState(input);
+  const atCamera = state === 'camera-near' || state === 'camera-speeding';
+  const road = Number.isFinite(input.limitKmh) && input.limitKmh > 0 ? input.limitKmh : null;
+  const cameraLimit = atCamera && Number.isFinite(input.camera?.maxspeed) ? input.camera.maxspeed : null;
+  return { state, limit: cameraLimit ?? road, distanceM: atCamera ? input.distanceM : null, cameraLimit };
+}
+
+/**
+ * Does `camera` sit on `route` (within `maxOffsetM` of the line) and enforce the direction the route
+ * travels there? A camera without a direction counts for both ways.
+ */
+export function cameraOnRoute(route, camera, { maxOffsetM = 40, dirTolDeg = 60 } = {}) {
+  if (!route?.geometry?.length || !camera || !Number.isFinite(camera.lat) || !Number.isFinite(camera.lon)) return false;
+  const cum = route.cum || cumulativeDistances(route.geometry);
+  const hit = projectOnLine(route.geometry, cum, camera);
+  if (hit.offset > maxOffsetM) return false;
+  if (!Number.isFinite(camera.direction)) return true;
+  return Math.abs(angleDelta(pointAlong(route.geometry, cum, hit.along).bearing, camera.direction)) <= dirTolDeg;
+}
+
+/**
+ * A made-up camera for the demo drive, so the warning shows without a real one: on the right-hand
+ * roadside of the route's longest stretch between maneuvers, far enough in for a full run-up,
+ * enforcing the route's direction at the road's limit there (`fallbackKmh` when that is unknown).
+ */
+export function demoCamera(route, limits, { fallbackKmh = 50, runUpM = 600, sideM = 6 } = {}) {
+  const coords = route?.geometry;
+  if (!Array.isArray(coords) || coords.length < 2) return null;
+  const cum = route.cum || cumulativeDistances(coords);
+  const total = cum[cum.length - 1];
+  const marks = [0, ...stepOffsets(coords, cum, route.steps || []), total].sort((a, b) => a - b);
+  let from = 0, to = total;
+  for (let i = 1; i < marks.length; i++) if (marks[i] - marks[i - 1] > to - from) { from = marks[i - 1]; to = marks[i]; }
+  const len = to - from;
+  const along = from + Math.max(0, Math.max(Math.min(runUpM, len - 80), Math.min(len * 0.7, len - 80)));
+  const p = pointAlong(coords, cum, Math.max(0, Math.min(total, along)));
+  const side = ((p.bearing + 90) * Math.PI) / 180;
+  const lat = p.lat + (sideM * Math.cos(side)) / 111320;
+  const lon = p.lon + (sideM * Math.sin(side)) / (111320 * Math.cos((p.lat * Math.PI) / 180));
+  const road = Array.isArray(limits) && Number.isFinite(limits[p.index]) && limits[p.index] > 0 ? limits[p.index] : null;
+  return { id: 'demo', demo: true, lat, lon, maxspeed: road ?? fallbackKmh, direction: Math.round(p.bearing), along };
 }

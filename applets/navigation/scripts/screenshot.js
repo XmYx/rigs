@@ -5,6 +5,12 @@
 //
 //   node applets/navigation/scripts/screenshot.js <url> <out.png> [WIDTHxHEIGHT] [--wait=8] [--chrome=path] [--swiftshader]
 //     [--eval='<js run in the page once it is ready, before sampling>']
+//     [--until='<js expression; after --eval, wait (up to 40 s) until it is truthy, then sample and shoot>']
+//     [--reduced-motion]   emulate prefers-reduced-motion: reduce
+//
+// The speed-warning states come from the demo car, e.g. a red/blue camera light on a phone:
+//   … '?demo=1' docs/screenshot-speed-camera-phone.png 390x844 --wait=1 \
+//     --eval='__nav.demo.scenario("camera-speeding")' --until='__nav.warn?.state === "camera-speeding" && __nav.map.areTilesLoaded()'
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -60,6 +66,7 @@ try {
   await send('Network.enable');
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: mobile ? 2 : 1, mobile });
   if (mobile) await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  if (flag('reduced-motion')) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   await send('Page.enable');
   await send('Page.navigate', { url });
 
@@ -73,6 +80,12 @@ try {
     if (state?.loaded && (!isDemo || state.fixes > 5)) break;
   }
   if (opt('eval', null)) console.error('eval →', JSON.stringify((await send('Runtime.evaluate', { expression: opt('eval'), awaitPromise: true, returnByValue: true })).result?.result?.value));
+  let until = null;
+  if (opt('until', null)) {
+    const u0 = Date.now();
+    while (!(until = await evaluate(`!!(${opt('until')})`)) && Date.now() - u0 < 40000) await sleep(250);
+    if (!until) { problems.push('--until never became true: ' + opt('until')); process.exitCode = 1; }
+  }
   const samples = [];
   for (let i = 0; i < waitS * 2; i++) {
     await sleep(500);
@@ -82,7 +95,8 @@ try {
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   fs.writeFileSync(out, Buffer.from(shot.result.data, 'base64'));
-  console.log(JSON.stringify({ out, size, state, renderer, samples, problems }, null, 2));
+  const warn = await evaluate(`JSON.stringify(window.__nav?.warn ? { state: __nav.warn.state, limit: __nav.warn.limit, distanceM: __nav.warn.distanceM && Math.round(__nav.warn.distanceM) } : null)`);
+  console.log(JSON.stringify({ out, size, state, renderer, samples, until, warn: JSON.parse(warn || 'null'), problems }, null, 2));
 } catch (e) {
   console.error('screenshot failed:', e.message);
   process.exitCode = 1;

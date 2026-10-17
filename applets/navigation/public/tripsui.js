@@ -4,6 +4,7 @@
 // and the trip recorder keep running underneath all of it; leaving a view or the replay hands the
 // camera and the HUD back to live navigation.
 import { lerpHeading, zoomForSpeed } from './geo.js';
+import { speedHud } from './speedwarn.js';
 import { speedProfile } from './tripstats.js';
 import * as V from './tripsview.js';
 
@@ -546,7 +547,9 @@ export function createTripsUi({ state, map, renderHud, setFollow, status, pitch,
         padding: { top: Math.round(map.getContainer().clientHeight * 0.38), bottom: 0, left: 0, right: 0 },
       });
     }
-    state.replay.hud = { speed: p.v, heading: p.heading, source: 'replay' };
+    // The limit sign, camera chip and light as they were: from what the recorder kept with each fix.
+    const warn = speedHud({ speedKmh: p.v * 3.6, limitKmh: p.lim, camera: p.camD != null ? { maxspeed: p.camLim } : null, distanceM: p.camD });
+    state.replay.hud = { speed: p.v, heading: p.heading, source: 'replay', warn };
     if (force || now - r.hudAt > 100) {
       r.hudAt = now;
       renderHud();

@@ -3,7 +3,8 @@
 // Deleting moves the file into trash/ beside it; nothing is ever hard-deleted here.
 //
 //   <dir>/<id>.json        {v, id, status: 'recording'|'done', source, createdAt, updatedAt, endReason,
-//                           seqs: [chunk numbers seen], points: [{t, lat, lon, speed, heading, accuracy, alt}],
+//                           seqs: [chunk numbers seen], points: [{t, lat, lon, speed, heading, accuracy, alt,
+//                           lim?, camD?, camLim?}] (the road limit and the camera ahead the driver was shown),
 //                           summary (tripStats without the timeline, cached once the trip is done),
 //                           title?, places?}
 //   <dir>/trash/<id>.json  the same, after DELETE
@@ -33,7 +34,10 @@ export function normalizePoint(p) {
   if (!p || typeof p !== 'object') return null;
   const t = num(p.t), lat = num(p.lat), lon = num(p.lon);
   if (t == null || lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-  return { t, lat, lon, speed: num(p.speed), heading: num(p.heading), accuracy: num(p.accuracy), alt: num(p.alt) };
+  const out = { t, lat, lon, speed: num(p.speed), heading: num(p.heading), accuracy: num(p.accuracy), alt: num(p.alt) };
+  // What the speed warning saw (km/h, m), only on fixes that had it, so a replay shows the same states.
+  for (const k of ['lim', 'camD', 'camLim']) if (num(p[k]) != null) out[k] = p[k];
+  return out;
 }
 
 /**

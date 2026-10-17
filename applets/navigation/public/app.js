@@ -1,14 +1,16 @@
 // Navigation applet UI: MapLibre GL over free OpenStreetMap vector tiles, a JARVIS-style HUD (speed,
 // heading, next turn, ETA), a follow-me 3D camera, destination search + routing through the applet
 // server, traffic (streets shaded by congestion, little cars moving around you) and ?demo=1 which
-// drives a simulated vehicle so it all works without GPS. Every drive is recorded as a trip (trips.js;
-// ?record=0 turns that off, and the demo records only with ?record=1); the Trips panel (tripsui.js)
-// lists, charts, replays and maps them.
+// drives a simulated vehicle so it all works without GPS. Speed limits and speed cameras (speedwarn.js)
+// put a round limit sign by the speedometer and a red/blue light when speeding towards a camera. Every
+// drive is recorded as a trip (trips.js; ?record=0 turns that off, and the demo records only with
+// ?record=1); the Trips panel (tripsui.js) lists, charts, replays and maps them.
 import {
   bearing, cardinal, createMotionEstimator, formatDistance, formatDuration, kmhToMs, lerpHeading,
-  maneuverArrow, maneuverText, pointAlong, cumulativeDistances, routeProgress, speedIn, zoomForSpeed,
+  maneuverArrow, maneuverText, msToKmh, pointAlong, projectOnLine, cumulativeDistances, routeProgress, speedIn, zoomForSpeed,
 } from './geo.js';
 import { buildStyle, routeLayers, trafficLayers } from './mapstyle.js';
+import { cameraOnRoute, currentLimit, demoCamera, nearestCameraAhead, speedHud } from './speedwarn.js';
 import { createTrafficSim, shadeFeatures } from './traffic.js';
 import { installTripRecorder } from './trips.js';
 import { createTripsUi } from './tripsui.js';
@@ -19,6 +21,7 @@ const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo') && params.get('demo') !== '0';
 const RECORD = DEMO ? params.get('record') === '1' : params.get('record') !== '0';
 const DEMO_TICK_MS = 200;
+const DEMO_LIMIT_KMH = 50; // the demo's road limit where the real one isn't known (yet)
 const PITCH = 60;
 
 const store = {
@@ -33,7 +36,8 @@ const state = {
   mapLoaded: false, driving: false, fixes: 0,
   traffic: { on: store.get('traffic', '1') !== '0', source: null, segments: 0, cars: 0, updated: null },
   trip: null, // trip recorder status: {recording, id, points, outbox, …} (trips.js)
-  replay: null, // while a trip replays: {hud: {speed, heading, source}} shown instead of the live values
+  replay: null, // while a trip replays: {hud: {speed, heading, source, warn}} shown instead of the live values
+  warn: null, // speed warning: speedHud() + {roadLimit, camera, cameraM} (the nearest camera ahead, counted or not)
 };
 window.__nav = state; // inspection hook for screenshots and debugging
 
@@ -145,11 +149,15 @@ function startMap() {
     map.addLayer(tl.shade, 'building-3d');
     map.addSource('route', { type: 'geojson', data: emptyLine() });
     for (const l of routeLayers('route')) map.addLayer(l);
+    map.addImage('nav-cam', cameraIcon('#00ff88', 'rgba(0, 255, 136, 0.7)'), { pixelRatio: 2 });
+    map.addImage('nav-cam-hot', cameraIcon('#ff3b5c', 'rgba(255, 59, 92, 0.9)'), { pixelRatio: 2 });
+    map.addSource('speedcams', { type: 'geojson', data: emptyLine() });
+    map.addLayer(cameraLayer('speedcams'));
     map.addLayer(tl.cars);
     for (const id of ['traffic-shade', 'traffic-cars']) map.setLayoutProperty(id, 'visibility', state.traffic.on ? 'visible' : 'none');
     map.on('moveend', () => {
       // The follow camera eases every tick, so this is a trailing timer rather than a resetting one.
-      if (!trafficTimer) trafficTimer = setTimeout(() => { trafficTimer = null; refreshTraffic(); }, 500);
+      if (!trafficTimer) trafficTimer = setTimeout(() => { trafficTimer = null; refreshTraffic(); refreshAreaCameras(); }, 500);
     });
     vehicle = new maplibregl.Marker({ element: vehicleEl(), rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(center);
     state.mapLoaded = true;
@@ -158,6 +166,7 @@ function startMap() {
     renderHud();
     if (DEMO) startDemo(); else startGps();
     refreshTraffic();
+    refreshAreaCameras();
   });
 }
 
@@ -174,7 +183,6 @@ let camHeading = null;
 
 function onFix(fix) {
   state.fixes++;
-  recorder?.addFix(fix);
   const m = motion.update(fix);
   state.pos = fix;
   state.speed = m.speed;
@@ -186,6 +194,10 @@ function onFix(fix) {
     if (!vehicleShown) { vehicle.addTo(state.map); vehicleShown = true; }
   }
   if (state.route) updateProgress(fix);
+  updateWarning();
+  // The trip keeps what the warning saw, so its replay shows the same sign, chip and light.
+  const w = state.warn;
+  recorder?.addFix({ ...fix, lim: w.roadLimit, camD: w.cameraM, camLim: w.camera?.maxspeed });
   if (state.replay) return; // the replay owns the camera and the HUD; recording and the live marker carry on
   if (state.follow) followCam(fix, DEMO ? DEMO_TICK_MS * 1.1 : 1000);
   renderHud();
@@ -273,6 +285,7 @@ function setRoute(route) {
   $('turn').hidden = false;
   $('eta').hidden = false;
   if (state.pos) updateProgress(state.pos);
+  loadRouteSpeed(route);
   renderHud();
   refreshTraffic(); // the route changes the assumed traffic along it
 }
@@ -287,6 +300,7 @@ function clearRoute() {
   $('eta').hidden = true;
   $('q').value = '';
   if (DEMO) sim.stop();
+  clearRouteSpeed();
 }
 
 function updateProgress(fix) {
@@ -343,7 +357,7 @@ const FALLBACK_ROUTE = {
 };
 
 function createSimulator(emit) {
-  let route = null, cum = null, along = 0, v = 0, timer = null, last = 0, restart = null;
+  let route = null, cum = null, along = 0, v = 0, timer = null, last = 0, restart = null, hold = null;
   function tick() {
     const now = performance.now();
     const dt = Math.min(0.5, (now - last) / 1000);
@@ -351,12 +365,10 @@ function createSimulator(emit) {
     const total = cum[cum.length - 1];
     const here = pointAlong(route.geometry, cum, along);
     const pr = routeProgress(route, here);
-    // Cruise speed wanders between ~25 and ~80 km/h; brake for the next maneuver like a driver would.
-    const cruise = kmhToMs(52 + 20 * Math.sin(along / 350) + 8 * Math.sin(along / 97));
-    const turnV = kmhToMs(pr.nextStep?.type === 'arrive' ? 0 : 20);
-    const brake = Math.sqrt(turnV * turnV + 2 * 1.6 * Math.max(0, pr.toNext - 10));
-    const vt = Math.min(cruise, brake);
-    v = Math.max(0, v + Math.max(-3.2 * dt, Math.min(2.4 * dt, vt - v)));
+    const ahead = along + 1 < total ? bearing(here, pointAlong(route.geometry, cum, along + 12)) : here.bearing;
+    const vt = hold && now < hold.until ? kmhToMs(hold.kmh) : demoTarget(pr, here, ahead);
+    if (hold && now < hold.until) v = vt; // a held speed (screenshots) applies at once
+    else v = Math.max(0, v + Math.max(-3.2 * dt, Math.min(2.4 * dt, vt - v)));
     along = Math.min(total, along + v * dt);
     const p = pointAlong(route.geometry, cum, along);
     const heading = along + 1 < total ? bearing(p, pointAlong(route.geometry, cum, along + 12)) : p.bearing;
@@ -366,6 +378,21 @@ function createSimulator(emit) {
       status('Demo: arrived — looping the drive in 4 s');
       restart = setTimeout(() => drive(route, { fromStart: true }), 4000);
     }
+  }
+  // The demo driver (m/s): wanders from ~15 km/h under the limit to ~15 over it; with a camera ahead
+  // keeps going too fast until ~130 m before it (the light comes on), then brakes under its limit
+  // (the light goes out); brakes for the next maneuver like a driver would.
+  function demoTarget(pr, here, heading) {
+    const limit = roadLimit(pr) ?? DEMO_LIMIT_KMH;
+    let kmh = limit - 2 + 13 * Math.sin(along / 300) + 4 * Math.sin(along / 97);
+    const cam = nearestCameraAhead(here, heading, activeCameras());
+    if (cam) {
+      const camLimit = cam.camera.maxspeed ?? limit;
+      kmh = cam.distanceM > 130 ? camLimit + 14 : camLimit - 6;
+    }
+    const turnV = kmhToMs(pr.nextStep?.type === 'arrive' ? 0 : 20);
+    const brake = Math.sqrt(turnV * turnV + 2 * 1.6 * Math.max(0, pr.toNext - 10));
+    return Math.min(kmhToMs(Math.max(15, kmh)), brake);
   }
   function drive(r, { fromStart = false } = {}) {
     stop();
@@ -382,10 +409,45 @@ function createSimulator(emit) {
     timer = null;
     state.driving = false;
   }
-  return { drive, stop };
+  /** Jump to `m` metres along the route (the follow camera catches up). */
+  function seek(m) {
+    if (!route) return;
+    along = Math.max(0, Math.min(cum[cum.length - 1] - 1, m));
+    if (!timer) drive(route);
+  }
+  /** Drive at exactly `kmh` for `ms`, then let the demo driver take over again. */
+  function setHold(kmh, ms = 8000) { hold = { kmh, until: performance.now() + ms }; }
+  return { drive, stop, seek, hold: setHold, at: () => ({ route, cum, along }) };
 }
 
 const sim = createSimulator(onFix);
+
+// For screenshots and trying the HUD: put the demo car where it shows one warning state.
+// __nav.demo.scenario('none' | 'speeding' | 'camera-near' | 'camera-speeding') → true when it could.
+if (DEMO) state.demo = { seek: sim.seek, hold: sim.hold, scenario: demoScenario };
+
+function demoScenario(name) {
+  const { route, cum } = sim.at();
+  if (!route) return false;
+  const total = cum[cum.length - 1];
+  const cams = activeCameras().map((c) => ({ c, along: projectOnLine(route.geometry, cum, c).along }));
+  const limitAt = (m) => roadLimit({ index: pointAlong(route.geometry, cum, m).index }) ?? DEMO_LIMIT_KMH;
+  if (name === 'camera-near' || name === 'camera-speeding') {
+    const cam = cams.find((x) => x.along > 450 && cameraOnRoute(route, x.c)) || cams.find((x) => x.along > 450);
+    if (!cam) return false;
+    const camLimit = cam.c.maxspeed ?? limitAt(cam.along);
+    sim.seek(cam.along - (name === 'camera-speeding' ? 380 : 260));
+    sim.hold(name === 'camera-speeding' ? camLimit + 15 : camLimit - 8);
+    return true;
+  }
+  // Somewhere with no camera within 900 m ahead, clear of the route's ends.
+  const spot = [150, 400, 800, 1200, 1600, 2000].map((m) => Math.min(m, total - 200))
+    .find((m) => m > 0 && !cams.some((x) => x.along > m - 20 && x.along - m < 900));
+  if (spot == null) return false;
+  sim.seek(spot);
+  sim.hold(name === 'speeding' ? limitAt(spot) + 15 : limitAt(spot) - 8);
+  return true;
+}
 
 async function startDemo() {
   const { from, to } = state.cfg.demo;
@@ -531,6 +593,159 @@ document.addEventListener('visibilitychange', () => {
 });
 setInterval(refreshTraffic, 15000); // cheap: it only fetches when the answer is a minute old
 
+// ---- Speed limits and cameras ------------------------------------------------------------------
+
+// With a route: its road limits (api/route, else api/route/limits) and the cameras along it
+// (api/speedcams?route=), fetched once per route. Without one: the cameras round the vehicle or the
+// map centre (api/speedcams?bbox=), throttled. The demo adds a made-up camera on its route when no
+// real one enforces it. Every fix then gets a warning state (speedwarn.js) the HUD shows.
+const CAM_AREA_DEG = 0.06;      // bbox lookups reach this far from the vehicle/map centre (°), within the view
+const CAM_GRID = 0.02;          // …snapped outward to this grid, so small moves reuse the last answer
+const CAM_MIN_ZOOM = 11;        // zoomed further out, no lookups
+const CAM_AREA_POLL_MS = 120000;
+const CAM_AREA_MIN_MS = 10000;  // at most one bbox lookup this often
+const CAM_RETRY_MS = 60000;     // Overpass busy or down: try a route's data again after this, twice
+const cams = { routeId: null, limits: null, route: [], area: [], demo: null, areaKey: '', areaAt: 0, retry: null, shown: '' };
+
+async function getJson(url) {
+  try {
+    const r = await fetch(url);
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+
+const roadLimit = (pr) => currentLimit(pr, cams.limits);
+
+function activeCameras() {
+  if (!state.route) return cams.area;
+  return cams.demo ? [...cams.route, cams.demo] : cams.route;
+}
+
+function loadRouteSpeed(route) {
+  clearTimeout(cams.retry);
+  cams.routeId = route.routeId || null;
+  cams.limits = Array.isArray(route.limits) ? route.limits : null;
+  cams.route = [];
+  seedDemoCamera();
+  if (cams.routeId) fetchRouteSpeed(route, 0); // the built-in fallback line has no server-side route
+}
+
+async function fetchRouteSpeed(route, attempt) {
+  const id = route.routeId;
+  const [lim, cam] = await Promise.all([
+    cams.limits ? null : getJson(`api/route/limits?route=${encodeURIComponent(id)}`),
+    getJson(`api/speedcams?route=${encodeURIComponent(id)}`),
+  ]);
+  if (cams.routeId !== id) return; // re-routed meanwhile
+  if (Array.isArray(lim?.limits)) cams.limits = lim.limits;
+  if (Array.isArray(cam?.cameras)) cams.route = cam.cameras;
+  seedDemoCamera();
+  if (attempt < 2 && (!cams.limits || cam?.status !== 'ok')) cams.retry = setTimeout(() => fetchRouteSpeed(route, attempt + 1), CAM_RETRY_MS);
+}
+
+function clearRouteSpeed() {
+  clearTimeout(cams.retry);
+  Object.assign(cams, { routeId: null, limits: null, route: [], demo: null, areaKey: '' });
+  updateWarning();
+  renderHud();
+  refreshAreaCameras();
+}
+
+/** The demo's own camera, unless a real one on the route enforces its direction. */
+function seedDemoCamera() {
+  cams.shown = ''; // the list (or the demo camera's limit) may have changed
+  cams.demo = DEMO && state.route && !cams.route.some((c) => cameraOnRoute(state.route, c)) ? demoCamera(state.route, cams.limits, { fallbackKmh: DEMO_LIMIT_KMH }) : null;
+  updateWarning();
+  renderCameras();
+}
+
+/** Cameras round the vehicle (or the map centre) while there is no route. */
+async function refreshAreaCameras() {
+  if (!state.mapLoaded || state.route || document.hidden || state.map.getZoom() < CAM_MIN_ZOOM) return;
+  const c = state.pos ? [state.pos.lon, state.pos.lat] : state.map.getCenter().toArray();
+  const b = state.map.getBounds();
+  const snap = (v, round) => Number((round(v / CAM_GRID) * CAM_GRID).toFixed(3));
+  const bbox = [
+    snap(Math.max(b.getWest(), c[0] - CAM_AREA_DEG), Math.floor), snap(Math.max(b.getSouth(), c[1] - CAM_AREA_DEG), Math.floor),
+    snap(Math.min(b.getEast(), c[0] + CAM_AREA_DEG), Math.ceil), snap(Math.min(b.getNorth(), c[1] + CAM_AREA_DEG), Math.ceil),
+  ].join(',');
+  const since = Date.now() - cams.areaAt;
+  if ((bbox === cams.areaKey && since < CAM_AREA_POLL_MS) || since < CAM_AREA_MIN_MS) return;
+  cams.areaKey = bbox;
+  cams.areaAt = Date.now();
+  const data = await getJson('api/speedcams?bbox=' + bbox);
+  if (state.route || cams.areaKey !== bbox) return;
+  if (Array.isArray(data?.cameras)) { cams.area = data.cameras; cams.shown = ''; }
+  if (data?.status !== 'ok') cams.areaAt = Date.now() - CAM_AREA_POLL_MS + CAM_RETRY_MS; // ask again in a minute
+  updateWarning();
+  renderCameras();
+}
+setInterval(refreshAreaCameras, 15000); // cheap: it only fetches when the view moved on or the answer is old
+
+/** The warning for the current position, speed and heading: state.warn (see its comment). */
+function updateWarning() {
+  const pos = state.pos;
+  const road = state.route ? roadLimit(state.progress) ?? (DEMO ? DEMO_LIMIT_KMH : null) : null;
+  const hit = pos ? nearestCameraAhead(pos, state.heading, activeCameras()) : null;
+  const speedKmh = state.speed == null ? null : msToKmh(state.speed);
+  state.warn = { ...speedHud({ speedKmh, limitKmh: road, camera: hit?.camera, distanceM: hit?.distanceM }), roadLimit: road, camera: hit?.camera ?? null, cameraM: hit?.distanceM ?? null };
+  renderCameras();
+}
+
+/** Camera markers; the one that counts right now turns red. Only re-uploaded when that changes. */
+function renderCameras() {
+  if (!state.mapLoaded) return;
+  const list = activeCameras();
+  const hot = state.warn?.distanceM != null ? state.warn.camera : null;
+  const key = `${list.length}:${list[0]?.id}:${list[list.length - 1]?.id}:${hot?.id ?? ''}`;
+  if (key === cams.shown) return;
+  cams.shown = key;
+  state.map.getSource('speedcams').setData({
+    type: 'FeatureCollection',
+    features: list.map((c) => ({
+      type: 'Feature',
+      properties: { id: c.id, hot: c === hot, ...(Number.isFinite(c.maxspeed) ? { limit: c.maxspeed } : {}) },
+      geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
+    })),
+  });
+}
+
+function cameraLayer(source) {
+  return {
+    id: source, type: 'symbol', source, minzoom: 11,
+    layout: {
+      'icon-image': ['case', ['get', 'hot'], 'nav-cam-hot', 'nav-cam'],
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.55, 16, 1],
+      'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-pitch-alignment': 'viewport',
+      'text-field': ['to-string', ['coalesce', ['get', 'limit'], '']],
+      'text-font': ['Noto Sans Bold'], 'text-size': 10, 'text-offset': [0, 1.6], 'text-optional': true, 'text-allow-overlap': true,
+    },
+    paint: { 'text-color': '#eafff4', 'text-halo-color': '#010403', 'text-halo-width': 1.5 },
+  };
+}
+
+/** A small speed-camera badge (dark box, glowing outline, camera glyph) for map.addImage at pixelRatio 2. */
+function cameraIcon(color, glow) {
+  const r = 2, w = 30, h = 30;
+  const c = document.createElement('canvas');
+  c.width = w * r; c.height = h * r;
+  const g = c.getContext('2d');
+  g.scale(r, r);
+  g.shadowColor = glow; g.shadowBlur = 6;
+  g.fillStyle = 'rgba(2, 14, 9, 0.92)';
+  g.strokeStyle = color; g.lineWidth = 1.6;
+  g.beginPath(); g.roundRect(4, 4, 22, 22, 5); g.fill(); g.stroke();
+  g.shadowBlur = 0;
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(8, 11, 14, 10, 2); g.fill();  // body
+  g.fillRect(11, 9, 5, 2.5);                               // top
+  g.fillStyle = 'rgba(2, 14, 9, 1)';
+  g.beginPath(); g.arc(15, 16, 3.2, 0, Math.PI * 2); g.fill(); // lens
+  g.fillStyle = color;
+  g.beginPath(); g.arc(15, 16, 1.6, 0, Math.PI * 2); g.fill();
+  return { width: c.width, height: c.height, data: g.getImageData(0, 0, c.width, c.height).data };
+}
+
 // ---- HUD ---------------------------------------------------------------------------------------
 
 const GAUGE_MAX_KMH = 160;
@@ -547,6 +762,8 @@ function renderHud() {
   const frac = live.speed == null ? 0 : Math.min(1, speedIn(live.speed, 'kmh') / GAUGE_MAX_KMH);
   $('gauge-arc').style.strokeDashoffset = String(75 * (1 - frac));
 
+  renderWarn(live.warn, unit);
+
   const h = live.heading;
   $('hdg').textContent = h == null ? '— ---°' : `${cardinal(h)} ${String(Math.round(h) % 360).padStart(3, '0')}°`;
   renderCompass();
@@ -562,6 +779,37 @@ function renderHud() {
     $('eta-time').textContent = arrive.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     $('eta-dist').textContent = formatDistance(pr.remaining, unit);
     $('eta-left').textContent = formatDuration(pr.timeLeft);
+  }
+}
+
+const WARN_SAY = {
+  'speeding': 'Over the speed limit',
+  'camera-near': 'Speed camera ahead',
+  'camera-speeding': 'Speed camera ahead. Slow down',
+};
+let warnSaid = 'none';
+
+/** The limit sign, the camera chip and the red/blue light for a speedHud() result (live or replayed). */
+function renderWarn(w, unit) {
+  const st = w?.state || 'none';
+  const lim = w?.limit ?? null;
+  const limText = lim == null ? '' : String(Math.round(unit === 'mph' ? lim / 1.609344 : lim));
+  const unitText = unit === 'mph' ? 'mph' : 'km/h';
+  $('limit').hidden = lim == null;
+  $('limit-val').textContent = limText;
+  $('limit').classList.toggle('wide', limText.length > 2);
+  $('limit').setAttribute('aria-label', lim == null ? 'No speed limit known' : `Speed limit ${limText} ${unitText}`);
+  document.body.dataset.warn = st;
+  const atCamera = st === 'camera-near' || st === 'camera-speeding';
+  $('cam').hidden = !atCamera;
+  if (atCamera) {
+    $('cam-dist').textContent = formatDistance(w.distanceM, unit);
+    $('cam-text').textContent = st === 'camera-near' ? 'Speed camera' : lim == null ? 'Slow down' : `Slow down · ${limText}`;
+  }
+  $('police').hidden = st !== 'camera-speeding';
+  if (st !== warnSaid) { // screen readers hear the state change, not every distance tick
+    warnSaid = st;
+    $('warn-say').textContent = WARN_SAY[st] ? WARN_SAY[st] + (lim == null ? '' : `, limit ${limText} ${unitText}`) : '';
   }
 }
 

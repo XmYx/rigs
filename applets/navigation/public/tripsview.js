@@ -97,18 +97,24 @@ export function replayTrack(profile, { lookM = 8, lookMs = 30000 } = {}) {
   return { pts, t0: pts[0]?.t ?? 0, t1: pts[pts.length - 1]?.t ?? 0 };
 }
 
-/** Where the replay is at time `t` (ms): {lat, lon, v, heading, i}, interpolated between the fixes around it. */
+/**
+ * Where the replay is at time `t` (ms): {lat, lon, v, heading, i, lim, camD, camLim}, interpolated
+ * between the fixes around it. lim/camD/camLim are what the speed warning saw then (null when not recorded).
+ */
 export function replayAt(track, t) {
   const { pts } = track;
   if (!pts.length) return null;
-  if (t <= pts[0].t) return { lat: pts[0].lat, lon: pts[0].lon, v: pts[0].v, heading: pts[0].h, i: 0 };
+  const warn = (p, camD = p.camD) => ({ lim: p.lim ?? null, camD: camD ?? null, camLim: p.camLim ?? null });
+  if (t <= pts[0].t) return { lat: pts[0].lat, lon: pts[0].lon, v: pts[0].v, heading: pts[0].h, i: 0, ...warn(pts[0]) };
   const n = pts.length - 1;
-  if (t >= pts[n].t) return { lat: pts[n].lat, lon: pts[n].lon, v: pts[n].v, heading: pts[n].h, i: n };
+  if (t >= pts[n].t) return { lat: pts[n].lat, lon: pts[n].lon, v: pts[n].v, heading: pts[n].h, i: n, ...warn(pts[n]) };
   let lo = 0, hi = n;
   while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid].t <= t) lo = mid; else hi = mid; }
   const a = pts[lo], b = pts[hi];
   const f = (t - a.t) / (b.t - a.t || 1);
-  return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f, v: a.v + (b.v - a.v) * f, heading: lerpHeading(a.h, b.h, f), i: lo };
+  // The camera distance counts down smoothly while both fixes saw it; otherwise it holds the earlier fix's.
+  const camD = Number.isFinite(a.camD) && Number.isFinite(b.camD) ? a.camD + (b.camD - a.camD) * f : a.camD;
+  return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f, v: a.v + (b.v - a.v) * f, heading: lerpHeading(a.h, b.h, f), i: lo, ...warn(a, camD) };
 }
 
 /** Date-range filter → `since` in ms, or null for all time. */
