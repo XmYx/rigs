@@ -104,7 +104,7 @@ ${p.workspace ? `\nWORKSPACE:\n${workspaceBrief(p)}\n` : ''}${guide ? `\nTHE PRO
 MACHINES:
 ${meshBrief(snapshot)}
 
-ROUTING POLICY (task kind → provider/model/effort; machines are chosen by RIGS afterwards): ${rules}
+ROUTING POLICY (task kind → provider/model/effort; machines are chosen by RIGS afterwards): ${rules}${avoided().length ? `\nSWITCHED OFF FOR NOW (never suggest them): ${avoided().join(', ')}` : ''}
 
 Rules:
 - 2 to 12 tasks. Each must be doable by one agent in one session and have a verifiable outcome.
@@ -299,6 +299,7 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
     const suggested = picks === 'all' ? normProvider(suggestText) : '';
     let providers = [suggested, first, rule.provider, ...PROVIDER_ORDER].filter((x, i, a) => x && a.indexOf(x) === i);
     if (t.kind === 'private') providers = ['ollama'];
+    providers = providers.filter((x) => !avoided().includes(x));
     let best = null;
     for (const provider of providers) {
       for (const e of live) {
@@ -465,7 +466,7 @@ export async function dispatchReady(id, ctx, { only } = {}) {
     }
     await saveProject(p);
   }
-  if (started.length) ctx.notify?.(`${p.name}: started ${started.length} task${started.length > 1 ? 's' : ''} (${started.map((x) => p.tasks.find((t) => t.id === x).assign.node).join(', ')}).`);
+  if (started.length) tell(ctx, p, `${p.name}: started ${started.length} task${started.length > 1 ? 's' : ''} (${started.map((x) => p.tasks.find((t) => t.id === x).assign.node).join(', ')}).`);
   if (!only) await settle(p, ctx);
   return p;
 }
@@ -497,6 +498,20 @@ export function finalReport(p, { merged = '' } = {}) {
   return `${spoken}\n---\n${merged ? `Merged as ${merged}.\n\n` : ''}${lines.join('\n')}`;
 }
 
+/**
+ * Tell Sir about a project: a toast + speech now, and — for results and problems — a message written into the
+ * JARVIS thread (and the thread the request came from), so nothing is lost when no screen is open.
+ */
+export function tell(ctx, p, text, level = 'info', { keep = false } = {}) {
+  ctx?.notify?.(text, level);
+  if ((keep || level === 'error') && ctx?.report) Promise.resolve(ctx.report(p, text, level)).catch(() => {});
+}
+
+/** Providers Sir switched off for now (routing.avoid, e.g. ["codex"]): never planned or placed. */
+export function avoided() {
+  return (config().routing?.avoid || []).map((x) => String(x).toLowerCase());
+}
+
 /** After any change: finish, hand a RIGS change to the merge steward, or escalate a project nothing can move. */
 async function settle(p, ctx) {
   if (p.main) return; // the standing project never finishes; each task reports on its own
@@ -508,16 +523,17 @@ async function settle(p, ctx) {
         p.selfDev = { ...p.selfDev, request: r.id, steward: r.steward, proposedAt: Date.now() };
         p.status = 'merging';
         event(p, `all tasks done — proposed ${p.selfDev.branch} to the merge steward on ${r.steward}`);
-        ctx.notify?.(`${p.name}: all tasks done and verified — handed to the merge steward for tests, merge and rollout.`);
+        tell(ctx, p, `${p.name}: all tasks done and verified — handed to the merge steward for tests, merge and rollout.`, 'info', { keep: true });
       } catch (e) {
         p.status = 'blocked';
         event(p, 'propose failed: ' + e.message);
-        ctx.notify?.(`${p.name}: the work is done but proposing it failed — ${truncate(e.message, 160)}.`, 'error');
+        tell(ctx, p, `${p.name}: the work is done but proposing it failed — ${truncate(e.message, 160)}.`, 'error');
       }
     } else {
       p.status = 'done';
       event(p, 'all tasks done');
-      ctx?.notify?.(finalReport(p));
+      tell(ctx, p, finalReport(p), 'info', { keep: true });
+      ctx?.release?.(p);
     }
     await saveProject(p);
     return;
@@ -527,7 +543,7 @@ async function settle(p, ctx) {
   if (!moving && stuck.length && p.status === 'running') {
     p.status = 'blocked';
     event(p, `blocked on ${stuck.map((x) => x.id).join(', ')}`);
-    ctx?.notify?.(`${p.name} needs you: ${stuck.map((x) => `“${x.title}” ${x.status}${x.summary ? ' — ' + truncate(x.summary, 120) : ''}`).join('; ')}.`, 'error');
+    tell(ctx, p, `${p.name} needs you: ${stuck.map((x) => `“${x.title}” ${x.status}${x.summary ? ' — ' + truncate(x.summary, 120) : ''}`).join('; ')}.`, 'error');
     await saveProject(p);
   }
 }
@@ -541,13 +557,13 @@ export async function updateTask(id, taskId, { status, summary, assign }, ctx) {
   if (status) {
     event(p, `${t.id} → ${status}${summary ? ': ' + truncate(summary, 160) : ''}`);
     if (status === 'failed' && ctx && retryOrFail(p, t, summary || 'the agent reported failure') === 'retry') {
-      ctx.notify?.(`${p.name}: “${t.title}” failed — trying once more with what went wrong.`);
+      tell(ctx, p, `${p.name}: “${t.title}” failed — trying once more with what went wrong.`);
     } else {
       t.status = status;
       if (summary !== undefined) t.summary = truncate(summary, 4000);
       if (status === 'todo') { t.run = null; t.attempts = 0; }
-      if (status === 'done') ctx?.notify?.(`${p.name}: task “${t.title}” finished on ${t.assign?.node}.`);
-      if (status === 'blocked' || status === 'failed') ctx?.notify?.(`${p.name}: task “${t.title}” is ${status}${summary ? ' — ' + truncate(summary, 140) : ''}.`, 'error');
+      if (status === 'done') tell(ctx, p, `${p.name}: task “${t.title}” finished on ${t.assign?.node}${summary ? ' — ' + truncate(summary, 600) : '.'}`, 'info', { keep: true });
+      if (status === 'blocked' || status === 'failed') tell(ctx, p, `${p.name}: task “${t.title}” is ${status}${summary ? ' — ' + truncate(summary, 140) : ''}.`, 'error');
     }
     // Sir (or an agent) moving a task again un-blocks the project.
     if (p.status === 'blocked' && ['todo', 'running', 'done'].includes(t.status)) p.status = 'running';
@@ -569,7 +585,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
   if (st.state === 'ended') {
     const r = retryOrFail(p, t, 'the agent session ended without reporting (no project_task_update)');
     event(p, `${t.id} session ended without a report${r === 'retry' ? ' — retrying' : ''}`);
-    if (r === 'failed') ctx.notify?.(`${p.name}: “${t.title}” ended twice without finishing.`, 'error');
+    if (r === 'failed') tell(ctx, p, `${p.name}: “${t.title}” ended twice without finishing.`, 'error');
     return true;
   }
   if (st.needsInput) return false; // a permission/question wait — the attention feed already asks Sir
@@ -584,7 +600,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
     t.status = 'blocked';
     t.summary = `stalled: idle ${Math.round((now - w.idleSince) / 60000)} min without a report after ${w.nudges} nudges — check its session`;
     event(p, `${t.id} → blocked (stalled)`);
-    ctx.notify?.(`${p.name}: “${t.title}” has stalled on ${t.assign?.node} and does not respond to nudges.`, 'error');
+    tell(ctx, p, `${p.name}: “${t.title}” has stalled on ${t.assign?.node} and does not respond to nudges.`, 'error');
     return true;
   }
   try {
@@ -612,7 +628,7 @@ export async function tick(ctx, now = Date.now()) {
       p.replanned = true;
       event(p, `planning never finished${again ? ' — planning again' : ''}`);
       await saveProject(p);
-      if (again) planProject(p.id, ctx).then(() => dispatchReady(p.id, ctx)).catch((e) => ctx.notify?.(`Couldn't plan ${p.name}: ${e.message}`, 'error'));
+      if (again) planProject(p.id, ctx).then(() => dispatchReady(p.id, ctx)).catch((e) => tell(ctx, p, `Couldn't plan ${p.name}: ${e.message}`, 'error'));
       continue;
     }
     if (p.status === 'merging') { await followMerge(p, ctx, now); continue; }
@@ -641,7 +657,8 @@ async function followMerge(p, ctx, now) {
     p.status = 'done';
     event(p, `merged to main as ${req.sha} and rolled out`);
     await saveProject(p);
-    ctx.notify?.(finalReport(p, { merged: req.sha || 'main' }));
+    tell(ctx, p, finalReport(p, { merged: req.sha || 'main' }), 'info', { keep: true });
+    ctx.release?.(p);
   } else if (req.status === 'checks-failed' && !(sd.fixes >= MAX_ATTEMPTS)) {
     p.selfDev = { ...sd, request: null, fixes: (sd.fixes || 0) + 1 };
     const [t] = normalizeTasks({ tasks: [{ id: `fix${p.selfDev.fixes}`, title: `Fix the failing ${req.failedStage || 'checks'} after merging onto main`, kind: 'code', size: 'M',
@@ -657,7 +674,7 @@ async function followMerge(p, ctx, now) {
     p.status = 'blocked';
     event(p, `merge ${req.status}`);
     await saveProject(p);
-    ctx.notify?.(`${p.name}: the merge ${req.status === 'conflict' ? 'is stuck on a conflict' : req.status === 'dropped' ? 'was dropped' : 'checks keep failing'} — it needs you.`, 'error');
+    tell(ctx, p, `${p.name}: the merge ${req.status === 'conflict' ? 'is stuck on a conflict' : req.status === 'dropped' ? 'was dropped' : 'checks keep failing'} — it needs you.`, 'error');
   }
 }
 

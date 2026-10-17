@@ -83,6 +83,8 @@ function defaults() {
       // What the planning brain may override: 'machine' (default), 'all' (provider + model too) or 'none'.
       plannerPicks: 'machine',
       maxTasksPerMachine: 4,
+      // Providers switched off for now, e.g. ["codex"]: the planner never suggests them and RIGS never places a task there.
+      avoid: [],
     },
     update: { auto: true, intervalMin: 10, remote: 'origin', branch: 'main' },
     ssh: { autoAuthorize: true, manageConfig: true, authorizeStaticPeers: false },

@@ -60,6 +60,23 @@ export async function mainChat() {
   return c;
 }
 
+/**
+ * A RIGS report (a project finished, a task needs Sir, a merge landed) written into the JARVIS thread — and into the
+ * thread the request came from — so it is there to read later and the brain sees it on its next turn.
+ */
+export async function postReport({ text, level = 'info', chatId = '', project = null } = {}) {
+  const msg = { role: 'assistant', text: String(text || '').slice(0, 8000), brain: 'rigs', report: true, level, project: project?.id || '', ts: Date.now() };
+  const main = await mainChat();
+  const targets = [main];
+  if (chatId && chatId !== main.id) { const c = await getChat(chatId).catch(() => null); if (c) targets.push(c); }
+  for (const c of targets) {
+    c.messages.push(msg);
+    c.updatedAt = Date.now();
+    await saveChat(c);
+  }
+  return { ok: true, chats: targets.map((c) => c.id) };
+}
+
 /** Archive the JARVIS thread (kept on disk, no longer routed to); the next answer starts a fresh one. */
 export async function clearMainChat() {
   const existing = (await listChats()).find((c) => c.main);
@@ -320,9 +337,6 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   const bound = (decision.work || []).filter((w) => !w.unresolved);
   const unclear = (decision.work || []).filter((w) => w.unresolved);
   let filed = [];
-  if (bound.length && opts.onWork) {
-    try { filed = await opts.onWork(bound); } catch (e) { emit({ type: 'error', message: 'filing the work failed: ' + e.message }); }
-  }
   const isContinue = decision.route === 'continue' && decision.threadId;
   const chat = isContinue
     ? await getChat(decision.threadId)
@@ -333,6 +347,9 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
         project: decision.projectId || '', ongoing: true,
       });
   if (!chat) throw new Error('thread not found');
+  if (bound.length && opts.onWork) {
+    try { filed = await opts.onWork(bound, { chatId: chat.id }); } catch (e) { emit({ type: 'error', message: 'filing the work failed: ' + e.message }); }
+  }
   let hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
   if (filed.length) {
     hint += `\n[RIGS already filed this request as ${filed.length} project${filed.length > 1 ? 's' : ''} — the core brain is planning each with the project's own agent guide, then an OpenRig team is cast for it: ${filed.map((f, i) => `${i + 1}) ${f.name} → ${f.node}:${f.path} (project ${f.id})${f.flow ? ` running its "${f.flow}" flow` : ''}${f.note ? ` — ${f.note}` : ''}`).join('; ')}. Agents verify their own work, a final review checks it, and RIGS reports back when it is done${filed.some((f) => f.self) ? ' (RIGS changes are then merged by the merge steward, tested and rolled out to every machine)' : ''}. Do NOT file these again (no jarvis_task or project_create for them). Tell Sir in one or two sentences what was set in motion and where; progress shows on the Work dashboard.]`;
