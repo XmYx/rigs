@@ -233,7 +233,7 @@ reached as `/api/nodes/<node>/apps/navigation/api/traffic`).
 
 ### Request
 
-`GET api/traffic?bbox=w,s,e,n&z=<map zoom>[&route=<routeId>][&tz=<IANA zone>][&source=synthetic]`
+`GET api/traffic?bbox=w,s,e,n&z=<map zoom>[&route=<routeId>][&tz=<IANA zone>][&source=synthetic][&at=<ISO time>]`
 
 | Param | Required | Meaning |
 | --- | --- | --- |
@@ -242,6 +242,7 @@ reached as `/api/nodes/<node>/apps/navigation/api/traffic`).
 | `route` | no | `routeId` from `api/route`, for the closeness term. Unknown or expired ids are ignored. |
 | `tz` | no | IANA time zone for the time-of-day curve, e.g. `Europe/Budapest`. Defaults to the server's zone. |
 | `source` | no | `synthetic` forces the fallback (for testing and the demo). Otherwise `NAV_TRAFFIC_SOURCE` decides. |
+| `at` | no | ISO time for the synthetic model (added in the implementation: `?demo=1` asks for the latest weekday 17:30 so rush hour is always visible). Live TomTom data ignores it. |
 
 **Validation:** 400 `{error}` if `bbox` is not 4 finite numbers with w<e and s<n, or if `z` is missing.
 
@@ -324,7 +325,9 @@ halved on minor roads. The exact look belongs to the UI task.
 - **Synthetic results:** a pure function of (tile lines, time bucket, route). Compute on every request,
   with a 60 s time bucket so repeated polls within a minute return identical numbers.
 - **Client polling:** re-fetch every 60 s while the map is visible, plus on `moveend` debounced 500 ms.
-  Send `bbox` snapped outward to the `tz` tile grid so the server cache hits.
+  As built, the client sends a box of about 900 m round the vehicle, snapped outward to a 0.005° grid,
+  and the server keeps only the roads touching it. The server's tile caches hit either way, and the
+  answer stays small: a few hundred KB of coordinates, gzipped about 5×.
 
   At z14 that is about 4–9 tiles per poll. A 1-hour drive costs about 540 TomTom tiles worst case, well
   inside the budget.
