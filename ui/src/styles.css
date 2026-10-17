@@ -395,7 +395,7 @@ a.link { color: var(--accent); cursor: pointer; }
 }
 
 /* ---- work dashboard (work.js) ---- */
-#work { position: fixed; right: 12px; top: 340px; width: 300px; max-height: max(180px, calc(100vh - 690px)); max-height: max(180px, calc(100dvh - 690px)); padding: 10px 12px; overflow-y: auto; z-index: 10; scrollbar-width: thin; }
+#work, #questions { position: fixed; right: 12px; top: 340px; width: 300px; max-height: max(180px, calc(100vh - 690px)); max-height: max(180px, calc(100dvh - 690px)); padding: 10px 12px; overflow-y: auto; z-index: 10; scrollbar-width: thin; }
 .wk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: default; }
 .wk-title { font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); flex: 1; }
 .wk-meta { font: 10px var(--mono); color: var(--accent); }
@@ -418,7 +418,12 @@ a.link { color: var(--accent); cursor: pointer; }
 @keyframes wk-pulse { 50% { opacity: .35; } }
 .wk-rmeta { font: 10px var(--mono); color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wk-rnow { font-size: 11px; color: #b9c8d2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#work > .wk-head > .pctl { order: 2; }
+#work > .wk-head > .pctl, #questions > .wk-head > .pctl { order: 2; }
+#questions { right: 324px; max-height: max(180px, calc(100dvh - 500px)); }
+.wk-title.attn { color: #fbbf24; }
+.btn-count { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #f59e0b; color: #1c1103; font: 700 10px/16px var(--mono); text-align: center; }
+.btn-count[hidden] { display: none; }
+#btn-ask { position: relative; }
 
 /* Visual replies (visual.js): animated cards inside the chat dock */
 .vz-text { white-space: pre-wrap; margin: 4px 0; }
@@ -578,14 +583,14 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   :root { --gap: 8px; --hdr: calc(var(--sat) + 60px); --bar-h: 44px; --bar-bottom: calc(max(8px, var(--sab)) + var(--kb)); --room: calc(100dvh - var(--hdr) - var(--bar-h) - var(--bar-bottom) - 16px); }
   input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea { font-size: 16px; }
-  .scroll-contain, .win-body, .win-body *, #left, #work, #subtitle, #brain-menu, #panels-menu, .xterm-viewport { overscroll-behavior: contain; }
+  .scroll-contain, .win-body, .win-body *, #left, #work, #questions, #subtitle, #brain-menu, #panels-menu, .xterm-viewport { overscroll-behavior: contain; }
   #legend, #footer, #face, #face.big { display: none !important; }
 
   /* Panel chrome: no grips/resize/collapse; only the ✕ of the work and chat panels, at finger size. Saved
      desktop drags don't apply: geometry below wins over the inline styles panels.js sets. */
   .pctl, .presize { display: none !important; }
-  #work > .wk-head > .pctl, #chat-dock .pctl { display: inline-flex !important; opacity: 1; }
-  #work .pctl > :not(.pclose:last-child), #chat-dock .pctl > :not(.pclose:last-child) { display: none; }
+  #work > .wk-head > .pctl, #questions > .wk-head > .pctl, #chat-dock .pctl { display: inline-flex !important; opacity: 1; }
+  #work .pctl > :not(.pclose:last-child), #questions .pctl > :not(.pclose:last-child), #chat-dock .pctl > :not(.pclose:last-child) { display: none; }
   .pclose { min-width: 44px; min-height: 44px; font-size: 16px; display: inline-grid; place-items: center; }
   #bar.floating.panel-closed, #topbar.floating.panel-closed { display: flex !important; } /* the only way back to ☰ Layout */
   #bar.floating.panel-out, #topbar.floating.panel-out { opacity: 1; pointer-events: auto; scale: none; translate: none; filter: none; }
@@ -631,7 +636,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #dock-detach { min-width: 44px; min-height: 44px; }
 
   /* Work dashboard: a sheet under the header */
-  #work { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
+  #work, #questions { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
   .wk-head { min-height: 44px; }
 
   /* Toasts, the "agent needs you" banner and the activity tray sit under the header */

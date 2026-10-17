@@ -18,7 +18,7 @@ const root = document.documentElement;
 // Short labels for the buttons in the ⋯ sheet (the toolbar shows icons only).
 const SHEET = [
   ['btn-hands', 'Hands-free'], ['btn-term', 'Terminal'], ['btn-files', 'Files'], ['btn-desk', 'Desktop'],
-  ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-work', 'Work'], ['btn-apps', 'Apps'],
+  ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-ask', 'Questions'], ['btn-work', 'Active projects'], ['btn-apps', 'Apps'],
   ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'], ['panels-btn', 'Layout'],
 ];
 
@@ -111,7 +111,7 @@ export function initMobile() {
   $('#topbar')?.prepend(drawerBtn);
   document.body.append(backdrop);
 
-  moreBtn = h('button', { id: 'btn-more', class: 'round', title: 'More — terminal, files, sessions, projects, work, apps, mesh, voice', 'aria-label': 'More controls', 'aria-controls': 'more-sheet', 'aria-expanded': 'false',
+  moreBtn = h('button', { id: 'btn-more', class: 'round', title: 'More — terminal, files, sessions, projects, questions, active projects, apps, mesh, voice', 'aria-label': 'More controls', 'aria-controls': 'more-sheet', 'aria-expanded': 'false',
     onclick: (e) => { e.stopPropagation(); if (sheet.classList.contains('open')) closeSheet(); else openSheet(); } }, '⋯');
   sheet = h('div', { id: 'more-sheet', class: 'panel', role: 'group', 'aria-label': 'More controls' });
   // A tap on a sheet button does its job and puts the sheet away (☰ Layout opens its own menu above it).

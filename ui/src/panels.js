@@ -89,7 +89,7 @@ function animateClosed(el, closed) {
   }
 }
 
-function setClosed(id, closed) {
+export function setClosed(id, closed) {
   const p = panels.get(id);
   if (!p) return;
   if (closed && p.el.contains(document.activeElement)) document.getElementById('panels-btn')?.focus({ preventScroll: true }); // don't strand focus on a hidden panel
@@ -174,6 +174,11 @@ function reset(id) {
   renderMenu();
 }
 
+/** First run of a panel split off another one: start from the parent's closed state (never overrides saved state). */
+export function inheritPanel(id, fromId) {
+  if (state[id] || !state[fromId]) return;
+  if (state[fromId].closed) { state[id] = { closed: true }; save(); }
+}
 export function showPanel(id) { setClosed(id, false); if (state[id]?.collapsed) setCollapsed(id, false); }
 export function togglePanel(id) { if (state[id]?.closed) showPanel(id); else setClosed(id, true); }
 export function panelState(id) { return { closed: !!state[id]?.closed, collapsed: !!state[id]?.collapsed }; }

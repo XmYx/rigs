@@ -4,12 +4,12 @@ import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
-import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
-import { initMobile, revealInspector } from './mobile.js';
+import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
+import { initMobile, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
-import { createWork } from './work.js';
+import { createWork, createQuestions } from './work.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -101,6 +101,7 @@ const machineById = (id) => snap.find((e) => e.node.id === id)?.node;
 // ------------------------------------------------------------------ "an agent needs you"
 // Every machine reports agents waiting on the user (permission prompts, questions, blocked tasks).
 // They blink in the galaxy, sit in a banner until answered, and announce themselves once.
+let work = null; // the Active projects panel (wire())
 let attention = []; // [{ node, nodeId, items: [...] }]
 const baseTitle = document.title;
 
@@ -127,6 +128,25 @@ async function refreshAttention() {
   try { attention = await api('/api/mesh/attention'); } catch { return; }
   graph.setAttention(attentionGraphIds());
   renderAttention();
+  work?.rerender();
+}
+
+// The Questions button's count follows the attention poll, so it is right while the panel is closed.
+function updateQuestionCount(n) {
+  const c = $('#ask-count');
+  if (!c) return;
+  c.hidden = !n;
+  c.textContent = String(n);
+  const label = n ? `Questions — ${n} agent${n > 1 ? 's' : ''} waiting for your answer` : 'Questions — agents waiting for your answer';
+  $('#btn-ask').title = label;
+  $('#btn-ask').setAttribute('aria-label', label);
+}
+
+// Bring the Questions panel up (on a phone the two panels are sheets in the same place, so Active projects steps aside).
+function showQuestions() {
+  if (isPhone()) setClosed('work', true);
+  showPanel('questions');
+  $('#questions')?.scrollIntoView?.({ block: 'nearest' });
 }
 
 function syncNotifyChecks() {
@@ -137,6 +157,7 @@ function syncNotifyChecks() {
 
 function renderAttention() {
   const items = attnItems();
+  updateQuestionCount(items.length);
   // The banner heads the toast column, so toasts stack under it instead of on top of it.
   let box = document.getElementById('toasts');
   if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
@@ -150,7 +171,7 @@ function renderAttention() {
   const who = (a) => ({ claude: 'Claude', codex: 'Codex', ollama: 'Ollama' }[a] || a || 'agent');
   bar.replaceChildren(
     h('div', { class: 'attn-head' }, h('b', {}, `⚠ ${items.length} agent${items.length > 1 ? 's' : ''} need${items.length > 1 ? '' : 's'} you`),
-      h('button', { class: 'toast-x', title: 'Close for good (questions stay in the Work panel; turn it back on under Display)', 'aria-label': 'Close attention banner', onclick: () => { prefs().attnBanner = false; syncNotifyChecks(); renderAttention(); } }, '×')),
+      h('button', { class: 'toast-x', title: 'Close for good (questions stay in the Questions panel; turn it back on under Display)', 'aria-label': 'Close attention banner', onclick: () => { prefs().attnBanner = false; syncNotifyChecks(); renderAttention(); } }, '×')),
     ...items.slice(0, 3).map((it) => h('div', { class: 'attn-row' },
       h('div', { class: 'attn-what' }, h('b', {}, `${who(it.agent)} · ${it.nodeName}`), ' ', h('span', {}, it.title || ''), h('div', { class: 'muted small' }, `${it.reason || ''}${it.since ? ' · ' + ago(it.since) : ''}${it.where && it.where !== 'tmux' ? ' · in ' + it.where : ''}`)),
       h('div', { class: 'attn-btns' }, act('⌨ Answer', () => openAttention(it), 'primary'), act('◎', () => showAttention(it), 'icon')))),
@@ -184,7 +205,7 @@ async function attentionNotify(m) {
   await refreshAttention();
   if (!it) return;
   // No toast: it shows once, in the banner. With the banner closed or notifications off Sir asked for quiet; the
-  // Work panel's Questions, the orb and the tab title still show who is waiting.
+  // Questions panel, the orb and the tab title still show who is waiting.
   try {
     if (prefs().notifications && 'Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
       const n = new Notification(`${m.from}: an agent needs you`, { body: m.text, tag: it.key, requireInteraction: true });
@@ -1112,17 +1133,25 @@ function wire() {
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
   makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
   makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
-  const work = createWork($('#work'), {
+  // Questions and Active projects were one "work" panel: 'work' keeps its saved layout as Active projects,
+  // and the new Questions panel starts closed if the old one was.
+  inheritPanel('questions', 'work');
+  work = createWork($('#work'), {
     onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
-    onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }),
+    onOpenQuestions: showQuestions,
+    getWaiting: attnItems,
   });
-  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
+  makeFloating($('#work'), { id: 'work', title: 'Active projects', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
+  const questions = createQuestions($('#questions'), { onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }) });
+  makeFloating($('#questions'), { id: 'questions', title: 'Questions', into: $('#questions .wk-head'), keep: [$('#questions .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => questions.setActive(!closed && !collapsed) });
+  { const st = panelState('questions'); questions.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
-  $('#btn-work').onclick = () => togglePanel('work');
+  $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };
+  $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();
