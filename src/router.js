@@ -13,6 +13,40 @@ const QUESTION = /^\s*(what|why|how|when|where|who|which|is|are|was|were|did|doe
 const SELF = /\b(jarvis|rigs(?: os)?)\b/i;
 const WORDS = (s) => new Set(String(s || '').toLowerCase().match(/[a-zà-ž0-9]{4,}/g) || []);
 
+// Leading verbs that ask for something to be made, changed, improved, run or updated.
+const IMPERATIVE_VERBS = 'make|build|add|fix|change|improve|update|upgrade|run|deploy|create|rename|remove|delete|refactor|separate|split|set up|setup|implement|write|move|merge|install|enable|disable|stop|start|restart|ensure|rewrite|redesign|replace|clean up|cleanup|extend|connect|wire|configure|patch|migrate|optimi[sz]e|develop|generate|publish|release|commit|test|verify';
+// Polite openers that don't change what is being asked: "please", "can you", "lets", "I want you to", "JARVIS,"…
+const OPENERS = /^\s*(?:(?:(?:hey|hi|ok|okay|so|and|also|then) )?(?:jarvis|rigs)\b[\s,:;-]*|please\b[\s,]*|(?:can|could|would|will) you(?: please)?\b[\s,]*|(?:i |we )?(?:want|need|would like|'d like|wish) (?:you |us )?to\b[\s,]*|(?:you |we )?(?:should|must|have to|need to|ought to)\b[\s,]*|let'?s\b[\s,]*|let us\b[\s,]*|go ahead and\b[\s,]*|just\b[\s,]*|kindly\b[\s,]*)+/i;
+const IMPERATIVE = new RegExp(`^(?:${IMPERATIVE_VERBS})\\b(?!\\s+(?:sense|a difference)\\b)`, 'i');
+
+/** Is this an imperative work request (after stripping polite openers)? */
+export function isImperative(text) {
+  const rest = String(text || '').trim().replace(OPENERS, '');
+  // "make sure that's not happening" is a request too, although "sure" isn't a verb.
+  return IMPERATIVE.test(rest);
+}
+
+/** Does the request spell out several parts (a list, several sentences, a very long ask)? Then it is a plan. */
+function hasSeveralParts(text) {
+  const t = String(text || '').trim();
+  if (t.length > 400) return true;
+  const joins = (t.match(/,\s*\S|\s(?:and|also|then|plus)\s/gi) || []).length;
+  if (joins >= 3) return true;
+  const verbs = t.split(/(?:[.;!,]\s+|\s+(?:and|then|also)\s+)/i).filter((c) => isImperative(c.trim().replace(/^(and|then|also)\s+/i, ''))).length;
+  return verbs >= 3 || /\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|several|multi[- ]?(step|part)|phases?)\b/i.test(t);
+}
+
+/**
+ * Deterministic guard on the decision: an imperative work request is never "answer". It is upgraded to implement,
+ * or plan when it spans several parts. Questions, status checks and one-step actions the model left as answer
+ * (open a window, read a file) are untouched because their leading word is not a work verb.
+ */
+export function guardRoute(d, text) {
+  if (!d || d.route !== 'answer' || !isImperative(text)) return d;
+  const route = hasSeveralParts(text) ? 'plan' : 'implement';
+  return { ...d, route, reason: `an imperative work request, not a question (${route})`, guarded: true };
+}
+
 /** Keyword rules: the fallback when no model answers, and a sanity check on model output. */
 export function heuristicRoute(text, threads = []) {
   const t = String(text || '');
@@ -23,6 +57,7 @@ export function heuristicRoute(text, threads = []) {
   if (/\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
+  if (isImperative(t)) return { route: 'implement', reason: 'an imperative work request' };
   if (QUESTION.test(t)) return { route: 'answer', reason: 'a question' };
   if (/\b(implement|build|fix|refactor|patch|develop|wire up|add (a |an |the )?(feature|button|page|endpoint|test)|write (the |a |an )?(code|script|test)|change the code|update the code|bug|commit|deploy|rename|migrate|improve|redesign|optimi[sz]e|make (the|it|this|them) \w+( \w+)? (more|less|faster|better|work)|run the|nightly|(an? |the )?update (on|for|to|of)? ?\w+|upgrade)\b/i.test(t)) {
     return { route: 'implement', reason: 'a code or build change' };
@@ -118,7 +153,7 @@ function routerPrompt(text, { rules, threads, projects, catalog = [] }) {
     'Operating rules:',
     rules,
     '',
-    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Talk ("answer") is only for questions and chat; never answer a work request with a description of what you would do.',
+    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Polite or casual phrasing does not make a request a question: "can you …", "please …", "lets …", "I want you to …", "make sure …" followed by make/build/add/fix/change/improve/update/run/create/separate are work. Talk ("answer") is only for real questions, status checks, chat and one-step actions like opening a window or reading a file; never answer a work request with a description of what you would do.',
     '',
     'Ongoing threads (continue ONLY if the request clearly belongs to one; otherwise do not pick one):',
     threads.length ? threads.map((t) => `- ${t.id} · ${t.title} · project ${t.project || '—'}`).join('\n') : '(none)',
@@ -159,6 +194,7 @@ export async function route(text, ctx) {
 
 /** Second opinion on the decision + work items bound to folders. Pure given the decision (tested). */
 export function withWork(d, text, { catalog = [], selfNode = '' } = {}) {
+  d = Object.assign(d, guardRoute(d, text));
   // Requests that are clearly work never stay as talk: a named flow, or "JARVIS feature: …".
   if (d.route === 'answer' || d.route === 'continue') {
     const flow = !QUESTION.test(text) && namedFlow(text, catalog);
