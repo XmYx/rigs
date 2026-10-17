@@ -233,3 +233,14 @@ test('planning that died with the daemon is restarted for projects Sir asked to 
   assert.ok(['planned', 'running'].includes(after.status), after.status);
   assert.ok(after.log.some((l) => /planning never finished — planning again/.test(l.text)));
 });
+
+test('a running project that nothing can move any more is escalated by the tick', async () => {
+  const c = ctx();
+  const p = await runningProject(c);
+  const pr = await P.getProject(p.id);
+  pr.tasks[0].status = 'blocked'; // reported before the watchdog existed: no settle ran
+  await P.saveProject(pr);
+  await P.tick(c);
+  assert.equal((await P.getProject(p.id)).status, 'blocked');
+  assert.ok(c.notes.some((n) => /needs you/.test(n.text)));
+});
