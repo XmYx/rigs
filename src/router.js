@@ -19,7 +19,7 @@ export function heuristicRoute(text, threads = []) {
   if (/\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
-  if (/\b(implement|build|fix|refactor|add (a |an |the )?(feature|button|page|endpoint|test)|write (the |a |an )?(code|script|test)|change the code|bug|commit|deploy|rename|migrate)\b/i.test(t)) {
+  if (/\b(implement|build|fix|refactor|patch|develop|wire up|add (a |an |the )?(feature|button|page|endpoint|test)|write (the |a |an )?(code|script|test)|change the code|update the code|bug|commit|deploy|rename|migrate)\b/i.test(t)) {
     return { route: 'implement', reason: 'a code or build change' };
   }
   return { route: 'answer', reason: 'can be answered now' };
@@ -50,6 +50,8 @@ function routerPrompt(text, { rules, threads, projects }) {
     '',
     'Operating rules:',
     rules,
+    '',
+    'A request that asks to implement, build, fix or change code is "implement", even when it names JARVIS, RIGS or the router itself.',
     '',
     'Ongoing threads (continue ONLY if the request clearly belongs to one; otherwise do not pick one):',
     threads.length ? threads.map((t) => `- ${t.id} · ${t.title} · project ${t.project || '—'}`).join('\n') : '(none)',

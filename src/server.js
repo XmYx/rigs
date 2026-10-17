@@ -348,6 +348,7 @@ export async function startServer() {
     if (sub === 'ollama') return ollamaModels();
     if (sub === 'chats' && method === 'GET') return chat.listChats();
     if (sub === 'chats' && method === 'POST') return chat.createChat(await body());
+    if (sub === 'chats/main/clear' && method === 'POST') return chat.clearMainChat();
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'GET') { const c = await chat.getChat(mm[1]); if (!c) throw new HttpError(404, 'not found'); return c; }
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'DELETE') return { ok: await chat.deleteChat(mm[1]) };
     if (sub === 'jarvis/send' && method === 'POST') {

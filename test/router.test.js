@@ -11,6 +11,12 @@ test('heuristicRoute: questions answer, code changes implement, multi-part goals
   assert.equal(heuristicRoute('plan the whole deploy end to end', threads).route, 'plan');
 });
 
+test('heuristicRoute: imperative code requests about JARVIS itself implement', () => {
+  assert.equal(heuristicRoute('implement in jarvis that in the future, requests like this get routed correctly', []).route, 'implement');
+  assert.equal(heuristicRoute('patch the router so it stops misreading requests', []).route, 'implement');
+  assert.equal(heuristicRoute('develop a status widget for the mesh', []).route, 'implement');
+});
+
 test('heuristicRoute: continues an ongoing thread only when the subject clearly matches', () => {
   const d = heuristicRoute('the props studio dashboard still crashes, fix it', threads);
   assert.equal(d.route, 'continue');
