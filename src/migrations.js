@@ -65,6 +65,9 @@ MIGRATIONS.push({
 // `rig`/`codex` run with the Node they were installed for, so seats can always read their OpenRig queue.
 MIGRATIONS.push({ id: '2026-10-16-node-cli-wrappers', run: async () => (await import('./agentmodes.js')).ensureCliWrappers() });
 
+// Every agent on every machine learns Sir's autonomy rule (non-destructive = go; other projects: no commits unasked).
+MIGRATIONS.push({ id: '2026-10-17-autonomy-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {
