@@ -349,6 +349,7 @@ function renderInspector(id) {
       act('🖥 Desktop', () => desktopTo(d)),
       up ? act('💬 Sessions', () => sessionsWindow(d.name)) : null,
       up ? act('◆ Use as brain', () => pickBrainOn(d)) : null,
+      up ? act('⚙ Processes', () => processesWindow(d)) : null,
       act('🔐 SSH', () => sshTo(d)),
       act('⧉', () => { navigator.clipboard.writeText(`ssh ${d.sshAlias || d.name}`); toast(`Copied: ssh ${d.sshAlias || d.name}`); }, 'icon'),
       up ? act('✳ New agent', () => newAgent(d)) : null,
@@ -996,6 +997,40 @@ async function conversationWindow() {
     list.replaceChildren(...c.messages.map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
+}
+
+// ------------------------------------------------------------------ processes on any machine
+function processesWindow(m) {
+  const w = openWindow({ title: `Processes — ${m.name}`, icon: '⚙', width: 760, height: 520 });
+  const filter = h('input', { class: 'path-input', placeholder: 'Filter by name or command (e.g. moonlight)' });
+  const sort = h('select', { class: 'mini' }, ...['cpu', 'mem', 'age', 'name'].map((v) => h('option', { value: v }, `by ${v}`)));
+  const list = h('div', { class: 'proc-list' });
+  const status = h('span', { class: 'muted small' });
+  async function load() {
+    try {
+      const r = await api(`${node(m.id)}/processes?${new URLSearchParams({ filter: filter.value.trim(), sort: sort.value, limit: '120' })}`);
+      status.textContent = `${r.shown} of ${r.total}`;
+      list.replaceChildren(...r.processes.map((p) => h('div', { class: 'proc-row' },
+        h('span', { class: 'proc-pid' }, p.pid), h('b', { class: 'proc-name', title: p.args }, p.name),
+        h('span', { class: 'proc-num' }, `${p.cpu.toFixed(0)}%`), h('span', { class: 'proc-num' }, `${p.rssMB} MB`),
+        h('span', { class: 'proc-args muted small', title: p.args }, p.args),
+        p.protected ? h('span', { class: 'muted small' }, 'RIGS/system') : act('Stop', () => stop(p), 'danger'))));
+    } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
+  }
+  async function stop(p) {
+    if (!confirm(`Stop ${p.name} (pid ${p.pid}) on ${m.name}? It gets TERM, then KILL after 3 s.`)) return;
+    try {
+      const r = await api(`${node(m.id)}/processes/kill`, { method: 'POST', body: { pid: p.pid } });
+      toast(r.stopped?.length ? `Stopped ${p.name} on ${m.name}${r.stopped[0].forced ? ' (forced)' : ''}` : `${p.name} is still running`, r.stopped?.length ? 'ok' : 'error');
+    } catch (e) { toast(e.message, 'error'); }
+    load();
+  }
+  let t;
+  filter.oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
+  sort.onchange = load;
+  w.body.append(h('div', { class: 'toolbar' }, filter, sort, h('button', { class: 'tb', onclick: load }, '↻'), status), list);
+  load();
+  const timer = setInterval(() => { if (!document.body.contains(list)) clearInterval(timer); else load(); }, 5000);
 }
 
 // ------------------------------------------------------------------ wiring

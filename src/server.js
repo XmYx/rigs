@@ -36,6 +36,7 @@ import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
 import { APP_DIR, isWin, log, run, truncate } from './util.js';
 import * as work from './work.js';
+import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
@@ -669,6 +670,8 @@ export async function startServer() {
     }
 
     // remote command execution (used by the mesh MCP tools)
+    if (sub === 'processes' && method === 'GET') return processes.list({ filter: q.get('filter') || '', sort: q.get('sort') || 'cpu', limit: Number(q.get('limit')) || 80 });
+    if (sub === 'processes/kill' && method === 'POST') return processes.kill(await body());
     if (sub === 'exec' && method === 'POST') {
       const b = await body();
       const timeout = Math.min(600, Number(b.timeoutSec) || 60) * 1000;

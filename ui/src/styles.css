@@ -505,3 +505,11 @@ a.link { color: var(--accent); cursor: pointer; }
 #chat-dock.floating { display: flex; flex-direction: column; }
 #chat-dock.floating #subtitle.show { max-height: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 #chat-dock.floating #subtitle.show.has-details { max-height: none; }
+
+/* ---------------- processes */
+.proc-list { overflow: auto; height: calc(100% - 44px); font-size: 12px; }
+.proc-row { display: grid; grid-template-columns: 64px 140px 52px 72px 1fr auto; gap: 8px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+.proc-pid, .proc-num { font-family: var(--mono); color: var(--muted); text-align: right; }
+.proc-name, .proc-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ibtn.danger { border-color: rgba(248, 113, 113, .5); color: #fecaca; }
+@media (max-width: 640px) { .proc-row { grid-template-columns: 56px 1fr 48px auto; } .proc-row .proc-args, .proc-row .proc-num:nth-of-type(2) { display: none; } }

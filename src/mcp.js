@@ -83,6 +83,16 @@ const TOOLS = [
     run: async (a) => { const r = await api(`/api/nodes/${n(a.node)}/app-start/${encodeURIComponent(a.id)}`, { method: 'POST', body: {}, timeout: 90000 }); return { started: r.started, status: r.health?.status, path: `/api/nodes/${encodeURIComponent(a.node)}/apps/${a.id}/` }; },
   },
   {
+    name: 'mesh_processes', description: 'List processes on a machine in the mesh (pid, name, CPU %, memory, age, command line). filter matches the name or command line; sort is cpu | mem | age | name | pid.',
+    inputSchema: { type: 'object', properties: { machine: { type: 'string' }, filter: { type: 'string' }, sort: { type: 'string' }, limit: { type: 'number' } }, required: ['machine'] },
+    run: (a) => api(`/api/nodes/${n(a.machine)}/processes?${new URLSearchParams({ filter: a.filter || '', sort: a.sort || 'cpu', limit: String(a.limit || 40) })}`, { timeout: 30000 }),
+  },
+  {
+    name: 'mesh_kill', description: 'Stop processes on a machine in the mesh — by pid, or by name / command-line match (e.g. "moonlight"). Sends TERM, then KILL to whatever is still running after 3 s (escalate:false to skip). Never touches RIGS itself or system processes.',
+    inputSchema: { type: 'object', properties: { machine: { type: 'string' }, pid: { type: 'number' }, name: { type: 'string' }, signal: { type: 'string' }, escalate: { type: 'boolean' } }, required: ['machine'] },
+    run: (a) => api(`/api/nodes/${n(a.machine)}/processes/kill`, { method: 'POST', body: { pid: a.pid, name: a.name, signal: a.signal, escalate: a.escalate }, timeout: 60000 }),
+  },
+  {
     name: 'mesh_exec', description: 'Run a shell command on a machine in the mesh (bash/zsh login shell on mac/linux, PowerShell on Windows). Returns exit code, stdout, stderr.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine name (see mesh_status); "self" for this one' }, command: { type: 'string' }, cwd: { type: 'string' }, timeoutSec: { type: 'number' } }, required: ['node', 'command'] },
     run: (a) => api(`/api/nodes/${n(a.node)}/exec`, { method: 'POST', body: a, timeout: (Math.min(600, a.timeoutSec || 60) + 10) * 1000 }),
