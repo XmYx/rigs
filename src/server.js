@@ -9,6 +9,7 @@ import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
 import * as control from './control.js';
 import { createControlApi, wireControlEvents } from './control-api.js';
+import { ensureControlSetup } from './control-setup.js';
 import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
 import * as caps from './capabilities.js';
@@ -1021,7 +1022,15 @@ export async function startServer() {
   // RIGS_NO_MIGRATIONS: throwaway nodes (tests) must never install software or touch dotfiles.
   if (!process.env.RIGS_NO_MIGRATIONS) setTimeout(() => migrations.runPending((m, res) => {
     if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
-  }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+  }).then(() => setupControl()).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+
+  // Control is on by default: its first-run setup (helper, Linux uinput root step, GNOME extension) runs at boot and
+  // again when a person switches it back on, never only on enable(). Same throwaway-node rule as the migrations.
+  function setupControl() {
+    return ensureControlSetup({ control }).then((r) => { if (!r.skipped) log('control setup:', JSON.stringify(r)); })
+      .catch((e) => log('control setup:', e.message));
+  }
+  if (!process.env.RIGS_NO_MIGRATIONS) control.events.on('change', (c) => { if (c.enabled) setupControl().then(() => announceRoot()); });
 
   // "An agent needs you": watch every agent on this machine; announce new waits mesh-wide.
   // Screen access/control: routes for this machine, plus the announcements that make every action visible.

@@ -149,7 +149,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
   }
   async function gate(caller, act) {
     const s = settings();
-    if (!s.enabled || state.killed) throw new ControlError('off', 'Screen access is off on this machine. Enable it in JARVIS or the interactive CLI.');
+    if (!s.enabled || state.killed) throw new ControlError('off', 'Screen access is off on this machine (switched off or stopped). A person can switch it back on in JARVIS → Access & control.');
     if (act && !s.input) throw new ControlError('input-off', 'Input control is off on this machine.');
     if (s.allowFrom?.length && !s.allowFrom.includes(caller.from)) throw new ControlError('not-allowed', 'Caller node is not in control.allowFrom');
     if (lease && now() - lease.lastAt >= (s.leaseIdleSec ?? 60) * 1000) { await endLease('idle'); await adapter.stop(); cached = null; }
@@ -347,6 +347,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
   }
   adapter.events?.on('event', (msg) => {
     if (msg.event === 'restore-token') { state.restoreToken = msg.token; saveState(); }
+    if (msg.event === 'exit') { revoke('Control helper stopped'); endLease('helper exit'); return; }
     if (['closed', 'hotkey', 'locked'].includes(msg.event) && settings().enabled) kill({ reason: msg.reason || `helper ${msg.event}` }, { who: 'desktop' }).catch((e) => events.emit('fault', e));
   });
   return { status, screenshot, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };

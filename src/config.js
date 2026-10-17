@@ -95,10 +95,11 @@ function defaults() {
     merge: { steward: '' },
     desktop: { sunshineUser: 'rigs', sunshinePass: crypto.randomBytes(12).toString('base64url') },
     // Full access (enabled: screenshots + window list) and full control (input: pointer, keys, focus) of this
-    // machine's screen, see docs/full-access.md and src/control.js. Off by default; only control.enable() from a
-    // human surface switches it on, never the settings patch. backend: 'auto' or a forced one (mutter, portal, …).
+    // machine's screen, see docs/full-access.md and src/control.js. On by default; the kill switch or a person
+    // switches it off per machine, and only control.enable() from a human surface switches it back on, never the
+    // settings patch. backend: 'auto' or a forced one (mutter, portal, …).
     control: {
-      enabled: false, input: false, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
+      enabled: true, input: true, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
       maxActionsPerMin: 120, maxShotsPerMin: 30, announce: 'lease', killHotkey: 'default', auditPreview: 64,
     },
   };

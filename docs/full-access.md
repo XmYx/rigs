@@ -12,8 +12,9 @@ Two words, used precisely throughout:
   (macOS Full Disk Access, exists today), the **screen** and the **window list** (new).
 - **Full control** — on top of that they can *act*: **pointer**, **keyboard** and **window focus** (new).
 
-Both are **off by default on every machine** and switched on per machine (`config.control.enabled` for access,
-`config.control.input` for control).
+Both are **on by default on every machine** (`config.control.enabled` for access, `config.control.input` for
+control). The **kill switch** stops them at once and keeps them off across restarts and updates, and a person can
+switch either one **off per machine**; only a person turns them back on (§7).
 
 ---
 
@@ -107,8 +108,9 @@ The **daemon owns the desktop**, never the agent. Agents call `mesh_screen` / `m
   agent seats run with a stripped env and cannot reach the session bus;
 - one choke point is where the gate, audit log, announcements and kill switch live (§7).
 
-Each platform has a **helper**: a long-lived process the daemon starts when control is enabled and
-stops when it is disabled or killed. Linux and Windows talk to it over stdio, macOS over a Unix socket.
+Each platform has a **helper**: a long-lived process the daemon starts at boot whenever control is on (by
+default, `src/control-setup.js`) and stops when it is disabled or killed. A helper that exits on its own (crash,
+logout) only ends the lease; the next call starts it again. Linux and Windows talk to it over stdio, macOS over a Unix socket.
 The protocol is JSON lines: a request `{ "id", "op", ...args }` gets back `{ "id", "ok": true, "result" }` or
 `{ "id", "ok": false, "error": { "code", "message" } }`, and the helper can send events such as
 `{ "event": "closed" | "hotkey" | "locked" }`. A screenshot comes back as a path in `~/.rigs/run/shots/` (0700),
@@ -164,7 +166,7 @@ Why a separate helper app. TCC attributes a request to the **responsible process
 the job's own executable, and fork/exec children inherit it. So without a helper, every grant would land on
 `/Users/mix/.nvm/versions/node/v22.23.3/bin/node`, which has three consequences:
 - every agent and shell RIGS spawns could capture the screen and post events (`screencapture` from `mesh_exec`),
-  which defeats "off by default";
+  which bypasses the gate, the audit log and the kill switch;
 - the grant is keyed to a versioned nvm path, so the next Node upgrade silently drops it;
 - System Settings lists it as "node".
 
@@ -330,8 +332,8 @@ Every `down` is paired with an `up`: helpers track what they hold and release it
 
 ```jsonc
 "control": {
-  "enabled": false,        // full access: screenshots + window list. Master switch; kill sets it false.
-  "input": false,          // full control: pointer, keys, typing, focus. Needs enabled.
+  "enabled": true,         // full access: screenshots + window list. Master switch; kill sets it false.
+  "input": true,           // full control: pointer, keys, typing, focus. Needs enabled.
   "backend": "auto",       // or force one (§4)
   "allowFrom": [],         // node names whose agents/UIs may use it; [] = any authorized mesh member
   "leaseIdleSec": 60,      // a controller's lease ends after this long without an action
@@ -347,13 +349,23 @@ Every `down` is paired with an `up`: helpers track what they hold and release it
   save, or an agent's `POST config`, cannot switch it on. It is exposed read-only in `publicConfig()`.
 - Volatile state lives in `~/.rigs/control-state.json` (0600): `killedAt/By/reason`, the portal restore token
   and the macOS helper hash.
-- No migration turns anything on. Defaults come from `config.js` `defaults()`, so every existing machine is
-  off after the update. Root steps and the GNOME extension are registered only when someone enables control
-  on that machine, never at update time.
+- **On by default.** Defaults come from `config.js` `defaults()`, so a machine with no saved `control` key is on.
+  The migration `2026-10-17-control-default-on` switches on machines that saved the old off defaults
+  (`enabled: false, input: false`), except where the kill switch fired (`killed` in `control-state.json`) or a
+  person ever switched it (an `enable` or `kill` line in `logs/control.jsonl`): those stay as they are.
+- **First-run setup at boot**, not on `enable()`: whenever control is on, `ensureControlSetup()`
+  (`src/control-setup.js`, run by the server after the migrations and again when a person switches control
+  back on) probes the desktop, which starts the helper. On Linux with a graphical session it queues the uinput
+  udev rule as a root step (`rootsteps.ensureUinput`, only when `/dev/uinput` is not yet writable) and, on GNOME,
+  installs the RIGS Shell extension in `~/.local/share/gnome-shell/extensions` and adds it to
+  `org.gnome.shell enabled-extensions` (active after one log-out/in). On macOS, Screen Recording and
+  Accessibility cannot be automated: the Access & control panel shows a guided grant until both are on.
+  Throwaway nodes (`RIGS_NO_MIGRATIONS=1`) skip this setup.
 
-### Who may switch it on
+### Who may switch it on again
 
-`enable()` is the only way to set `enabled`/`input` to true:
+Control starts on. After a kill or a person's switch-off, `enable()` is the only way to set `enabled`/`input`
+back to true:
 - The request must come from a **human surface**: the JARVIS UI on any machine, which proxies to the target,
   or `rigs control on [--input]` in an interactive terminal on the target. The CLI refuses without a TTY, so it
   does not work through `mesh_exec`.
@@ -433,13 +445,13 @@ It **persists across restarts**, and only `enable()` from a human surface undoes
 | --- | --- |
 | Any JARVIS UI | **■ Stop** on the attention item or panel; **✋ Hands off** in Mesh control (all machines); voice "hands off" / "stop control" |
 | API / agents | `POST control/kill`, `POST /api/mesh/control/kill` |
-| The machine itself | `rigs control off` (also works with the daemon down: edits config and kills the helper by pidfile) |
-| Hotkey on the machine | GNOME/KDE: a custom shortcut **Super+Shift+Esc** → `rigs control off`, added via `gsettings` custom keybinding when control is enabled and removed when disabled. macOS: **⌃⌥⌘⎋** registered by the helper with Carbon `RegisterEventHotKey` (no Input Monitoring needed). Windows: `RegisterHotKey` in the helper. `control.killHotkey` overrides |
-| GNOME indicator | **Stop** on the top-bar sharing indicator closes the Mutter session; the helper's `closed` event is treated as a kill |
+| The machine itself | *Designed, not built yet:* `rigs control off` (also works with the daemon down: edits config and kills the helper by pidfile) |
+| Hotkey on the machine | *Designed, not built yet:* | GNOME/KDE: a custom shortcut **Super+Shift+Esc** → `rigs control off`, added via `gsettings` custom keybinding when control is enabled and removed when disabled. macOS: **⌃⌥⌘⎋** registered by the helper with Carbon `RegisterEventHotKey` (no Input Monitoring needed). Windows: `RegisterHotKey` in the helper. `control.killHotkey` overrides |
+| GNOME indicator | **Stop** on the top-bar sharing indicator closes the Mutter session; the helper's `closed` event is treated as a kill. A helper that merely exits (crash, logout) is not a kill: it ends the lease (`exit` event) |
 
 ### Agent rules (t8 writes them into `setup.js` instructions and AGENTS.md)
 
-- Control is opt-in per machine. Agents never enable it and never work around the gate: no `screencapture`,
+- Control is on by default; a person can switch it off per machine or kill it. Agents never enable it and never work around the gate: no `screencapture`,
   `grim` or uinput from a shell when `mesh_screen` / `mesh_control` exist.
 - Ask Sir before using computer control, unless the task brief explicitly authorizes it for that machine.
 - Pass `secret: true` when typing anything credential-like; better still, do not type credentials at all.
@@ -448,8 +460,9 @@ It **persists across restarts**, and only `enable()` from a human surface undoes
 
 `control.status().permissions` (backed by `access.status()`, t2) gives each permission
 `ok: true | false | null` (`null` = cannot tell) and a `fix`. The UI renders the fix as a button that calls
-`POST control/grant {permission}` on that machine. Grants are only offered once control has been enabled
-there, or when the user asks for them from the panel.
+`POST control/grant {permission}` on that machine. Control is on by default, so grants are offered
+whenever one is missing; on macOS the panel leads with a guided "Finish setup" box for Screen Recording and
+Accessibility.
 
 ### Linux
 

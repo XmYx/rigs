@@ -37,7 +37,8 @@ export class ControlRPC extends EventEmitter {
       const failed = (err) => {
         if (this.stream !== io) return;
         this.close(new ControlError('no-session', err?.message || 'Control helper disconnected'));
-        this.emit('event', { event: 'closed', reason: 'helper disconnected' });
+        // A crash or logout is not a person pressing stop: 'exit' ends the lease, only 'closed'/'hotkey' kill.
+        this.emit('event', { event: 'exit', reason: 'helper disconnected' });
       };
       io.read.on('error', failed);
       io.write.on('error', failed);

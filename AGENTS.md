@@ -22,13 +22,19 @@ treat `main` as production.
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
-| `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |
+| `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools (incl. `mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`; no tool can enable control) |
 | `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
+| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: gate, lease, rate limits, audit (`logs/control.jsonl`), persistent kill (`control-state.json`). Design: `docs/full-access.md` |
+| `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
+| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, Linux uinput root step, GNOME extension) |
+| `src/control-{linux,mac,win}.js`, `src/control-rpc.js` | Platform adapters and the JSON-lines helper transport; helpers in `scripts/control/` (Linux python + GNOME extension, Windows PowerShell) |
+| `src/access.js` | Permission status per OS (files, screen capture, input, accessibility) with fix hints and the guided grant |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
 | `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist` |
+| `ui/src/control.js` | Access & control panel per machine: permissions + guided grants, the access/full-control switches, live "in control" banner, Stop / Stop on every machine |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
 ## Rules
