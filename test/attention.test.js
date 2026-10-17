@@ -140,3 +140,12 @@ test('failed tasks of active projects need the user; finished projects never bli
   ] });
   assert.deepEqual(keys(items), ['task:pa:t1']);
 });
+
+test('an OpenRig seat\'s Claude (no TMUX in its report) is the seat itself — one entry, attachable', async () => {
+  fs.writeFileSync(claudeFile, JSON.stringify({ pid: process.pid, sessionId: 'seat-1', cwd: '/w', name: 'team-test-sonnet@game-86d3', status: 'waiting' }));
+  const items = await attention.refresh({ projects: [] });
+  const it = items.find((x) => x.key === 'claude:seat-1');
+  assert.deepEqual(it.session, { kind: 'rig', id: 'team-test-sonnet@game-86d3' });
+  claude('idle');
+  await attention.refresh();
+});
