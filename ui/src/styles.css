@@ -513,3 +513,16 @@ a.link { color: var(--accent); cursor: pointer; }
 .proc-name, .proc-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ibtn.danger { border-color: rgba(248, 113, 113, .5); color: #fecaca; }
 @media (max-width: 640px) { .proc-row { grid-template-columns: 56px 1fr 48px auto; } .proc-row .proc-args, .proc-row .proc-num:nth-of-type(2) { display: none; } }
+
+/* ---------------- work: questions + projects */
+.wk-section { font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 10px 0 6px; }
+.wk-section.attn { color: #fbbf24; }
+.wk-questions:not(.on) { display: none; }
+.wk-q { border: 1px solid rgba(245, 158, 11, .55); background: rgba(40, 24, 4, .55); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.wk-qhead { font-size: 12px; } .wk-qhead span { color: #fde68a; }
+.wk-qtext { font-size: 12.5px; margin: 4px 0 6px; overflow-wrap: anywhere; }
+.wk-qopts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.wk-qopts .btn { font-size: 11.5px; padding: 4px 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-qfoot { display: flex; gap: 6px; }
+.wk-reply { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(0, 0, 0, .35); }
+.wk-row.stuck .wk-dot { background: #f87171; }
