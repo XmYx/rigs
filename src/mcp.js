@@ -229,6 +229,19 @@ const TOOLS = [
     },
   },
   {
+    name: 'usage_report', description: 'The usage ledger across the mesh: which model spent how much time and how many tokens on which JARVIS chat turns, planning calls and project tasks, with each run\'s status and outcome. Returns totals, groupings (model, project, task, node, day, provider, kind) and the newest records. since/until take ms, an ISO date or a relative "24h" / "7d".',
+    inputSchema: { type: 'object', properties: {
+      since: { type: 'string', description: 'start of the range, e.g. "7d" (default), "24h", "2026-10-01"' }, until: { type: 'string' },
+      groupBy: { type: 'string', description: 'comma-separated: model, project, task, node, day, provider, kind (default model,project,task,node,day)' },
+      node: { type: 'string', description: 'one machine only; omit for the whole mesh' }, project: { type: 'string', description: 'project id filter' },
+      kind: { type: 'string', enum: ['chat-turn', 'task', 'plan', 'review', 'merge'] }, limit: { type: 'number', description: 'records to return (default 50)' },
+    } },
+    run: async (a) => {
+      const qs = new URLSearchParams({ since: a.since || '7d', ...(a.until ? { until: a.until } : {}), ...(a.groupBy ? { groupBy: a.groupBy } : {}), ...(a.project ? { project: a.project } : {}), ...(a.kind ? { kind: a.kind } : {}), limit: String(a.limit ?? 50) });
+      return api(a.node ? `/api/nodes/${n(a.node)}/usage?${qs}` : `/api/usage?${qs}`, { timeout: 60000 });
+    },
+  },
+  {
     name: 'project_list', description: 'List RIGS projects on every machine with their tasks, routing (machine/provider/model/effort) and status.',
     inputSchema: { type: 'object', properties: {} },
     run: () => api('/api/mesh/projects', { timeout: 30000 }),

@@ -119,6 +119,25 @@ const commands = {
     const r = argv[0] === 'status' ? await d.status() : await d.ensure({ force: argv.includes('--force') });
     console.log(JSON.stringify(r, null, 2));
   },
+  /** rigs usage [--since 7d] [--group model|project|task|node|day] · rigs usage backfill */
+  async usage() {
+    if (argv[0] === 'backfill') {
+      const r = await daemonFetch('/api/local/usage/backfill', { method: 'POST', body: '{}', timeout: 10 * 60 * 1000 }).catch((e) => ({ error: e.message }));
+      if (r.error) { console.error(r.error); process.exit(1); }
+      console.log(`backfilled ${r.tasks} task run${r.tasks === 1 ? '' : 's'} and ${r.chatTurns} chat turn${r.chatTurns === 1 ? '' : 's'} (estimated)`);
+      return;
+    }
+    const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
+    const group = opt('--group', 'model');
+    const qs = new URLSearchParams({ since: opt('--since', '7d'), groupBy: group, limit: '0' });
+    const r = await daemonFetch(`/api/usage?${qs}`, { timeout: 60000 }).catch((e) => ({ error: e.message }));
+    if (r.error || !r.totals) { console.error(r.error || 'RIGS daemon is not running (rigs start).'); process.exit(1); }
+    const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n));
+    const h = (ms) => (ms / 3600000).toFixed(1) + 'h';
+    console.log(`${r.totals.count} records since ${opt('--since', '7d')} · ${k(r.totals.totalTokens)} tokens · ${h(r.totals.durationMs)}${r.totals.costUsd != null ? ` · $${r.totals.costUsd.toFixed(2)}` : ''}`);
+    for (const g of r.groups[group] || []) console.log(`  ${String(g.label).slice(0, 40).padEnd(40)} ${String(g.count).padStart(5)}  ${k(g.totalTokens).padStart(7)} tok  ${h(g.durationMs).padStart(7)}  ${g.done} done / ${g.failed} failed`);
+    for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
+  },
   async status() {
     const nodes = await daemonFetch('/api/nodes').catch(() => null);
     if (!Array.isArray(nodes)) { console.log('RIGS daemon is not running (rigs start).'); process.exit(1); }
@@ -185,6 +204,8 @@ const commands = {
   rigs propose [--title T]  hand the committed branch (cwd) to the merge steward
   rigs merge           merge steward + queue status
   rigs control off [reason]  kill switch: stop OS control (screen + input) on this machine, stays off
+  rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
+  rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

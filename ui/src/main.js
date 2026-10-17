@@ -11,6 +11,7 @@ import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
+import { createUsage } from './usage-panel.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -1169,6 +1170,9 @@ function wire() {
   const questions = createQuestions($('#questions'), { onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }) });
   makeFloating($('#questions'), { id: 'questions', title: 'Questions', into: $('#questions .wk-head'), keep: [$('#questions .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => questions.setActive(!closed && !collapsed) });
   { const st = panelState('questions'); questions.setActive(!st.closed && !st.collapsed); }
+  const usagePanel = createUsage($('#usage'));
+  makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => usagePanel.setActive(!closed && !collapsed) });
+  { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.collapsed); }
   agentsPanel = createAgents($('#agents'), {
     snapshot: () => snap, onAttach: attachSession, onChat: attachChat,
     onCount: (n, waiting) => { const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
@@ -1182,6 +1186,7 @@ function wire() {
   $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#btn-agents').onclick = () => togglePanel('agents');
+  $('#btn-usage').onclick = () => togglePanel('usage');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();

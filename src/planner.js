@@ -261,7 +261,7 @@ export async function planProject(id, ctx, { brain } = {}) {
   p.status = 'planning';
   event(p, `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
   await saveProject(p);
-  const out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}` });
+  const out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}`, usage: { kind: 'plan', projectId: p.id, projectName: p.name } });
   if (out.error && !out.text) { p.status = 'draft'; event(p, 'planning failed: ' + out.error); await saveProject(p); throw new Error(out.error); }
   let parsed;
   try { parsed = extractJson(out.text); } catch (e) { p.status = 'draft'; event(p, 'planning failed: ' + e.message); await saveProject(p); throw new Error(`${e.message}: ${truncate(out.text, 300)}`); }
@@ -552,7 +552,7 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
     // Tasks that lost their machine (dispatch failed, machine offline) are placed again before starting.
     if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) placeUnassigned(p, await ctx.snapshot());
     const ts = p.tasks.filter((x) => ready(p, x, now) && (!only || x.id === only));
-    for (const t of ts) { t.status = 'starting'; t.startingAt = Date.now(); }
+    for (const t of ts) { t.status = 'starting'; t.startingAt = Date.now(); delete t.usageFrom; }
     await saveProject(p);
     return { p, ts: ts.map((t) => ({ ...t })) };
   });
@@ -602,6 +602,27 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
 }
 
 /**
+ * Usage ledger: where a finished stretch of a task run goes (wired by the server to usage.recordTaskRun; unset in
+ * tests). Each call covers the run from where the last one ended, so a "blocked" report followed by "done" never
+ * counts the same transcript twice.
+ */
+let runSink = null;
+export function onRunEnd(fn) { runSink = fn; }
+
+export function runEnded(p, t, status, summary = '') {
+  if (!t.run || !t.assign?.node) return null;
+  const until = Date.now();
+  const since = t.usageFrom || t.startingAt || t.run.startedAt || until;
+  t.usageFrom = until;
+  const e = {
+    node: t.assign.node, project: { id: p.id, name: p.name }, task: { id: t.id, title: t.title, kind: t.kind, attempts: t.attempts || 0 },
+    assign: { provider: t.assign.provider, model: t.assign.model, effort: t.assign.effort }, run: { ...t.run }, since, until, status, summary: String(summary || ''),
+  };
+  if (runSink) Promise.resolve().then(() => runSink(e)).catch((err) => log(`project ${p.id} ${t.id}: usage capture: ${err.message}`));
+  return e;
+}
+
+/**
  * A task that failed, stalled or ended silently gets a fresh attempt with the failure in its brief, one rung up the
  * model ladder (Sonnet medium → Opus high → Opus xhigh) unless the failure was the machine's (`escalate: false`, e.g.
  * a dispatch error, retried after `delayMs`). When the project's attempt budget (config.autonomy.maxAttempts) is
@@ -610,6 +631,7 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
 export function retryOrFail(p, t, why, { escalate = true, delayMs = 0, now = Date.now() } = {}) {
   const A = autonomy.settings(p);
   const max = A.enabled ? A.maxAttempts : MAX_ATTEMPTS;
+  runEnded(p, t, 'failed', why);
   t.attempts = (t.attempts || 0) + 1;
   t.lastFailure = truncate(String(why || ''), 1500);
   (t.history ||= []).push({ attempt: t.attempts, at: now, node: t.assign?.node || '', provider: t.assign?.provider || '', model: t.assign?.model || '', effort: t.assign?.effort || '', why: truncate(String(why || ''), 300) });
@@ -809,6 +831,7 @@ async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
       // On a paused project this only records the next attempt; it starts when Sir resumes.
       if (p.status !== 'paused') tell(ctx, p, `${p.name}: “${t.title}” failed — retrying (attempt ${t.attempts + 1}${t.escalate ? `, ${t.escalate.model} ${t.escalate.effort}` : ''}) with what went wrong.`);
     } else {
+      if (was !== status && ['done', 'failed', 'blocked'].includes(status)) runEnded(p, t, status, summary);
       t.status = status;
       t.stalled = false; // an agent's own report replaces the watchdog's verdict
       if (summary !== undefined) t.summary = truncate(summary, 4000);
@@ -862,6 +885,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
   const unfinished = st.state === 'done' && /^(blocked_on|denied|canceled|escalation)$/.test(st.closure || '') && autonomy.settings(p).enabled;
   if (st.state === 'done' && !unfinished) {
     t.status = 'done'; t.summary ||= `queue item closed (${st.closure || 'done'})`; event(p, `${t.id} → done (OpenRig queue)`);
+    runEnded(p, t, 'done', t.summary);
     return true;
   }
   if (st.state === 'ended') {
@@ -895,6 +919,7 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
     t.status = 'blocked';
     t.stalled = true;
     t.summary = `stalled: idle ${Math.round((now - w.idleSince) / 60000)} min without a report after ${w.nudges} nudges — check its session`;
+    runEnded(p, t, 'blocked', t.summary);
     event(p, `${t.id} → blocked (stalled)`);
     tell(ctx, p, `${p.name}: “${t.title}” has stalled on ${t.assign?.node} and does not respond to nudges.`, 'error');
     return true;
@@ -1109,7 +1134,7 @@ export async function stopProject(id, ctx, { reason = '', by = '' } = {}) {
     if (!p) throw new Error('project not found');
     const out = [];
     for (const t of p.tasks) {
-      if (t.run && ['running', 'review', 'starting'].includes(t.status)) out.push({ node: t.assign.node, run: t.run });
+      if (t.run && ['running', 'review', 'starting'].includes(t.status)) { out.push({ node: t.assign.node, run: t.run }); runEnded(p, t, 'stopped', `paused by ${by || 'Sir'}${reason ? ': ' + reason : ''}`); }
       if (['running', 'starting'].includes(t.status)) { t.status = 'todo'; t.run = null; t.watch = null; }
     }
     if (p.status !== 'done') p.status = 'paused';
