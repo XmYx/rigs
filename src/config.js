@@ -88,7 +88,9 @@ function defaults() {
     },
     update: { auto: true, intervalMin: 10, remote: 'origin', branch: 'main' },
     ssh: { autoAuthorize: true, manageConfig: true, authorizeStaticPeers: false },
-    openrig: { registerPeers: true },
+    // hubs: a persistent rig per pinned project (lead seat + on-demand workers, idle workers stopped after
+    // idleMinutes) and JARVIS's own "jarvis" rig with an overseer seat on the core-brain machine (src/hubs.js).
+    openrig: { registerPeers: true, hubs: { enabled: true, jarvis: true, idleMinutes: 20, lead: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, overseer: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } } },
     // Change policy: work branches merged by one steward. steward: '' = auto (first machine that can push).
     merge: { steward: '' },
     desktop: { sunshineUser: 'rigs', sunshinePass: crypto.randomBytes(12).toString('base64url') },

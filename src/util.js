@@ -33,7 +33,8 @@ export function which(name, extra = []) {
   const hit = whichCache.get(key);
   if (hit && (hit.path || Date.now() - hit.at < 60000)) return hit.path;
   const exts = isWin ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.PS1').split(';').map((e) => e.toLowerCase()) : [''];
-  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  // The service's own PATH first, then the usual install dirs: launchd/systemd hand services a thin PATH.
+  const dirs = augmentedPath().split(path.delimiter).filter(Boolean);
   const candidates = [];
   for (const d of dirs) for (const e of exts) candidates.push(path.join(d, isWin && path.extname(name) ? name : name + e));
   candidates.push(...extra);

@@ -21,6 +21,7 @@ import * as rootsteps from './rootsteps.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
 import * as models from './models.js';
+import * as hubs from './hubs.js';
 import * as openrig from './openrig.js';
 import * as planner from './planner.js';
 import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
@@ -238,11 +239,11 @@ export async function startServer() {
 
   async function snapshotFor(node) {
     const get = (p) => (node.self ? localCall(p) : peerJson(node, p, { timeout: 7000 }));
-    const [sess, brains, rig, info, projects, att, apps] = await Promise.all([
+    const [sess, brains, rig, info, projects, att, apps, hubsSt] = await Promise.all([
       get('sessions').catch(() => []), get('brains').catch(() => []), get('openrig').catch(() => null), node.self ? selfInfo() : get('info').catch(() => node),
-      get('projects').catch(() => []), get('attention').catch(() => []), get('apps').then((r) => r.apps || []).catch(() => []),
+      get('projects').catch(() => []), get('attention').catch(() => []), get('apps').then((r) => r.apps || []).catch(() => []), get('hubs').catch(() => null),
     ]);
-    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects, attention: att, apps };
+    return { node: stripNode({ ...node, ...info, self: node.self, url: node.url, online: true }), sessions: sess, brains, openrig: rig, projects, attention: att, apps, hubs: hubsSt };
   }
 
   async function meshSnapshot() {
@@ -353,7 +354,8 @@ export async function startServer() {
     // A finished project lets its agent team go (rig down keeps transcripts and a snapshot).
     release: (p) => {
       const rigs = new Map();
-      for (const t of p.tasks) if (t.run?.mode === 'openrig' && t.run.rig) rigs.set(`${t.assign?.node}|${t.run.rig}`, { node: t.assign?.node, run: t.run });
+      // Pinned projects' hub rigs are persistent (idle workers are reaped by hubs.reapIdle): never downed here.
+      for (const t of p.tasks) if (t.run?.mode === 'openrig' && t.run.rig && !t.run.hub) rigs.set(`${t.assign?.node}|${t.run.rig}`, { node: t.assign?.node, run: t.run });
       for (const { node, run: r } of rigs.values()) callNode(node, 'work/stop', { method: 'POST', body: r, timeout: 150000 }).catch((e) => log('release:', e.message));
     },
     // A finished RIGS self-change: its worktree lives on the project's own machine (this one — fileWork made it here).
@@ -378,6 +380,19 @@ export async function startServer() {
     const self = config();
     const t = String(title || session.id).slice(0, 80);
     broadcastNotify({ text: `${agent} · ${t} started on ${self.name}`, speak: false, from: self.name, session: { nodeId: self.nodeId, nodeName: self.name, kind: session.kind, id: session.id, title: t } }).catch((e) => log('session-popup', e.message));
+  }
+
+  /** Every new OpenRig seat surfaces as a terminal in every JARVIS UI (the session-popups mechanism). */
+  function announceSeats(req, seats, where) {
+    for (const seat of seats || []) announceSession(req, { kind: 'rig', id: seat }, { agent: 'OpenRig', title: `${seat.split('@')[0].replace(/^team-/, '')} seat${where ? ' · ' + String(where).split(/[\\/]/).pop() : ''}` });
+  }
+
+  /** Calls to the machine that hosts the jarvis rig (the core brain's). */
+  function jarvisCall(sub, method = 'GET', body) {
+    const core = config().brain?.core?.node;
+    // A lookup must not hold up Sir's instruction: a slow or absent overseer just means no overseer this time.
+    const call = callNode(!core || core === config().name ? 'self' : core, sub, { method, body, timeout: method === 'GET' ? 5000 : 30000 });
+    return method === 'GET' ? Promise.race([call, new Promise((r) => setTimeout(r, 5000, null))]) : call; // local calls have no timeout of their own
   }
 
   // Local handlers are invoked directly for the self node so the gateway never loops over HTTP.
@@ -583,6 +598,29 @@ export async function startServer() {
       };
     }
     if (sub === 'projects' && method === 'POST') return planner.createProject(await body());
+    if (sub === 'projects/intake' && method === 'POST') {
+      // JARVIS files an instruction under a project and casts an agent for it. Matched before projects/<id>, which
+      // would otherwise read "intake" as a project id ("project not found"). The project may live on another
+      // machine: forward to its owner. The main "rigs" project is created here when no machine has it — or when
+      // the machine that has it does not answer — so the default project never fails.
+      const b = await body();
+      const want = b.newProject ? null : (b.project || planner.MAIN_ID);
+      if (want && !(await planner.getProject(want))) {
+        const owner = (await meshSnapshot()).find((e) => !e.node.self && !e.offline && (e.projects || []).some((x) => x.id === want));
+        if (owner) {
+          try { return await callNode(owner.node.id, 'projects/intake', { method: 'POST', body: b, timeout: 10 * 60 * 1000 }); }
+          catch (e) { if (want !== planner.MAIN_ID) throw e; log(`intake: ${owner.node.name} (owner of "${want}") did not answer (${e.message}) — filing it here`); }
+        } else if (want !== planner.MAIN_ID) throw new HttpError(404, `project ${want} not found on any machine`);
+      }
+      // JARVIS's overseer seat hands the work out: it is the recorded source, and gets Sir's instruction to own.
+      if (!b.source) b.source = (await jarvisCall('hubs/jarvis', 'GET').catch(() => null))?.overseer || undefined;
+      const r = await planner.intake(b, plannerCtx);
+      if (b.source && r.task) {
+        jarvisCall('hubs/jarvis/intake', 'POST', { instruction: String(b.instruction || b.title), project: r.project, task: r.task, run: r.task.run })
+          .catch((e) => log('intake → overseer:', e.message));
+      }
+      return { ...r, overseer: b.source || null };
+    }
     if ((mm = m(/^projects\/([\w-]+)$/))) {
       if (method === 'DELETE') { await planner.stopProject(mm[1], plannerCtx).catch(() => {}); return { ok: await planner.deleteProject(mm[1]) }; }
       const pr = await planner.getProject(mm[1]);
@@ -607,18 +645,6 @@ export async function startServer() {
       if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
       return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;
     }
-    if (sub === 'projects/intake' && method === 'POST') {
-      // JARVIS files an instruction under a project and casts an agent for it. The project may live on
-      // another machine: forward to its owner (the main project too, wherever it was first created).
-      const b = await body();
-      const want = b.newProject ? null : (b.project || planner.MAIN_ID);
-      if (want && !(await planner.getProject(want))) {
-        const owner = (await meshSnapshot()).find((e) => !e.node.self && (e.projects || []).some((x) => x.id === want));
-        if (owner) return callNode(owner.node.id, 'projects/intake', { method: 'POST', body: b, timeout: 10 * 60 * 1000 });
-        if (want !== planner.MAIN_ID) throw new HttpError(404, `project ${want} not found on any machine`);
-      }
-      return planner.intake(b, plannerCtx);
-    }
     if ((mm = m(/^projects\/([\w-]+)\/tasks\/([\w-]+)$/))) {
       if (method === 'DELETE') {
         const pr = await planner.getProject(mm[1]);
@@ -642,8 +668,17 @@ export async function startServer() {
       const b = await body();
       const r = await work.startTask(b);
       if (r?.session) announceSession(b, r.session, { agent: b.task?.assign?.provider || r.mode, title: `${b.task?.id || ''} ${b.task?.title || ''}`.trim() || r.session.id });
+      announceSeats(b, (r?.newSeats || []).filter((x) => x !== r.session?.id), b.project?.name);
       return r;
     }
+    // persistent OpenRig rigs: pinned-project hubs and JARVIS's own rig (src/hubs.js)
+    if (sub === 'hubs' && method === 'GET') return hubs.status();
+    if (sub === 'hubs/up' && method === 'POST') { const b = await body(); const r = await hubs.up(b.path); announceSeats(b, r.newSeats, b.path); return r; }
+    if (sub === 'hubs/down' && method === 'POST') return hubs.down((await body()).path);
+    if (sub === 'hubs/send' && method === 'POST') { const b = await body(); const r = await hubs.sendToHub(b.path, b.text, b.seat); announceSeats(b, r.newSeats, b.path); return r; }
+    if (sub === 'hubs/jarvis' && method === 'GET') return { overseer: await hubs.overseer(), core: hubs.isCoreNode() };
+    if (sub === 'hubs/jarvis' && method === 'POST') { const r = await hubs.ensureJarvis(); announceSeats({}, r.newSeats, 'JARVIS'); return r; }
+    if (sub === 'hubs/jarvis/intake' && method === 'POST') return hubs.overseerIntake(await body());
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
     if (sub === 'work/nudge' && method === 'POST') return work.nudgeTask(await body());
@@ -997,6 +1032,17 @@ export async function startServer() {
     .catch((e) => log('openrig keep-alive:', e.message)));
   setTimeout(keepOpenRig, 12000).unref();
   setInterval(keepOpenRig, 2 * 60 * 1000).unref();
+  // Persistent rigs: JARVIS's overseer rig on the core-brain machine; idle hub workers stopped (leads stay).
+  // Throwaway nodes (tests) never start agents.
+  if (!process.env.RIGS_NO_MIGRATIONS) {
+    const keepHubs = () => hubs.keep().then((r) => {
+      if (r.jarvis?.newSeats?.length) announceSeats({}, r.jarvis.newSeats, 'JARVIS');
+      if (r.jarvis?.error) log('jarvis rig:', r.jarvis.error);
+      if (r.reaped?.stopped?.length) log(`openrig: stopped idle worker seat(s) ${r.reaped.stopped.join(', ')}`);
+    }).catch((e) => log('hubs:', e.message));
+    setTimeout(keepHubs, 45000).unref();
+    setInterval(keepHubs, 2 * 60 * 1000).unref();
+  }
 
   // Warm the workspace index so the first routed request doesn't wait for a scan.
   setTimeout(() => sessionDirs().then((extraDirs) => workspaces.list({ extraDirs })).catch(() => {}), 10000).unref();

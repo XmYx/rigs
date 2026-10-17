@@ -4,7 +4,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
-import { CODEX_AUTO_PROFILE, codexAutoProfileReady, wrapperTarget } from './agentmodes.js';
+import * as hubs from './hubs.js';
+import { AGENT_REF, GONE, agentsDir as openrigAgentsDir, memberFor, memberYaml, modelTag, slug, specYaml } from './hubs.js';
 import * as openrig from './openrig.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
@@ -12,34 +13,19 @@ import { APP_DIR, HOME, expandHome, isWin, run, sleep } from './util.js';
 
 /**
  * Runs ONE planned task on THIS machine. Called by the project's owner node through the mesh.
- * Two ways to run it:
- *  - openrig: a one-seat rig (runtime/model/effort set in the spec) + the task as an owned queue item
- *  - direct: the agent CLI in a tmux session (or a terminal on Windows) with model/effort flags
+ * Ways to run it:
+ *  - hub: the folder is a pinned project → its persistent rig (src/hubs.js): a worker seat with the routed
+ *    model/effort gets the task as a queue item, or a follow-up is typed into the seat that holds the context
+ *  - openrig: the project's own team rig (a seat per role + model) + the task as an owned queue item
+ *  - direct: the agent CLI in a tmux session (or a terminal on Windows) with model/effort flags — only where
+ *    OpenRig is unavailable (not installed, unhealthy, Windows, or a provider OpenRig can't run)
  */
-
-const AGENT_REF = {
-  code: 'development/implementer', test: 'development/qa', review: 'review/independent-reviewer',
-  research: 'research/analyst', docs: 'research/analyst', 'reverse-engineer': 'research/analyst',
-  architecture: 'orchestration/orchestrator', plan: 'orchestration/orchestrator',
-};
 
 function q(s) {
   return isWin ? `'${String(s).replace(/'/g, "''")}'` : `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
-export function slug(s, n = 24) {
-  return String(s || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, n) || 'x';
-}
-
-function openrigAgentsDir() {
-  const r = bin('rig');
-  if (!r) return null;
-  try {
-    const real = wrapperTarget(r) || fs.realpathSync(r); // …/@openrig/cli/dist/bin-wrapper.js
-    const dir = path.join(path.dirname(path.dirname(real)), 'daemon', 'specs', 'agents');
-    return fs.existsSync(dir) ? dir : null;
-  } catch { return null; }
-}
+export { slug, modelTag };
 
 async function prepareWorkdir(workdir, gitUrl) {
   const dir = path.resolve(expandHome(workdir || '~'));
@@ -54,7 +40,7 @@ async function prepareWorkdir(workdir, gitUrl) {
   return dir;
 }
 
-export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto' }) {
+export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto', source }) {
   const dir = await prepareWorkdir(workdir, project.gitUrl);
   // The installed checkout is production: agents change RIGS in a dev worktree (rigs_dev_start), never here.
   if (isInstall(dir)) throw new Error(`refusing to run an agent in the installed RIGS checkout (${dir}) — RIGS changes go through a dev worktree`);
@@ -67,10 +53,13 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   const pointer = `Read ${brief.split(path.sep).join('/')} and carry out the task it describes. Report back with the project_task_update tool when you are done.`;
   const a = task.assign;
   if (mode !== 'direct' && !isWin) await ensureDaemon().catch(() => {});
-  const rigOk = ['claude', 'codex', 'stub'].includes(a.provider) && !isWin && openrigAgentsDir() && (await openrig.status(true)).daemon === 'running';
+  const st = await openrig.status(true);
+  const rigOk = ['claude', 'codex', 'stub'].includes(a.provider) && !isWin && !!openrigAgentsDir() && st.healthy !== false && st.daemon === 'running';
   const useRig = mode === 'openrig' ? rigOk : mode === 'direct' ? false : rigOk;
-  if (mode === 'openrig' && !rigOk) throw new Error('OpenRig is not available on this machine (needs `rig` + a running daemon, Claude Code or Codex)');
-  if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy })), brief };
+  if (mode === 'openrig' && !rigOk) throw new Error(st.health || 'OpenRig is not available on this machine (needs `rig` + a running daemon, Claude Code or Codex)');
+  const pin = hubs.hubSettings().enabled ? hubs.pinFor(dir) : null;
+  if (useRig && pin) return { ...(await hubs.dispatchTask({ pin, project, task, dir, brief, pointer, policy, source })), brief };
+  if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy, source })), brief };
   return { ...(await startDirect({ project, task, dir, pointer })), brief };
 }
 
@@ -81,73 +70,23 @@ export function isInstall(dir) {
   return d === app || d.startsWith(app + path.sep);
 }
 
-/** A short, stable tag for a seat id: claude-opus-5-5 → opus, gpt-6.1-sol → codex. */
-export function modelTag(a) {
-  const m = String(a.model || '').toLowerCase();
-  const fam = (m.match(/opus|sonnet|haiku|fable/) || [])[0];
-  if (fam) return fam;
-  if (a.provider === 'codex' || a.provider === 'stub') return a.provider;
-  return slug(m || a.provider || 'agent', 10);
-}
-
-function memberYaml(mb, indent = '') {
-  return [
-    `${indent}id: ${mb.id}`,
-    `${indent}agent_ref: ${JSON.stringify('path:' + mb.agentRef)}`,
-    `${indent}runtime: ${mb.runtime}`,
-    `${indent}profile: default`,
-    `${indent}cwd: ${JSON.stringify(mb.cwd)}`,
-    ...(mb.model ? [`${indent}model: ${JSON.stringify(mb.model)}`] : []),
-    ...(mb.effort ? [`${indent}effort: ${JSON.stringify(mb.effort)}`] : []),
-    // Codex has no auto mode of its own; under builtin:auto OpenRig launches it "at the floor", which with a named
-    // profile means `-p rigs-auto`: workspace-write + network, asking only to escalate (see agentmodes.js).
-    ...(mb.codexProfile ? [`${indent}codex_config_profile: ${mb.codexProfile}`] : []),
-    `${indent}role: ${mb.role}`,
-  ];
-}
-
-function specYaml(rigName, summary, policy, members) {
-  return [
-    'version: "0.2"',
-    `name: ${rigName}`,
-    `summary: ${JSON.stringify(summary)}`,
-    ...(policy && policy !== 'floor' ? [`permission_policy: ${policy}`] : []),
-    'pods:',
-    '  - id: team',
-    `    label: ${JSON.stringify('team')}`,
-    '    members:',
-    ...members.flatMap((mb) => memberYaml(mb, '        ').map((l, i) => (i === 0 ? '      - ' + l.trimStart() : l))),
-    '    edges: []',
-    'edges: []',
-    '',
-  ].join('\n');
-}
-
-const GONE = /detached|stopped|exited|dead|failed/i;
-
 /**
  * One OpenRig team per project on each machine: rig `<project>-<id>`, pod `team`, one seat per role + model
  * (`team-code-opus@…`). A task goes to an idle seat of its kind; a new role — or every same-role seat busy —
  * adds a seat with `rig add`. Seats keep their context between tasks, like colleagues on the project.
  */
-async function startOpenRig({ project, task, dir, brief, policy }) {
+async function startOpenRig({ project, task, dir, brief, policy, source }) {
   const a = task.assign;
-  const agents = openrigAgentsDir();
-  const rig = bin('rig');
   const rigName = slug(`${project.slug}-${String(project.id || '').slice(0, 4)}`, 40);
-  const runtime = a.provider === 'codex' ? 'codex' : a.provider === 'stub' ? 'stub' : 'claude-code';
   const base = slug(`${task.kind || 'work'}-${modelTag(a)}`, 22);
-  const member = (id) => ({
-    id, agentRef: path.join(agents, AGENT_REF[task.kind] || AGENT_REF.code), runtime, cwd: dir, model: a.model, effort: a.effort,
-    role: slug(task.kind || 'builder', 20), codexProfile: runtime === 'codex' && policy !== 'builtin:yolo' && codexAutoProfileReady() ? CODEX_AUTO_PROFILE : '',
-  });
+  const member = (id) => memberFor({ id, kind: task.kind, assign: a, cwd: dir, policy });
   const specDir = path.join(RIGS_HOME, 'rigs', rigName);
   await fsp.mkdir(specDir, { recursive: true });
 
   let seats = (await openrig.status(true)).nodes?.filter((n) => n.rig === rigName) || [];
   if (seats.length && seats.every((n) => GONE.test(n.status || ''))) {
     // The team was stopped (or the machine restarted): start it fresh rather than half-restoring it.
-    await run(rig, ['down', rigName, '--delete', '--force', '--json'], { timeout: 120000 });
+    await openrig.rigRun(['down', rigName, '--delete', '--force', '--json'], { timeout: 120000 });
     seats = [];
   }
   const live = (id) => seats.find((n) => n.session === `team-${id}@${rigName}` && !GONE.test(n.status || ''));
@@ -158,9 +97,9 @@ async function startOpenRig({ project, task, dir, brief, policy }) {
   if (!seats.length) {
     const spec = path.join(specDir, 'rig.yaml');
     await fsp.writeFile(spec, specYaml(rigName, `RIGS project ${project.name}`, policy, [member(id)]));
-    const v = await run(rig, ['spec', 'validate', spec], { timeout: 30000 });
+    const v = await openrig.rigRun(['spec', 'validate', spec], { timeout: 30000 });
     if (v.code !== 0) throw new Error('rig spec invalid: ' + (v.stdout + v.stderr).trim().slice(-400));
-    const up = await run(rig, ['up', spec, '--yes', '--json'], { timeout: 300000 });
+    const up = await openrig.rigRun(['up', spec, '--yes', '--json'], { timeout: 300000 });
     let upJson = null;
     try { upJson = JSON.parse(up.stdout.slice(up.stdout.indexOf('{'))); } catch {}
     const node = upJson?.stages?.flatMap((s) => s.detail?.nodes || [])[0];
@@ -169,7 +108,7 @@ async function startOpenRig({ project, task, dir, brief, policy }) {
   } else if (!seat) {
     const frag = path.join(specDir, `${id}.member.yaml`);
     await fsp.writeFile(frag, memberYaml(member(id)).join('\n') + '\n');
-    const add = await run(rig, ['add', rigName, 'team', frag, '--json'], { timeout: 300000 });
+    const add = await openrig.rigRun(['add', rigName, 'team', frag, '--json'], { timeout: 300000 });
     let addJson = null;
     try { addJson = JSON.parse(add.stdout.slice(add.stdout.indexOf('{'))); } catch {}
     seat = addJson?.result?.node?.sessionName;
@@ -185,7 +124,7 @@ async function startOpenRig({ project, task, dir, brief, policy }) {
     if (!seat) throw new Error('rig add failed: ' + (add.stdout + add.stderr).trim().slice(-400));
   }
 
-  const qc = await run(rig, ['queue', 'create', '--source', `rigs-planner@${config().name}`, '--destination', seat, '--body-file', brief,
+  const qc = await openrig.rigRun(['queue', 'create', '--source', source || `rigs-planner@${config().name}`, '--destination', seat, '--body-file', brief,
     '--summary', task.title.slice(0, 120), '--tags', `project:${project.id},task:${task.id}`, '--tier', task.size === 'L' ? 'deep' : 'routine'], { timeout: 60000 });
   const qitem = (qc.stdout.match(/qitem-[\w-]+/) || [])[0];
   if (!qitem) throw new Error('rig queue create failed: ' + (qc.stdout + qc.stderr).trim().slice(-300));
@@ -224,12 +163,11 @@ async function startDirect({ project, task, dir, pointer }) {
  * queues come back. Returns what it did.
  */
 export async function ensureDaemon() {
-  const rig = bin('rig');
-  if (!rig || isWin) return { skipped: true };
+  if (!bin('rig') || isWin) return { skipped: true };
   const st = await openrig.status(true);
   if (st.daemon === 'running') return { running: true };
   if (st.daemon !== 'stopped') return { unknown: true }; // slow to answer is not down: never start a second daemon
-  const r = await run(rig, ['daemon', 'start'], { timeout: 120000 });
+  const r = await openrig.rigRun(['daemon', 'start'], { timeout: 120000 });
   const after = await openrig.status(true);
   return { started: after.daemon === 'running', output: (r.stdout + r.stderr).trim().slice(-200) };
 }
@@ -250,7 +188,6 @@ async function seatAlive(seat) {
  */
 export async function reviveTask(run_) {
   if (run_.mode !== 'openrig' || !run_.seat) return { ok: false, reason: 'not an OpenRig seat' };
-  const rig = bin('rig');
   const d = await ensureDaemon();
   // Nothing to bring back: the agent is fine (a daemon that was down and is up again doesn't kill its seats).
   if (await seatAlive(run_.seat)) return { ok: true, restored: false, how: d.started ? 'OpenRig was down — restarted it; the agent was unaffected' : 'the seat was alive' };
@@ -259,11 +196,11 @@ export async function reviveTask(run_) {
   let how;
   let out = { stdout: '', stderr: '' };
   if (!anyLive) {
-    out = await run(rig, ['up', run_.rig, '--existing', '--yes', '--json'], { timeout: 300000 });
+    out = await openrig.rigRun(['up', run_.rig, '--existing', '--yes', '--json'], { timeout: 300000 });
     how = 'restored the team from its snapshot (conversations resumed)';
   } else {
-    await run(rig, ['seat', 'clean', run_.seat], { timeout: 60000 });
-    out = await run(rig, ['seat', 'launch', run_.seat], { timeout: 300000 });
+    await openrig.rigRun(['seat', 'clean', run_.seat], { timeout: 60000 });
+    out = await openrig.rigRun(['seat', 'launch', run_.seat], { timeout: 300000 });
     how = 'gave the seat a fresh occupant';
   }
   // Success is the seat being live again (the CLI can exit non-zero on warnings while the restore worked).
@@ -279,7 +216,7 @@ export async function taskStatus(run_) {
     // A seat that died (reboot, killed session) leaves its queue item "in progress" forever: say so, so it is revived.
     const alive = await seatAlive(run_.seat).catch(() => true);
     if (alive === null) return { state: 'daemon-down' };
-    const r = await run(bin('rig'), ['queue', 'show', run_.qitem, '--json'], { timeout: 15000 });
+    const r = await openrig.rigRun(['queue', 'show', run_.qitem, '--json'], { timeout: 15000 });
     try {
       const j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
       const state = j.state || j.qitem?.state || j.waiting?.state;
@@ -306,12 +243,13 @@ export async function taskStatus(run_) {
 export async function findTask({ project, task }) {
   const tags = [`project:${project.id}`, `task:${task.id}`];
   if (bin('rig')) {
-    const r = await run(bin('rig'), ['queue', 'list', '--json'], { timeout: 20000 });
+    const r = await openrig.rigRun(['queue', 'list', '--json'], { timeout: 20000 });
     try {
       const j = JSON.parse(r.stdout.slice(r.stdout.search(/[[{]/)));
       const items = (Array.isArray(j) ? j : j.items || j.qitems || []).filter((q) => tags.every((x) => (q.tags || []).includes(x)) && ['in-progress', 'pending'].includes(q.state));
       const q = items.sort((a, b) => (a.state === 'in-progress' ? -1 : 1) - (b.state === 'in-progress' ? -1 : 1) || String(b.tsCreated).localeCompare(String(a.tsCreated)))[0];
-      if (q) return { run: { mode: 'openrig', rig: q.destinationSession.split('@')[1], seat: q.destinationSession, qitem: q.qitemId, team: true, session: { kind: 'rig', id: q.destinationSession } } };
+      const rig = q && q.destinationSession.split('@')[1];
+      if (q) return { run: { mode: 'openrig', rig, hub: /^hub-/.test(rig), seat: q.destinationSession, qitem: q.qitemId, team: true, session: { kind: 'rig', id: q.destinationSession } } };
     } catch {}
   }
   const t = bin('tmux');
@@ -326,7 +264,7 @@ export async function findTask({ project, task }) {
 export async function nudgeTask({ text, ...run_ }) {
   if (!text) throw new Error('nothing to send');
   if (run_.mode === 'openrig' && run_.seat) {
-    const r = await run(bin('rig'), ['send', run_.seat, text], { timeout: 30000 });
+    const r = await openrig.rigRun(['send', run_.seat, text], { timeout: 30000 });
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().slice(-200) || 'rig send failed');
     return { ok: true, via: 'rig send' };
   }
@@ -342,7 +280,15 @@ export async function nudgeTask({ text, ...run_ }) {
 }
 
 export async function stopTask(run_) {
-  if (run_.mode === 'openrig' && run_.rig) return run(bin('rig'), ['down', run_.rig, '--json'], { timeout: 120000 });
+  // A pinned project's rig is persistent: stopping a task cancels its queue item (so no seat picks it up again) and
+  // stops its worker seat, never the rig. A task running in the lead is told to stop; the lead itself stays.
+  if (run_.mode === 'openrig' && run_.hub) {
+    if (run_.qitem) await openrig.rigRun(['queue', 'update', run_.qitem, '--state', 'canceled', '--note', 'RIGS: Sir stopped this task'], { timeout: 30000 });
+    if (!run_.seat) return null;
+    if (run_.seat === run_.lead) return openrig.rigRun(['send', run_.seat, 'RIGS: Sir stopped the task you were given. Stop working on it now and wait for new instructions.'], { timeout: 30000 });
+    return openrig.rigRun(['seat', 'stop', run_.seat, '--reason', 'RIGS: task stopped', '--json'], { timeout: 60000 });
+  }
+  if (run_.mode === 'openrig' && run_.rig) return openrig.rigRun(['down', run_.rig, '--json'], { timeout: 120000 });
   if (run_.session?.kind === 'tmux') return run(bin('tmux') || 'tmux', ['kill-session', '-t', run_.session.id], { timeout: 5000 });
   return null;
 }

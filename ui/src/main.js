@@ -266,21 +266,63 @@ const inside = (cwd, root) => !!cwd && !!root && (cwd === root || cwd.startsWith
 const pinSessions = (e, p) => (e.sessions || []).filter((s) => s.live !== false && inside(s.cwd, p.path));
 const allPins = () => snap.flatMap((e) => (e.node.pinnedProjects || []).map((p) => ({ ...p, node: e.node, entry: e })));
 
+const pinRig = (e, p) => (e?.hubs?.pins || []).find((x) => x.path === p.path) || null;
+const rigHealth = (e) => e?.hubs?.openrig || null;
+
+/** "3 seats · 1 running · 2 queued" — or why there is no rig. */
+function rigLine(r, health) {
+  if (health && !health.healthy) return 'OpenRig unusable';
+  if (!r || !r.exists) return 'no rig yet';
+  if (!r.up) return 'rig down';
+  const live = r.seats.filter((x) => x.live).length;
+  return `${live} seat${live === 1 ? '' : 's'} · ${r.running ? `${r.running} running` : 'idle'}${r.queue ? ` · ${r.queue} queued` : ''}`;
+}
+
 function projectWindow(pin) {
   const m = pin.node;
   const list = h('div', { class: 'proj-sessions' });
-  const w = openWindow({ title: `📌 ${pin.name} · ${m.name}`, width: 520, height: 420 });
+  const seatsEl = h('div', { class: 'proj-sessions proj-seats' });
+  const rigHead = h('div', { class: 'proj-rig-head' });
+  const msg = h('input', { class: 'path-input', placeholder: 'Message the lead seat…', onkeydown: (e) => { if (e.key === 'Enter') sendLead(); } });
+  const upDown = h('button', { class: 'btn' }, '…');
+  const w = openWindow({ title: `📌 ${pin.name} · ${m.name}`, width: 560, height: 520 });
+  const call = (sub, body) => api(`${node(m.id)}/hubs/${sub}`, { method: 'POST', body: { path: pin.path, ...body } });
+  async function sendLead() {
+    const text = msg.value.trim();
+    if (!text) return;
+    msg.disabled = true;
+    try { const r = await call('send', { text }); msg.value = ''; toast(`Sent to ${r.seat}.`, 'ok'); refresh(); } catch (e) { toast(e.message, 'error'); }
+    msg.disabled = false;
+  }
   const render = () => {
     const cur = allPins().find((x) => x.node.id === m.id && x.path === pin.path) || pin;
-    const ss = pinSessions(cur.entry, cur);
+    const ss = pinSessions(cur.entry, cur).filter((s) => s.kind !== 'rig');
     list.replaceChildren(...(ss.length ? ss.map((s) => h('div', { class: 'hub', onclick: () => attachSession(m, s) },
-      h('i', { style: { background: TYPES.machine.color } }), h('span', {}, s.title || s.id), h('em', {}, s.kind))) : [h('div', { class: 'muted small' }, 'No live sessions in this project.')]));
+      h('i', { style: { background: TYPES.machine.color } }), h('span', {}, s.title || s.id), h('em', {}, s.kind))) : [h('div', { class: 'muted small' }, 'No other live sessions in this project.')]));
+    const r = pinRig(cur.entry, cur);
+    const health = rigHealth(cur.entry);
+    rigHead.replaceChildren(h('b', {}, '⛭ OpenRig team'), h('span', { class: 'muted small' }, ` ${r?.rig || ''} · ${rigLine(r, health)}`));
+    if (health && !health.healthy) seatsEl.replaceChildren(h('div', { class: 'chip st-bad wrap' }, health.health || 'OpenRig is not usable on this machine.'));
+    else seatsEl.replaceChildren(...(r?.seats?.length ? r.seats.map((x) => h('div', { class: 'hub' + (x.live ? '' : ' off'), title: `${x.session} — ${x.live ? x.activity : x.status}`, onclick: () => (x.live ? attachSession(m, { kind: 'rig', id: x.session, title: x.session }) : toast('That seat is stopped — it comes back when work arrives.', 'info')) },
+      h('i', { style: { background: !x.live ? TYPES.offline.color : /idle/i.test(x.activity || '') && !x.work ? '#60a5fa' : '#4ade80' } }),
+      h('span', {}, `${x.lead ? '★ ' : ''}${x.id}`), h('em', {}, `${x.live ? (/idle/i.test(x.activity || '') && !x.work ? 'idle' : 'running') : 'stopped'}${x.queue ? ` · q${x.queue}` : ''} · ⌨`))) : [h('div', { class: 'muted small' }, 'No seats yet — the lead starts with the first task, a message, or “Bring rig up”.')]));
+    upDown.textContent = r?.up ? '⏹ Bring rig down' : '⏵ Bring rig up';
+    upDown.onclick = async () => {
+      upDown.disabled = true;
+      try {
+        if (r?.up) { if (!confirm(`Stop every seat of ${r.rig}? Conversations are kept and resume when it comes back up.`)) return; await call('down'); toast('Rig is down.', 'ok'); }
+        else { toast('Bringing the rig up…'); await call('up'); toast('Rig is up.', 'ok'); }
+        refresh();
+      } catch (e) { toast(e.message, 'error'); } finally { upDown.disabled = false; }
+    };
   };
   render();
   const t = setInterval(() => { if (!w.el.isConnected) clearInterval(t); else render(); }, 3000);
-  w.body.append(h('div', { class: 'muted small' }, `${m.name}:${pin.path}`), list,
+  w.body.append(h('div', { class: 'muted small' }, `${m.name}:${pin.path}`), rigHead, seatsEl,
+    h('div', { class: 'actions proj-send' }, msg, h('button', { class: 'btn primary', onclick: sendLead }, '➤ Send to lead'), upDown),
+    h('div', { class: 'pv-title small' }, 'Other sessions here'), list,
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', onclick: () => startAgent(m, 'claude', pin.path) }, '▶ New Claude here'),
+      h('button', { class: 'btn', onclick: () => startAgent(m, 'claude', pin.path) }, '▶ New Claude here'),
       h('button', { class: 'btn', onclick: () => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: pin.path, title: pin.name }) }, '⌨ Terminal here'),
       h('button', { class: 'btn', onclick: async () => { await pinProject(m, pin.path, pin.name, true); w.close(); } }, 'Unpin')));
 }
@@ -291,7 +333,12 @@ async function pinProject(m, path, name, remove = false) {
 
 function renderHubs() {
   const pinRows = allPins().map((p) => {
-    const el = h('div', { class: 'hub' + (p.node.online ? '' : ' off'), title: `${p.node.name}:${p.path}` }, h('i', { style: { background: '#fbbf24' } }), h('span', {}, `📌 ${p.name}`), h('em', {}, `${p.node.name} · ${pinSessions(p.entry, p).length}`));
+    const r = pinRig(p.entry, p);
+    const health = rigHealth(p.entry);
+    const rl = rigLine(r, health);
+    const el = h('div', { class: 'hub pin-hub' + (p.node.online ? '' : ' off'), title: `${p.node.name}:${p.path}\nOpenRig: ${r?.rig || '—'} — ${rl}` },
+      h('i', { style: { background: '#fbbf24' } }), h('span', {}, `📌 ${p.name}`), h('em', {}, `${p.node.name} · ${pinSessions(p.entry, p).length}`),
+      h('small', { class: 'rig-line' + (r?.up ? ' up' : '') + (health && !health.healthy ? ' bad' : '') }, `⛭ ${rl}`));
     el.onclick = () => projectWindow(p);
     return el;
   });

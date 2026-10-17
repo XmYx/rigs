@@ -5,12 +5,23 @@ import { config } from './config.js';
 import { tailscaleBin } from './tailscale.js';
 
 const WIN_PF = 'C:\\Program Files';
+/** `<name>` from every nvm-installed Node, newest first (a service's PATH rarely includes nvm). */
+function nvmBins(name) {
+  if (isWin) return [];
+  const dir = path.join(process.env.NVM_DIR || path.join(HOME, '.nvm'), 'versions', 'node');
+  const ver = (v) => v.replace(/^v/, '').split('.').map(Number);
+  try {
+    return fs.readdirSync(dir).sort((a, b) => { const x = ver(a); const y = ver(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2]; }).map((v) => path.join(dir, v, 'bin', name));
+  } catch { return []; }
+}
 const macApp = (app, bins) => ['/Applications', path.join(HOME, 'Applications')].flatMap((d) => bins.map((b) => path.join(d, `${app}.app`, 'Contents', 'MacOS', b)));
 const KNOWN = {
   claude: { extra: [path.join(HOME, '.local', 'bin', isWin ? 'claude.exe' : 'claude'), path.join(HOME, '.claude', 'local', 'claude')], args: ['--version'] },
   codex: { extra: [], args: ['--version'] },
   ollama: { extra: isWin ? [path.join(HOME, 'AppData', 'Local', 'Programs', 'Ollama', 'ollama.exe')] : ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama'], args: ['--version'] },
-  rig: { extra: [], args: ['--version'] },
+  // RIGS's own wrapper (~/.local/bin/rig, see agentmodes.js) pins the Node rig was installed with, so a broken
+  // `node` earlier on PATH (e.g. a Homebrew node missing its libicu) can't take OpenRig down: prefer it.
+  rig: { prefer: isWin ? [] : [path.join(HOME, '.local', 'bin', 'rig')], get extra() { return [path.join(HOME, '.npm-global', 'bin', 'rig'), ...nvmBins('rig'), '/opt/homebrew/bin/rig', '/usr/local/bin/rig']; }, args: ['--version'] },
   rea: { extra: [], args: ['--version'] },
   tmux: { extra: ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'], args: ['-V'] },
   git: { extra: isWin ? [WIN_PF + '\\Git\\cmd\\git.exe'] : [], args: ['--version'] },
@@ -24,6 +35,7 @@ const KNOWN = {
 export function bin(name) {
   if (name === 'tailscale') return tailscaleBin();
   const k = KNOWN[name];
+  for (const p of k?.prefer || []) { try { if (fs.statSync(p).isFile()) return p; } catch {} }
   return which(name, k?.extra || []);
 }
 

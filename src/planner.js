@@ -532,7 +532,7 @@ export async function dispatchReady(id, ctx, { only } = {}) {
     let r = null;
     let err = null;
     try {
-      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy }, timeout: 10 * 60 * 1000 });
+      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined }, timeout: 10 * 60 * 1000 });
     } catch (e) { err = e; }
     await withProject(id, async () => {
       const p = await getProject(id);
@@ -576,6 +576,8 @@ export async function dispatchReady(id, ctx, { only } = {}) {
 export function retryOrFail(p, t, why) {
   t.attempts = (t.attempts || 0) + 1;
   t.lastFailure = truncate(String(why || ''), 1500);
+  // The seat that held the work keeps its context: a retry in a persistent rig is typed into it if it is idle.
+  if (t.run?.seat) t.lastSeat = t.run.seat;
   t.run = null;
   t.watch = null;
   if (t.attempts < MAX_ATTEMPTS) {
@@ -895,6 +897,9 @@ export async function addTask(id, spec, snapshot) {
   const [t] = normalizeTasks({ tasks: [{ ...spec, id: tid }] });
   t.deps = (spec.deps || []).filter((d) => p.tasks.some((x) => x.id === d));
   if (spec.assign) { t.assign = { ...spec.assign, locked: true }; t.reason = 'set by hand'; }
+  // Who handed it out (JARVIS's overseer seat) and a seat that already holds the context (a follow-up).
+  if (spec.source) t.source = String(spec.source);
+  if (spec.followUp) t.followUp = String(spec.followUp);
   p.tasks.push(t);
   if (!spec.assign) routeProject(p, snapshot, { onlyUnassigned: true });
   if (p.status === 'draft') p.status = 'planned';
@@ -924,6 +929,7 @@ export async function intake(body, ctx) {
   const title = truncate(String(body.title || body.instruction).replace(/\s+/g, ' '), 100);
   const { task } = await addTask(p.id, {
     title, description: String(body.instruction || title), kind: body.kind, size: body.size, needs: body.needs, deps: body.deps,
+    source: body.source, followUp: body.followUp,
   }, await ctx.snapshot());
   if (!task.assign) return { project: brief(p), task, started: false, why: task.reason };
   // The main project and projects already running stay "running" (the planner tick tracks them); a project
