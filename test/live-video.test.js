@@ -54,7 +54,7 @@ async function setup({ mock: mockOpts = {}, settings = {}, overseer = false } = 
 // ---- Templates and node maps --------------------------------------------------------------------------
 
 test('templates: LTX t2v + i2v and Wan 2.1 load, each map points at real nodes', () => {
-  assert.deepEqual([...templates.keys()].sort(), ['ltxv-i2v', 'ltxv-t2v', 'wan21-t2v']);
+  assert.deepEqual([...templates.keys()].sort(), ['fasth3-i2v', 'fasth3-t2v', 'ltxv-i2v', 'ltxv-t2v', 'wan21-t2v']);
   for (const t of templates.values()) {
     for (const k of ['prompt', 'seed', 'width', 'height', 'frames', 'fps']) assert.ok(t.params[k]?.length, `${t.id} maps ${k}`);
     assert.ok(t.outputs.video && t.workflow[t.outputs.video], `${t.id} has a video output`);
@@ -97,6 +97,16 @@ test('buildWorkflow: values land on the mapped node inputs; the template itself 
   const o = W.buildWorkflow(t, {}, { ltxv: { checkpoint: 'my-ltx.safetensors' } });
   assert.equal(o['44'].inputs.ckpt_name, 'my-ltx.safetensors', 'model override by family');
   assert.equal(o['38'].inputs.clip_name, 't5xxl_fp16.safetensors', 'other slots keep the default');
+});
+
+test('FastH3: 17k+5 frames, and the V3 dynamic-combo options (SaveVideo format, sparse attention) are read as keys', () => {
+  const h3 = templates.get('fasth3-t2v');
+  assert.equal(W.framesFor(3, 24, h3.limits), 73);
+  assert.equal(W.framesFor(5, 24, h3.limits), 124);
+  const dyn = { SaveVideo: { input: { required: { format: ['COMFY_DYNAMICCOMBO_V3', { options: [{ key: 'auto', inputs: { required: {} } }, { key: 'mp4', inputs: { required: {} } }] }] } } } };
+  assert.deepEqual(W.inputOptions(dyn, 'SaveVideo', 'format'), ['auto', 'mp4']);
+  // sub-inputs of a dynamic combo are named "format.codec"; they are not in /object_info's top level, so they are skipped
+  assert.equal(W.inputOptions(dyn, 'SaveVideo', 'format.codec'), null);
 });
 
 test('framesFor / fitSize: model constraints (LTX 8n+1, Wan 4n+1, sizes in steps, ≤1280x720)', () => {
@@ -393,7 +403,7 @@ test('GPU overseer client: speaks the overseer API; unreachable is reported, rel
 });
 
 test('normalizeRequest: validation and Wan chain fallback', () => {
-  assert.throws(() => L.normalizeRequest({ template: 'nope', prompt: 'x' }, templates), /template must be one of: ltxv-t2v, wan21-t2v/);
+  assert.throws(() => L.normalizeRequest({ template: 'nope', prompt: 'x' }, templates), /template must be one of: fasth3-t2v, ltxv-t2v, wan21-t2v/);
   assert.throws(() => L.normalizeRequest({ template: 'ltxv-i2v', prompt: 'x' }, templates), /template/);
   assert.throws(() => L.normalizeRequest({ template: 'ltxv-t2v', prompt: '  ' }, templates), /prompt is empty/);
   assert.throws(() => L.normalizeRequest({ template: 'ltxv-t2v', prompt: 'x', mode: 'warp' }, templates), /mode/);
@@ -411,6 +421,7 @@ test('normalizeRequest: validation and Wan chain fallback', () => {
 test('server: healthz, static UI with relative URLs, /view proxied with Range, path traversal refused', async () => {
   const { base } = await setup();
   assert.deepEqual((await req(base, '/healthz')).data, { ok: true });
+  assert.deepEqual((await req(base, '/api/busy')).data, { busy: false }, 'the GPU overseer probes this');
   const html = await req(base, '/');
   assert.equal(html.status, 200);
   assert.match(html.headers.get('content-type'), /text\/html/);
@@ -434,7 +445,7 @@ test('server: ComfyUI down → status says so; start → 502 with the reason; no
   const st = await req(base, '/api/status');
   assert.equal(st.data.connection.ok, false);
   assert.match(st.data.connection.error, /unreachable at http:\/\/127\.0\.0\.1:9/);
-  assert.equal(st.data.templates.length, 3, 'templates still listed');
+  assert.equal(st.data.templates.length, 5, 'templates still listed');
   assert.equal((await req(base, '/api/live/start', { method: 'POST', body: { template: 'ltxv-t2v', prompt: 'x' } })).status, 502);
 
   const none = fs.mkdtempSync(path.join(process.env.RIGS_HOME, 'none-'));

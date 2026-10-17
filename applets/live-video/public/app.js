@@ -127,6 +127,7 @@ function renderTemplates() {
   const t2v = state.templates.filter((t) => t.kind === 't2v');
   sel.replaceChildren(...t2v.map((t) => el('option', { value: t.id }, (t.check && !t.check.ok ? '⚠ ' : '') + t.label)));
   if (t2v.some((t) => t.id === prev)) sel.value = prev;
+  else { const ready = t2v.find((t) => t.check?.ok); if (ready) sel.value = ready.id; }
   renderPickers(saved);
 }
 

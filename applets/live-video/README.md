@@ -27,16 +27,37 @@ No build step and no npm install beyond the repo itself (`ws` for the ComfyUI we
 plain Node 22 ESM and serves everything with **relative URLs**, so it works both at `/` and behind the App
 Cloud proxy at `/api/nodes/<node>/apps/live-video/`.
 
-As a service (Linux): `rigs-live-video.service` is a `systemctl --user` unit that runs it from
-`~/.rigs/app`. Once this branch is merged and rolled out:
+As a service: the migration `2026-10-17-live-video-applet` (`src/migrations.js`) runs once on every machine
+after this is merged. On Linux it installs `rigs-live-video.service` into `~/.config/systemd/user/` with the
+checkout's real path and runs `systemctl --user enable --now`; elsewhere it records a `command` launch. Either way it
+registers the applet in the App Cloud as **`live-video-comfy`** ("Live Video", port `8741`, `healthPath: "/healthz"`).
+The id is not `live-video` because that is already taken on magix-system by a separate Python app (port 8211). By hand:
 
 ```bash
-cp ~/.rigs/app/applets/live-video/rigs-live-video.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now rigs-live-video.service
+mesh_app_register  id=live-video-comfy  port=8741  healthPath=/healthz  launch={"systemd":"rigs-live-video.service"}
 ```
 
-then register it in the App Cloud (MCP `mesh_app_register`): id `live-video`, port `8741`,
-`healthPath: "/healthz"`, `launch: { "systemd": "rigs-live-video.service" }`.
+It opens at `/api/nodes/<node>/apps/live-video-comfy/`.
+
+GPU overseer (`~/apps/gpu-overseer/clients.json`): the lease is taken in ComfyUI's name (`comfyui` is already a
+client), and the applet adds a client of its own so the overseer can see whether it is busy:
+`{"id": "live-video-comfy", "name": "Live Video (ComfyUI applet)", "match": "applets/live-video/server.js", "busy": {"url": "http://127.0.0.1:8741/api/busy", "method": "GET"}}`.
+
+### Pointing it at a different ComfyUI
+
+The applet only needs HTTP(S) (and the `/ws` websocket) to a ComfyUI. In the page, put the URL in the ComfyUI
+field and press **Connect**, or `PUT api/settings {"comfyUrl": "http://gpu-box:8188"}`:
+
+- **Another machine on the tailnet:** start ComfyUI there with `--listen 0.0.0.0` (or the Tailscale IP) and use
+  `http://<machine>:8188`. Set `overseer.mode` to `auto` (the default): it only leases VRAM when ComfyUI is local.
+- **A remote host behind auth** (a reverse proxy, RunPod, a hosted ComfyUI): use an `https://` URL, then ⚙ to set the
+  token (`authToken`, and `authHeader` if it is not `Authorization`; a bare token is sent as `Bearer …`). The
+  token is stored in `~/.rigs/live-video/settings.json` (mode 0600) and never sent back to the page.
+- **Models live on that ComfyUI**, not here. The page lists what the chosen template is missing there and
+  never queues anything until it has every node and file; a differently named file is picked with
+  `models.<family>.<slot>` in the settings.
+- Generated clips stay on that ComfyUI and are streamed through this server (`api/view`), so the browser
+  only ever talks to the applet.
 
 ### Without a GPU: the mock ComfyUI
 
@@ -105,11 +126,12 @@ ComfyUI's `output/live-video/`).
 
 | Template | Models (in `ComfyUI/models/…`) | Size / length | Notes |
 | --- | --- | --- | --- |
+| `fasth3-t2v` FastH3 · 8 steps (with sound) | `diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors`, `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`, `vae/minimax_h3_video_vae_int8_convrot.safetensors`, `vae/minimax_h3_audio_vae_fp32.safetensors` | multiples of 32 up to 1280×704, 17k+5 frames at 24 fps | MiniMax H3 distilled to 8 steps; needs ComfyUI-MiniMax-H3 nodes (`MiniMaxH3ImageToVideo`…) and ~20 GB VRAM. Clips have audio (mp4). `fasth3-i2v` is its start-frame partner. About 40 s per 3 s clip at 864×480 on an RTX 4090 |
 | `ltxv-t2v` LTX-Video 2B · fast | `checkpoints/ltxv-2b-0.9.8-distilled.safetensors`, `text_encoders/t5xxl_fp16.safetensors` | multiples of 32 up to 1280×704, 8n+1 frames at 24 fps | 8 steps, cfg 1. About real time on a 4090 at 768×512 |
 | `ltxv-i2v` (used automatically) | same | same | start frame → video: an uploaded image, or the previous clip's last frame in continuous mode |
 | `wan21-t2v` Wan 2.1 1.3B · low-res | `diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors`, `text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors`, `vae/wan_2.1_vae.safetensors` | multiples of 16 up to 1280×720 (trained at 832×480), 4n+1 frames at 16 fps | 20 steps, uni_pc. No image-to-video: continuous mode falls back to drift |
 
-Every template uses only core ComfyUI nodes. The clip is saved with `SaveWEBM` (VP9) and the last frame
+The LTX and Wan templates use only core ComfyUI nodes (FastH3 needs the MiniMax H3 ones). The clip is saved with `SaveWEBM` (VP9) and the last frame
 comes out of `ImageFromBatch` → `PreviewImage` (a temp file), which continuous mode uploads as the next
 start image. A template is added by dropping a new `.api.json` + `.map.json` pair into `workflows/`.
 

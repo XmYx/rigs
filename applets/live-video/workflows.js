@@ -85,7 +85,8 @@ export function inputOptions(objectInfo, classType, input) {
   const spec = def?.required?.[input] || def?.optional?.[input];
   if (!spec) return null;
   if (Array.isArray(spec[0])) return spec[0];
-  if (Array.isArray(spec[1]?.options)) return spec[1].options;
+  // COMBO and the V3 dynamic combos (options are {key, inputs}) both list their choices in spec[1].options
+  if (Array.isArray(spec[1]?.options)) return spec[1].options.map((o) => (o && typeof o === 'object' && 'key' in o ? o.key : o));
   return null;
 }
 

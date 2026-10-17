@@ -198,6 +198,7 @@ export function createLiveVideoServer({
     }
     if (p === '/api/status' && m === 'GET') return send(res, 200, await status(url.searchParams.get('refresh') === '1'));
     if (p === '/api/live' && m === 'GET') return send(res, 200, live.snapshot());
+    if (p === '/api/busy' && m === 'GET') return send(res, 200, { busy: ['starting', 'running', 'stopping'].includes(live.snapshot().status) });
     if (p === '/api/live/start' && m === 'POST') {
       await detectedUrl();
       if (!currentUrl()) return send(res, 409, { error: 'Set the ComfyUI URL first' });

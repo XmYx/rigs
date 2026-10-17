@@ -1,11 +1,14 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RIGS_HOME } from './config.js';
 import * as desktopInstall from './desktop-install.js';
 import * as rootsteps from './rootsteps.js';
 import { tailscaleBin } from './tailscale.js';
 import * as sshSession from './sshsession.js';
 import { detectTools } from './tools.js';
-import { log, readJsonSync, writeJsonAtomic } from './util.js';
+import { log, readJsonSync, run, which, writeJsonAtomic } from './util.js';
 
 /**
  * One-time steps that a self-update brings to every machine. They run in the background after the
@@ -71,6 +74,33 @@ MIGRATIONS.push({ id: '2026-10-17-autonomy-instructions', run: async () => { awa
 // Moonlight on Wayland: native Wayland stream window + Vulkan, no VDPAU through XWayland (it locked up and
 // crashed XWayland on NVIDIA); the AppImage is extracted once instead of on every start.
 MIGRATIONS.push({ id: '2026-10-17-moonlight-wayland', run: () => desktopInstall.ensureMoonlightWrapper() });
+
+// Live Video applet (applets/live-video): a systemd --user unit on Linux, a `command` elsewhere, and an App
+// Cloud entry. The id is live-video-comfy because `live-video` may already be another app on this machine.
+MIGRATIONS.push({
+  id: '2026-10-17-live-video-applet',
+  run: async () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const dir = path.join(root, 'applets', 'live-video');
+    if (!fs.existsSync(path.join(dir, 'server.js'))) return { skipped: 'applet not in this checkout' };
+    const { config, saveConfig } = await import('./config.js');
+    let launch = { command: `node ${JSON.stringify(path.join(dir, 'server.js'))}` };
+    if (process.platform === 'linux' && which('systemctl')) {
+      const unit = 'rigs-live-video.service';
+      const dest = path.join(os.homedir(), '.config', 'systemd', 'user');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.writeFileSync(path.join(dest, unit), fs.readFileSync(path.join(dir, unit), 'utf8').replaceAll('%h/.rigs/app', root));
+      await run('systemctl', ['--user', 'daemon-reload'], { timeout: 20000 });
+      const r = await run('systemctl', ['--user', 'enable', '--now', unit], { timeout: 30000 });
+      if (r.code === 0) launch = { systemd: unit };
+    }
+    const c = config();
+    const entry = { id: 'live-video-comfy', name: 'Live Video', icon: '🎬', port: 8741, healthPath: '/healthz', launch };
+    c.apps = [...(c.apps || []).filter((a) => a?.id !== entry.id), entry];
+    saveConfig(c);
+    return { app: entry.id, launch };
+  },
+});
 
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
