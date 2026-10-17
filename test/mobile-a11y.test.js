@@ -93,6 +93,6 @@ test('browser: no overflow, no small touch targets, no page errors at phone size
   const report = JSON.parse(fs.readFileSync(path.join(out, 'report.json'), 'utf8'));
   const views = Array.isArray(report) ? report : report.views || Object.values(report);
   const serious = views.flatMap((v) => (v.axe || v.violations || []).filter((x) => ['serious', 'critical'].includes(x.impact)));
-  assert.equal(serious.length, 0, `axe serious/critical: ${serious.map((x) => x.id).join(', ')}`);
+  assert.equal(serious.length, 0, `axe serious/critical: ${serious.map((x) => `${x.id} ${(x.targets || []).join(' ')}`).join(', ')}`);
   fs.rmSync(out, { recursive: true, force: true });
 });

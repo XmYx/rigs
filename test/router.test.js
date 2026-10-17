@@ -1,7 +1,7 @@
 // Router: keyword rules, model-output validation and project parsing (no model needed).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { heuristicRoute, parseDecision, parseProjects } from '../src/router.js';
+import { guardRoute, heuristicRoute, parseDecision, parseProjects, withWork } from '../src/router.js';
 
 const threads = [{ id: 't1', title: 'Props studio dashboard fix' }];
 
@@ -44,4 +44,44 @@ test('parseProjects: reads the brain project list lines', () => {
     { id: 'rigs', name: 'RIGS', status: 'active' },
     { id: 'x', name: 'Y z', status: 'running' },
   ]);
+});
+
+const TABLE = [
+  // [phrase, expected route]
+  ['make sure that\'s not happening', 'implement'],
+  ['lets separate the questions panel, the projects panel, the active agents panel and the work log into their own pages', 'plan'],
+  ['fix the router', 'implement'],
+  ['please improve the navigation applet on mobile', 'implement'],
+  ['can you make the galaxy view faster?', 'implement'],
+  ['could you please update the nightly flow', 'implement'],
+  ['JARVIS, add a dark mode toggle', 'implement'],
+  ['I want you to rename the hubs tab to teams', 'implement'],
+  ['lets run the Mad Mike update tonight', 'implement'],
+  ['build a status page, deploy it to the linux machine, and set up a systemd unit for it', 'plan'],
+  ['update the docs and also refactor chat.js, then add tests for it, and ship it to every machine', 'plan'],
+  ['what is the weather', 'answer'],
+  ['why did the last project fail?', 'answer'],
+  ['how does the router decide where a request goes', 'answer'],
+  ['is the navigation app running?', 'answer'],
+  ['open the terminal window', 'answer'],
+  ['read the README file', 'answer'],
+  ['can you tell me which machines are online?', 'answer'],
+];
+
+test('guardRoute: imperatives are never answered, questions and one-step actions still are', () => {
+  for (const [phrase, expected] of TABLE) {
+    const got = guardRoute({ route: 'answer', reason: 'model said answer' }, phrase).route;
+    assert.equal(got, expected, `${phrase} → ${got}, expected ${expected}`);
+  }
+});
+
+test('guardRoute: leaves other routes and non-answers alone', () => {
+  assert.equal(guardRoute({ route: 'plan' }, 'fix the router').route, 'plan');
+  assert.equal(guardRoute({ route: 'continue', threadId: 'x' }, 'fix the router').route, 'continue');
+});
+
+test('withWork and heuristicRoute apply the guard', () => {
+  assert.equal(withWork({ route: 'answer' }, 'make sure that\'s not happening', {}).route, 'implement');
+  assert.equal(heuristicRoute('can you fix the router?', []).route, 'implement');
+  assert.equal(heuristicRoute('what does the router do', []).route, 'answer');
 });

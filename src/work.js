@@ -211,6 +211,14 @@ export async function reviveTask(run_) {
   return { ok: false, how, reason: 'the seat did not come back: ' + (out.stdout + out.stderr).trim().slice(-200) };
 }
 
+// Seat activity that means the agent is mid-turn (thinking, running a tool or a background job).
+export const BUSY = /running|working|busy|thinking|streaming|tool|in[-_ ]?progress/i;
+
+/** When the seat's transcript last grew (ms), or 0: a quiet prompt line does not mean a quiet agent. */
+function transcriptMtime(run_) {
+  try { return fs.statSync(path.join(HOME, '.openrig', 'transcripts', run_.rig, `${run_.seat}.log`)).mtimeMs; } catch { return 0; }
+}
+
 export async function taskStatus(run_) {
   if (run_.mode === 'openrig' && run_.qitem) {
     // A seat that died (reboot, killed session) leaves its queue item "in progress" forever: say so, so it is revived.
@@ -223,7 +231,8 @@ export async function taskStatus(run_) {
       const live = j.waiting?.liveness || {};
       if (state !== 'done' && !alive) return { state: 'seat-down' };
       return { state, closure: j.closureReason || j.qitem?.closureReason || null, activity: live.activity || null,
-        idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0 };
+        idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0,
+        busy: BUSY.test(live.activity || ''), activityAt: transcriptMtime(run_) };
     } catch { return { state: 'unknown' }; }
   }
   if (run_.session?.kind === 'tmux') {
@@ -233,7 +242,9 @@ export async function taskStatus(run_) {
     const pane = await run(t, ['capture-pane', '-p', '-t', run_.session.id], { timeout: 5000 });
     // Strip clocks/spinners so a frozen screen hashes the same.
     const text = pane.stdout.replace(/\d+(\.\d+)?\s?(s|m|ms|min|tokens?)\b|[⠀-⣿✻✶✳✢·*]/g, '');
-    return { state: 'running', fingerprint: crypto.createHash('sha1').update(text).digest('hex').slice(0, 16),
+    const act = await run(t, ['display-message', '-p', '-t', run_.session.id, '#{session_activity}'], { timeout: 5000 });
+    const activityAt = (parseInt(act.stdout, 10) || 0) * 1000;
+    return { state: 'running', activityAt, fingerprint: crypto.createHash('sha1').update(text).digest('hex').slice(0, 16),
       needsInput: /Do you want to|\(y\/n\)|Allow .*\?|approve|permission/i.test(pane.stdout.split('\n').slice(-15).join('\n')) };
   }
   return { state: 'running' };
