@@ -207,6 +207,7 @@ export function routeProgress(route, p) {
   }
   return {
     along: hit.along,
+    index: hit.index,
     offset: hit.offset,
     nextIndex: next,
     nextStep: route.steps[next],

@@ -42,7 +42,14 @@
       <button id="unit" type="button" class="unit" title="Switch km/h · mph">KM/H</button>
       <div id="speed-src" class="speed-src">NO FIX</div>
     </div>
+    <div id="limit" class="limit" role="img" aria-label="No speed limit known" hidden><b id="limit-val"></b></div>
+    <div id="cam" class="cam" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Zm8 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" /></svg>
+      <div><b id="cam-dist">—</b><small id="cam-text">Speed camera</small></div>
+    </div>
   </section>
+  <div id="police" class="police" hidden aria-hidden="true"><i class="red"></i><i class="blue"></i></div>
+  <div id="warn-say" class="sr-only" role="status" aria-live="assertive"></div>
 
   <button id="compass" type="button" class="panel compass" title="Heading">
     <div id="ring" class="ring" aria-hidden="true">

@@ -5,6 +5,8 @@ A dark, 3D, green-vector navigation map for JARVIS. It has:
 - tilted vector map, near-black base, neon-green outlines for roads, water, parks and buildings
 - translucent extruded buildings and a glowing green route
 - live speed readout (km/h ⇄ mph), heading compass, next-turn card and ETA
+- speed limits and speed cameras: a round limit sign beside the speedometer, cameras on the map, and a
+  red/blue flashing light when you speed towards a camera (see [Speed limits and cameras](#speed-limits-and-cameras))
 - a follow-me camera that eases to your position and direction of travel
 - traffic: streets shaded darker where traffic is heavy, and little car silhouettes moving around you,
   more and slower on congested roads (see [Traffic](#traffic))
@@ -51,7 +53,9 @@ everything with **relative URLs**, so it works both at `/` and behind the App Cl
 | `GET healthz` | `{"ok":true}` |
 | `GET config.json` | `{tiles, glyphs, demo, traffic:{source}, provider}`: the public endpoints the browser loads; `traffic.source` is `tomtom`, `synthetic` or `off` (never the key) |
 | `GET api/search?q=…&near=lon,lat` | `{results:[{label, detail, lon, lat}]}` |
-| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], routeId}` |
+| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], limits, routeId}`; `limits` is OSRM's per-segment km/h (`null` entries = unknown) or `null` when the server sends none |
+| `GET api/route/limits?route=routeId` | `{routeId, source:'osrm'\|'overpass'\|'none', limits:[km/h\|null per route segment]\|null}`; always 200 for a known route, 404 once the routeId expired. See [Speed limits and cameras](#speed-limits-and-cameras) |
+| `GET api/speedcams?bbox=w,s,e,n` or `?route=routeId` | `{source:'overpass', status:'ok'\|'partial'\|'unavailable', cameras:[{id, lat, lon, maxspeed km/h\|null, direction deg\|null}], error?}`; always 200 for a valid request, empty `cameras` and `status:'unavailable'` when Overpass is down |
 | `GET api/traffic?bbox=w,s,e,n&z=…[&route=routeId][&tz=IANA zone][&source=synthetic][&at=ISO time]` | `{source, updated, z, clipped, segments:[{id, coords:[[lon,lat]…], class, congestion 0..1, speedKmh, oneway?}]}`, see [Traffic](#traffic) |
 | `api/trips…` | recorded trips: upload, list, detail, totals, delete, see [Trips](#trips) |
 
@@ -60,9 +64,17 @@ everything with **relative URLs**, so it works both at `/` and behind the App Cl
 `?demo=1` fetches a real route through central Budapest, from Deák tér up Andrássy út to Városliget. A
 simulated vehicle drives it at 5 Hz:
 
-- it speeds up, cruises between roughly 30 and 75 km/h, and brakes for each turn
-- the speed readout, compass, next-turn card, ETA and 3D follow camera all run exactly as with GPS
+- it speeds up, wanders from about 15 km/h under the road's limit to about 15 km/h over it, and brakes
+  for each turn
+- before a speed camera it stays too fast until about 130 m out (the red/blue light comes on), then
+  brakes under the camera's limit (the light goes out) and passes it. When no real camera on the route
+  enforces its direction, the demo adds its own on the longest straight; where the road's limit is not
+  known (yet) the demo assumes 50 km/h
+- the speed readout, limit sign, compass, next-turn card, ETA and 3D follow camera all run exactly as with GPS
 - at the end it loops
+
+`__nav.demo.scenario('none' | 'speeding' | 'camera-near' | 'camera-speeding')` in the console jumps
+the demo car to a spot that shows that state and holds its speed for 8 s (the screenshots use it).
 
 Searching for a destination in demo mode drives there instead. If the routing service is down, the demo
 falls back to a built-in line, so it still works.
@@ -114,6 +126,7 @@ over the defaults:
 | `NAV_TOMTOM_KEY` | `tomtomKey` | unset. **Secret**: stays on the server, never in `config.json`, logs or errors |
 | `NAV_TRAFFIC_DAILY_TILES` | `trafficDailyTiles` | `5000` TomTom tiles per UTC day, then assumed traffic until midnight UTC |
 | `NAV_TOMTOM_URL` | `tomtomUrl` | `https://api.tomtom.com` |
+| `NAV_OVERPASS_URL` | `overpassUrl` | `https://overpass-api.de`: speed cameras and the road-limit fallback |
 | `NAV_DATA_DIR` | `dataDir` | `~/.rigs/navigation/trips` (under `RIGS_HOME` when set): where recorded trips are stored |
 | `NAV_REVERSE_GEOCODE` | `reverseGeocode` | `true`: name trip ends through the search service. `0`/`false` keeps every trip coordinate on this machine; the panel shows coordinates |
 
@@ -125,6 +138,61 @@ Any OpenMapTiles-schema source works for `tilesUrl`. That includes a self-hosted
 Planetiler build, or MapTiler with your own key in the URL. If you put a key there, keep it in
 `~/.rigs/config.json` or the environment, never in this repo. Invalid values are ignored with a log
 warning that names the setting but not its value.
+
+## Speed limits and cameras
+
+Server side (`speedcams.js`) and the pure rules the browser applies (`public/speedwarn.js`):
+
+- **Cameras**: OSM `highway=speed_camera` and `enforcement=maxspeed` nodes, plus the `device` nodes of
+  enforcement relations (the relation's `maxspeed` is inherited). Red-light cameras
+  (`enforcement=traffic_signals` etc.) are dropped. `direction` / `camera:direction` is read as the
+  direction of travel the camera enforces; `forward`/`backward` have no bearing and come back `null`.
+  Overpass answers are cached for 6 h on a 0.05° grid; a failure is not retried for 30 s.
+  `bbox` may span at most 0.5° a side.
+- **Road limits**: the route request asks OSRM for `annotations=maxspeed` (a server that rejects it still
+  routes). When OSRM has no limits, `api/route/limits` matches Overpass `maxspeed` ways to each route segment
+  (nearest way within 30 m running the same way). Routes longer than about 150 km only get limits for their
+  first 150 km. Values are normalised to km/h: `50`, `30 mph` (→ 48), implicit `RO:urban`-style values for
+  the countries listed in `speedwarn.js`; `none`, `signals`, unknown zones → `null`.
+- **`speedwarn.js`** (ESM, no DOM): `parseMaxspeed`, `currentLimit(routeProgress, limits)` (`routeProgress` is
+  `geo.routeProgress`, which now also returns the segment `index`), `nearestCameraAhead(pos, heading,
+  cameras)` (≤800 m, ±40° of the heading, and inside the camera's direction ±60° when it has one) and
+  `warningState({speedKmh, limitKmh, camera, distanceM})` → `none` | `speeding` | `camera-near` |
+  `camera-speeding`. Speeding means over the limit by more than 3 km/h or 5 %, whichever is larger. A
+  camera counts inside a radius of 300 m (≤30 km/h) growing to 800 m (≥130 km/h), and its own `maxspeed`
+  replaces the road limit then. With no known limit nothing is "speeding".
+  `speedHud(sameInput)` adds what the HUD shows: the limit on the sign and the camera distance.
+
+### In the HUD
+
+- **Where the data comes from**: with a route, its limits (from `api/route`, else `api/route/limits`) and
+  the cameras along it (`api/speedcams?route=`) are fetched once per route and again after a re-route;
+  when Overpass is busy they are asked again a minute later, twice. Without a route, the cameras within
+  about 6 km of you (or of the map centre), inside the view, come from `api/speedcams?bbox=`, at most every
+  10 s and only when the snapped box changed or the answer is 2 min old. Zoomed out past 11, nothing is asked.
+- **Limit sign**: a European round sign beside the speedometer whenever a limit is known (the road's, or
+  a counted camera's own). It follows the km/h ⇄ mph toggle. Without a route there is no road limit, so
+  only a camera's limit shows.
+- **Speeding, no camera** (`speeding`): the sign stays and pulses red, and the speed digits and gauge turn
+  red. No flashing light.
+- **Camera ahead, within the limit** (`camera-near`): a calm green chip above the speedometer with
+  the distance to the camera.
+- **Speeding towards a camera** (`camera-speeding`): a police-style light bar along the top edge and a soft
+  glow round the screen edges, red and blue taking turns at 1.25 Hz (under the 3 Hz flash limit). The chip
+  turns red and shows the distance and `SLOW DOWN · <limit>`. It clears on the next fix once you are at or
+  under the limit (within the tolerance) or past the camera.
+- **Reduced motion** (`prefers-reduced-motion: reduce`): no pulsing; the light swaps colour in a slow 3 s
+  fade instead of flashing.
+- **Map**: cameras are small dark badges with a green camera glyph and their limit underneath; the one
+  that counts right now turns red.
+- **Screen readers** hear each state change (not every distance tick).
+- **Trips** record the road limit, the distance to the camera ahead and its limit with each fix, so a
+  replay shows the same sign, chip and light. Trips recorded before this show no sign.
+
+| Limit shown | Speeding, no camera | Speeding towards a camera |
+| --- | --- | --- |
+| ![limit shown](docs/screenshot-speed-limit-desktop.png) | ![speeding](docs/screenshot-speed-speeding-desktop.png) | ![camera light](docs/screenshot-speed-camera-desktop.png) |
+| ![limit shown, phone](docs/screenshot-speed-limit-phone.png) | ![speeding, phone](docs/screenshot-speed-speeding-phone.png) | ![camera light, phone](docs/screenshot-speed-camera-phone.png) |
 
 ## The look
 
@@ -215,7 +283,8 @@ the panel.
   to `trash/`.
 - **Replay**: a white car and the follow camera move along the recorded track by its real
   timestamps, at 1×, 4×, 16× or 64×. Play/pause (Space), and scrub on the bar, which shows the trip's
-  speed profile. The speed gauge reads `REPLAY` and the compass turns with the replayed heading.
+  speed profile. The speed gauge reads `REPLAY` and the compass turns with the replayed heading, and
+  the limit sign, camera chip and red/blue light show what they showed on the drive.
   Dragging the map stops the camera following; ◎ resumes it. ✕ (or Esc) leaves the replay and
   returns to live navigation.
 - **All trips**: every trip on the map at once, each in its own colour (chosen to stand out from the
@@ -376,11 +445,16 @@ of an error.
 - `test/trips.test.js` covers trips:
   - `tripstats.js` on synthetic tracks: known distance and speed, acceleration and braking steps,
     a rejected speed spike and position jump, noise, standing still
-  - the recorder's filtering, chunking, offline outbox, crash recovery and `pagehide` beacon
+  - the recorder's filtering, chunking, offline outbox, crash recovery and `pagehide` beacon, and the
+    speed limit / camera fields it keeps for the replay
   - the `api/trips` round-trip on a temp `NAV_DATA_DIR`, including delete-to-trash and stale trips
+- `test/speedwarn.test.js` covers speed limits and cameras: maxspeed parsing, limit lookup, the camera
+  ahead, every warning state, what the HUD shows (`speedHud`), the demo camera, and the Overpass/OSRM
+  digesting and endpoints against stubs
 - `test/trips-panel.test.js` covers the Trips panel:
   - `tripsview.js`: speed and per-trip colours, speed-coloured segments without gaps, replay
-    position and heading by timestamp (held while parked), chart geometry in km/h and mph, labels
+    position and heading by timestamp (held while parked), the recorded speed warning, chart geometry
+    in km/h and mph, labels
   - `speedProfile` / `thinTrack`, `api/trips/tracks` with its `since` filter
   - `api/reverse` against a fake Photon and Nominatim, its rounding and its off switch
   - that every element `tripsui.js` and `app.js` address exists in `index.html`
@@ -388,4 +462,17 @@ of an error.
   headless-Chrome screenshot. It also prints speed samples, console errors and failed requests.
   `--eval='<js>'` runs in the page first, for example
   `--eval="__navTrips.open('all')"` for the trips screenshots (seeded with `scripts/seed-trips.js`).
-  `--swiftshader` gives headless Chrome a software WebGL.
+  `--swiftshader` gives headless Chrome a software WebGL. `--until='<js>'` waits (up to 40 s) after
+  `--eval` until the expression is true, and `--reduced-motion` emulates `prefers-reduced-motion`. The
+  speed-warning screenshots (`docs/screenshot-speed-{limit,speeding,camera}-{desktop,phone}.png`) are, for
+  example:
+
+  ```bash
+  node applets/navigation/scripts/screenshot.js 'http://127.0.0.1:8731/?demo=1' \
+    applets/navigation/docs/screenshot-speed-camera-phone.png 390x844 --swiftshader --wait=1 \
+    --eval="__nav.demo.scenario('camera-speeding')" \
+    --until='__nav.warn?.state === "camera-speeding" && __nav.map.areTilesLoaded()'
+  ```
+
+  with `scenario('none')` / `state === "none" && __nav.warn.limit != null` for the limit and
+  `'speeding'` for speeding without a camera; desktop is `1440x900`.
