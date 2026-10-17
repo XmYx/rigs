@@ -1,0 +1,121 @@
+{
+  "id": "wan21-t2v",
+  "label": "Wan 2.1 1.3B · low-res",
+  "kind": "t2v",
+  "family": "wan21",
+  "workflow": "wan21-t2v.api.json",
+  "vramMb": 8000,
+  "notes": "Wan 2.1 text-to-video 1.3B at 480p and 16 fps: small, steady motion, no image-to-video.",
+  "defaults": {
+    "width": 832,
+    "height": 480,
+    "seconds": 2,
+    "fps": 16
+  },
+  "limits": {
+    "sizeStep": 16,
+    "maxWidth": 1280,
+    "maxHeight": 720,
+    "framesStep": 4,
+    "framesOffset": 1,
+    "maxFrames": 81
+  },
+  "resolutions": [
+    [
+      480,
+      272
+    ],
+    [
+      640,
+      368
+    ],
+    [
+      832,
+      480
+    ],
+    [
+      1280,
+      720
+    ]
+  ],
+  "params": {
+    "prompt": [
+      {
+        "node": "6",
+        "input": "text"
+      }
+    ],
+    "negative": [
+      {
+        "node": "7",
+        "input": "text"
+      }
+    ],
+    "seed": [
+      {
+        "node": "3",
+        "input": "seed"
+      }
+    ],
+    "width": [
+      {
+        "node": "40",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node": "40",
+        "input": "height"
+      }
+    ],
+    "frames": [
+      {
+        "node": "40",
+        "input": "length"
+      }
+    ],
+    "fps": [
+      {
+        "node": "80",
+        "input": "fps"
+      }
+    ],
+    "lastFrameIndex": [
+      {
+        "node": "90",
+        "input": "batch_index"
+      }
+    ],
+    "prefix": [
+      {
+        "node": "80",
+        "input": "filename_prefix"
+      }
+    ]
+  },
+  "models": {
+    "diffusionModel": {
+      "node": "37",
+      "input": "unet_name",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors",
+      "dir": "diffusion_models"
+    },
+    "textEncoder": {
+      "node": "38",
+      "input": "clip_name",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "dir": "text_encoders"
+    },
+    "vae": {
+      "node": "39",
+      "input": "vae_name",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+      "dir": "vae"
+    }
+  },
+  "outputs": {
+    "video": "80",
+    "lastFrame": "91"
+  }
+}

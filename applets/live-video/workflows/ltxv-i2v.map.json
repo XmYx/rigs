@@ -1,0 +1,125 @@
+{
+  "id": "ltxv-i2v",
+  "label": "LTX-Video 2B · image to video",
+  "kind": "i2v",
+  "family": "ltxv",
+  "workflow": "ltxv-i2v.api.json",
+  "vramMb": 12000,
+  "notes": "LTX-Video 0.9.8 distilled 2B from a start frame: used for an uploaded image and for continuous (last frame to next clip) mode.",
+  "defaults": {
+    "width": 768,
+    "height": 512,
+    "seconds": 3,
+    "fps": 24
+  },
+  "limits": {
+    "sizeStep": 32,
+    "maxWidth": 1280,
+    "maxHeight": 720,
+    "framesStep": 8,
+    "framesOffset": 1,
+    "maxFrames": 257
+  },
+  "resolutions": [
+    [
+      512,
+      288
+    ],
+    [
+      768,
+      512
+    ],
+    [
+      960,
+      544
+    ],
+    [
+      1280,
+      704
+    ]
+  ],
+  "params": {
+    "prompt": [
+      {
+        "node": "6",
+        "input": "text"
+      }
+    ],
+    "negative": [
+      {
+        "node": "7",
+        "input": "text"
+      }
+    ],
+    "seed": [
+      {
+        "node": "72",
+        "input": "noise_seed"
+      }
+    ],
+    "width": [
+      {
+        "node": "77",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node": "77",
+        "input": "height"
+      }
+    ],
+    "frames": [
+      {
+        "node": "77",
+        "input": "length"
+      }
+    ],
+    "fps": [
+      {
+        "node": "69",
+        "input": "frame_rate"
+      },
+      {
+        "node": "80",
+        "input": "fps"
+      }
+    ],
+    "lastFrameIndex": [
+      {
+        "node": "90",
+        "input": "batch_index"
+      }
+    ],
+    "prefix": [
+      {
+        "node": "80",
+        "input": "filename_prefix"
+      }
+    ],
+    "image": [
+      {
+        "node": "78",
+        "input": "image"
+      }
+    ]
+  },
+  "models": {
+    "checkpoint": {
+      "node": "44",
+      "input": "ckpt_name",
+      "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.8-distilled.safetensors",
+      "dir": "checkpoints"
+    },
+    "textEncoder": {
+      "node": "38",
+      "input": "clip_name",
+      "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors",
+      "dir": "text_encoders"
+    }
+  },
+  "outputs": {
+    "video": "80",
+    "lastFrame": "91"
+  }
+}

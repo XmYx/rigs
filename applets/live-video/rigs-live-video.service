@@ -1,0 +1,14 @@
+[Unit]
+Description=RIGS live video applet (rolling text/image-to-video on a ComfyUI)
+After=network-online.target
+
+[Service]
+# %h = home; the applet imports ../../src/util.js, so it runs from the RIGS checkout.
+WorkingDirectory=%h/.rigs/app
+ExecStart=/usr/bin/node %h/.rigs/app/applets/live-video/server.js
+Environment=LV_PORT=8741 LV_HOST=127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
