@@ -338,6 +338,8 @@ export async function startServer() {
     }
     if (sub === 'sessions/send' && method === 'POST') { const b = await body(); return sessions.send(b.kind, b.id, b.text); }
     if (sub === 'sessions/state') return sessions.resumeState(q.get('kind'), q.get('id'));
+    if (sub === 'sessions/prompt') return sessions.promptOptions(q.get('kind'), q.get('id'));
+    if (sub === 'sessions/answer' && method === 'POST') { const b = await body(); return sessions.answerOption(b.kind, b.id, b.choice); }
     if (sub === 'sessions/attach' && method === 'POST') { const b = await body(); return sessions.attach(b.kind, b.id, b); }
     if (sub === 'agents/start' && method === 'POST') return sessions.startAgent(await body());
 
@@ -346,6 +348,7 @@ export async function startServer() {
     if (sub === 'ollama') return ollamaModels();
     if (sub === 'chats' && method === 'GET') return chat.listChats();
     if (sub === 'chats' && method === 'POST') return chat.createChat(await body());
+    if (sub === 'chats/main/clear' && method === 'POST') return chat.clearMainChat();
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'GET') { const c = await chat.getChat(mm[1]); if (!c) throw new HttpError(404, 'not found'); return c; }
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'DELETE') return { ok: await chat.deleteChat(mm[1]) };
     if (sub === 'jarvis/send' && method === 'POST') {

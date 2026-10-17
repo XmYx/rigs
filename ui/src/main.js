@@ -145,6 +145,8 @@ async function openAttention(it) {
   if (!s) { showAttention(it); return; }
   // A Claude Code / Codex session outside tmux can't be joined (resuming would fork it): show where it is instead.
   if (s.kind === 'claude' || s.kind === 'codex') { showAttention(it); sessionsWindow('', { node: m, s }); toast(`Answer it in the terminal where it runs on ${m.name}.`, 'ok', 12000); return; }
+  // A Claude Code / Codex seat in tmux: answer from the chat dock, its options are shown there.
+  if ((s.kind === 'tmux' || s.kind === 'rig') && (it.agent === 'claude' || it.agent === 'codex')) { showAttention(it); attachChat(m, s); return; }
   attachSession(m, s);
 }
 
@@ -889,11 +891,13 @@ async function pollTarget(first = false) {
   const t = chatTarget;
   if (!t) return;
   try {
-    const [tr, st] = await Promise.all([
+    const [tr, st, choices] = await Promise.all([
       api(`${node(t.nodeId)}/sessions/transcript?kind=${encodeURIComponent(t.kind)}&id=${encodeURIComponent(t.id)}`),
       t.kind === 'claude' || t.kind === 'codex' ? api(`${node(t.nodeId)}/sessions/state?kind=${t.kind}&id=${encodeURIComponent(t.id)}`).catch(() => null) : null,
+      t.kind === 'tmux' || t.kind === 'rig' ? api(`${node(t.nodeId)}/sessions/prompt?kind=${t.kind}&id=${encodeURIComponent(t.id)}`).catch(() => null) : null,
     ]);
     if (chatTarget !== t) return;
+    renderChoices(t, choices);
     // tmux/pty transcripts are the whole screen: show its tail
     const text = t.kind === 'tmux' || t.kind === 'rig' || t.kind === 'pty' ? (lastReply(tr).split('\n').filter((l) => l.trim()).slice(-14).join('\n')) : lastReply(tr);
     if (text && (text !== targetLast || first)) {
@@ -904,6 +908,30 @@ async function pollTarget(first = false) {
     }
     setOrb(st?.running ? 'thinking' : voice.mode === 'handsfree' ? 'listening' : 'online');
   } catch (e) { if (first) showSubtitle(e.message, 'error'); }
+}
+
+// The numbered question on an attached terminal session, shown as buttons under the reply.
+let choicesSig = '';
+function renderChoices(t, p) {
+  const sig = p?.options?.length ? `${t.id}|${p.question}|${p.options.map((o) => o.label).join('|')}` : '';
+  if (sig === choicesSig) return;
+  choicesSig = sig;
+  let box = $('#dock-choices');
+  if (!box) { box = h('div', { id: 'dock-choices' }); $('#chat-dock').append(box); }
+  box.replaceChildren(...(sig ? [
+    h('div', { class: 'dock-q' }, p.question || 'Waiting for your answer'),
+    h('div', { class: 'dock-opts' }, ...p.options.map((o) => h('button', { class: 'btn', onclick: () => answerChoice(t, o) }, `${o.n}. ${o.label}`))),
+  ] : []));
+}
+
+async function answerChoice(t, o) {
+  try {
+    await api(`${node(t.nodeId)}/sessions/answer`, { method: 'POST', body: { kind: t.kind, id: t.id, choice: o.n } });
+    choicesSig = '';
+    $('#dock-choices')?.replaceChildren();
+    setOrb('thinking');
+    setTimeout(() => pollTarget(), 1200);
+  } catch (e) { toast(e.message, 'error', 9000); }
 }
 
 /** Attach the chat dock to a session: what you type or say goes into it, its replies show here. */
@@ -923,6 +951,8 @@ function attachChat(m, s) {
 
 function detachChat() {
   chatTarget = null;
+  choicesSig = '';
+  $('#dock-choices')?.replaceChildren();
   store.set('chatTarget', null);
   clearInterval(targetPoll);
   targetPoll = null;

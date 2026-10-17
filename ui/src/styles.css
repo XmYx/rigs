@@ -102,6 +102,9 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 #subtitle.user { color: #9fb2bf; font-style: italic; }
 #subtitle.interim { opacity: .7; }
 #subtitle.error { color: var(--danger); border-color: rgba(248, 113, 113, .4); }
+#dock-choices { padding: 0 14px 10px; }
+#dock-choices .dock-q { font-size: 12px; color: #f0abfc; margin-bottom: 6px; }
+#dock-choices .dock-opts { display: flex; flex-wrap: wrap; gap: 6px; }
 #bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; z-index: 10; }
 #ask { width: min(420px, calc(100vw - 680px)); min-width: 220px; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); outline: none; }
 #ask:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(45, 212, 191, .08); }

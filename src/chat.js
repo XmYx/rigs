@@ -21,7 +21,7 @@ export async function listChats() {
   await fsp.mkdir(DIR, { recursive: true });
   const names = (await fsp.readdir(DIR)).filter((n) => n.endsWith('.json'));
   const chats = await Promise.all(names.map((n) => readJson(path.join(DIR, n))));
-  return chats.filter(Boolean).map((c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: c.messages.length, project: c.project || '', ongoing: !!c.ongoing }))
+  return chats.filter(Boolean).map((c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: c.messages.length, project: c.project || '', ongoing: !!c.ongoing, main: !!c.main }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -43,11 +43,32 @@ function workRoot() {
 export async function createChat({ brain, model, effort, title, cwd, hidden, project, ongoing } = {}) {
   const c = {
     id: crypto.randomUUID(), title: title || 'New conversation', brain: brain || 'auto', model: model || '', effort: effort || '', cwd: cwd || workRoot(), hidden: !!hidden,
-    project: project || '', ongoing: !!ongoing,
+    project: project || '', ongoing: !!ongoing, main: false,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [], claudeSessionId: null, codexThreadId: null, seen: {},
   };
   await saveChat(c);
   return c;
+}
+
+/** The JARVIS thread: the one long-running conversation that answers go into. Created on first use. */
+export async function mainChat() {
+  const existing = (await listChats()).find((c) => c.main);
+  if (existing) return getChat(existing.id);
+  const c = await createChat({ title: 'JARVIS' });
+  c.main = true;
+  await saveChat(c);
+  return c;
+}
+
+/** Archive the JARVIS thread (kept on disk, no longer routed to); the next answer starts a fresh one. */
+export async function clearMainChat() {
+  const existing = (await listChats()).find((c) => c.main);
+  if (!existing) return { ok: true, cleared: false };
+  const c = await getChat(existing.id);
+  c.main = false;
+  c.ongoing = false;
+  await saveChat(c);
+  return { ok: true, cleared: true };
 }
 
 export async function deleteChat(id) {
@@ -279,12 +300,14 @@ export async function sendMessage(id, { text, brain, model, effort }, emit, opts
 export async function ongoingThreads({ days = 3, limit = 8 } = {}) {
   const cutoff = Date.now() - days * 86400000;
   const all = await listChats();
-  return all.filter((c) => c.ongoing && c.updatedAt >= cutoff && c.count > 0).slice(0, limit);
+  const main = all.filter((c) => c.main);
+  const ongoing = all.filter((c) => c.ongoing && c.updatedAt >= cutoff && c.count > 0 && !c.main);
+  return [...main, ...ongoing].slice(0, limit);
 }
 
 /**
- * Send a request through the router. It goes to a NEW conversation (persona + mesh state + active projects
- * only) unless the router finds it belongs to an ongoing thread, which is then continued. The chosen route
+ * Send a request through the router. Answers go to the JARVIS thread (see mainChat); implement and plan
+ * work opens its own thread, unless the router finds it belongs to an ongoing thread, which is then continued. The chosen route
  * is emitted first ({ type: 'route' }) so the screen can show it, and it is handed to the brain as a hint.
  */
 export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts = {}) {
@@ -294,10 +317,12 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   const isContinue = decision.route === 'continue' && decision.threadId;
   const chat = isContinue
     ? await getChat(decision.threadId)
-    : await createChat({
-      brain, model, effort, title: decision.title || truncate(text.replace(/\s+/g, ' '), 60),
-      project: decision.projectId || '', ongoing: decision.route !== 'answer',
-    });
+    : decision.route === 'answer'
+      ? await mainChat()
+      : await createChat({
+        brain, model, effort, title: decision.title || truncate(text.replace(/\s+/g, ' '), 60),
+        project: decision.projectId || '', ongoing: true,
+      });
   if (!chat) throw new Error('thread not found');
   const hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
   emit({ type: 'route', route: decision.route, reason: decision.reason, via: decision.via, chatId: chat.id, title: chat.title, projectId: decision.projectId || '', continued: !!isContinue });
