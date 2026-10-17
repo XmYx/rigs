@@ -51,7 +51,9 @@ everything with **relative URLs**, so it works both at `/` and behind the App Cl
 | `GET healthz` | `{"ok":true}` |
 | `GET config.json` | `{tiles, glyphs, demo, traffic:{source}, provider}`: the public endpoints the browser loads; `traffic.source` is `tomtom`, `synthetic` or `off` (never the key) |
 | `GET api/search?q=…&near=lon,lat` | `{results:[{label, detail, lon, lat}]}` |
-| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], routeId}` |
+| `GET api/route?from=lon,lat&to=lon,lat` | `{distance, duration, geometry:[[lon,lat]…], steps:[{type, modifier, name, location, distance, duration}], limits, routeId}`; `limits` is OSRM's per-segment km/h (`null` entries = unknown) or `null` when the server sends none |
+| `GET api/route/limits?route=routeId` | `{routeId, source:'osrm'\|'overpass'\|'none', limits:[km/h\|null per route segment]\|null}`; always 200 for a known route, 404 once the routeId expired. See [Speed limits and cameras](#speed-limits-and-cameras) |
+| `GET api/speedcams?bbox=w,s,e,n` or `?route=routeId` | `{source:'overpass', status:'ok'\|'partial'\|'unavailable', cameras:[{id, lat, lon, maxspeed km/h\|null, direction deg\|null}], error?}`; always 200 for a valid request, empty `cameras` and `status:'unavailable'` when Overpass is down |
 | `GET api/traffic?bbox=w,s,e,n&z=…[&route=routeId][&tz=IANA zone][&source=synthetic][&at=ISO time]` | `{source, updated, z, clipped, segments:[{id, coords:[[lon,lat]…], class, congestion 0..1, speedKmh, oneway?}]}`, see [Traffic](#traffic) |
 | `api/trips…` | recorded trips: upload, list, detail, totals, delete, see [Trips](#trips) |
 
@@ -114,6 +116,7 @@ over the defaults:
 | `NAV_TOMTOM_KEY` | `tomtomKey` | unset. **Secret**: stays on the server, never in `config.json`, logs or errors |
 | `NAV_TRAFFIC_DAILY_TILES` | `trafficDailyTiles` | `5000` TomTom tiles per UTC day, then assumed traffic until midnight UTC |
 | `NAV_TOMTOM_URL` | `tomtomUrl` | `https://api.tomtom.com` |
+| `NAV_OVERPASS_URL` | `overpassUrl` | `https://overpass-api.de`: speed cameras and the road-limit fallback |
 | `NAV_DATA_DIR` | `dataDir` | `~/.rigs/navigation/trips` (under `RIGS_HOME` when set): where recorded trips are stored |
 | `NAV_REVERSE_GEOCODE` | `reverseGeocode` | `true`: name trip ends through the search service. `0`/`false` keeps every trip coordinate on this machine; the panel shows coordinates |
 
@@ -125,6 +128,29 @@ Any OpenMapTiles-schema source works for `tilesUrl`. That includes a self-hosted
 Planetiler build, or MapTiler with your own key in the URL. If you put a key there, keep it in
 `~/.rigs/config.json` or the environment, never in this repo. Invalid values are ignored with a log
 warning that names the setting but not its value.
+
+## Speed limits and cameras
+
+Server side (`speedcams.js`) and the pure rules the browser applies (`public/speedwarn.js`):
+
+- **Cameras**: OSM `highway=speed_camera` and `enforcement=maxspeed` nodes, plus the `device` nodes of
+  enforcement relations (the relation's `maxspeed` is inherited). Red-light cameras
+  (`enforcement=traffic_signals` etc.) are dropped. `direction` / `camera:direction` is read as the
+  direction of travel the camera enforces; `forward`/`backward` have no bearing and come back `null`.
+  Overpass answers are cached for 6 h on a 0.05° grid; a failure is not retried for 30 s.
+  `bbox` may span at most 0.5° a side.
+- **Road limits**: the route request asks OSRM for `annotations=maxspeed` (a server that rejects it still
+  routes). When OSRM has no limits, `api/route/limits` matches Overpass `maxspeed` ways to each route segment
+  (nearest way within 30 m running the same way). Routes longer than about 150 km only get limits for their
+  first 150 km. Values are normalised to km/h: `50`, `30 mph` (→ 48), implicit `RO:urban`-style values for
+  the countries listed in `speedwarn.js`; `none`, `signals`, unknown zones → `null`.
+- **`speedwarn.js`** (ESM, no DOM): `parseMaxspeed`, `currentLimit(routeProgress, limits)` (`routeProgress` is
+  `geo.routeProgress`, which now also returns the segment `index`), `nearestCameraAhead(pos, heading,
+  cameras)` (≤800 m, ±40° of the heading, and inside the camera's direction ±60° when it has one) and
+  `warningState({speedKmh, limitKmh, camera, distanceM})` → `none` | `speeding` | `camera-near` |
+  `camera-speeding`. Speeding means over the limit by more than 3 km/h or 5 %, whichever is larger. A
+  camera counts inside a radius of 300 m (≤30 km/h) growing to 800 m (≥130 km/h), and its own `maxspeed`
+  replaces the road limit then. With no known limit nothing is "speeding".
 
 ## The look
 

@@ -6,6 +6,7 @@
 //   GET api/search   place search: Photon (komoot), falling back to Nominatim
 //   GET api/reverse  the street/area name at a point (trip start and end labels), same services
 //   GET api/route    driving route with turn-by-turn steps from OSRM
+//   GET api/speedcams  OSM speed cameras in a bbox or along a route (Overpass); api/route/limits: road limits per route segment
 //   GET api/traffic  per-road congestion around a bbox: TomTom flow tiles or assumed traffic (traffic.js)
 //   api/trips…       recorded trips: upload chunks, list, detail, totals, delete-to-trash (tripstore.js)
 // Search and routing go through here so the public OSM services see one polite, cached, rate-limited
@@ -16,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { HOME, expandHome, log, readJsonSync } from '../../src/util.js';
+import { createSpeedcams, MAX_BBOX_SPAN, osrmLimits } from './speedcams.js';
 import { createTraffic, hash01, routeInfo } from './traffic.js';
 import { createTripStore, tripsRoute } from './tripstore.js';
 
@@ -32,6 +34,8 @@ export const DEFAULTS = {
   searchUrl: 'https://photon.komoot.io',
   nominatimUrl: 'https://nominatim.openstreetmap.org',
   tomtomUrl: 'https://api.tomtom.com',
+  // Speed cameras and the road-limit fallback (api/speedcams, api/route/limits).
+  overpassUrl: 'https://overpass-api.de',
   // Traffic: 'auto' = TomTom when a key is set, else the synthetic model. tomtomKey is a secret: it
   // never reaches the browser or a log line.
   trafficSource: 'auto',
@@ -44,8 +48,8 @@ export const DEFAULTS = {
   demo: { from: [19.0548, 47.4979], to: [19.0838, 47.5155] },
 };
 
-const URL_KEYS = ['tilesUrl', 'glyphsUrl', 'routingUrl', 'searchUrl', 'nominatimUrl', 'tomtomUrl'];
-const ENV_KEYS = { tilesUrl: 'NAV_TILES_URL', glyphsUrl: 'NAV_GLYPHS_URL', routingUrl: 'NAV_ROUTING_URL', searchUrl: 'NAV_SEARCH_URL', nominatimUrl: 'NAV_NOMINATIM_URL', tomtomUrl: 'NAV_TOMTOM_URL' };
+const URL_KEYS = ['tilesUrl', 'glyphsUrl', 'routingUrl', 'searchUrl', 'nominatimUrl', 'tomtomUrl', 'overpassUrl'];
+const ENV_KEYS = { tilesUrl: 'NAV_TILES_URL', glyphsUrl: 'NAV_GLYPHS_URL', routingUrl: 'NAV_ROUTING_URL', searchUrl: 'NAV_SEARCH_URL', nominatimUrl: 'NAV_NOMINATIM_URL', tomtomUrl: 'NAV_TOMTOM_URL', overpassUrl: 'NAV_OVERPASS_URL' };
 const TRAFFIC_SOURCES = ['auto', 'tomtom', 'synthetic', 'off'];
 
 const isHttpUrl = (s) => typeof s === 'string' && /^https?:\/\/[^\s]+$/i.test(s);
@@ -140,7 +144,8 @@ export function normalizeOsrm(data) {
       });
     }
   }
-  return { distance: r.distance, duration: r.duration, geometry: r.geometry.coordinates, steps };
+  // limits: km/h per geometry segment from OSRM `annotations=maxspeed`, or null when the server has none.
+  return { distance: r.distance, duration: r.duration, geometry: r.geometry.coordinates, steps, limits: osrmLimits(r, r.geometry.coordinates.length) };
 }
 
 /**
@@ -206,9 +211,10 @@ export function normalizeNominatimReverse(d) {
 export function createUpstream({ fetchImpl = globalThis.fetch, minGapMs = { 'nominatim.openstreetmap.org': 1100 }, ttlMs = 10 * 60 * 1000, max = 300 } = {}) {
   const cache = new Map();
   const nextSlot = new Map();
-  return async function getJson(url) {
-    const hit = cache.get(url);
-    if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+  // opts: ttlMs (this answer's cache life), cache:false (big answers that are digested by the caller), timeoutMs.
+  return async function getJson(url, opts = {}) {
+    const hit = opts.cache === false ? null : cache.get(url);
+    if (hit && Date.now() - hit.at < (opts.ttlMs ?? ttlMs)) return hit.data;
     const host = new URL(url).host;
     const gap = minGapMs[host] || 0;
     if (gap) {
@@ -217,9 +223,10 @@ export function createUpstream({ fetchImpl = globalThis.fetch, minGapMs = { 'nom
       nextSlot.set(host, at + gap);
       if (at > now) await new Promise((r) => setTimeout(r, at - now));
     }
-    const res = await fetchImpl(url, { headers: { 'user-agent': USER_AGENT, accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+    const res = await fetchImpl(url, { headers: { 'user-agent': USER_AGENT, accept: 'application/json' }, signal: AbortSignal.timeout(opts.timeoutMs || 10000) });
     if (!res.ok) throw Object.assign(new Error(`upstream ${host} HTTP ${res.status}`), { status: res.status });
     const data = await res.json();
+    if (opts.cache === false) return data;
     cache.set(url, { at: Date.now(), data });
     if (cache.size > max) cache.delete(cache.keys().next().value);
     return data;
@@ -250,7 +257,9 @@ function parseLonLat(s) {
 }
 
 export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDir = PUBLIC_DIR, now, trips } = {}) {
-  const getJson = createUpstream({ fetchImpl });
+  const overpassHost = new URL(cfg.overpassUrl || DEFAULTS.overpassUrl).host;
+  const getJson = createUpstream({ fetchImpl, minGapMs: { 'nominatim.openstreetmap.org': 1100, [overpassHost]: 500 } });
+  const speedcams = createSpeedcams({ overpassUrl: cfg.overpassUrl || DEFAULTS.overpassUrl, getJson, log });
   const tripStore = trips || createTripStore({ dir: cfg.dataDir || path.join(HOME, '.rigs', 'navigation', 'trips'), now });
   const traffic = createTraffic({ cfg, fetchImpl, now, log, userAgent: USER_AGENT });
   const root = path.resolve(publicDir);
@@ -315,15 +324,45 @@ export function createNavServer({ cfg = loadNavConfig().cfg, fetchImpl, publicDi
       const to = parseLonLat(url.searchParams.get('to'));
       if (!from || !to) return send(res, 400, { error: 'from and to must be lon,lat' });
       try {
-        const data = await getJson(`${cfg.routingUrl}/route/v1/driving/${from.join(',')};${to.join(',')}?overview=full&geometries=geojson&steps=true&alternatives=false`);
+        const base = `${cfg.routingUrl}/route/v1/driving/${from.join(',')};${to.join(',')}?overview=full&geometries=geojson&steps=true&alternatives=false`;
+        // Ask for per-segment limits; an OSRM build that rejects the annotation still gets plain routing.
+        let data;
+        try { data = await getJson(base + '&annotations=maxspeed'); }
+        catch (e) { if (e.status !== 400) throw e; data = await getJson(base); }
         const route = normalizeOsrm(data);
         if (!route) return send(res, 404, { error: 'no route found' });
         route.routeId = Math.floor(hash01(`${from.join(',')};${to.join(',')}`) * 2 ** 32).toString(36);
         routes.delete(route.routeId);
-        routes.set(route.routeId, { at: clock(), info: routeInfo(route.geometry) });
+        routes.set(route.routeId, { at: clock(), info: routeInfo(route.geometry), limits: route.limits });
         while (routes.size > 20) routes.delete(routes.keys().next().value);
         return send(res, 200, route);
       } catch (e) { return send(res, 502, { error: 'routing unavailable: ' + e.message }); }
+    }
+    if (p === '/api/route/limits') {
+      // Road limit per route segment (km/h | null): OSRM's own when it had them, else Overpass way tags.
+      // Always 200 once the route is known; source 'none' + limits null when neither has data.
+      const id = url.searchParams.get('route') || '';
+      const hit = routes.get(id);
+      if (!hit || clock() - hit.at >= ROUTE_TTL) return send(res, 404, { error: 'unknown or expired route: ask api/route again' });
+      if (!hit.limitsResult) {
+        hit.limitsResult = hit.limits ? { source: 'osrm', limits: hit.limits } : await speedcams.routeLimits(hit.info);
+        if (hit.limitsResult.source === 'none') setTimeout(() => { delete hit.limitsResult; }, 60 * 1000).unref();
+      }
+      return send(res, 200, { routeId: id, ...hit.limitsResult }, { 'cache-control': 'private, max-age=60' });
+    }
+    if (p === '/api/speedcams') {
+      // ?bbox=w,s,e,n (≤0.5° a side) or ?route=routeId (cameras within ~80 m of the route).
+      // Overpass trouble is a 200 with cameras [] and status 'unavailable', never an error.
+      const routeId = url.searchParams.get('route');
+      if (routeId) {
+        const hit = routes.get(routeId);
+        if (!hit || clock() - hit.at >= ROUTE_TTL) return send(res, 404, { error: 'unknown or expired route: ask api/route again' });
+        return send(res, 200, { source: 'overpass', routeId, ...(await speedcams.camerasAlongRoute(hit.info)) }, { 'cache-control': 'private, max-age=60' });
+      }
+      const bbox = parseBbox(url.searchParams.get('bbox'));
+      if (!bbox) return send(res, 400, { error: 'bbox must be west,south,east,north with west<east and south<north (or pass route=routeId)' });
+      if (bbox[2] - bbox[0] > MAX_BBOX_SPAN || bbox[3] - bbox[1] > MAX_BBOX_SPAN) return send(res, 400, { error: `bbox may span at most ${MAX_BBOX_SPAN}° per side` });
+      return send(res, 200, { source: 'overpass', bbox, ...(await speedcams.cameras(bbox)) }, { 'cache-control': 'private, max-age=60' });
     }
     if (p === '/api/traffic') {
       const bbox = parseBbox(url.searchParams.get('bbox'));
