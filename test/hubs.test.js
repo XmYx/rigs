@@ -231,10 +231,9 @@ test('rig resolves outside the service PATH: RIGS\'s pinned wrapper first, then 
     let o = ''; p.stdout.on('data', (d) => (o += d)); p.stderr.on('data', (d) => (o += d)); p.on('close', () => res(o));
   });
   const [a, b] = JSON.parse(out.trim().split('\n').at(-1));
-  // The running Node's own bin dir is searched before nvm (augmentedPath): where rig sits next to it (an nvm install
-  // of both), that one is found first — the fake nvm tree only decides when it isn't there.
-  const nextToNode = path.join(path.dirname(process.execPath), 'rig');
-  assert.equal(a, fs.existsSync(nextToNode) ? nextToNode : path.join(home, '.nvm', 'versions', 'node', 'v22.23.3', 'bin', 'rig'));
+  // The lone node copy has no rig beside it, so the fake nvm tree decides (a real nvm rig next to the test's own
+  // node is never on this child's path).
+  assert.equal(a, path.join(home, '.nvm', 'versions', 'node', 'v22.23.3', 'bin', 'rig'));
   assert.equal(b, path.join(home, '.local', 'bin', 'rig'));
 });
 
