@@ -1,0 +1,126 @@
+{
+  "id": "fasth3-t2v",
+  "label": "FastH3 \u00b7 8 steps (with sound)",
+  "kind": "t2v",
+  "i2v": "fasth3-i2v",
+  "workflow": "fasth3-t2v.api.json",
+  "notes": "FastVideo FastH3 (MiniMax H3, 8 steps, int8) with block-sparse attention; clips have synchronized audio. Needs ~20 GB VRAM.",
+  "params": {
+    "prompt": [
+      {
+        "node": "104",
+        "input": "prompt"
+      }
+    ],
+    "seed": [
+      {
+        "node": "15",
+        "input": "noise_seed"
+      }
+    ],
+    "width": [
+      {
+        "node": "104",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node": "104",
+        "input": "height"
+      }
+    ],
+    "frames": [
+      {
+        "node": "104",
+        "input": "length"
+      }
+    ],
+    "fps": [
+      {
+        "node": "91",
+        "input": "fps"
+      }
+    ],
+    "lastFrameIndex": [
+      {
+        "node": "93",
+        "input": "batch_index"
+      }
+    ],
+    "prefix": [
+      {
+        "node": "92",
+        "input": "filename_prefix"
+      }
+    ]
+  },
+  "models": {
+    "diffusion": {
+      "node": "6",
+      "input": "unet_name",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "dir": "diffusion_models"
+    },
+    "textEncoder": {
+      "node": "13",
+      "input": "clip_name",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "dir": "text_encoders"
+    },
+    "vae": {
+      "node": "11",
+      "input": "vae_name",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "dir": "vae"
+    },
+    "audioVae": {
+      "node": "24",
+      "input": "vae_name",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "dir": "vae"
+    }
+  },
+  "outputs": {
+    "video": "92",
+    "lastFrame": "94"
+  },
+  "family": "fasth3",
+  "vramMb": 20000,
+  "defaults": {
+    "width": 864,
+    "height": 480,
+    "seconds": 3,
+    "fps": 24
+  },
+  "limits": {
+    "sizeStep": 32,
+    "maxWidth": 1280,
+    "maxHeight": 704,
+    "framesStep": 17,
+    "framesOffset": 5,
+    "maxFrames": 362
+  },
+  "resolutions": [
+    [
+      608,
+      352
+    ],
+    [
+      736,
+      416
+    ],
+    [
+      864,
+      480
+    ],
+    [
+      960,
+      544
+    ],
+    [
+      1280,
+      704
+    ]
+  ]
+}

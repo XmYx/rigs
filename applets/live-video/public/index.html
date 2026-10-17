@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Live Video</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><img src="icon.svg" alt="" width="20" height="20"><span>LIVE VIDEO</span></div>
+  <div class="conn" title="ComfyUI connection">
+    <span id="conn-dot" class="dot"></span>
+    <span id="conn-text">Connecting…</span>
+  </div>
+  <button id="settings-btn" class="icon-btn" title="ComfyUI settings" aria-label="ComfyUI settings">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+  </button>
+</header>
+
+<main class="layout">
+  <section class="watch">
+    <div id="stage" class="stage">
+      <video id="video-a" class="on" muted playsinline preload="auto"></video>
+      <video id="video-b" muted playsinline preload="auto"></video>
+      <div id="stage-empty" class="stage-empty">
+        <div class="ring"></div>
+        <p>Write a prompt and press <b>Start live</b>.<br>Clips stream in here back to back.</p>
+      </div>
+      <div class="stage-top">
+        <span id="stage-badge" class="badge" hidden>● LIVE</span>
+        <span id="stage-info" class="stage-info"></span>
+      </div>
+      <div id="buffering" class="buffering" hidden><span class="spin"></span>next clip generating…</div>
+    </div>
+
+    <div class="progress">
+      <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+      <div id="progress-text" class="progress-text">Idle</div>
+    </div>
+
+    <div class="strip-head"><h2>Recent clips</h2><span id="clips-count" class="muted"></span></div>
+    <div id="clips" class="strip" role="list"></div>
+  </section>
+
+  <section class="controls">
+    <div class="card">
+      <label class="lbl" for="comfy-url">ComfyUI</label>
+      <form id="url-form" class="row">
+        <input id="comfy-url" type="url" placeholder="http://127.0.0.1:8188" autocomplete="off" spellcheck="false">
+        <button id="connect-btn" type="submit" class="btn">Connect</button>
+      </form>
+      <div id="url-source" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <label class="lbl" for="prompt">Prompt <span class="hint inline" id="prompt-hint"></span></label>
+      <textarea id="prompt" rows="4" placeholder="a neon-lit city street at night, rain, slow dolly forward, cinematic">a neon-lit city street at night, rain, slow dolly forward, cinematic</textarea>
+      <div class="grid">
+        <label><span class="lbl">Model</span><select id="template"></select></label>
+        <label><span class="lbl">Resolution</span><select id="resolution"></select></label>
+        <label><span class="lbl">Length</span><select id="length"></select></label>
+        <label><span class="lbl">Mode</span>
+          <select id="mode">
+            <option value="loop">New shot each clip</option>
+            <option value="drift">Prompt drift</option>
+            <option value="chain">Continuous</option>
+          </select>
+        </label>
+      </div>
+      <div class="row image-row">
+        <button id="image-btn" type="button" class="btn ghost">＋ Start image</button>
+        <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        <span id="image-chip" class="chip" hidden></span>
+      </div>
+      <div id="missing" class="missing" hidden></div>
+      <div id="notice" class="notice" hidden></div>
+      <button id="start-btn" type="button" class="btn primary big">▶ Start live</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings" class="dialog">
+  <form id="settings-form" method="dialog">
+    <h2>ComfyUI connection</h2>
+    <label><span class="lbl">Base URL</span><input id="set-url" type="url" placeholder="http://127.0.0.1:8188" spellcheck="false"></label>
+    <p id="set-url-hint" class="hint"></p>
+    <label><span class="lbl">Auth header</span><input id="set-header" type="text" placeholder="Authorization" spellcheck="false"></label>
+    <label><span class="lbl">Token</span><input id="set-token" type="password" autocomplete="new-password" spellcheck="false"></label>
+    <label class="check"><input id="set-clear-token" type="checkbox"> Remove the saved token</label>
+    <p class="hint">A bare token in <code>Authorization</code> is sent as <code>Bearer …</code>. The token stays on the applet server and is never shown again.</p>
+    <label><span class="lbl">GPU overseer (VRAM lease)</span>
+      <select id="set-overseer">
+        <option value="auto">Auto: when ComfyUI is on this machine</option>
+        <option value="on">Always</option>
+        <option value="off">Off</option>
+      </select>
+    </label>
+    <p id="set-error" class="notice error" hidden></p>
+    <div class="row end">
+      <button id="set-cancel" type="button" class="btn ghost">Cancel</button>
+      <button id="set-save" type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
