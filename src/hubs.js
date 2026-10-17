@@ -268,8 +268,9 @@ export function ensureHub(pin, { policy } = {}) {
 }
 
 /**
- * Run one planned task in the pinned project's hub rig. A retry or follow-up whose seat is still alive and idle gets
- * the brief typed in (`rig send`, the context carries over); everything else is a queue item for a worker seat.
+ * Run one planned task in the pinned project's hub rig, always as a queue item (so the watchdog can follow it and
+ * stopping can cancel it). A retry or follow-up whose seat is still alive and idle goes to that same seat, so its
+ * context carries over; everything else goes to a worker seat for the task's kind and model.
  */
 export async function dispatchTask({ pin, project, task, dir, brief, pointer, policy, source }) {
   const hub = await ensureHub(pin, { policy });
@@ -278,8 +279,8 @@ export async function dispatchTask({ pin, project, task, dir, brief, pointer, po
   if (follow && follow.endsWith('@' + hub.rig)) {
     const n = (await seatsOf(hub.rig)).find((x) => x.session === follow);
     if (n && !GONE.test(n.status || '') && !(n.work > 0)) {
-      await send(follow, pointer);
-      return { mode: 'openrig', hub: true, rig: hub.rig, seat: follow, lead: hub.lead, via: 'send', qitem: null, cwd: dir, team: true, newSeats, session: { kind: 'rig', id: follow } };
+      const qitem = await queue({ seat: follow, bodyFile: brief, summary: `${task.title} (follow-up)`, tags: [`project:${project.id}`, `task:${task.id}`], tier: task.size === 'L' ? 'deep' : 'routine', source });
+      return { mode: 'openrig', hub: true, rig: hub.rig, seat: follow, lead: hub.lead, via: 'follow-up', qitem, cwd: dir, team: true, newSeats, session: { kind: 'rig', id: follow } };
     }
   }
   const w = await ensureWorker({ rig: hub.rig, cwd: dir, kind: task.kind, assign: task.assign, policy });
@@ -332,10 +333,14 @@ export async function reapIdle({ now = Date.now(), idleMs = hubSettings().idleMs
 // ------------------------------------------------------------------ status, up/down, send to lead (the hub UI)
 
 let workCache = { at: 0, value: null };
-async function cachedWork() {
-  if (workCache.value && Date.now() - workCache.at < 10000) return workCache.value;
-  workCache = { at: Date.now(), value: await openWork().catch(() => ({ ok: false, by: new Map() })) };
-  return workCache.value;
+let workInflight = null;
+/** Open queue items per seat, at most one `rig queue list` at a time, reused for 10 s. */
+function cachedWork() {
+  if (workCache.value && Date.now() - workCache.at < 10000) return Promise.resolve(workCache.value);
+  workInflight ||= openWork().catch(() => ({ ok: false, by: new Map() }))
+    .then((value) => { workCache = { at: Date.now(), value }; return value; })
+    .finally(() => { workInflight = null; });
+  return workInflight;
 }
 
 function rigView(rig, st, work) {

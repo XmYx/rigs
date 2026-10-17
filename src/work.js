@@ -280,8 +280,14 @@ export async function nudgeTask({ text, ...run_ }) {
 }
 
 export async function stopTask(run_) {
-  // A pinned project's rig is persistent: stopping a task stops its worker seat only, never the lead or the rig.
-  if (run_.mode === 'openrig' && run_.hub) return run_.seat && run_.seat !== run_.lead ? openrig.rigRun(['seat', 'stop', run_.seat, '--reason', 'RIGS: task stopped', '--json'], { timeout: 60000 }) : null;
+  // A pinned project's rig is persistent: stopping a task cancels its queue item (so no seat picks it up again) and
+  // stops its worker seat, never the rig. A task running in the lead is told to stop; the lead itself stays.
+  if (run_.mode === 'openrig' && run_.hub) {
+    if (run_.qitem) await openrig.rigRun(['queue', 'update', run_.qitem, '--state', 'canceled', '--note', 'RIGS: Sir stopped this task'], { timeout: 30000 });
+    if (!run_.seat) return null;
+    if (run_.seat === run_.lead) return openrig.rigRun(['send', run_.seat, 'RIGS: Sir stopped the task you were given. Stop working on it now and wait for new instructions.'], { timeout: 30000 });
+    return openrig.rigRun(['seat', 'stop', run_.seat, '--reason', 'RIGS: task stopped', '--json'], { timeout: 60000 });
+  }
   if (run_.mode === 'openrig' && run_.rig) return openrig.rigRun(['down', run_.rig, '--json'], { timeout: 120000 });
   if (run_.session?.kind === 'tmux') return run(bin('tmux') || 'tmux', ['kill-session', '-t', run_.session.id], { timeout: 5000 });
   return null;

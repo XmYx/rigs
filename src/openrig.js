@@ -25,9 +25,11 @@ export function rigRun(args, opts = {}) {
   const r = rigBin();
   if (!r) return Promise.resolve({ code: -1, stdout: '', stderr: 'rig is not installed' });
   return runner(r, args, { ...opts, env: { ...process.env, PATH: [path.dirname(process.execPath), augmentedPath()].join(path.delimiter), ...(opts.env || {}) } })
-    .then((res) => { if (CHANGES.has(args[0])) cache.at = 0; return res; }); // the next status() sees the change
+    .then((res) => { if (changes(args)) cache.at = 0; return res; }); // the next status() sees the change
 }
-const CHANGES = new Set(['up', 'down', 'add', 'seat', 'queue', 'remove']);
+// Only commands that change seats or queues make the cached status stale; reads (queue list/show…) don't.
+const READS = { seat: new Set(['show', 'list', 'status']), queue: new Set(['list', 'show', 'transitions', 'overdue', 'undelivered', 'whoami', 'inbox-pending', 'outbox-list']) };
+const changes = (a) => ['up', 'down', 'add', 'remove'].includes(a[0]) || (READS[a[0]] ? !READS[a[0]].has(a[1]) : false);
 
 /** What a failing `rig --version` means, in one sentence for the Mesh window. */
 export function diagnose(text) {

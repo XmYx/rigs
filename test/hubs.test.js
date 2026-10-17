@@ -132,15 +132,17 @@ test('idle workers are stopped after the timeout, the lead never; a stopped work
   assert.equal(rig.cmds('add').length, 1);
 });
 
-test('tasks enter via rig queue; a follow-up goes to the seat that holds the context with rig send', async () => {
+test('tasks enter via rig queue; a follow-up is queued to the seat that holds the context', async () => {
   useFake();
   const r = await hubs.dispatchTask({ pin, project, task: task('t1', 'code', 'claude-opus-5-5'), dir: PROJ, brief, pointer: 'p' });
   const queued = rig.cmds('queue create').length;
+  const seats = rig.cmds('add').length;
   const f = await hubs.dispatchTask({ pin, project, task: task('t1', 'code', 'claude-opus-5-5', { lastSeat: r.seat }), dir: PROJ, brief, pointer: 'Read the brief again: it failed because X' });
-  assert.equal(f.via, 'send');
+  assert.equal(f.via, 'follow-up');
   assert.equal(f.seat, r.seat);
-  assert.deepEqual(rig.cmds('send').at(-1), ['send', r.seat, 'Read the brief again: it failed because X']);
-  assert.equal(rig.cmds('queue create').length, queued, 'no new queue item for a follow-up');
+  assert.ok(f.qitem, 'a follow-up has a queue item, so the watchdog can follow it and a pause can cancel it');
+  assert.equal(rig.cmds('queue create').length, queued + 1);
+  assert.equal(rig.cmds('add').length, seats, 'no new seat for a follow-up');
   // A follow-up to a seat that is busy with other work is queued instead (it would interrupt).
   rig.nodes.find((n) => n.canonicalSessionName === r.seat).assignedWorkCount = 1;
   openrig.invalidate();
@@ -164,6 +166,7 @@ test('work.startTask sends tasks in a pinned folder to the hub rig; stopping one
   await work.stopTask(r);
   assert.deepEqual(rig.cmds('seat stop').map((c) => c[2]), [r.seat]);
   assert.equal(rig.cmds('down').length, 0);
+  assert.deepEqual(rig.cmds('queue update').map((c) => [c[2], c[4]]), [[r.qitem, 'canceled']], 'its queue item is canceled so nothing picks it up again');
 });
 
 test('JARVIS gets a persistent rig whose overseer receives the intake and is the source of the fan-out', async () => {
