@@ -51,6 +51,9 @@ function defaults() {
     capabilities: {},
     // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
     apps: [],
+    // App Store (src/appstore.js): where installed apps live ('' = ~/.rigs/apps) and the GPU Overseer's
+    // clients.json that GPU apps join ('' = ~/apps/gpu-overseer/clients.json, skipped when absent).
+    appstore: { appsDir: '', gpuOverseerClients: '' },
     // Projects pinned in JARVIS's Top hubs: [{ name, path }]. They stay on this machine; every UI sees them.
     pinnedProjects: [],
     // Extra model ids per provider, appended to the built-in catalog (src/models.js).

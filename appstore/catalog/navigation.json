@@ -1,0 +1,21 @@
+{
+  "id": "navigation",
+  "name": "Navigation",
+  "icon": "🧭",
+  "description": "Dark 3D green-vector navigation map: search, turn-by-turn routing, live speed, traffic and trip recording with replay. Free map data, no API key needed.",
+  "version": "1.0.0",
+  "homepage": "applets/navigation/README.md",
+  "platforms": ["linux", "mac", "windows"],
+  "needs": { "gpu": false, "diskGB": 0.05 },
+  "source": { "type": "rigs", "path": "applets/navigation" },
+  "runtime": { "type": "node" },
+  "port": 8731,
+  "healthPath": "/healthz",
+  "healthTimeoutSec": 30,
+  "env": { "NAV_PORT": "{port}", "NAV_HOST": "127.0.0.1" },
+  "launch": {
+    "command": ["{node}", "{appDir}/server.js"],
+    "cwd": "{rigsApp}",
+    "systemd": { "unit": "rigs-app-navigation" }
+  }
+}

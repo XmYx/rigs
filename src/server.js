@@ -11,6 +11,7 @@ import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
 import * as caps from './capabilities.js';
 import * as appsReg from './apps.js';
+import * as appstore from './appstore.js';
 import * as chat from './chat.js';
 import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
@@ -579,6 +580,19 @@ export async function startServer() {
       appsReg.checkAll().catch(() => {});
       return appsReg.localApps();
     }
+    // App Store (src/appstore.js): the catalog with fit + install state, and install jobs on this machine.
+    if (sub === 'appstore' && method === 'GET') return appstore.list();
+    if ((mm = m(/^appstore\/([^/]+)(?:\/(install|uninstall|cancel|job))?$/))) {
+      const id = decodeURIComponent(mm[1]);
+      const op = mm[2] || '';
+      try {
+        if (!op && method === 'GET') return await appstore.detail(id);
+        if (op === 'job' && method === 'GET') return appstore.jobFor(id);
+        if (op === 'install' && method === 'POST') return appstore.install(id, await body());
+        if (op === 'uninstall' && method === 'POST') return await appstore.uninstall(id);
+        if (op === 'cancel' && method === 'POST') return appstore.cancel(id);
+      } catch (e) { throw new HttpError(e.status || 500, e.message); }
+    }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();
@@ -1051,6 +1065,7 @@ export async function startServer() {
   // Merge steward: process proposed branches (also kicked on every proposal / resolution).
   setInterval(kickMerge, 30000).unref();
   appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
+  appstore.onJobEvent((job) => broadcast({ type: 'appstore', node: config().name, job }));
   appsReg.startHealthChecks({ intervalMs: 5000 });
 
   // Project tracker: finished seats/sessions → start what became ready.

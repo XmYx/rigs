@@ -21,6 +21,7 @@ treat `main` as production.
 | `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
+| `src/appstore.js` | App Store: catalog of installable apps (`appstore/catalog/*.json`, format in `appstore/README.md`), manifest validation, and the resumable install job (fetch → venv → deps → models → post → launch → register → health) with progress; uninstall moves files to `~/.rigs/trash`. `GET /api/local/appstore`, `…/<id>/install|job|cancel|uninstall`, MCP `appstore_list` / `appstore_install` |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |
 | `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |

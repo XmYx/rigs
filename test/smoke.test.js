@@ -14,7 +14,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-test-'));
 const PORT = 20000 + Math.floor(Math.random() * 20000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
+const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token',
+  // App Store: launcher scripts instead of systemd units, and nothing outside this throwaway home.
+  RIGS_NO_SYSTEMD: '1', RIGS_SYSTEMD_USER_DIR: path.join(HOME, 'systemd-user'), RIGS_GPU_OVERSEER_CLIENTS: path.join(HOME, 'gpu-overseer', 'clients.json') };
 let server;
 
 async function get(p) {
@@ -42,6 +44,10 @@ before(async () => {
 });
 
 after(() => {
+  // An App Store app the tests started outlives the server; stop it before removing the home.
+  for (const id of ['hello']) {
+    try { const p = JSON.parse(fs.readFileSync(path.join(HOME, 'apps', id, 'app.pid'), 'utf8')); for (const pid of [p.child, p.launcher]) try { process.kill(pid); } catch {} } catch {}
+  }
   server?.kill();
   fs.rmSync(HOME, { recursive: true, force: true });
 });
@@ -177,4 +183,93 @@ test('attention: feed per node + mesh-wide, codex hook endpoint', async () => {
   assert.ok(mesh.some((g) => g.node && Array.isArray(g.items)));
   const r = await post('/api/local/attention/codex', { type: 'agent-turn-complete', 'thread-id': 'smoke' });
   assert.equal(r.ok, true);
+});
+
+// ---------------------------------------------------------------- App Store (src/appstore.js)
+
+const HELLO_PORT = 40000 + Math.floor(Math.random() * 20000);
+function putHello() {
+  // A tiny node app from test/fixtures, copied out of the repo, launched by the launcher script (RIGS_NO_SYSTEMD).
+  fs.mkdirSync(path.join(HOME, 'appstore', 'catalog'), { recursive: true });
+  fs.writeFileSync(path.join(HOME, 'appstore', 'catalog', 'hello.json'), JSON.stringify({
+    id: 'hello', name: 'Hello', icon: '👋', description: 'smoke-test app', version: '1.0.0',
+    source: { type: 'rigs', path: 'test/fixtures/appstore-hello', copy: true }, runtime: { type: 'node' },
+    port: HELLO_PORT, healthPath: '/healthz', healthTimeoutSec: 30, env: { HELLO_PORT: '{port}' },
+    launch: { command: ['{node}', '{appDir}/server.mjs'] },
+  }));
+}
+async function helloAnswers() {
+  try { return (await fetch(`http://127.0.0.1:${HELLO_PORT}/healthz`, { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; }
+}
+async function waitFor(pred, ms = 10000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 200))) if (await pred()) return true;
+  return false;
+}
+
+test('App Store API: catalog, install end to end, open through the App Cloud, uninstall to trash', async () => {
+  putHello();
+  const cat = await get('/api/local/appstore');
+  assert.deepEqual(cat.errors, []);
+  assert.equal(cat.node, 'test-node');
+  assert.ok(cat.apps.some((a) => a.id === 'navigation'), 'the built-in catalog is served');
+  assert.equal(cat.apps.find((a) => a.id === 'hello').install.state, 'not-installed');
+  assert.ok((await get('/api/nodes/self/appstore')).apps.some((a) => a.id === 'hello'), 'reachable through /api/nodes/<node>/');
+  assert.equal((await get('/api/local/appstore/hello')).manifest.port, HELLO_PORT);
+
+  const started = await post('/api/nodes/self/appstore/hello/install', {});
+  assert.equal(started.state, 'running');
+  let job;
+  await waitFor(async () => (job = await get('/api/local/appstore/hello/job')).state !== 'running', 60000);
+  assert.equal(job.state, 'done', JSON.stringify(job, null, 2));
+  assert.deepEqual(job.steps.map((s) => s.status), ['done', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'done', 'done', 'done']);
+  assert.ok(job.log.some((l) => /Hello is installed/.test(l)));
+  const app = (await get('/api/local/apps')).apps.find((a) => a.id === 'hello');
+  assert.match(app.launch.command, /launch\.mjs/);
+  const page = await fetch(`${BASE}/api/nodes/self/apps/hello/`);
+  assert.equal(await page.text(), 'hello from the app store');
+  assert.equal((await get('/api/local/appstore')).apps.find((a) => a.id === 'hello').install.state, 'installed');
+
+  const out = await post('/api/local/appstore/hello/uninstall', {});
+  assert.equal(out.unregistered, true);
+  assert.ok(out.stopped.length >= 1, JSON.stringify(out));
+  assert.ok(out.trashed.some((p) => p.startsWith(path.join(HOME, 'trash'))), JSON.stringify(out));
+  assert.ok(await waitFor(async () => !(await helloAnswers())), 'the app is stopped');
+  assert.ok(!(await get('/api/local/apps')).apps.some((a) => a.id === 'hello'));
+  assert.equal((await get('/api/local/appstore')).apps.find((a) => a.id === 'hello').install.state, 'not-installed');
+
+  const missing = await fetch(`${BASE}/api/local/appstore/nope/install`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(missing.status, 404);
+  const badPort = await fetch(`${BASE}/api/local/appstore/hello/install`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"port":0}' });
+  assert.equal(badPort.status, 400);
+});
+
+test('App Store MCP tools: appstore_list and appstore_install (wait, then uninstall)', async () => {
+  putHello();
+  const mcp = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'mcp'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+  const replies = new Map();
+  let buf = '';
+  mcp.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const msg = JSON.parse(buf.slice(0, i)); replies.set(msg.id, msg); buf = buf.slice(i + 1); } });
+  let next = 1;
+  const call = async (name, args) => {
+    const id = ++next;
+    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+    await waitFor(() => replies.has(id), 90000);
+    const r = replies.get(id).result;
+    assert.ok(!r.isError, r.content[0].text);
+    return JSON.parse(r.content[0].text);
+  };
+  try {
+    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }) + '\n');
+    const listed = await call('appstore_list', {});
+    assert.equal(listed.node, 'test-node');
+    assert.equal(listed.apps.find((a) => a.id === 'hello').install.state, 'not-installed');
+    const job = await call('appstore_install', { id: 'hello', wait: true, waitSec: 60 });
+    assert.equal(job.state, 'done', JSON.stringify(job, null, 2));
+    assert.ok(job.steps.some((s) => s.startsWith('✓ Register in the App Cloud')), job.steps.join('\n'));
+    assert.ok(await helloAnswers());
+    assert.equal((await call('appstore_list', { node: 'self' })).apps.find((a) => a.id === 'hello').install.state, 'installed');
+    const out = await call('appstore_install', { id: 'hello', uninstall: true });
+    assert.equal(out.unregistered, true);
+    assert.ok(await waitFor(async () => !(await helloAnswers())), 'the app is stopped');
+  } finally { mcp.kill(); }
 });
