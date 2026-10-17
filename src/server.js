@@ -196,6 +196,7 @@ export async function startServer() {
   /** Hand a committed work branch (a worktree on this machine) to the merge steward. */
   async function proposeBranch(b) {
     const dir = files.resolvePath(b.dir || '.');
+    if (b.stripManaged) await merge.stripManagedBlocks(dir);
     const d = await merge.describe(dir);
     const st = merge.electSteward(discovery.list());
     if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
@@ -355,7 +356,7 @@ export async function startServer() {
       for (const { node, run: r } of rigs.values()) callNode(node, 'work/stop', { method: 'POST', body: r, timeout: 150000 }).catch((e) => log('release:', e.message));
     },
     // A finished RIGS self-change: its worktree lives on the project's own machine (this one — fileWork made it here).
-    propose: (p) => callNode(p.repo.node, 'dev/propose', { method: 'POST', body: { dir: p.repo.path, title: p.name, summary: truncate(`${p.goal}\n\n${p.tasks.map((t) => `- ${t.title}: ${t.summary}`).join('\n')}`, 4000) }, timeout: 60000 }),
+    propose: (p) => callNode(p.repo.node, 'dev/propose', { method: 'POST', body: { dir: p.repo.path, stripManaged: true, title: p.name, summary: truncate(`${p.goal}\n\n${p.tasks.map((t) => `- ${t.title}: ${t.summary}`).join('\n')}`, 4000) }, timeout: 60000 }),
   };
 
   async function broadcastNotify(b) {

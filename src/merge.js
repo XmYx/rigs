@@ -34,6 +34,43 @@ async function forbiddenPaths(cwd, range) {
   return r.stdout.split('\n').filter((f) => FORBIDDEN.test(f));
 }
 
+// OpenRig writes its seat culture/onboarding into the CLAUDE.md / AGENTS.md of every seat's working folder.
+// Those blocks belong to that machine's seats, never to the repository.
+const MANAGED = /\n*<!-- BEGIN OpenRig MANAGED BLOCK: ([^>]*?) -->[\s\S]*?<!-- END OpenRig MANAGED BLOCK: \1 -->\n?/g;
+export const stripManaged = (text) => text.replace(MANAGED, '\n').replace(/\n{3,}$/, '\n').replace(/\n+$/, '\n');
+
+async function managedBlockPaths(cwd, range) {
+  const r = await git(['diff', '-U0', range], cwd);
+  const out = new Set();
+  let file = '';
+  for (const l of r.stdout.split('\n')) {
+    if (l.startsWith('+++ b/')) file = l.slice(6);
+    else if (l.startsWith('+') && l.includes('OpenRig MANAGED BLOCK')) out.add(file);
+  }
+  return [...out];
+}
+
+/**
+ * Before RIGS proposes a worktree on an agent team's behalf: take OpenRig's injected blocks back out of the guides
+ * (working tree and any commit that carried them), committing the removal.
+ */
+export async function stripManagedBlocks(dir) {
+  const changed = [];
+  for (const f of ['CLAUDE.md', 'AGENTS.md']) {
+    const p = path.join(dir, f);
+    let text;
+    try { text = await fsp.readFile(p, 'utf8'); } catch { continue; }
+    const clean = stripManaged(text);
+    if (clean !== text) { await fsp.writeFile(p, clean); changed.push(f); }
+  }
+  if (!changed.length) return { changed };
+  // Only commit what is ours to commit: the guide files, and only when nothing else is uncommitted in them.
+  await git(['add', '--', ...changed], dir);
+  const staged = (await git(['diff', '--cached', '--name-only'], dir)).stdout.trim();
+  if (staged) await git(['commit', '-m', 'Drop OpenRig managed blocks from the agent guides', '--', ...changed], dir);
+  return { changed };
+}
+
 function git(args, cwd, timeout = 120000) {
   return run(bin('git') || 'git', args, { cwd, timeout });
 }
@@ -74,6 +111,8 @@ export async function describe(dir) {
   if (st.stdout.trim()) throw new Error('commit your changes first (git status is not clean)');
   const commits = logr.stdout.trim().split('\n').filter(Boolean);
   if (!commits.length) throw new Error('nothing to propose: no commits ahead of origin/main');
+  const managed = await managedBlockPaths(dir, 'origin/main...HEAD');
+  if (managed.length) throw new Error(`the branch commits OpenRig's managed blocks into ${managed.join(', ')} (seats inject them into their folder's guide) — run \`rigs propose\` via RIGS, or remove the <!-- BEGIN/END OpenRig MANAGED BLOCK --> sections and commit`);
   const bad = await forbiddenPaths(dir, 'origin/main...HEAD');
   if (bad.length) throw new Error(`the branch commits ${bad.join(', ')} — remove them (git rm -r --cached ${bad[0].split('/')[0]}) and commit again`);
   return { branch, base: base.stdout.trim(), commits };

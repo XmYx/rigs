@@ -107,3 +107,23 @@ test('a branch that commits node_modules (e.g. the worktree symlink) is refused'
 test('main itself is never a work branch', async () => {
   await assert.rejects(() => merge.describe(app), /work branch, not main|nothing to propose/);
 });
+
+test("OpenRig's managed blocks never reach the repo: refused on propose, stripped when RIGS proposes", async () => {
+  const BLOCK = '\n\n<!-- BEGIN OpenRig MANAGED BLOCK: CULTURE-default.md -->\n# OpenRig default culture\n<!-- END OpenRig MANAGED BLOCK: CULTURE-default.md -->\n';
+  assert.equal(merge.stripManaged('# Guide\n\nRead AGENTS.md.\n' + BLOCK), '# Guide\n\nRead AGENTS.md.\n');
+  const w = await merge.startWork('managed-blocks', { repo: app });
+  fs.writeFileSync(path.join(w.dir, 'CLAUDE.md'), '# Guide\n');
+  fs.writeFileSync(path.join(w.dir, 'f.txt'), 'line one\nline two\nline three\n');
+  git(w.dir, 'add', '.');
+  git(w.dir, 'commit', '-q', '-m', 'real change');
+  // A seat injects its blocks and an agent commits them along with its work.
+  fs.appendFileSync(path.join(w.dir, 'CLAUDE.md'), BLOCK);
+  git(w.dir, 'commit', '-q', '-am', 'more work');
+  await assert.rejects(merge.describe(w.dir), /OpenRig's managed blocks into CLAUDE\.md/);
+  // Injected again, uncommitted this time (a dirty tree would also block the proposal).
+  fs.appendFileSync(path.join(w.dir, 'CLAUDE.md'), BLOCK.replaceAll('CULTURE-default', 'openrig-start'));
+  assert.deepEqual((await merge.stripManagedBlocks(w.dir)).changed, ['CLAUDE.md']);
+  assert.equal(fs.readFileSync(path.join(w.dir, 'CLAUDE.md'), 'utf8'), '# Guide\n');
+  const d = await merge.describe(w.dir);
+  assert.equal(d.commits.length, 3);
+});
