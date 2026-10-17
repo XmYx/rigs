@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { guardBrief, gitDenyRules } from './autonomy.js';
 import { config, RIGS_HOME } from './config.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
 import * as hubs from './hubs.js';
 import { AGENT_REF, GONE, agentsDir as openrigAgentsDir, memberFor, memberYaml, modelTag, slug, specYaml } from './hubs.js';
 import * as openrig from './openrig.js';
+import { devRoot } from './merge.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
 import { APP_DIR, HOME, expandHome, isWin, run, sleep } from './util.js';
@@ -33,7 +35,8 @@ async function prepareWorkdir(workdir, gitUrl) {
     await fsp.mkdir(path.dirname(dir), { recursive: true });
     const r = await run(bin('git') || 'git', ['clone', gitUrl, dir], { timeout: 600000 });
     if (r.code !== 0) throw new Error('git clone failed: ' + r.stderr.trim().slice(-300));
-  } else if (gitUrl) {
+  } else if (gitUrl && within(dir, DEFAULT_WORKROOT)) {
+    // Only RIGS's own clones are fast-forwarded; the user's folder keeps whatever branch tip he left it on.
     await run(bin('git') || 'git', ['pull', '--ff-only'], { cwd: dir, timeout: 120000 });
   }
   await fsp.mkdir(dir, { recursive: true });
@@ -44,6 +47,10 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   const dir = await prepareWorkdir(workdir, project.gitUrl);
   // The installed checkout is production: agents change RIGS in a dev worktree (rigs_dev_start), never here.
   if (isInstall(dir)) throw new Error(`refusing to run an agent in the installed RIGS checkout (${dir}) — RIGS changes go through a dev worktree`);
+  // Git guard: commits only inside a RIGS dev worktree, pushes and branch switches never (see autonomy.js).
+  const devWorktree = isDevWorktree(dir);
+  if (project.selfDev && !devWorktree) throw new Error(`refusing to run a RIGS change outside a dev worktree (${dir} is not under ${devRoot()}) — start one with rigs_dev_start`);
+  prompt = guardBrief(prompt, { devWorktree, branch: project.selfDev?.branch || '' }).prompt;
   // The full brief lives on disk — under ~/.rigs, never inside the user's project folder; agents get a short
   // pointer to it (robust quoting on every OS), OpenRig seats get it as their queue item.
   const briefDir = path.join(RIGS_HOME, 'briefs', project.slug);
@@ -60,14 +67,39 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   const pin = hubs.hubSettings().enabled ? hubs.pinFor(dir) : null;
   if (useRig && pin) return { ...(await hubs.dispatchTask({ pin, project, task, dir, brief, pointer, policy, source })), brief };
   if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy, source })), brief };
-  return { ...(await startDirect({ project, task, dir, pointer })), brief };
+  return { ...(await startDirect({ project, task, dir, pointer, devWorktree })), brief };
 }
 
+const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+const within = (dir, root) => { const d = real(dir); const r = real(root); return d === r || d.startsWith(r + path.sep); };
+
 export function isInstall(dir) {
-  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-  const d = real(dir);
-  const app = real(APP_DIR);
-  return d === app || d.startsWith(app + path.sep);
+  return within(dir, APP_DIR);
+}
+
+/** A RIGS dev worktree (rigs_dev_start): a folder inside the dev root, never the root itself. */
+export function isDevWorktree(dir) {
+  return within(dir, devRoot()) && real(dir) !== real(devRoot());
+}
+
+/** The tmux session of a directly started task: unique per project (two "Merge conflict: …" projects share a slug). */
+export function sessionName(project, task) {
+  return `${project.slug}-${String(project.id || '').slice(0, 4)}-${task.id}${task.attempts ? `-r${task.attempts}` : ''}`.replace(/--+/g, '-').replace(/[^\w.-]/g, '-');
+}
+
+/**
+ * The command line that starts a task's agent directly. Claude gets the git guard as deny rules (it cannot run a
+ * forbidden git step even if a brief asked); the prompt goes after `--` so the variadic flag can't swallow it.
+ */
+export function directLine(a, pointer, { devWorktree = false } = {}) {
+  const modes = agentModes();
+  if (a.provider === 'claude') return ['claude', ...claudeFlags({ ...a, ...modes.claude }).map(q), '--disallowedTools', q(gitDenyRules({ devWorktree }).join(',')), '--', q(pointer)].join(' ');
+  if (a.provider === 'codex') return ['codex', ...codexFlags({ ...a, ...modes.codex }).map(q), q(pointer)].join(' ');
+  if (a.provider === 'ollama') {
+    // Codex drives local Ollama models as a real agent (tools + MCP incl. REA); plain `ollama run` otherwise.
+    return bin('codex') ? ['codex', '--oss', '--local-provider', 'ollama', ...(a.model ? ['-m', q(a.model)] : []), q(pointer)].join(' ') : `ollama run ${q(a.model || 'llama3.2')} ${q(pointer)}`;
+  }
+  throw new Error('unknown provider ' + a.provider);
 }
 
 /**
@@ -131,17 +163,10 @@ async function startOpenRig({ project, task, dir, brief, policy, source }) {
   return { mode: 'openrig', rig: rigName, seat, qitem, cwd: dir, team: true, session: { kind: 'rig', id: seat } };
 }
 
-async function startDirect({ project, task, dir, pointer }) {
+async function startDirect({ project, task, dir, pointer, devWorktree }) {
   const a = task.assign;
-  let line;
-  const modes = agentModes();
-  if (a.provider === 'claude') line = ['claude', ...claudeFlags({ ...a, ...modes.claude }).map(q), q(pointer)].join(' ');
-  else if (a.provider === 'codex') line = ['codex', ...codexFlags({ ...a, ...modes.codex }).map(q), q(pointer)].join(' ');
-  else if (a.provider === 'ollama') {
-    // Codex drives local Ollama models as a real agent (tools + MCP incl. REA); plain `ollama run` otherwise.
-    line = bin('codex') ? ['codex', '--oss', '--local-provider', 'ollama', ...(a.model ? ['-m', q(a.model)] : []), q(pointer)].join(' ') : `ollama run ${q(a.model || 'llama3.2')} ${q(pointer)}`;
-  } else throw new Error('unknown provider ' + a.provider);
-  const name = `${project.slug}-${task.id}${task.attempts ? `-r${task.attempts}` : ''}`.replace(/[^\w.-]/g, '-');
+  const line = directLine(a, pointer, { devWorktree });
+  const name = sessionName(project, task);
   const t = bin('tmux');
   if (t && !isWin) {
     const sh = shellWrap(line);
@@ -231,7 +256,7 @@ export async function taskStatus(run_) {
       const live = j.waiting?.liveness || {};
       if (state !== 'done' && !alive) return { state: 'seat-down' };
       return { state, closure: j.closureReason || j.qitem?.closureReason || null, activity: live.activity || null,
-        idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0,
+        idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0, question: live.needsInput?.reason || '',
         busy: BUSY.test(live.activity || ''), activityAt: transcriptMtime(run_) };
     } catch { return { state: 'unknown' }; }
   }
@@ -244,8 +269,10 @@ export async function taskStatus(run_) {
     const text = pane.stdout.replace(/\d+(\.\d+)?\s?(s|m|ms|min|tokens?)\b|[⠀-⣿✻✶✳✢·*]/g, '');
     const act = await run(t, ['display-message', '-p', '-t', run_.session.id, '#{session_activity}'], { timeout: 5000 });
     const activityAt = (parseInt(act.stdout, 10) || 0) * 1000;
+    const tail = pane.stdout.split('\n').slice(-15).join('\n');
+    const needsInput = /Do you want to|\(y\/n\)|Allow .*\?|approve|permission/i.test(tail);
     return { state: 'running', activityAt, fingerprint: crypto.createHash('sha1').update(text).digest('hex').slice(0, 16),
-      needsInput: /Do you want to|\(y\/n\)|Allow .*\?|approve|permission/i.test(pane.stdout.split('\n').slice(-15).join('\n')) };
+      needsInput, question: needsInput ? tail.replace(/[│╭╮╰╯─]+/g, ' ').replace(/\s+/g, ' ').trim().slice(-400) : '' };
   }
   return { state: 'running' };
 }
@@ -265,22 +292,25 @@ export async function findTask({ project, task }) {
   }
   const t = bin('tmux');
   if (t && !isWin && project.slug) {
-    const name = `${project.slug}-${task.id}${task.attempts ? `-r${task.attempts}` : ''}`.replace(/[^\w.-]/g, '-');
+    const name = sessionName(project, task);
     if ((await run(t, ['has-session', '-t', name], { timeout: 5000 })).code === 0) return { run: { mode: 'direct', session: { kind: 'tmux', id: name } } };
   }
   return { run: null };
 }
 
 /** The watchdog's nudge: a message typed into the agent's session (OpenRig seat or tmux). */
-export async function nudgeTask({ text, ...run_ }) {
+export async function nudgeTask({ text, dismiss = false, ...run_ }) {
   if (!text) throw new Error('nothing to send');
   if (run_.mode === 'openrig' && run_.seat) {
+    // A permission prompt holds the seat: decline it (Escape — the safe default), then the answer can be typed.
+    if (dismiss) { await openrig.rigRun(['send', run_.seat, '\u001b', '--dangerously-interact', '--reason', 'RIGS self-answer: decline the pending prompt (safe default)'], { timeout: 30000 }).catch(() => {}); await sleep(800); }
     const r = await openrig.rigRun(['send', run_.seat, text], { timeout: 30000 });
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().slice(-200) || 'rig send failed');
     return { ok: true, via: 'rig send' };
   }
   if (run_.session?.kind === 'tmux') {
     const t = bin('tmux') || 'tmux';
+    if (dismiss) { await run(t, ['send-keys', '-t', run_.session.id, 'Escape'], { timeout: 5000 }); await sleep(800); }
     await run(t, ['send-keys', '-t', run_.session.id, '-l', text], { timeout: 5000 });
     await sleep(300);
     const r = await run(t, ['send-keys', '-t', run_.session.id, 'Enter'], { timeout: 5000 });

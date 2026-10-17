@@ -17,6 +17,7 @@ treat `main` as production.
 | `src/chat.js` | JARVIS brains: Claude Code (`claude -p`), Codex (`codex exec --json`), Ollama (HTTP). Hot-swappable mid-conversation |
 | `src/models.js` | Provider → model → effort catalog and the per-harness flags (`--model/--effort`, `-m/-c model_reasoning_effort`, Ollama `think`); core brain |
 | `src/planner.js` | Projects: core-brain planning → routing policy (`config.routing.rules`) → dispatch → tracking. `routeProject` is pure and unit-tested |
+| `src/autonomy.js` | The completion loop's policy (pure, unit-tested): retry budget + model ladder (`config.autonomy`), the safe-default answer to agent questions, the git guard for briefs and direct agents (no commit/push/branch switch outside a dev worktree), and the one "How did it work out, sir?" report. Wired in by `planner.js` / `work.js`; e2e: `scripts/e2e-completion-loop.js` |
 | `src/work.js` | Runs one task on this machine: the pinned project's hub rig, the project's OpenRig team (seat per role + model) + queue item, or a direct agent session where OpenRig is unavailable |
 | `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |

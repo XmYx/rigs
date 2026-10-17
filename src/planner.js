@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { PROVIDERS, coreBrain } from './models.js';
@@ -283,7 +284,7 @@ export async function planFlow(id, ctx) {
   p.tasks = ensureFinalReview(normalizeTasks({ tasks: [{
     id: 't1', title: `Run ${f.name}${f.description ? ' — ' + f.description : ''}`, kind: 'code', size: 'L',
     description: `Sir asked: "${p.request || p.goal}". Carry out the workspace's "${f.name}" flow (below) now, exactly as its scheduled run would, following the workspace's agent guide (its worktree/branch conventions, builds, tests, notes).`,
-    acceptance: ['the flow ran to its end and its deliverables exist (commits/branch, build or release, notes as the flow prescribes)', 'its build and tests pass on the result'],
+    acceptance: ['the flow ran to its end and its deliverables exist (changes listed for Sir, build or release, notes as the flow prescribes)', 'its build and tests pass on the result'],
     verify: 'the checks the flow and the workspace guide prescribe; list commands and results',
   }] }), p.goal);
   routeProject(p, await ctx.snapshot());
@@ -349,6 +350,8 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
     const suggested = picks === 'all' ? normProvider(suggestText) : '';
     let providers = [suggested, first, rule.provider, ...PROVIDER_ORDER].filter((x, i, a) => x && a.indexOf(x) === i);
     if (t.kind === 'private') providers = ['ollama'];
+    // A retry stepped up the model ladder: that provider/model/effort, on whichever machine can run it.
+    if (t.escalate?.provider) providers = [t.escalate.provider];
     providers = providers.filter((x) => !avoided().includes(x));
     let best = null;
     for (const provider of providers) {
@@ -384,6 +387,7 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
     const a = { node: best.node.name, provider: best.provider, model: '', effort: '' };
     const pr = ruleFor(t, best.provider);
     if (pr) { a.model = pr.model || ''; a.effort = pr.effort || ''; }
+    if (t.escalate?.provider === best.provider) { a.model = t.escalate.model || a.model; a.effort = t.escalate.effort || a.effort; }
     if (best.provider === suggested) {
       const m = (PROVIDERS[suggested]?.models || []).find((x) => suggestText.toLowerCase().includes(x));
       if (m) a.model = m;
@@ -403,7 +407,8 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
       : best.provider === first && first !== rule.provider ? `cross-check: reviews ${rule.provider}'s work`
       : best.provider === rule.provider ? 'policy' : `fallback — no machine can run ${first} for this`;
     const hint = picks !== 'all' && suggestText && normProvider(suggestText) && normProvider(suggestText) !== a.provider ? ` (planner suggested ${suggestText})` : '';
-    t.reason = `${t.kind}${t.size === 'L' ? ' (large)' : ''} → ${a.provider}${a.model ? ' ' + a.model : ''}${a.effort ? ' · ' + a.effort : ''} by ${how}${hint}; ${best.node.name}: ${best.why.join(', ') || 'least loaded'}`;
+    const how2 = t.escalate?.provider === best.provider ? `escalation after attempt ${t.attempts || 1}` : how;
+    t.reason = `${t.kind}${t.size === 'L' ? ' (large)' : ''} → ${a.provider}${a.model ? ' ' + a.model : ''}${a.effort ? ' · ' + a.effort : ''} by ${how2}${hint}; ${best.node.name}: ${best.why.join(', ') || 'least loaded'}`;
     load.set(best.node.name, (load.get(best.node.name) || 0) + 1);
   }
   return p;
@@ -416,17 +421,19 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
  * changes go to the merge steward; work on other projects is not committed until Sir says so.
  */
 export function autonomyBrief(p) {
-  const commit = config().agents?.commitOtherProjects || 'ask';
   return `## What you may do without asking
 - Pre-approved by Sir: everything non-destructive — reading, editing files in the project folder, builds, tests,
   profiling and benchmark runs, launching the app, game or editor, project-local installs. This overrides any saved
   habit of confirming such steps first: do them.
 - Not pre-approved: destructive or irreversible steps — deleting or overwriting data you did not create, reverting,
   resetting, stashing or discarding changes, force-pushes and history rewrites, publishing or deploying, spending money,
-  changing system settings. If one is truly needed, don't do it: report status "blocked" naming the exact step and why.
+  changing system settings. Reversible steps (pausing, archiving, restarting your own processes) are not destructive.
+  If a destructive step is truly needed, don't do it: finish everything else, report "done" and list the skipped step
+  as a follow-up for Sir.
+- A declined permission prompt or a safety-classifier denial means: take another route (a different tool, a smaller
+  step) — not "blocked". If you still have a question, RIGS answers it with the safe default; nobody else will.
 ${p.selfDev ? '- Commits: this is RIGS itself — commit in your dev worktree; RIGS proposes the branch to the merge steward, which tests and pushes it.'
-    : commit === 'branch' ? '- Commits: you may commit on a work branch of your own (never main/master, never push); say which branch in your summary.'
-      : '- Commits: Sir approves commits on this project. Do not commit, push, merge, rebase or switch branches in its repositories — leave your changes in the working tree and list every file you changed plus a suggested commit message in your summary.'}
+    : '- Commits: Sir approves commits on this project. Do not commit, push, merge, rebase or switch branches in its repositories — leave your changes in the working tree and list every file you changed plus a suggested commit message in your summary.'}
 `;
 }
 
@@ -458,7 +465,7 @@ ${t.needs?.tool ? `## Tool for this task\nThis machine provides **${t.needs.tool
 - Before reporting done: \`npm test\` passes (and \`npm run build\` when ui/ changed), and your work is committed.
 
 ` : ''}${autonomyBrief(p)}
-${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\nPick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}## How to work
+${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}## How to work
 - Stay inside your task. If you need something from another machine, use the rigs MCP tools (mesh_*).
 - To understand existing software, binaries or apps, use REA (the \`rea\` MCP / \`npx -y rea-agents@latest\`).
 - Nobody is watching this session: never stop to ask a question or wait for a reply. Decide sensibly, note the assumption in your summary.
@@ -477,8 +484,8 @@ ${'If you are an OpenRig seat, also close your queue item.'}
 `;
 }
 
-function ready(p, t) {
-  return t.status === 'todo' && t.assign && t.deps.every((d) => p.tasks.find((x) => x.id === d)?.status === 'done');
+function ready(p, t, now = Date.now()) {
+  return t.status === 'todo' && t.assign && !(t.retryAt > now) && t.deps.every((d) => p.tasks.find((x) => x.id === d)?.status === 'done');
 }
 
 // Anything that was "in flight" before this process started (planning, a dispatch) cannot still be in flight:
@@ -509,18 +516,42 @@ export function withProject(id, fn) {
 }
 
 /**
+ * Route tasks that have no machine. A platform need that no online machine can meet next to the project's folder
+ * (a "mac" test for a repo on the linux box) would strand the task in todo forever: drop that need once, say so,
+ * and route again. Whatever still has no machine is timed, so settle() can tell it apart from a brief outage.
+ */
+export function placeUnassigned(p, snapshot, now = Date.now()) {
+  routeProject(p, snapshot, { onlyUnassigned: true });
+  const strand = () => p.tasks.filter((t) => t.status === 'todo' && !t.assign);
+  if (autonomy.settings(p).enabled) {
+    const relax = strand().filter((t) => t.needs?.platform && t.needs.platform !== 'any');
+    for (const t of relax) {
+      t.relaxed = `needs.platform ${t.needs.platform} dropped: no online machine had it next to the project's folder`;
+      t.needs = { ...t.needs, platform: 'any' };
+      event(p, `${t.id}: ${t.relaxed}`);
+    }
+    if (relax.length) routeProject(p, snapshot, { onlyUnassigned: true });
+  }
+  for (const t of p.tasks) {
+    if (t.status === 'todo' && !t.assign) t.unroutableSince ||= now;
+    else delete t.unroutableSince;
+  }
+  return p;
+}
+
+/**
  * Start every task whose dependencies are done. Tasks are claimed ("starting") under the lock, started outside it
  * (a start can take minutes), and each result is written back onto the then-current project.
  */
-export async function dispatchReady(id, ctx, { only } = {}) {
+export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
   const claim = await withProject(id, async () => {
     const p = await getProject(id);
     if (!p) throw new Error('project not found');
     if (!only && !['planned', 'running', 'blocked'].includes(p.status)) throw new Error(`project is ${p.status}`);
     if (!only) p.status = 'running';
     // Tasks that lost their machine (dispatch failed, machine offline) are placed again before starting.
-    if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) routeProject(p, await ctx.snapshot(), { onlyUnassigned: true });
-    const ts = p.tasks.filter((x) => ready(p, x) && (!only || x.id === only));
+    if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) placeUnassigned(p, await ctx.snapshot());
+    const ts = p.tasks.filter((x) => ready(p, x, now) && (!only || x.id === only));
     for (const t of ts) { t.status = 'starting'; t.startingAt = Date.now(); }
     await saveProject(p);
     return { p, ts: ts.map((t) => ({ ...t })) };
@@ -532,7 +563,7 @@ export async function dispatchReady(id, ctx, { only } = {}) {
     let r = null;
     let err = null;
     try {
-      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined }, timeout: 10 * 60 * 1000 });
+      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl, selfDev: p0.selfDev ? { branch: p0.selfDev.branch } : null }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined }, timeout: 10 * 60 * 1000 });
     } catch (e) { err = e; }
     await withProject(id, async () => {
       const p = await getProject(id);
@@ -554,7 +585,8 @@ export async function dispatchReady(id, ctx, { only } = {}) {
         started.push(t.id);
         event(p, `${t.id} started on ${t.assign.node} via ${r.mode === 'openrig' ? `OpenRig seat ${r.seat}` : `${r.session.kind} ${r.session.id}`}${t.attempts ? ` (attempt ${t.attempts + 1})` : ''}`);
       } else {
-        const rr = retryOrFail(p, t, `dispatch to ${t.assign.node} failed: ${err.message}`);
+        // The machine or its agent runtime failed, not the model: same model, after a pause, maybe elsewhere.
+        const rr = retryOrFail(p, t, `dispatch to ${t.assign.node} failed: ${err.message}`, { escalate: false, delayMs: autonomy.settings(p).retryDelayMs });
         if (rr === 'retry' && !t.assign?.locked) t.assign = null; // let routing pick another machine
         event(p, `${t.id} dispatch failed on ${t.assign?.node || 'its machine'}: ${err.message}`);
       }
@@ -564,33 +596,109 @@ export async function dispatchReady(id, ctx, { only } = {}) {
   return withProject(id, async () => {
     const p = await getProject(id);
     if (started.length) tell(ctx, p, `${p.name}: started ${started.length} task${started.length > 1 ? 's' : ''} (${started.map((x) => p.tasks.find((t) => t.id === x).assign.node).join(', ')}).`);
-    if (!only) await settle(p, ctx);
+    if (!only) await settle(p, ctx, now);
     return p;
   });
 }
 
 /**
- * A task that failed (or ended silently) gets one fresh attempt with the failure in its brief; after that it is
- * failed for good and the project escalates to Sir. Returns 'retry' or 'failed'.
+ * A task that failed, stalled or ended silently gets a fresh attempt with the failure in its brief, one rung up the
+ * model ladder (Sonnet medium → Opus high → Opus xhigh) unless the failure was the machine's (`escalate: false`, e.g.
+ * a dispatch error, retried after `delayMs`). When the project's attempt budget (config.autonomy.maxAttempts) is
+ * spent the task is failed for good. Returns 'retry' or 'failed'.
  */
-export function retryOrFail(p, t, why) {
+export function retryOrFail(p, t, why, { escalate = true, delayMs = 0, now = Date.now() } = {}) {
+  const A = autonomy.settings(p);
+  const max = A.enabled ? A.maxAttempts : MAX_ATTEMPTS;
   t.attempts = (t.attempts || 0) + 1;
   t.lastFailure = truncate(String(why || ''), 1500);
+  (t.history ||= []).push({ attempt: t.attempts, at: now, node: t.assign?.node || '', provider: t.assign?.provider || '', model: t.assign?.model || '', effort: t.assign?.effort || '', why: truncate(String(why || ''), 300) });
+  if (t.history.length > 10) t.history = t.history.slice(-10);
   // The seat that held the work keeps its context: a retry in a persistent rig is typed into it if it is idle.
   if (t.run?.seat) t.lastSeat = t.run.seat;
   t.run = null;
   t.watch = null;
-  if (t.attempts < MAX_ATTEMPTS) {
+  t.answers = 0;
+  if (t.attempts < max) {
     t.status = 'todo';
-    event(p, `${t.id} will be retried (attempt ${t.attempts + 1}): ${truncate(why, 160)}`);
+    let how = '';
+    const nx = A.enabled && escalate ? autonomy.nextAssign(t.assign, A.ladder) : null;
+    if (nx && !(nx.provider === t.assign?.provider && nx.model === t.assign?.model && nx.effort === t.assign?.effort)) {
+      t.escalate = { provider: nx.provider, model: nx.model, effort: nx.effort };
+      // A different model needs a fresh seat; the same provider stays on its machine, another one is routed again.
+      delete t.lastSeat;
+      if (t.assign && (t.assign.provider === nx.provider || t.assign.locked)) t.assign = { ...t.assign, ...t.escalate };
+      else t.assign = null;
+      how = ` with ${nx.model} ${nx.effort}`;
+    }
+    if (delayMs > 0) t.retryAt = now + delayMs; else delete t.retryAt;
+    event(p, `${t.id} will be retried (attempt ${t.attempts + 1}/${max}${how}${delayMs > 0 ? `, in ${Math.round(delayMs / 1000)} s` : ''}): ${truncate(why, 160)}`);
     return 'retry';
   }
   t.status = 'failed';
+  delete t.retryAt;
   t.summary = truncate(String(why || ''), 4000);
+  event(p, `${t.id} failed after ${t.attempts} attempt${t.attempts > 1 ? 's' : ''}: ${truncate(why, 160)}`);
   return 'failed';
 }
 
-/** What Sir hears when a project is finished: one spoken line, the evidence written below it. */
+/**
+ * The loop's end — 100%, the attempt budget spent, or a hand-off that can't finish: Sir gets ONE report (what was
+ * done, retried, still open, "How did it work out, sir?"). The same end state is never reported twice.
+ */
+export function completionNotify(p, ctx, { why = 'done', merged = '' } = {}) {
+  const sig = `${p.status}|${p.tasks.map((t) => `${t.id}:${t.status}`).join(',')}`;
+  if (p.loop?.notified === sig) return false;
+  p.loop = { ...(p.loop || {}), notified: sig, endedAt: Date.now(), why };
+  event(p, `loop ended (${why}) — asked Sir how it worked out`);
+  tell(ctx, p, autonomy.completionReport(p, { why, merged }), why === 'done' ? 'info' : 'error', { keep: true });
+  return true;
+}
+
+/** Sir's answer to "How did it work out?", kept on the project. */
+export async function addFeedback(id, { text, by = 'Sir' } = {}) {
+  if (!String(text || '').trim()) throw new Error('no feedback text');
+  return withProject(id, async () => {
+    const p = await getProject(id);
+    if (!p) throw new Error('project not found');
+    (p.feedback ||= []).push({ ts: Date.now(), by: truncate(String(by), 80), text: truncate(String(text), 4000) });
+    event(p, `feedback from ${by}: ${truncate(String(text), 160)}`);
+    return saveProject(p);
+  });
+}
+
+/**
+ * Work that can never start on its own: a task an agent left "blocked", or tasks whose dependencies wait on each
+ * other. Blocked tasks are retried (within the budget); a dependency cycle loses the edges that close it.
+ * Returns true if anything changed.
+ */
+export function requeueDeadlocks(p, now = Date.now()) {
+  let changed = false;
+  for (const t of p.tasks.filter((x) => x.status === 'blocked')) {
+    retryOrFail(p, t, `was blocked: ${t.summary || 'no reason given'}`, { now });
+    t.stalled = false;
+    changed = true;
+  }
+  const byId = new Map(p.tasks.map((t) => [t.id, t]));
+  const state = new Map(); // 1 = on the DFS stack, 2 = finished
+  const visit = (t) => {
+    state.set(t.id, 1);
+    for (const d of [...t.deps]) {
+      const dt = byId.get(d);
+      if (!dt || dt.status === 'done') continue;
+      if (state.get(d) === 1) {
+        t.deps = t.deps.filter((x) => x !== d);
+        event(p, `${t.id} and ${d} waited on each other — ${t.id} no longer waits for ${d}`);
+        changed = true;
+      } else if (!state.get(d)) visit(dt);
+    }
+    state.set(t.id, 2);
+  };
+  for (const t of p.tasks) if (t.status === 'todo' && !state.get(t.id)) visit(t);
+  return changed;
+}
+
+/** What Sir hears when a project is finished (autonomy off): one spoken line, the evidence written below it. */
 export function finalReport(p, { merged = '' } = {}) {
   const n = p.tasks.length;
   const spoken = `${p.name} is done: ${n} task${n === 1 ? '' : 's'} finished${merged ? ', merged and rolled out to every machine' : ''}.`;
@@ -612,38 +720,63 @@ export function avoided() {
   return (config().routing?.avoid || []).map((x) => String(x).toLowerCase());
 }
 
-/** After any change: finish, hand a RIGS change to the merge steward, or escalate a project nothing can move. */
-async function settle(p, ctx) {
-  if (p.main) return; // the standing project never finishes; each task reports on its own
+/**
+ * After any change: finish (and ask Sir how it went), hand a RIGS change to the merge steward, re-queue work that
+ * can't start on its own, or end the loop when the budget is spent. Never touches a paused project.
+ */
+async function settle(p, ctx, now = Date.now()) {
+  if (p.main || p.status === 'paused') return; // the standing project never finishes; each task reports on its own
+  const A = autonomy.settings(p);
   if (p.tasks.length && p.tasks.every((x) => x.status === 'done')) {
     if (['done', 'merging'].includes(p.status)) return;
     if (p.selfDev && ctx?.propose) {
+      if (p.selfDev.proposeRetryAt > now) return;
       try {
         const r = await ctx.propose(p);
-        p.selfDev = { ...p.selfDev, request: r.id, steward: r.steward, proposedAt: Date.now() };
-        p.status = 'merging';
-        event(p, `all tasks done — proposed ${p.selfDev.branch} to the merge steward on ${r.steward}`);
-        tell(ctx, p, `${p.name}: all tasks done and verified — handed to the merge steward for tests, merge and rollout.`, 'info', { keep: true });
+        if (r?.empty) {
+          // Nothing was committed (an action, not a code change): there is nothing to merge — the project is done.
+          p.status = 'done';
+          event(p, `all tasks done — ${p.selfDev.branch} has no commits ahead of main, nothing to merge`);
+          if (A.enabled) completionNotify(p, ctx); else tell(ctx, p, finalReport(p), 'info', { keep: true });
+          ctx?.release?.(p);
+        } else {
+          p.selfDev = { ...p.selfDev, request: r.id, steward: r.steward, proposedAt: now, proposeFails: 0, proposeRetryAt: 0 };
+          p.status = 'merging';
+          event(p, `all tasks done — proposed ${p.selfDev.branch} to the merge steward on ${r.steward}`);
+          tell(ctx, p, `${p.name}: all tasks done and verified — handed to the merge steward for tests, merge and rollout.`, 'info', { keep: true });
+        }
       } catch (e) {
-        p.status = 'blocked';
-        event(p, 'propose failed: ' + e.message);
-        tell(ctx, p, `${p.name}: the work is done but proposing it failed — ${truncate(e.message, 160)}.`, 'error');
+        const fails = (p.selfDev.proposeFails || 0) + 1;
+        if (A.enabled && fails < A.maxAttempts) {
+          // Often transient (steward offline, a guide block left in the tree): try again on a later tick.
+          p.selfDev = { ...p.selfDev, proposeFails: fails, proposeRetryAt: now + Math.max(A.retryDelayMs, 20000) };
+          event(p, `propose failed (${fails}/${A.maxAttempts}) — trying again: ${e.message}`);
+        } else {
+          p.status = 'blocked';
+          event(p, 'propose failed: ' + e.message);
+          if (A.enabled) completionNotify(p, ctx, { why: `the work is done but handing it to the merge steward failed ${fails} times (${truncate(e.message, 160)})` });
+          else tell(ctx, p, `${p.name}: the work is done but proposing it failed — ${truncate(e.message, 160)}.`, 'error');
+        }
       }
     } else {
       p.status = 'done';
       event(p, 'all tasks done');
-      tell(ctx, p, finalReport(p), 'info', { keep: true });
+      if (A.enabled) completionNotify(p, ctx); else tell(ctx, p, finalReport(p), 'info', { keep: true });
       ctx?.release?.(p);
     }
     await saveProject(p);
     return;
   }
-  const moving = p.tasks.some((x) => ['running', 'starting'].includes(x.status) || ready(p, x));
-  const stuck = p.tasks.filter((x) => ['failed', 'blocked'].includes(x.status));
+  if (A.enabled && p.status === 'running' && requeueDeadlocks(p, now)) await saveProject(p);
+  const moving = p.tasks.some((x) => ['running', 'starting'].includes(x.status) || ready(p, x, now) || (x.status === 'todo' && x.retryAt > now));
+  // A task no machine can run counts as stuck once that has lasted (a machine rebooting is not a reason to stop).
+  const stranded = p.tasks.filter((x) => x.status === 'todo' && !x.assign && x.unroutableSince && now - x.unroutableSince > 10 * 60000);
+  const stuck = [...p.tasks.filter((x) => ['failed', 'blocked'].includes(x.status)), ...(A.enabled ? stranded : [])];
   if (!moving && stuck.length && p.status === 'running') {
     p.status = 'blocked';
     event(p, `blocked on ${stuck.map((x) => x.id).join(', ')}`);
-    tell(ctx, p, `${p.name} needs you: ${stuck.map((x) => `“${x.title}” ${x.status}${x.summary ? ' — ' + truncate(x.summary, 120) : ''}`).join('; ')}.`, 'error');
+    if (A.enabled) completionNotify(p, ctx, { why: `the attempt budget is spent (${A.maxAttempts} per task) — ${stuck.map((x) => `“${x.title}” ${x.status === 'todo' ? 'has no machine that can run it' : x.status}`).join('; ')}` });
+    else tell(ctx, p, `${p.name} needs you: ${stuck.map((x) => `“${x.title}” ${x.status}${x.summary ? ' — ' + truncate(x.summary, 120) : ''}`).join('; ')}.`, 'error');
     await saveProject(p);
   }
 }
@@ -660,11 +793,20 @@ async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
   const t = p.tasks.find((x) => x.id === taskId);
   if (!t) throw new Error('task not found');
   if (assign) { t.assign = { ...t.assign, ...assign, locked: true }; t.reason = 'set by hand'; }
+  const A = autonomy.settings(p);
+  // Sir paused it: a late report is recorded, but nothing is retried, answered or started.
+  const live = A.enabled && ctx && p.status !== 'paused';
   if (status) {
     event(p, `${t.id} → ${status}${summary ? ': ' + truncate(summary, 160) : ''}`);
     const was = t.status;
-    if (status === 'failed' && ctx && retryOrFail(p, t, summary || 'the agent reported failure') === 'retry') {
-      tell(ctx, p, `${p.name}: “${t.title}” failed — trying once more with what went wrong.`);
+    if (status === 'blocked' && live && t.status === 'running' && t.run && (t.answers || 0) < A.maxAnswers) {
+      // A question, not a dead end: answer it with the safe default, log it, and the task keeps running.
+      selfAnswer(p, t, summary || 'the agent reported blocked without saying why', ctx);
+    } else if (status === 'blocked' && live && t.status === 'running' && t.run) {
+      retryOrFail(p, t, `still blocked after ${t.answers} automatic answers: ${summary || 'no reason given'}`);
+    } else if (status === 'failed' && ctx && retryOrFail(p, t, summary || 'the agent reported failure') === 'retry') {
+      // On a paused project this only records the next attempt; it starts when Sir resumes.
+      if (p.status !== 'paused') tell(ctx, p, `${p.name}: “${t.title}” failed — retrying (attempt ${t.attempts + 1}${t.escalate ? `, ${t.escalate.model} ${t.escalate.effort}` : ''}) with what went wrong.`);
     } else {
       t.status = status;
       t.stalled = false; // an agent's own report replaces the watchdog's verdict
@@ -679,6 +821,23 @@ async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
   await saveProject(p);
   if (p.status !== 'running' && ctx) await settle(p, ctx);
   return p;
+}
+
+/**
+ * Answer an agent's question on Sir's behalf (the standing safe default), log it on the task and keep the task
+ * running. `dismiss` first declines a permission prompt that holds the session (Escape) — the safe choice.
+ */
+function selfAnswer(p, t, question, ctx, { dismiss = false, now = Date.now() } = {}) {
+  t.answers = (t.answers || 0) + 1;
+  const q = truncate(String(question || ''), 500);
+  (t.questions ||= []).push({ ts: now, attempt: (t.attempts || 0) + 1, question: q, answer: 'safe default (automatic)' });
+  if (t.questions.length > 20) t.questions = t.questions.slice(-20);
+  t.status = 'running';
+  event(p, `${t.id} asked: “${truncate(q, 140)}” — answered automatically with the safe default (${t.answers}/${autonomy.settings(p).maxAnswers})`);
+  // Not awaited: the agent may be waiting on this very report (project_task_update) to return.
+  if (!ctx?.call) return;
+  Promise.resolve(ctx.call(t.assign.node, 'work/nudge', { method: 'POST', body: { ...t.run, dismiss, text: autonomy.selfAnswerText(p, t, q) }, timeout: 30000 }))
+    .catch((e) => log(`project ${p.id} ${t.id}: answering failed: ${e.message}`));
 }
 
 const nudgeText = (p, t, idleMin) => `RIGS watchdog: you have been idle for ${idleMin} min on task ${t.id} of project ${p.id} without reporting. If a background job is running, wait for it and carry on. If the task is done, verify it against its acceptance criteria and call project_task_update (owner "${p.owner}", project "${p.id}", task "${t.id}", status "done", with the evidence). If you cannot finish, call it with status "failed" or "blocked" and say exactly why.`;
@@ -702,21 +861,32 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
     return true;
   }
   if (st.state === 'ended') {
-    const r = retryOrFail(p, t, 'the agent session ended without reporting (no project_task_update)');
-    event(p, `${t.id} session ended without a report${r === 'retry' ? ' — retrying' : ''}`);
-    if (r === 'failed') tell(ctx, p, `${p.name}: “${t.title}” ended twice without finishing.`, 'error');
+    event(p, `${t.id} session ended without a report`);
+    const r = retryOrFail(p, t, 'the agent session ended without reporting (no project_task_update)', { now });
+    if (r === 'failed' && !autonomy.settings(p).enabled) tell(ctx, p, `${p.name}: “${t.title}” ended twice without finishing.`, 'error');
     return true;
   }
   if (st.state === 'seat-down' || st.state === 'daemon-down') return reviveTask(p, t, st, ctx);
-  if (st.needsInput) return false; // a permission/question wait — the attention feed already asks Sir
+  const A = autonomy.settings(p);
   const w = t.watch || (t.watch = { fp: '', idleSince: 0, nudges: 0, nudgedAt: 0 });
+  if (st.needsInput) {
+    if (!A.enabled) return false; // a permission/question wait — the attention feed asks Sir
+    return answerWait(p, t, st, ctx, now, A);
+  }
+  if (w.inputSince) w.inputSince = 0;
+  // No sign of progress for the whole stall window (not busy, transcript/session untouched): failed → retried.
+  if (A.enabled && !st.busy && st.activityAt > 0 && now - st.activityAt >= A.stallMs && now - (t.run?.startedAt || 0) >= A.stallMs) {
+    return failStalled(p, t, ctx, now, `stalled: no progress for ${Math.round((now - st.activityAt) / 60000)} min without a report`);
+  }
   // Idle only when nothing shows life: not busy, no transcript/session activity within the stall window.
   const idle = !isActive(st, now) && (st.idle === true || (st.fingerprint && st.fingerprint === w.fp));
   let changed = false;
   if (st.fingerprint) w.fp = st.fingerprint;
   if (!idle) { if (w.idleSince) { w.idleSince = 0; w.nudges = 0; changed = true; } return changed; }
   if (!w.idleSince) { w.idleSince = now; return true; }
+  if (A.enabled && w.nudges && now - w.idleSince >= A.stallMs) return failStalled(p, t, ctx, now, `stalled: idle ${Math.round((now - w.idleSince) / 60000)} min without a report after ${w.nudges} nudges`);
   if (now - w.idleSince < STALL_MS || now - w.nudgedAt < STALL_MS) return false;
+  if (w.nudges >= MAX_NUDGES && A.enabled) return failStalled(p, t, ctx, now, `stalled: idle ${Math.round((now - w.idleSince) / 60000)} min without a report after ${w.nudges} nudges`);
   if (w.nudges >= MAX_NUDGES) {
     t.status = 'blocked';
     t.stalled = true;
@@ -731,6 +901,32 @@ export async function watchTask(p, t, st, ctx, now = Date.now()) {
     w.nudgedAt = now;
     event(p, `${t.id} idle without a report — nudged (${w.nudges}/${MAX_NUDGES})`);
   } catch (e) { log(`project ${p.id} ${t.id}: nudge failed: ${e.message}`); w.nudgedAt = now; }
+  return true;
+}
+
+/** The watchdog's verdict on a task that stopped making progress: stop its agent and feed it into the retry. */
+async function failStalled(p, t, ctx, now, why) {
+  const old = t.run;
+  const node = t.assign?.node;
+  event(p, `${t.id} → failed (${why})`);
+  retryOrFail(p, t, why, { now });
+  if (old && node) await ctx.call(node, 'work/stop', { method: 'POST', body: old, timeout: 120000 }).catch((e) => log(`project ${p.id} ${t.id}: stopping a stalled agent: ${e.message}`));
+  return true;
+}
+
+/**
+ * The agent sits on a permission prompt or a question. After answerAfterSec RIGS answers it (declining the prompt,
+ * then the standing safe-default answer) and logs it; one that keeps waiting after maxSelfAnswers answers is failed
+ * and retried.
+ */
+async function answerWait(p, t, st, ctx, now, A) {
+  const w = t.watch;
+  if (!w.inputSince) { w.inputSince = now; return true; }
+  if (now - w.inputSince < A.answerAfterMs || now - (w.answeredAt || 0) < A.answerAfterMs) return false;
+  const q = st.question || 'a permission prompt or question held the session';
+  if ((t.answers || 0) >= A.maxAnswers) return failStalled(p, t, ctx, now, `kept waiting for input after ${t.answers} automatic answers: ${truncate(q, 200)}`);
+  selfAnswer(p, t, q, ctx, { dismiss: true, now });
+  w.answeredAt = now;
   return true;
 }
 
@@ -774,7 +970,7 @@ export async function tick(ctx, now = Date.now()) {
   for (const s of await listProjects()) {
     if (!['running', 'planning', 'merging'].includes(s.status) && !(s.status === 'blocked' && s.tasks?.some((t) => t.stalled))) continue;
     const next = await withProject(s.id, () => tickProject(s.id, ctx, now)).catch((e) => { log(`project ${s.id}: tick: ${e.message}`); return null; });
-    if (next === 'dispatch') await dispatchReady(s.id, ctx).catch((e) => log(`project ${s.id}: dispatch: ${e.message}`));
+    if (next === 'dispatch') await dispatchReady(s.id, ctx, { now }).catch((e) => log(`project ${s.id}: dispatch: ${e.message}`));
   }
 }
 
@@ -790,11 +986,13 @@ async function tickProject(id, ctx, now) {
   }
   if (p.status === 'blocked') { if (changed) await saveProject(p); return null; }
   if (p.status === 'planning' && (now - p.updatedAt > PLANNING_MS || p.updatedAt < BOOT)) {
-    // The planner's brain call died with the daemon (restart, update): plan again once if Sir asked for it to run.
-    const again = p.autoRun && !p.replanned;
+    // The planner's brain call died with the daemon (restart, update): plan again (up to 3 times) if Sir asked for it to run.
+    const again = p.autoRun && (p.replans || (p.replanned ? 1 : 0)) < 3;
     p.status = 'draft';
     p.replanned = true;
+    p.replans = (p.replans || 0) + 1;
     event(p, `planning never finished${again ? ' — planning again' : ''}`);
+    if (p.autoRun && !again) tell(ctx, p, `${p.name}: planning died ${p.replans} times — it needs a fresh start.`, 'error');
     await saveProject(p);
     if (again) planProject(p.id, ctx).then(() => dispatchReady(p.id, ctx)).catch((e) => tell(ctx, p, `Couldn't plan ${p.name}: ${e.message}`, 'error'));
     return null;
@@ -816,8 +1014,8 @@ async function tickProject(id, ctx, now) {
     } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
   }
   if (changed) await saveProject(p);
-  if (changed || p.tasks.some((x) => ready(p, x) || (x.status === 'todo' && !x.assign))) return 'dispatch';
-  await settle(p, ctx); // e.g. a task went blocked before this tick existed: nothing can move → escalate once
+  if (changed || p.tasks.some((x) => ready(p, x, now) || (x.status === 'todo' && !x.assign))) return 'dispatch';
+  await settle(p, ctx, now); // a blocked task to re-queue, a propose to retry, or nothing can move → end the loop once
   return null;
 }
 
@@ -827,12 +1025,38 @@ async function followMerge(p, ctx, now) {
   let req;
   try { req = (await ctx.call(sd.steward, 'merge', { timeout: 20000 })).queue?.find((r) => r.id === sd.request); } catch (e) { log(`project ${p.id}: merge status: ${e.message}`); return; }
   if (!req) return;
+  const A = autonomy.settings(p);
   if (req.status === 'merged') {
     p.status = 'done';
     event(p, `merged to main as ${req.sha} and rolled out`);
+    if (A.enabled) completionNotify(p, ctx, { merged: req.sha || 'main' });
     await saveProject(p);
-    tell(ctx, p, finalReport(p, { merged: req.sha || 'main' }), 'info', { keep: true });
+    if (!A.enabled) tell(ctx, p, finalReport(p, { merged: req.sha || 'main' }), 'info', { keep: true });
     ctx.release?.(p);
+  } else if (req.status === 'conflict' && A.enabled) {
+    // A conflict belongs to a resolver agent (routing kind "merge"). One that failed, stalled or never started is
+    // replaced by re-queuing the request (the steward merges again and casts a new resolver); one Sir paused stays.
+    const resolver = req.resolver?.project ? await ctx.call(sd.steward, `projects/${req.resolver.project}`, { timeout: 20000 }).catch(() => null) : null;
+    const act = conflictAction(req, resolver, sd, now, A);
+    if (act === 'retry') {
+      try {
+        // A resolver that finished without saying so may have left the merge resolved: keep its work if so.
+        const kept = resolver?.status === 'done' && await ctx.call(sd.steward, `merge/${req.id}/resolved`, { method: 'POST', body: {}, timeout: 60000 }).then(() => true, () => false);
+        if (!kept) await ctx.call(sd.steward, `merge/${req.id}/retry`, { method: 'POST', body: {}, timeout: 20000 });
+        p.selfDev = { ...sd, conflictRetries: (sd.conflictRetries || 0) + 1, conflictRetryAt: now + 15 * 60000 };
+        event(p, `merge conflict had no working resolver (${resolver?.status || req.resolver?.error || 'none'}) — re-queued it for a new resolver (${p.selfDev.conflictRetries}/${A.maxAttempts})`);
+      } catch (e) { log(`project ${p.id}: re-queue merge ${req.id}: ${e.message}`); }
+      await saveProject(p);
+    } else if (act === 'paused' && !sd.resolverPaused) {
+      p.selfDev = { ...sd, resolverPaused: true };
+      event(p, `merge conflict: its resolver ${req.resolver.project} was paused by Sir — left as it is`);
+      await saveProject(p);
+    } else if (act === 'exhausted') {
+      p.status = 'blocked';
+      event(p, 'merge conflict: resolvers kept failing');
+      completionNotify(p, ctx, { why: `the merge stays in conflict after ${sd.conflictRetries || 0} resolver attempts` });
+      await saveProject(p);
+    }
   } else if (req.status === 'checks-failed' && !(sd.fixes >= MAX_ATTEMPTS)) {
     p.selfDev = { ...sd, request: null, fixes: (sd.fixes || 0) + 1 };
     const [t] = normalizeTasks({ tasks: [{ id: `fix${p.selfDev.fixes}`, title: `Fix the failing ${req.failedStage || 'checks'} after merging onto main`, kind: 'code', size: 'M',
@@ -847,9 +1071,25 @@ async function followMerge(p, ctx, now) {
   } else if (['checks-failed', 'dropped'].includes(req.status) || (req.status === 'conflict' && now - (sd.proposedAt || now) > 6 * 3600000)) {
     p.status = 'blocked';
     event(p, `merge ${req.status}`);
+    const what = req.status === 'conflict' ? 'is stuck on a conflict' : req.status === 'dropped' ? 'was dropped' : 'checks keep failing';
+    if (A.enabled) completionNotify(p, ctx, { why: `the merge ${what}${req.failedStage ? ` (${req.failedStage})` : ''}` });
     await saveProject(p);
-    tell(ctx, p, `${p.name}: the merge ${req.status === 'conflict' ? 'is stuck on a conflict' : req.status === 'dropped' ? 'was dropped' : 'checks keep failing'} — it needs you.`, 'error');
+    if (!A.enabled) tell(ctx, p, `${p.name}: the merge ${what} — it needs you.`, 'error');
   }
+}
+
+/**
+ * What to do about a merge request parked in "conflict", given its resolver project (null if unknown/missing):
+ * 'wait' (a resolver is on it, or is just being cast), 'paused' (Sir paused the resolver — never revived),
+ * 'retry' (no working resolver: re-queue the request) or 'exhausted' (the budget of resolver attempts is spent).
+ */
+export function conflictAction(req, resolver, sd = {}, now = Date.now(), A = autonomy.settings()) {
+  if (resolver?.status === 'paused') return 'paused';
+  if (resolver && ['draft', 'planning', 'planned', 'running', 'merging'].includes(resolver.status)) return 'wait';
+  // No resolver recorded yet: the steward may be casting it right now.
+  if (!resolver && !req.resolver?.error && now - (req.updatedAt || 0) < 10 * 60000) return 'wait';
+  if ((sd.conflictRetryAt || 0) > now) return 'wait';
+  return (sd.conflictRetries || 0) < A.maxAttempts ? 'retry' : 'exhausted';
 }
 
 /**

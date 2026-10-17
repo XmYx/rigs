@@ -187,7 +187,7 @@ export async function startServer() {
       pr.tasks = [{
         id: 't1', kind: 'merge', size: 'L', deps: [], needs: { platform: 'any', gpu: false, tool: '' }, suggest: {}, status: 'todo', assign: null, reason: '', run: null, summary: '',
         title: `Resolve merge conflicts: ${req.branch}`,
-        description: `The merge steward is merging ${req.branch} (from ${req.node}) into the latest main in this worktree:\n  ${req.worktree}\nThe merge stopped on conflicts in:\n${req.conflicts.map((f) => '  - ' + f).join('\n')}\n\nThe branch's commits (its intent):\n${log_}\n\nResolve every conflict so BOTH sides' changes survive (read 'git log origin/main' for what landed on main meanwhile; never drop either side's work silently). Then run 'npm test', 'git add' the files and finish the merge with 'git commit --no-edit'. Do not push — when the merge is committed, call the rigs MCP tool rigs_merge_resolved with {"id": "${req.id}"}; the steward re-runs the checks and pushes.`,
+        description: `The merge steward is merging ${req.branch} (from ${req.node}) into the latest main in this worktree:\n  ${req.worktree}\nThe merge stopped on conflicts in:\n${req.conflicts.map((f) => '  - ' + f).join('\n')}\n\nThe branch's commits (its intent):\n${log_}\n\nResolve every conflict so BOTH sides' changes survive (read 'git log origin/main' for what landed on main meanwhile; never drop either side's work silently). Then run 'npm test' and 'git add' the resolved files. Do not commit and do not push: call the rigs MCP tool rigs_merge_resolved with {"id": "${req.id}"} — it commits the merge, and the steward re-runs the checks and pushes.`,
       }];
       planner.routeProject(pr, await meshSnapshot());
       pr.tasks[0].assign = { ...(pr.tasks[0].assign || { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }), node: config().name, locked: true };
@@ -204,6 +204,7 @@ export async function startServer() {
     const dir = files.resolvePath(b.dir || '.');
     if (b.stripManaged) await merge.stripManagedBlocks(dir);
     const d = await merge.describe(dir);
+    if (d.empty) return { empty: true, branch: d.branch };
     const st = merge.electSteward(discovery.list());
     if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
     const reqBody = { node: config().name, dir, branch: d.branch, title: b.title || d.commits[0].replace(/^\w+ /, ''), summary: b.summary || '', commits: d.commits, session: b.session || null };
@@ -659,6 +660,8 @@ export async function startServer() {
     if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/(stop|pause)$/)) && method === 'POST') { const b = await body().catch(() => ({})); return planner.stopProject(mm[1], plannerCtx, { reason: b?.reason, by: b?.by }); }
     if ((mm = m(/^projects\/([\w-]+)\/resume$/)) && method === 'POST') return planner.resumeProject(mm[1], plannerCtx);
+    // Sir's answer to "How did it work out?" (the completion loop's last question), kept on the project.
+    if ((mm = m(/^projects\/([\w-]+)\/feedback$/)) && method === 'POST') { const b = await body(); return planner.addFeedback(mm[1], { text: b.text, by: b.by }); }
     if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
       if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
       return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;

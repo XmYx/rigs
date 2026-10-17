@@ -41,9 +41,16 @@ function defaults() {
     // How agents RIGS starts (terminal agents, project tasks, OpenRig seats) handle permissions. "auto" = work
     // unattended: Claude's auto mode (a classifier approves safe actions), Codex in its workspace-write sandbox
     // with network, asking only to escalate. Anything that still asks shows up as "needs you" (blinking planet).
-    // commitOtherProjects: 'ask' = agents leave changes uncommitted in projects other than RIGS and list them for Sir;
-    // 'branch' = they may commit on a work branch there. RIGS itself always goes through the merge steward.
+    // commitOtherProjects: 'ask' = agents leave changes uncommitted in projects other than RIGS and list them for Sir.
+    // Task agents never commit, push or switch branches outside a RIGS dev worktree (src/autonomy.js guardBrief), so
+    // 'branch' no longer lets them commit there. RIGS itself always goes through the merge steward.
     agents: { claudePermissionMode: 'auto', codexSandbox: 'workspace-write', codexApproval: 'on-request', codexNetwork: true, rigPolicy: 'builtin:auto', commitOtherProjects: 'ask' },
+    // The completion loop (src/autonomy.js): a task that fails, stalls (no progress for stallMinutes) or goes silent is
+    // retried with a fresh brief, one rung up the ladder each time, up to maxAttempts attempts per task (a project can
+    // override it with its own `autonomy`); questions agents ask are answered with the safe default after
+    // answerAfterSec, at most maxSelfAnswers times per attempt; Sir gets one report when the loop ends.
+    // ladder: [] = the built-in Sonnet medium → Opus high → Opus xhigh. Providers in routing.avoid are skipped.
+    autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60 },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
