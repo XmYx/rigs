@@ -488,7 +488,14 @@ export async function dispatchReady(id, ctx, { only } = {}) {
       const p = await getProject(id);
       const t = p?.tasks.find((x) => x.id === t0.id);
       if (!t) return;
-      if (t.status !== 'starting') { if (r) event(p, `${t.id} started on ${t0.assign.node} after it had moved to ${t.status} — check for a stray agent`); await saveProject(p); return; }
+      if (t.status !== 'starting') {
+        if (r && p.status === 'paused') {
+          event(p, `${t.id} came up on ${t0.assign.node} after the project was paused — stopped it`);
+          ctx.call(t0.assign.node, 'work/stop', { method: 'POST', body: r, timeout: 120000 }).catch(() => {});
+        } else if (r) event(p, `${t.id} started on ${t0.assign.node} after it had moved to ${t.status} — check for a stray agent`);
+        await saveProject(p);
+        return;
+      }
       if (r) {
         t.run = { ...r, startedAt: Date.now() };
         t.status = 'running';
@@ -770,16 +777,44 @@ async function followMerge(p, ctx, now) {
   }
 }
 
-export async function stopProject(id, ctx) {
+/**
+ * Sir said stop / pause / hold: the project is "paused" and stays that way until he resumes it — nothing is
+ * dispatched, watched, nudged or revived. Runs under the project lock so an in-flight tick (which may be about to
+ * revive a seat) can't write a stale "running" copy back. The agents are stopped once the lock is released;
+ * their uncommitted edits stay in the working tree.
+ */
+export async function stopProject(id, ctx, { reason = '', by = '' } = {}) {
+  const live = await withProject(id, async () => {
+    const p = await getProject(id);
+    if (!p) throw new Error('project not found');
+    const out = [];
+    for (const t of p.tasks) {
+      if (t.run && ['running', 'review', 'starting'].includes(t.status)) out.push({ node: t.assign.node, run: t.run });
+      if (['running', 'starting'].includes(t.status)) { t.status = 'todo'; t.run = null; t.watch = null; }
+    }
+    if (p.status !== 'done') p.status = 'paused';
+    p.paused = { at: Date.now(), by: by || 'Sir', reason: truncate(String(reason || ''), 500) };
+    event(p, `paused${by ? ' by ' + by : ''}${reason ? ': ' + truncate(reason, 160) : ''}`);
+    await saveProject(p);
+    return out;
+  });
+  for (const x of live) await ctx.call(x.node, 'work/stop', { method: 'POST', body: x.run, timeout: 120000 }).catch((e) => log(`project ${id}: stopping ${x.run.seat || x.run.session?.id}: ${e.message}`));
+  return getProject(id);
+}
+
+/** Sir picked a paused project up again: back to running, ready tasks start. */
+export async function resumeProject(id, ctx) {
+  await withProject(id, async () => {
+    const p = await getProject(id);
+    if (!p) throw new Error('project not found');
+    if (p.status !== 'paused') throw new Error(`project is ${p.status}, not paused`);
+    p.status = p.tasks.length ? 'running' : 'draft';
+    delete p.paused;
+    event(p, 'resumed');
+    await saveProject(p);
+  });
   const p = await getProject(id);
-  if (!p) throw new Error('project not found');
-  for (const t of p.tasks.filter((x) => (x.status === 'running' || x.status === 'review') && x.run)) {
-    await ctx.call(t.assign.node, 'work/stop', { method: 'POST', body: t.run, timeout: 120000 }).catch(() => {});
-    if (t.status === 'running') t.status = 'todo';
-  }
-  p.status = 'planned';
-  event(p, 'stopped');
-  return saveProject(p);
+  return p.status === 'running' && ctx ? dispatchReady(id, ctx) : p;
 }
 
 // ------------------------------------------------------------------ intake: every instruction lands in a project
@@ -844,6 +879,7 @@ export async function intake(body, ctx) {
   // The main project and projects already running stay "running" (the planner tick tracks them); a project
   // Sir only planned keeps its other tasks waiting — just this one starts.
   const cur = await getProject(p.id);
+  if (cur.status === 'paused') return { project: brief(cur), task, started: false, why: 'the project is paused — resume it to start this' };
   if (cur.main || cur.status === 'running' || cur.status === 'done') await saveProject(Object.assign(cur, { status: 'running' }));
   const after = await dispatchReady(p.id, ctx, { only: task.id });
   const t = after.tasks.find((x) => x.id === task.id);
