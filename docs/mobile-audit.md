@@ -124,3 +124,43 @@ Severity: **High** = blocks a task on a phone, **Med** = hurts but has a workaro
 4. **Motion/perf** (M1–M3), then polish (V2–V4).
 
 Success check for each later task: rerun `scripts/mobile-shots.js --out docs/mobile-audit/after` and compare `report.json` — axe rules/nodes per view, `smallTargets`, `clipped`, `overlaps` and the "obscured tap target" notes should all fall.
+
+## t2 — phone layout and touch (done)
+
+Phone mode applies below 640px wide, and to short touch screens in landscape (`(max-width: 640px), (max-height: 500px) and (pointer: coarse)`, `PHONE_QUERY` in `ui/src/mobile.js`). Wider screens keep the desktop layout. Code: `ui/src/mobile.js` (new), the `MOBILE LAYOUT (t2)` block at the end of `ui/src/styles.css`, phone hooks in `wm.js`, `panels.js` and `main.js`, and the viewport meta in `ui/index.html`.
+
+The phone screen has four parts:
+- **Header:** ☰ side panel, Fit and ↻ on the left; the orb and brain badge on the right.
+- **Galaxy:** full screen behind everything.
+- **Chat dock:** full width, above the toolbar.
+- **Toolbar:** one row with Ask, 🎙 and ⋯. The ⋯ sheet holds the other ten controls as labelled 64px tiles, plus Layout (☰ panels).
+
+The side panel becomes a slide-over drawer with a backdrop. It closes with ✕, a tap on the backdrop or Escape, and tapping a galaxy node opens it on the Inspector. Windows open full-screen inside the safe areas with a 44px ✕; Maximize, drag and resize are hidden. Each phone window pushes a history entry, so the browser or OS back gesture closes it. The Work dashboard starts closed on phones and opens as a sheet under the header.
+
+| # | Status | How |
+| --- | --- | --- |
+| L1 | fixed | `#left` is a drawer (`min(340px, 86vw)`, hidden until ☰), so the galaxy gets the whole screen in both orientations |
+| L2 | fixed | One phone layout: header, dock and toolbar are anchored to the edges. `#work` drops its fixed `top: 340px` and is closed by default |
+| L3 | fixed | Resize handles and drag grips are hidden on coarse pointers. The orb sits in the header, away from the toolbar. Projects, Work and Apps taps land |
+| L4 | fixed | A one-row toolbar (Ask · 🎙 · ⋯) and the brain badge moved to the header |
+| L5 | fixed | `#brain-menu` is `position: fixed` under the header, with `max-height` set to the space left |
+| L6 | fixed | Windows are full-screen on phones (inline sizes overridden). Close is 44×44, and back closes them too |
+| L7 | fixed | The same phone layout applies to short touch landscape screens (844×390, 740×360) |
+| L8 | fixed | Every `vh` has a `dvh` partner (`#work`, `#left`, `#brain-menu`, `#subtitle`, `#face.big`); phone rules use `dvh` |
+| L9 | fixed | `viewport-fit=cover`; `env(safe-area-inset-*)` on the header, toolbar, dock, sheets, drawer, toasts and windows |
+| T1 | fixed | Panel chrome is hidden on phones; Work and Chat keep a 44px ✕; the drawer has its own 44px ✕ |
+| T2 | fixed | `.round` and `.win-btn` are 44×44 with 8px gaps; Maximize is hidden next to Close |
+| T3 | fixed | Rows, buttons, selects, inputs, tabs and summaries are at least 44px on phones. Sliders are 44px tall; checkboxes are 22px inside labels at least 44px tall |
+| T4 | fixed | `.win-bar { touch-action: none }`, and window drag is off on phones |
+| T5 | fixed | Inputs, selects and textareas are 16px on coarse pointers and phones |
+| T6 | partly | Tapping a node opens its Inspector in the drawer. Pick radius and label density are left to t4 |
+
+Other phone changes:
+- **Pinch zoom:** stays enabled (`user-scalable` was never set). Once the page is zoomed (`visualViewport.scale > 1`), the galaxy releases one-finger pans (`body.zoomed`), so nobody gets stuck zoomed in.
+- **Scroll chaining:** scroll areas (windows, drawer, dock, sheets, `.xterm-viewport`) use `overscroll-behavior: contain`, and the page uses `none`.
+- **On-screen keyboard:** `interactive-widget=resizes-content` handles Android. On iOS, `mobile.js` sets `--kb` from `visualViewport`, which lifts the toolbar, dock, sheets and window bottoms above the keyboard.
+- **Wide-tab windows:** the Mesh window's tabs scroll sideways inside their strip. List-and-detail windows (files, sessions, projects) stack the list over the detail, and the detail grows once something is selected.
+
+Check: `scripts/mobile-shots.js` now reports `overflow` per view and, on touch viewports, `smallTargets`; an input is measured by its `<label>`. It ends with a `CHECK` line, and `--strict` makes failures exit 1. A width of 1024 or more is captured as a desktop. `--url` now works. Results are in `docs/mobile-audit/after-layout/` (390x844, 360x740, 1440x900).
+
+Not verifiable headless: the real iOS keyboard, the notch and home-indicator insets, and touch scrolling inside xterm. These follow from the CSS and the `visualViewport` code, not from pixels.

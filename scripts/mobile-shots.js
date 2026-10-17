@@ -9,10 +9,16 @@
 // Options: --out <dir>            output directory (default docs/mobile-audit/after)
 //          --url <url>            use a running JARVIS instead of starting one (default: spawn `rigs serve`
 //                                 on port 4781 with RIGS_HOME=.rigs-dev, no migrations, no autoupdate)
-//          --viewports 390x844,.. override sizes (default 390x844,360x740,844x390,740x360)
+//          --viewports 390x844,.. override sizes (default 390x844,360x740,844x390,740x360); a width of 1024 or more
+//                                 is captured as a desktop (no touch, not mobile) and skips the touch-target check
 //          --views a,b            only these views (default all)
+//          --reduced-motion       emulate prefers-reduced-motion: reduce
 //          --png-all              save PNGs for every viewport (default: all; use --png-primary for 390x844 only)
+//          --strict               exit 1 when the overflow or touch-target check fails
 // Output: <view>@<W>x<H>.png per view/viewport and report.json (axe violations + metrics per view).
+// Checks: every view reports `overflow` (anything wider than the viewport that isn't clipped by a scroll container,
+// or a page that scrolls sideways) and, on touch viewports, `smallTargets` (visible controls under 44x44 CSS px; an
+// input inside a <label> is measured by its label). The run ends with a CHECK line.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -28,6 +34,7 @@ const PORT = 4781;
 const VIEWPORTS = opt('viewports', '390x844,360x740,844x390,740x360').split(',').map((s) => s.split('x').map(Number));
 const ONLY = opt('views', '') ? opt('views', '').split(',') : null;
 const PRIMARY_ONLY = args.includes('--png-primary');
+const STRICT = args.includes('--strict');
 
 function loadTools() {
   const dirs = [process.env.RIGS_AUDIT_TOOLS, path.join(os.homedir(), '.cache/rigs-audit'), ROOT].filter(Boolean);
@@ -59,6 +66,7 @@ function fallbackChromium() {
 }
 
 async function startServer() {
+  if (opt('url', '')) return { url: opt('url', ''), stop() {} };
   const home = path.join(ROOT, '.rigs-dev');
   fs.mkdirSync(home, { recursive: true });
   const cfg = path.join(home, 'config.json');
@@ -77,8 +85,22 @@ async function startServer() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Phone layout: a control may sit in the ⋯ sheet or the side-panel drawer. Open whichever holds it first. */
+async function reach(page, selector) {
+  const where = await page.locator(selector).first().evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const shown = r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    if (shown && r.right > 0 && r.left < window.innerWidth) return null;
+    if (el.closest('#more-sheet')) return '#btn-more';
+    if (el.closest('#left')) return '#drawer-btn';
+    return null;
+  }).catch(() => null);
+  if (where && await page.locator(where).isVisible()) { await page.locator(where).click({ timeout: 3000 }).catch(() => {}); await sleep(600); }
+}
+
 /** Tap like a finger would; when another element covers the target (itself an audit finding) note it and fall back to a DOM click. */
 async function tap(page, selector) {
+  await reach(page, selector);
   try { await page.locator(selector).click({ timeout: 3000 }); } catch (e) {
     const by = /intercepts pointer events/.test(e.message) ? (e.message.match(/<[^>]{0,80}>[^\n]*intercepts/) || [''])[0].replace(/ intercepts$/, '') : 'not tappable';
     (page._obscured ||= []).push(`${selector} ${by}`.trim());
@@ -92,6 +114,7 @@ const VIEWS = [
   { name: 'orb-home', run: async () => {} },
   { name: 'galaxy-graph', closePanels: true, run: async () => {} },
   { name: 'left-panel', run: async (p) => { await tap(p, '#search'); await p.keyboard.type('mac'); await sleep(400); } },
+  { name: 'more-sheet', mobileOnly: true, run: async (p) => { await tap(p, '#btn-more'); await sleep(400); } },
   { name: 'panels-menu', run: async (p) => { await tap(p, '#panels-btn'); await sleep(400); } },
   { name: 'brain-menu', run: async (p) => { await tap(p, '#brain-badge'); await sleep(400); } },
   { name: 'window-files', run: async (p) => { await tap(p, '#btn-files'); await sleep(1500); } },
@@ -101,7 +124,7 @@ const VIEWS = [
   { name: 'sessions', run: async (p) => { await tap(p, '#btn-sess'); await sleep(2000); } },
   { name: 'apps-launcher', run: async (p) => { await tap(p, '#btn-apps'); await sleep(1500); } },
   { name: 'mesh-settings', run: async (p) => { await tap(p, '#btn-mesh'); await sleep(1500); } },
-  { name: 'stage-visual-cards', run: async (p) => { await p.locator('#ask').fill('status'); await p.keyboard.press('Enter'); await sleep(2500); } },
+  { name: 'stage-visual-cards', run: async (p) => { await reach(p, '#ask'); await p.locator('#ask').fill('status'); await p.keyboard.press('Enter'); await sleep(2500); } },
   { name: 'voice-controls', run: async (p) => { await tap(p, '#btn-hands'); await sleep(600); await tap(p, '#btn-mic'); await sleep(800); } },
 ];
 
@@ -110,11 +133,24 @@ function metrics() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const doc = document.documentElement;
-  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0'; };
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0' && (!el.checkVisibility || el.checkVisibility({ opacityProperty: true, visibilityProperty: true })); };
   const sel = (el) => el.id ? `#${el.id}` : `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''}`;
   const interactive = [...document.querySelectorAll('button, a[href], a:not([href])[id], input, select, textarea, summary, [role=button], [tabindex]:not([tabindex="-1"]), .hub, .conn, .flt, .bm-item')].filter(vis);
-  const small = interactive.map((el) => { const r = el.getBoundingClientRect(); return { sel: sel(el), w: Math.round(r.width), h: Math.round(r.height), label: (el.getAttribute('title') || el.textContent || '').trim().slice(0, 30) }; })
+  // A control's hit area: an input wrapped in a <label> is hit anywhere on the label. Off-screen controls (a closed
+  // drawer) and scroll regions (focusable for keyboard scrolling, not tap targets) don't count.
+  const hit = (el) => (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.closest('label') ? el.closest('label') : el).getBoundingClientRect();
+  const onScreen = (r) => r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
+  const small = interactive.filter((el) => el.getAttribute('role') !== 'region' && !el.closest('.xterm') && onScreen(el.getBoundingClientRect()))
+    .map((el) => { const r = hit(el); return { sel: sel(el), w: Math.round(r.width), h: Math.round(r.height), label: (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim().slice(0, 30) }; })
     .filter((x) => x.w < 44 || x.h < 44);
+  // Horizontal overflow: the page scrolls sideways, or a visible element (outside the galaxy) pokes out of the
+  // viewport without a scroll container (other than html/body, which only hide it) clipping it.
+  const clippedByScroller = (el) => { for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) if (getComputedStyle(p).overflowX !== 'visible') return true; return false; };
+  const overflow = [...document.querySelectorAll('body *')].filter((el) => !el.closest('#graph, .scene-tooltip') && vis(el))
+    .map((el) => ({ el, r: el.getBoundingClientRect() }))
+    .filter(({ el, r }) => onScreen(r) && (r.right > vw + 1 || r.left < -1) && !clippedByScroller(el))
+    .map(({ el, r }) => ({ sel: sel(el), left: Math.round(r.left), right: Math.round(r.right) }));
+  if (doc.scrollWidth > vw + 1) overflow.unshift({ sel: 'document', left: 0, right: doc.scrollWidth });
   const clipped = [...document.querySelectorAll('body > *, .win, .panel')].filter(vis).map((el) => ({ el, r: el.getBoundingClientRect() }))
     .filter(({ r }) => r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1)
     .map(({ el, r }) => ({ sel: sel(el), left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right), bottom: Math.round(r.bottom) }));
@@ -129,7 +165,7 @@ function metrics() {
   return {
     viewport: { w: vw, h: vh },
     hScroll: doc.scrollWidth > vw + 1, docScroll: { w: doc.scrollWidth, h: doc.scrollHeight },
-    smallTargets: small.length, smallTargetSamples: small.slice(0, 25),
+    smallTargets: small.length, smallTargetSamples: small.slice(0, 25), overflow,
     clipped, overlaps, textUnder12px: tiny,
     meta: document.querySelector('meta[name=viewport]')?.content || null,
     safeAreaCss: [...document.styleSheets].some((s) => { try { return [...s.cssRules].some((r) => /safe-area-inset/.test(r.cssText)); } catch { return false; } }),
@@ -152,7 +188,9 @@ async function main() {
   try {
     for (const [w, h] of VIEWPORTS) {
       for (const view of VIEWS.filter((v) => !ONLY || ONLY.includes(v.name))) {
-        const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, reducedMotion: 'no-preference', permissions: [] });
+        const desktop = w >= 1024;
+        if (view.mobileOnly && desktop) continue;
+        const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, isMobile: !desktop, hasTouch: !desktop, reducedMotion: args.includes('--reduced-motion') ? 'reduce' : 'no-preference', permissions: [] });
         if (view.closePanels) {
           await ctx.addInitScript(() => localStorage.setItem('rigs.panels', JSON.stringify(Object.fromEntries(['left', 'legend', 'topbar', 'dock', 'work', 'footer'].map((id) => [id, { closed: true }])))));
         }
@@ -167,15 +205,17 @@ async function main() {
         note = [note, page._obscured.length ? `obscured tap target: ${[...new Set(page._obscured)].join('; ')}` : null].filter(Boolean).join(' | ') || null;
         await sleep(500);
         const key = `${view.name}@${w}x${h}`;
-        if (!PRIMARY_ONLY || (w === 390 && h === 844)) await page.screenshot({ path: path.join(OUT, `${key}.png`) });
+        if (!PRIMARY_ONLY || (w === 390 && h === 844)) await page.screenshot({ path: path.join(OUT, `${key}.png`), timeout: 120000 });
         await page.addScriptTag({ path: axePath });
         const axe = await page.evaluate(async () => {
           const r = await window.axe.run(document, { resultTypes: ['violations'] });
           return r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length, targets: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));
         });
         const m = await page.evaluate(metrics);
-        report.views.push({ view: view.name, viewport: `${w}x${h}`, screenshot: `${key}.png`, note, errors, axeViolationRules: axe.length, axeViolationNodes: axe.reduce((a, v) => a + v.nodes, 0), axe, metrics: m });
-        console.log(`${key.padEnd(34)} axe rules ${String(axe.length).padStart(2)} nodes ${String(axe.reduce((a, v) => a + v.nodes, 0)).padStart(3)}  small-targets ${m.smallTargets}${m.hScroll ? '  H-SCROLL' : ''}${note ? '  (' + note + ')' : ''}`);
+        const failures = { overflow: m.overflow.length, smallTargets: desktop ? 0 : m.smallTargets };
+        report.views.push({ view: view.name, viewport: `${w}x${h}`, desktop, screenshot: `${key}.png`, note, errors, failures, axeViolationRules: axe.length, axeViolationNodes: axe.reduce((a, v) => a + v.nodes, 0), axe, metrics: m });
+        console.log(`${key.padEnd(34)} axe rules ${String(axe.length).padStart(2)} nodes ${String(axe.reduce((a, v) => a + v.nodes, 0)).padStart(3)}  small-targets ${desktop ? '-' : m.smallTargets}  overflow ${m.overflow.length}${note ? '  (' + note + ')' : ''}`);
+        if (failures.overflow || failures.smallTargets) for (const x of [...m.overflow, ...(desktop ? [] : m.smallTargetSamples)].slice(0, 8)) console.log(`    ${JSON.stringify(x)}`);
         await ctx.close();
       }
     }
@@ -183,8 +223,12 @@ async function main() {
     await browser.close();
     server.stop();
   }
+  const sum = (k) => report.views.reduce((a, v) => a + v.failures[k], 0);
+  report.check = { overflow: sum('overflow'), smallTargets: sum('smallTargets'), pageErrors: report.views.reduce((a, v) => a + v.errors.length, 0) };
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 1));
   console.log(`\nwrote ${path.relative(ROOT, OUT)}/report.json`);
+  console.log(`CHECK overflow ${report.check.overflow} · small touch targets ${report.check.smallTargets} · page errors ${report.check.pageErrors}`);
+  if (STRICT && (report.check.overflow || report.check.smallTargets)) process.exitCode = 1;
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });

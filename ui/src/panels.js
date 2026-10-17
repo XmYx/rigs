@@ -1,4 +1,5 @@
 import { h } from './api.js';
+import { isPhone } from './mobile.js';
 
 // Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
 // bottom toolbar) can be dragged by its ⠿ grip, collapsed with ▾ to its header (elements marked .keep or
@@ -33,6 +34,7 @@ function addResizeHandles(el, id) {
     hd.className = `presize presize-${dir}`;
     hd.dataset.dir = dir;
     hd.title = 'Drag to resize';
+    hd.setAttribute('aria-hidden', 'true');
     el.append(hd);
     hd.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -90,6 +92,7 @@ function animateClosed(el, closed) {
 function setClosed(id, closed) {
   const p = panels.get(id);
   if (!p) return;
+  if (closed && p.el.contains(document.activeElement)) document.getElementById('panels-btn')?.focus({ preventScroll: true }); // don't strand focus on a hidden panel
   animateClosed(p.el, closed);
   state[id] = { ...state[id], closed };
   save();
@@ -103,18 +106,20 @@ function setCollapsed(id, collapsed) {
   p.el.classList.toggle('panel-collapsed', collapsed);
   p.collapseBtn.textContent = collapsed ? '▸' : '▾';
   p.collapseBtn.title = `${collapsed ? 'Expand' : 'Collapse'} ${p.title}`;
+  p.collapseBtn.setAttribute('aria-label', p.collapseBtn.title);
+  p.collapseBtn.setAttribute('aria-expanded', String(!collapsed));
   state[id] = { ...state[id], collapsed };
   save();
   p.onToggle?.({ closed: !!state[id]?.closed, collapsed });
 }
 
 /** Make a fixed element draggable and closable. The grip goes at the start of `into` (default: el). */
-export function makeFloating(el, { id, title, into = el, keep = [], onToggle }) {
+export function makeFloating(el, { id, title, into = el, keep = [], onToggle, closedOnPhone = false }) {
   if (!el) return;
   for (const k of keep) k?.classList.add('keep');
-  const grip = h('span', { class: 'pgrip', title: `Drag to move ${title} · double-click to reset` }, '⠿');
-  const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from ☰)`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
-  const collapseBtn = h('button', { class: 'pclose pcollapse', title: `Collapse ${title}`, onclick: (e) => { e.stopPropagation(); setCollapsed(id, !el.classList.contains('panel-collapsed')); } }, '▾');
+  const grip = h('span', { class: 'pgrip', 'aria-hidden': 'true', title: `Drag to move ${title} · double-click to reset` }, '⠿');
+  const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from ☰)`, 'aria-label': `Close ${title}`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
+  const collapseBtn = h('button', { class: 'pclose pcollapse', title: `Collapse ${title}`, 'aria-label': `Collapse ${title}`, 'aria-expanded': 'true', onclick: (e) => { e.stopPropagation(); setCollapsed(id, !el.classList.contains('panel-collapsed')); } }, '▾');
   panels.set(id, { el, title, collapseBtn, onToggle });
   into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
@@ -145,6 +150,8 @@ export function makeFloating(el, { id, title, into = el, keep = [], onToggle }) 
   grip.addEventListener('dblclick', () => reset(id));
   grip.addEventListener('click', (e) => e.stopPropagation());
 
+  // On a phone some panels start closed (until shown once), so the galaxy is not buried on first load.
+  if (closedOnPhone && !state[id] && isPhone()) state[id] = { closed: true };
   const s = state[id];
   if (s?.pos) {
     if (s.pos.width) el.style.width = s.pos.width;
@@ -180,7 +187,7 @@ function renderMenu() {
 
 /** The ☰ corner button: show/hide each panel, reset the layout. Call after the makeFloating()s. */
 export function panelMenu() {
-  const btn = h('button', { id: 'panels-btn', class: 'round', title: 'Panels — show, hide, reset layout' }, '☰');
+  const btn = h('button', { id: 'panels-btn', class: 'round', title: 'Panels — show, hide, reset layout', 'aria-label': 'Panels', 'aria-haspopup': 'dialog' }, '☰');
   const list = h('div', {});
   const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), list,
     h('button', { class: 'ibtn', onclick: () => { for (const id of panels.keys()) reset(id); } }, '↺ Reset layout'));

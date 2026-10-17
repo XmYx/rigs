@@ -4,6 +4,7 @@ import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel } from './panels.js';
+import { initMobile, revealInspector } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
@@ -14,6 +15,7 @@ import { openMesh } from './mesh.js';
 import { openProjects } from './projects.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
+import { announce, initA11y, initPopovers, prefersReducedMotion } from './a11y.js';
 import { openSessions } from './sessions.js';
 import { openTerminal } from './terminal.js';
 import { createVoice } from './voice.js';
@@ -37,7 +39,7 @@ let chatTarget = store.get('chatTarget', null);
 let busy = null;
 
 // ------------------------------------------------------------------ boot
-const graph = createGraph($('#graph'), { onSelect: (n) => select(n.id), onBackground: () => {} });
+const graph = createGraph($('#graph'), { onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {} });
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
@@ -70,7 +72,7 @@ function setOrb(s) {
   orb.setState(s);
   face?.setState(s);
   const label = { online: 'ONLINE', listening: 'LISTENING', thinking: 'THINKING', speaking: 'SPEAKING', error: 'ERROR', offline: 'OFFLINE' }[s] || s.toUpperCase();
-  $('#orb-state').innerHTML = `<i class="dot s-${s}"></i>${label}`;
+  $('#orb-state').innerHTML = `<i class="dot s-${s}" aria-hidden="true"></i>${label}`;
 }
 
 const machines = () => snap.filter((e) => e.node.online && e.node.rigs).map((e) => e.node);
@@ -111,9 +113,9 @@ function renderAttention() {
   const items = attnItems();
   // The banner heads the toast column, so toasts stack under it instead of on top of it.
   let box = document.getElementById('toasts');
-  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   let bar = $('#attn');
-  if (!bar) bar = h('div', { id: 'attn' });
+  if (!bar) bar = h('div', { id: 'attn', role: 'alert' });
   if (box.firstChild !== bar) box.prepend(bar);
   document.title = items.length ? `(${items.length}) ⚠ ${baseTitle}` : baseTitle;
   $('#orb-wrap').classList.toggle('alert', items.length > 0);
@@ -609,6 +611,7 @@ function shortModel(b) {
 function renderBrainBadge() {
   const b = currentBrain();
   $('#brain-badge').innerHTML = b ? `◆ ${shortModel(b).toUpperCase()}${b.effort ? ` <small>· ${b.effort}</small>` : ''} <small>· ${b.nodeName}</small> ▾` : '◆ NO BRAIN ▾';
+  $('#brain-badge').removeAttribute('aria-label'); // the visible text is its name (the title only described it before it filled in)
 }
 
 function setBrain(b, { quiet = false } = {}) {
@@ -651,6 +654,7 @@ function spokenText(text, final = false) {
 
 function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
+  if (/\b(jarvis|error)\b/.test(cls)) announce(text.replace(SEPARATOR, '. '), { assertive: cls.includes('error'), delay: 1200 }); // screen readers: once, when the reply settles
   el.className = 'show ' + cls;
   const m = text.match(SEPARATOR);
   el.replaceChildren();
@@ -997,11 +1001,12 @@ function wire() {
     onOpenTask: (t) => { const m = findMachine(t.node); if (m && t.session) sessionsWindow('', { node: m, s: { kind: t.session.kind, id: t.session.id, title: t.title, live: true } }); else toast('That agent has no session to show yet.'); },
     onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
   });
-  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
+  makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
+  initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   $('#btn-work').onclick = () => togglePanel('work');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
@@ -1012,6 +1017,7 @@ function wire() {
   $('#btn-hands').onclick = () => {
     const on = voice.toggleHandsFree();
     $('#btn-hands').classList.toggle('on', on);
+    $('#btn-hands').setAttribute('aria-pressed', String(on));
     if (on) { toast('Hands-free: just say “Jarvis, …”'); voice.say(`Listening, ${persona.address}.`); }
   };
   $('#btn-term').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; const m = n || machineById(selfId); if (m) openTerminal({ nodeId: m.id, nodeName: m.name }); };
@@ -1021,8 +1027,10 @@ function wire() {
   $('#btn-mesh').onclick = meshWindow;
   $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-apps').onclick = () => openApps();
-  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; };
+  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); };
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
+  $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
+  $('#btn-mute').setAttribute('aria-label', 'Mute voice output');
   $('#subtitle').onclick = conversationWindow;
   $('#brain-badge').onclick = () => toggleBrainMenu();
   $('#back').onclick = clearSelection;
@@ -1060,6 +1068,8 @@ function wire() {
 }
 
 wire();
+initA11y();
+initPopovers();
 setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
