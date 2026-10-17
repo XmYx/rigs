@@ -9,6 +9,7 @@
 // Options: --out <dir>            output directory (default docs/mobile-audit/after)
 //          --url <url>            use a running JARVIS instead of starting one (default: spawn `rigs serve`
 //                                 on port 4781 with RIGS_HOME=.rigs-dev, no migrations, no autoupdate)
+//          --port N            serve on N instead of the config/4781 (concurrent runs must not share a server)
 //          --viewports 390x844,.. override sizes (default 390x844,360x740,844x390,740x360); a width of 1024 or more
 //                                 is captured as a desktop (no touch, not mobile) and skips the touch-target check
 //          --views a,b            only these views (default all)
@@ -73,10 +74,10 @@ async function startServer() {
   // Live mesh data is wanted, but this throwaway node must not register OpenRig hosts or touch the real ~/.ssh
   const c = fs.existsSync(cfg) ? JSON.parse(fs.readFileSync(cfg, 'utf8')) : { port: PORT };
   if (c.openrig?.registerPeers !== false) { c.openrig = { ...c.openrig, registerPeers: false }; fs.writeFileSync(cfg, JSON.stringify(c)); }
-  const port = c.port || PORT;
+  const port = Number(opt('port', 0)) || c.port || PORT;
   const url = `http://127.0.0.1:${port}/`;
   try { const r = await fetch(url); if (r.ok) return { url, stop() {} }; } catch { /* not running */ }
-  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
+  const child = spawn(process.execPath, ['bin/rigs.js', 'serve'], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, RIGS_PORT: String(port), RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1' } });
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500));
     try { const r = await fetch(url); if (r.ok) return { url, stop: () => child.kill() }; } catch { /* wait */ }

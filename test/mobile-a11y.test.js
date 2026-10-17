@@ -82,8 +82,9 @@ function browserTools() {
 const tools = process.env.RIGS_SKIP_BROWSER_TESTS ? null : browserTools();
 
 test('browser: no overflow, no small touch targets, no page errors at phone sizes', { skip: tools ? false : 'Playwright/axe-core/Chromium not installed', timeout: 115000 }, (t) => {
+  // Its own port: a fixed one is shared with any other checkout's capture server running at the same time.
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-mobile-a11y-'));
-  const r = spawnSync(process.execPath, ['scripts/mobile-shots.js', '--out', out, '--viewports', '390x844', '--strict', '--png-primary', '--views', 'orb-home,more-sheet'], {
+  const r = spawnSync(process.execPath, ['scripts/mobile-shots.js', '--out', out, '--port', String(20000 + Math.floor(Math.random() * 20000)), '--viewports', '390x844', '--strict', '--png-primary', '--views', 'orb-home,more-sheet'], {
     cwd: ROOT, encoding: 'utf8', timeout: 80000, env: { ...process.env, RIGS_AUDIT_TOOLS: tools },
   });
   // A heavily loaded machine can starve the capture; that is not a regression, so don't fail on a timeout.
