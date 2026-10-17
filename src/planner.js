@@ -259,7 +259,8 @@ function normProvider(x) {
 
 function nodeHas(entry, provider) {
   if (provider === 'stub') return entry.openrig?.daemon === 'running';
-  return (entry.brains || []).some((b) => b.id === provider && (provider !== 'ollama' || b.models.length));
+  // Installed but signed out (e.g. Codex without a login) can't run a task: place it elsewhere or fall back.
+  return (entry.brains || []).some((b) => b.id === provider && b.signedIn !== false && (provider !== 'ollama' || b.models.length));
 }
 
 function hasDiscreteGpu(n) {

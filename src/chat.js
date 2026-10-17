@@ -81,7 +81,7 @@ export async function deleteChat(id) {
 export async function availableBrains() {
   const core = coreBrain();
   return (await catalog()).map((p) => ({
-    id: p.id, label: p.label, models: p.models, efforts: p.efforts,
+    id: p.id, label: p.label, models: p.models, efforts: p.efforts, ...(p.signedIn === false ? { signedIn: false } : {}),
     default: core.provider === p.id ? core.model : (p.id === 'ollama' ? p.models[0] || '' : ''),
     defaultEffort: core.provider === p.id ? core.effort : '',
   }));

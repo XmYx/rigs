@@ -110,3 +110,14 @@ test('team seats are named by role and model', () => {
   assert.equal(modelTag({ provider: 'claude', model: 'sonnet' }), 'sonnet');
   assert.equal(modelTag({ provider: 'codex', model: 'gpt-6.1-sol' }), 'codex');
 });
+
+test('a provider that is installed but signed out gets no tasks (Codex without a login → the review falls back)', () => {
+  const p = { name: 'x', goal: 'g', repo: { node: 'macbookpro', path: '/r' }, gitUrl: '', tasks: [
+    { id: 't1', title: 'code', kind: 'code', size: 'M', deps: [], needs: { platform: 'any', gpu: false, tool: '' }, status: 'done', assign: { node: 'macbookpro', provider: 'claude' }, suggest: {} },
+    { id: 't2', title: 'review', kind: 'review', size: 'M', deps: ['t1'], needs: { platform: 'any', gpu: false, tool: '' }, status: 'todo', suggest: {} },
+  ] };
+  const snap = [{ node: { name: 'macbookpro', online: true, rigs: true, platform: 'mac', stats: { cpu: 1, memUsed: 1, memTotal: 10 } },
+    brains: [{ id: 'claude', models: [] }, { id: 'codex', models: [], signedIn: false }] }];
+  routeProject(p, snap);
+  assert.equal(p.tasks[1].assign.provider, 'claude');
+});
