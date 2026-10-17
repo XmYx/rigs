@@ -396,6 +396,7 @@ ${p.workspace ? `
 ${workspaceBrief(p)}
 - Read the project's ${p.workspace.guides?.length ? p.workspace.guides.join(' / ') : 'README'} first and follow it — it overrides the generic notes below.
 - The folder may hold uncommitted work by the user or other agents: never revert, stash, reset or commit changes you didn't make.
+- OpenRig may add "OpenRig MANAGED BLOCK" sections to CLAUDE.md / AGENTS.md here: they are for your seat, never commit them (stage files by name, not \`git add -A\`).
 ` : ''}
 ## Task
 ${t.description}
