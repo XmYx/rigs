@@ -84,7 +84,7 @@ export function openControl({ machine }) {
       return h('div', { class: 'ctl-perm' }, dot(ok ?? null),
         h('div', { class: 'ctl-perm-t' }, h('b', {}, label), h('span', { class: 'muted small' }, ' ' + what),
           p.via || p.detail ? h('div', { class: 'muted small' }, [p.via ? `via ${p.via}` : '', p.partial ? 'partial' : '', p.detail].filter(Boolean).join(' · ')) : null,
-          ok !== true && p.fix ? h('div', { class: 'small ctl-fix' }, p.fix) : null),
+          ok !== true && p.fix ? h('div', { class: 'small ctl-fix' }, typeof p.fix === 'string' ? p.fix : p.fix.text || '') : null),
         fixable ? h('button', { class: 'btn', onclick: () => run('Grant', () => api(`${node(id)}/control/grant`, { method: 'POST', body: { permission: k } })) }, 'Grant') : null);
     });
 
