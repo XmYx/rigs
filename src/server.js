@@ -371,6 +371,14 @@ export async function startServer() {
     return results;
   }
 
+  /** A background agent session just started here: pop it up as a terminal in every open JARVIS UI (unless surface:false). */
+  function announceSession(req, session, { agent, title }) {
+    if (req?.surface === false || !session?.id) return;
+    const self = config();
+    const t = String(title || session.id).slice(0, 80);
+    broadcastNotify({ text: `${agent} · ${t} started on ${self.name}`, speak: false, from: self.name, session: { nodeId: self.nodeId, nodeName: self.name, kind: session.kind, id: session.id, title: t } }).catch((e) => log('session-popup', e.message));
+  }
+
   // Local handlers are invoked directly for the self node so the gateway never loops over HTTP.
   async function localCall(p, method = 'GET', body) {
     const fake = { method, url: '/api/local/' + p, body };
@@ -433,7 +441,13 @@ export async function startServer() {
     if (sub === 'sessions/prompt') return sessions.promptOptions(q.get('kind'), q.get('id'));
     if (sub === 'sessions/answer' && method === 'POST') { const b = await body(); return sessions.answerOption(b.kind, b.id, b.choice); }
     if (sub === 'sessions/attach' && method === 'POST') { const b = await body(); return sessions.attach(b.kind, b.id, b); }
-    if (sub === 'agents/start' && method === 'POST') return sessions.startAgent(await body());
+    if (sub === 'agents/start' && method === 'POST') {
+      const b = await body();
+      const r = await sessions.startAgent(b);
+      const id = r.kind === 'pty' ? r.ptyId || r.id : r.id;
+      announceSession(b, { kind: r.kind, id }, { agent: b.agent || 'claude', title: b.name || r.id });
+      return r;
+    }
 
     // chats / brains
     if (sub === 'brains') return chat.availableBrains();
@@ -622,7 +636,12 @@ export async function startServer() {
         return planner.updateTask(mm[1], mm[2], { status: b.status, summary: b.summary, assign: b.assign }, plannerCtx);
       }
     }
-    if (sub === 'work/start' && method === 'POST') return work.startTask(await body());
+    if (sub === 'work/start' && method === 'POST') {
+      const b = await body();
+      const r = await work.startTask(b);
+      if (r?.session) announceSession(b, r.session, { agent: b.task?.assign?.provider || r.mode, title: `${b.task?.id || ''} ${b.task?.title || ''}`.trim() || r.session.id });
+      return r;
+    }
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
     if (sub === 'work/nudge' && method === 'POST') return work.nudgeTask(await body());
@@ -718,7 +737,7 @@ export async function startServer() {
     // notifications to the JARVIS UI on this node
     if (sub === 'notify' && method === 'POST') {
       const b = await body();
-      broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null });
+      broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null, session: b.session?.id ? { nodeId: b.session.nodeId, nodeName: b.session.nodeName, kind: b.session.kind, id: b.session.id, title: b.session.title } : null });
       return { ok: true, delivered: uiSockets.size };
     }
 

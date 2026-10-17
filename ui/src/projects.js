@@ -9,7 +9,7 @@ const STATUS_CLASS = { todo: '', starting: 'warn', running: 'run', review: 'warn
  * Projects: goal → tasks planned by the core brain → each task routed to machine + provider +
  * model + effort (editable, with the reason) → dispatched as OpenRig seats or direct agents.
  */
-export function openProjects({ snapshot, voice, coreBrain, onFocus }) {
+export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }) {
   let list = [];
   let current = null; // { owner (node id), project }
   const left = h('div', { class: 'proj-list' });
@@ -157,6 +157,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus }) {
     const s = t.run.session;
     try {
       const r = s.kind === 'pty' ? { ptyId: s.id } : await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id } });
+      onAttached?.(m.id, s.kind, s.id);
       openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: `${t.id} · ${t.title}`.slice(0, 60) });
     } catch (e) { toast(e.message, 'error'); }
   }
