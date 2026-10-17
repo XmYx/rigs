@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -191,7 +192,7 @@ async function startDirect({ project, task, dir, pointer }) {
     // Codex drives local Ollama models as a real agent (tools + MCP incl. REA); plain `ollama run` otherwise.
     line = bin('codex') ? ['codex', '--oss', '--local-provider', 'ollama', ...(a.model ? ['-m', q(a.model)] : []), q(pointer)].join(' ') : `ollama run ${q(a.model || 'llama3.2')} ${q(pointer)}`;
   } else throw new Error('unknown provider ' + a.provider);
-  const name = `${project.slug}-${task.id}`.replace(/[^\w.-]/g, '-');
+  const name = `${project.slug}-${task.id}${task.attempts ? `-r${task.attempts}` : ''}`.replace(/[^\w.-]/g, '-');
   const t = bin('tmux');
   if (t && !isWin) {
     const sh = shellWrap(line);
@@ -203,21 +204,52 @@ async function startDirect({ project, task, dir, pointer }) {
   return { mode: 'direct', cwd: dir, session: { kind: 'pty', id: p.id } };
 }
 
-/** Where is a dispatched task at? (queue state for OpenRig, liveness for direct sessions) */
+/**
+ * Where is a dispatched task at? state: running | done | ended (| OpenRig queue states). For the watchdog also:
+ * idle (the agent sits at its prompt), needsInput (it waits on a permission/question), fingerprint (pane content
+ * hash — unchanged between checks means nothing is happening).
+ */
 export async function taskStatus(run_) {
   if (run_.mode === 'openrig' && run_.qitem) {
     const r = await run(bin('rig'), ['queue', 'show', run_.qitem, '--json'], { timeout: 15000 });
     try {
       const j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
       const state = j.state || j.qitem?.state || j.waiting?.state;
-      return { state, closure: j.closureReason || j.qitem?.closureReason || null };
+      const live = j.waiting?.liveness || {};
+      return { state, closure: j.closureReason || j.qitem?.closureReason || null, activity: live.activity || null,
+        idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0 };
     } catch { return { state: 'unknown' }; }
   }
   if (run_.session?.kind === 'tmux') {
-    const r = await run(bin('tmux') || 'tmux', ['has-session', '-t', run_.session.id], { timeout: 5000 });
-    return { state: r.code === 0 ? 'running' : 'ended' };
+    const t = bin('tmux') || 'tmux';
+    const r = await run(t, ['has-session', '-t', run_.session.id], { timeout: 5000 });
+    if (r.code !== 0) return { state: 'ended' };
+    const pane = await run(t, ['capture-pane', '-p', '-t', run_.session.id], { timeout: 5000 });
+    // Strip clocks/spinners so a frozen screen hashes the same.
+    const text = pane.stdout.replace(/\d+(\.\d+)?\s?(s|m|ms|min|tokens?)\b|[⠀-⣿✻✶✳✢·*]/g, '');
+    return { state: 'running', fingerprint: crypto.createHash('sha1').update(text).digest('hex').slice(0, 16),
+      needsInput: /Do you want to|\(y\/n\)|Allow .*\?|approve|permission/i.test(pane.stdout.split('\n').slice(-15).join('\n')) };
   }
   return { state: 'running' };
+}
+
+/** The watchdog's nudge: a message typed into the agent's session (OpenRig seat or tmux). */
+export async function nudgeTask({ text, ...run_ }) {
+  if (!text) throw new Error('nothing to send');
+  if (run_.mode === 'openrig' && run_.seat) {
+    const r = await run(bin('rig'), ['send', run_.seat, text], { timeout: 30000 });
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().slice(-200) || 'rig send failed');
+    return { ok: true, via: 'rig send' };
+  }
+  if (run_.session?.kind === 'tmux') {
+    const t = bin('tmux') || 'tmux';
+    await run(t, ['send-keys', '-t', run_.session.id, '-l', text], { timeout: 5000 });
+    await sleep(300);
+    const r = await run(t, ['send-keys', '-t', run_.session.id, 'Enter'], { timeout: 5000 });
+    if (r.code !== 0) throw new Error(r.stderr.trim() || 'tmux send-keys failed');
+    return { ok: true, via: 'tmux' };
+  }
+  return { ok: false, reason: 'this session kind cannot be nudged' };
 }
 
 export async function stopTask(run_) {

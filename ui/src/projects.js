@@ -191,6 +191,6 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus }) {
 
   loadList();
   renderDetail();
-  timer = setInterval(() => { if (current?.project.status === 'running' || current?.project.status === 'planning') refreshCurrent(); }, 5000);
+  timer = setInterval(() => { if (['running', 'planning', 'merging'].includes(current?.project.status)) refreshCurrent(); }, 5000);
   return { window: w, open };
 }

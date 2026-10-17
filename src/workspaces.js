@@ -96,6 +96,40 @@ function describe(dir, entries, m) {
   };
 }
 
+/**
+ * Flows: the user's own recurring agent jobs on this machine — Claude scheduled tasks
+ * (~/.claude/scheduled-tasks/<name>/SKILL.md). "Mad Mike update" names the `madmikeupdate` flow, which is how
+ * a request finds a project's nightly-update routine rather than being planned from scratch.
+ */
+export function flows(home = HOME) {
+  const dir = path.join(home, '.claude', 'scheduled-tasks');
+  return readdir(dir).filter((e) => e.isDirectory()).map((e) => {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, e.name, 'SKILL.md'), 'utf8'); } catch { return null; }
+    const fm = (text.match(/^---\n([\s\S]*?)\n---\n?/) || [])[1] || '';
+    const field = (k) => ((fm.match(new RegExp(`^${k}:\\s*(.+)$`, 'm')) || [])[1] || '').trim();
+    const cwd = field('cwd');
+    return { name: field('name') || e.name, description: field('description'), prompt: text.slice(fm ? text.indexOf('---', 3) + 3 : 0).trim().slice(0, 4000), cwd, source: 'claude scheduled task' };
+  }).filter(Boolean);
+}
+
+/** Which workspace a flow belongs to: its cwd, else a workspace whose name/title is spelled inside the flow's name. */
+export function flowWorkspace(flow, items) {
+  if (flow.cwd) {
+    const hit = items.filter((w) => flow.cwd === w.path || flow.cwd.startsWith(w.path + path.sep)).sort((a, b) => b.path.length - a.path.length)[0];
+    if (hit) return hit;
+  }
+  const f = flat(flow.name);
+  let best = null;
+  for (const w of items) {
+    const t = tokens(w.title);
+    const keys = [flat(w.name), t.join(''), ...t.slice(0, -1).map((x, i) => x + t[i + 1])].filter((k) => k.length >= 5);
+    const n = Math.max(0, ...keys.filter((k) => f.includes(k)).map((k) => k.length));
+    if (n && (!best || n > best.n)) best = { w, n };
+  }
+  return best?.w || null;
+}
+
 /** Walk the home folder (plus configured roots and folders agents recently worked in). */
 export function scan({ roots, extraDirs = [], maxDepth = 4, budgetMs = 15000, home = HOME } = {}) {
   const started = Date.now();
@@ -124,7 +158,12 @@ export function scan({ roots, extraDirs = [], maxDepth = 4, budgetMs = 15000, ho
     }
     if (top && !found.has(top.cur)) found.set(top.cur, describe(top.cur, top.entries, top.m));
   }
-  return [...found.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const items = [...found.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const fl of flows(home)) {
+    const w = flowWorkspace(fl, items);
+    if (w) (w.flows ||= []).push(fl);
+  }
+  return items;
 }
 
 let cache = readJsonSync(FILE, null);
@@ -211,8 +250,30 @@ export function resolve({ workspace = '', machine = '', text = '' }, catalog, { 
   // "on the same machine" / "there" refers to the machine of the previous item.
   const same = previousNode && /\b(same|that|this) (machine|box|computer|node|one)\b|\bthere\b/i.test(machine);
   const machines = same ? [previousNode] : matchMachine(machine, nodes);
+  const r = resolveIn(machines, { workspace, text }, catalog);
+  if (r.workspace || !machines.length) return { ...r, machines };
+  // The machine Sir named doesn't have it, but the project lives elsewhere ("Mad Mike update on the macbook" —
+  // the repo, its editor and its flows are on magix-system): work happens where the code is; say so.
+  const anywhere = resolveIn([], { workspace, text }, catalog);
+  if (anywhere.workspace) return { ...anywhere, machines, elsewhere: true, wanted: machines };
+  return { ...r, machines };
+}
+
+/** A flow (scheduled task) the text names: "Mad Mike update" → `madmikeupdate`. */
+export function matchFlow(text, ws) {
+  const q = flat(text);
+  if (q.length < 5) return null;
+  return (ws.flows || []).find((f) => { const n = flat(f.name); return n.length >= 5 && (q.includes(n) || (q.length >= 8 && n.includes(q))); }) || null;
+}
+
+function resolveIn(machines, { workspace, text }, catalog) {
   const pool = catalog.filter((c) => !machines.length || machines.includes(c.node))
     .flatMap((c) => (c.items || []).map((ws) => ({ node: c.node, ws })));
+  // A named flow pins its workspace outright.
+  for (const q of [workspace, text].filter(Boolean)) {
+    const hits = pool.map((x) => ({ ...x, flow: matchFlow(q, x.ws) })).filter((x) => x.flow);
+    if (hits.length === 1) return { node: hits[0].node, workspace: hits[0].ws, flow: hits[0].flow, score: 1, alternatives: [] };
+  }
   const query = workspace || text;
   const ranked = pool.map((x) => ({ ...x, score: score(query, x.ws) })).filter((x) => x.score >= 0.45).sort((a, b) => b.score - a.score);
   if (!ranked.length && !workspace && text) {
@@ -223,16 +284,17 @@ export function resolve({ workspace = '', machine = '', text = '' }, catalog, { 
   }
   const top = ranked[0];
   const alternatives = ranked.slice(1, 4).map((x) => ({ node: x.node, name: x.ws.name, path: x.ws.path, score: x.score }));
-  if (!top) return { candidates: [] , machines };
+  if (!top) return { candidates: [] };
   const clear = top.score >= 0.6 && (!ranked[1] || top.score - ranked[1].score >= 0.12 || ranked[1].ws.path.startsWith(top.ws.path + path.sep));
-  if (!clear) return { candidates: [top, ...ranked.slice(1, 4)].map((x) => ({ node: x.node, name: x.ws.name, title: x.ws.title, path: x.ws.path, score: x.score })), machines };
-  return { node: top.node, workspace: top.ws, score: top.score, alternatives, machines };
+  if (!clear) return { candidates: [top, ...ranked.slice(1, 4)].map((x) => ({ node: x.node, name: x.ws.name, title: x.ws.title, path: x.ws.path, score: x.score })) };
+  return { node: top.node, workspace: top.ws, flow: matchFlow(text, top.ws), score: top.score, alternatives };
 }
 
 /** One line per workspace for prompts. */
 export function catalogLines(catalog, { perNode = 40 } = {}) {
   return catalog.flatMap((c) => (c.items || []).slice(0, perNode).map((ws) => {
     const parts = (ws.parts || []).filter((p) => p.kind === 'unity').map((p) => `unity ${p.version} in ${p.rel}`);
-    return `- ${c.node} (${c.platform}): ${ws.name}${ws.title ? ` — "${ws.title}"` : ''} [${[...ws.kinds, ...parts].join(', ')}] ${ws.path}`;
+    const fl = (ws.flows || []).map((f) => `${f.name}${f.description ? ` (${f.description.slice(0, 80)})` : ''}`);
+    return `- ${c.node} (${c.platform}): ${ws.name}${ws.title ? ` — "${ws.title}"` : ''} [${[...ws.kinds, ...parts].join(', ')}] ${ws.path}${fl.length ? ` · flows: ${fl.join('; ')}` : ''}`;
   }));
 }

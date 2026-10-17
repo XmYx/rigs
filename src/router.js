@@ -2,12 +2,15 @@
 // any brain sees it. A small model reads AGENTS.md's rules and the candidates; if it can't answer in time,
 // keyword rules decide. Pure functions take their inputs explicitly so they can be tested without a model.
 import { claudeFlags } from './models.js';
-import { catalogLines, resolve as resolveWorkspace } from './workspaces.js';
+import { catalogLines, matchFlow, resolve as resolveWorkspace } from './workspaces.js';
 import { bin } from './tools.js';
 import { HOME, augmentedPath, run } from './util.js';
 
 export const ROUTES = ['answer', 'implement', 'plan', 'continue'];
 const ROUTER_MODEL = 'claude-haiku-5-5';
+const QUESTION = /^\s*(what|why|how|when|where|who|which|is|are|was|were|did|does|do|can|could|should|would|will)\b|\?\s*$/i;
+// A request about JARVIS / RIGS itself: changed in a RIGS dev worktree and shipped through the merge steward.
+const SELF = /\b(jarvis|rigs(?: os)?)\b/i;
 const WORDS = (s) => new Set(String(s || '').toLowerCase().match(/[a-zà-ž0-9]{4,}/g) || []);
 
 /** Keyword rules: the fallback when no model answers, and a sanity check on model output. */
@@ -17,10 +20,11 @@ export function heuristicRoute(text, threads = []) {
     .map((th) => ({ th, n: [...WORDS(t)].filter((w) => WORDS(th.title).has(w)).length }))
     .sort((a, b) => b.n - a.n)[0];
   if (best && best.n >= 2) return { route: 'continue', threadId: best.th.id, title: best.th.title, reason: 'shares its subject with an ongoing thread' };
-  if (/\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?)\b/i.test(t) || t.length > 600) {
+  if (/\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
-  if (/\b(implement|build|fix|refactor|patch|develop|wire up|add (a |an |the )?(feature|button|page|endpoint|test)|write (the |a |an )?(code|script|test)|change the code|update the code|bug|commit|deploy|rename|migrate)\b/i.test(t)) {
+  if (QUESTION.test(t)) return { route: 'answer', reason: 'a question' };
+  if (/\b(implement|build|fix|refactor|patch|develop|wire up|add (a |an |the )?(feature|button|page|endpoint|test)|write (the |a |an )?(code|script|test)|change the code|update the code|bug|commit|deploy|rename|migrate|improve|redesign|optimi[sz]e|make (the|it|this|them) \w+( \w+)? (more|less|faster|better|work)|run the|nightly|(an? |the )?update (on|for|to|of)? ?\w+|upgrade)\b/i.test(t)) {
     return { route: 'implement', reason: 'a code or build change' };
   }
   return { route: 'answer', reason: 'can be answered now' };
@@ -58,8 +62,9 @@ export function heuristicWork(text, catalog) {
   const clauses = String(text || '').split(/;|\.\s|\band (?:also |then )?(?=\w+\b)/i).map((c) => c.trim()).filter((c) => c.length > 6);
   const items = [];
   for (const c of clauses) {
-    const r = resolveWorkspace({ text: c }, catalog);
-    if (r.workspace && !items.some((x) => x.workspace === r.workspace.name)) items.push({ title: '', goal: c, workspace: r.workspace.name, machine: r.node });
+    const r = resolveWorkspace({ text: c, machine: c }, catalog);
+    // The machine stays as Sir said it, so binding can tell him when the project lives elsewhere.
+    if (r.workspace && !items.some((x) => x.workspace === r.workspace.name)) items.push({ title: '', goal: c, workspace: r.workspace.name, machine: r.elsewhere ? c : r.node });
   }
   return items;
 }
@@ -68,18 +73,38 @@ export function heuristicWork(text, catalog) {
  * Bind each work item to a real folder on a real machine. Items that can't be bound clearly come back with
  * candidates (JARVIS asks Sir) — nothing is filed for them.
  */
-export function bindWork(items, catalog, request = '') {
+export function bindWork(items, catalog, request = '', { selfNode = '' } = {}) {
   const out = [];
   let previousNode = '';
   for (const it of items || []) {
-    const r = resolveWorkspace({ workspace: it.workspace, machine: it.machine, text: it.goal }, catalog, { previousNode });
     const title = it.title || it.goal.split(/\s+/).slice(0, 5).join(' ');
-    if (r.workspace) {
+    const r = resolveWorkspace({ workspace: it.workspace, machine: it.machine, text: it.goal }, catalog, { previousNode });
+    // "JARVIS feature: …" is a change to RIGS itself — unless it clearly names some other project. A match on a
+    // RIGS checkout (the installed app, a dev clone) is the same thing: never let agents edit the live install.
+    const aboutSelf = selfNode && (isRigsCheckout(r.workspace) || (!r.workspace && SELF.test(`${it.workspace} ${it.goal}`)));
+    if (aboutSelf) {
+      previousNode = selfNode;
+      out.push({ ...it, title, request, node: selfNode, self: true, workspace: SELF_WORKSPACE });
+    } else if (r.workspace) {
       previousNode = r.node;
-      out.push({ ...it, title, request, node: r.node, workspace: r.workspace, score: r.score, alternatives: r.alternatives });
+      out.push({ ...it, title, request, node: r.node, workspace: r.workspace, flow: r.flow || null, score: r.score, alternatives: r.alternatives,
+        ...(r.elsewhere ? { note: `asked for ${r.wanted.join('/') || it.machine}, but ${r.workspace.name} lives on ${r.node} — it runs there` } : {}) });
     } else out.push({ ...it, title, request, unresolved: true, candidates: r.candidates || [] });
   }
   return out;
+}
+
+/** The workspace a RIGS self-change is bound to (the folder itself is a fresh dev worktree, made at filing time). */
+export const SELF_WORKSPACE = { name: 'rigs', title: 'RIGS OS · JARVIS', kinds: ['git', 'node'], guides: ['AGENTS.md'], parts: [], self: true };
+
+export function isRigsCheckout(ws) {
+  return !!ws && (ws.self || /^RIGS OS\b/.test(ws.title || '') || /[\\/]\.rigs[\\/]app$/.test(ws.path || ''));
+}
+
+/** Does the request name a known flow (a project's scheduled job)? Then it is work, not chat. */
+export function namedFlow(text, catalog = []) {
+  for (const c of catalog) for (const ws of c.items || []) { const f = matchFlow(text, ws); if (f) return { node: c.node, workspace: ws, flow: f }; }
+  return null;
 }
 
 function routerPrompt(text, { rules, threads, projects, catalog = [] }) {
@@ -93,7 +118,7 @@ function routerPrompt(text, { rules, threads, projects, catalog = [] }) {
     'Operating rules:',
     rules,
     '',
-    'A request that asks to implement, build, fix or change code is "implement", even when it names JARVIS, RIGS or the router itself.',
+    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Talk ("answer") is only for questions and chat; never answer a work request with a description of what you would do.',
     '',
     'Ongoing threads (continue ONLY if the request clearly belongs to one; otherwise do not pick one):',
     threads.length ? threads.map((t) => `- ${t.id} · ${t.title} · project ${t.project || '—'}`).join('\n') : '(none)',
@@ -129,9 +154,22 @@ export function parseProjects(text = '') {
 export async function route(text, ctx) {
   const viaModel = await modelRoute(text, ctx).catch(() => null);
   const d = viaModel ? { ...viaModel, via: 'model' } : { ...heuristicRoute(text, ctx.threads), via: 'rules' };
-  if (['implement', 'plan'].includes(d.route) && ctx.catalog?.length) {
-    const items = d.work?.length ? d.work : heuristicWork(text, ctx.catalog);
-    d.work = bindWork(items, ctx.catalog, text);
+  return withWork(d, text, ctx);
+}
+
+/** Second opinion on the decision + work items bound to folders. Pure given the decision (tested). */
+export function withWork(d, text, { catalog = [], selfNode = '' } = {}) {
+  // Requests that are clearly work never stay as talk: a named flow, or "JARVIS feature: …".
+  if (d.route === 'answer' || d.route === 'continue') {
+    const flow = !QUESTION.test(text) && namedFlow(text, catalog);
+    const self = selfNode && !QUESTION.test(text) && SELF.test(text) && heuristicRoute(text).route !== 'answer';
+    if (flow) Object.assign(d, { route: 'implement', reason: `runs the ${flow.flow.name} flow of ${flow.workspace.name}`, threadId: undefined });
+    else if (self) Object.assign(d, { route: heuristicRoute(text).route, reason: 'a change to JARVIS itself', threadId: undefined });
+  }
+  if (['implement', 'plan'].includes(d.route) && (catalog.length || selfNode)) {
+    let items = d.work?.length ? d.work : heuristicWork(text, catalog);
+    if (!items.length && selfNode && SELF.test(text)) items = [{ title: '', goal: text, workspace: 'rigs', machine: '' }];
+    d.work = bindWork(items, catalog, text, { selfNode });
   }
   return d;
 }

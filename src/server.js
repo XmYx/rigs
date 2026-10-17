@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
@@ -192,6 +193,18 @@ export async function startServer() {
     },
   };
 
+  /** Hand a committed work branch (a worktree on this machine) to the merge steward. */
+  async function proposeBranch(b) {
+    const dir = files.resolvePath(b.dir || '.');
+    const d = await merge.describe(dir);
+    const st = merge.electSteward(discovery.list());
+    if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
+    const reqBody = { node: config().name, dir, branch: d.branch, title: b.title || d.commits[0].replace(/^\w+ /, ''), summary: b.summary || '', commits: d.commits, session: b.session || null };
+    const r = st.self ? await merge.enqueue(reqBody) : await peerJson(st, 'merge/requests', { method: 'POST', body: reqBody, timeout: 20000 });
+    if (st.self) kickMerge();
+    return { ...r, steward: st.name };
+  }
+
   async function iAmSteward() {
     const st = merge.electSteward(discovery.list());
     return !!st?.self;
@@ -266,14 +279,30 @@ export async function startServer() {
     const out = [];
     for (const it of items) {
       const ws = it.workspace;
-      const name = truncate(`${workspaceLabel(ws)} · ${it.title || 'work'}`, 60);
-      let p = await planner.createProject({ name, goal: it.goal, repoNode: it.node, repoPath: ws.path });
-      p.workspace = { name: ws.name, title: ws.title, label: workspaceLabel(ws), kinds: ws.kinds, parts: ws.parts, guides: ws.guides, unity: ws.unity };
+      const label = it.self ? 'JARVIS' : workspaceLabel(ws);
+      const name = truncate(`${label} · ${it.flow ? it.flow.name : it.title || 'work'}`, 60);
+      let p;
+      if (it.self) {
+        // A change to RIGS itself: its own dev worktree off the latest main (never the installed checkout); the
+        // merge steward tests, merges and rolls it out when every task is done (planner.settle → ctx.propose).
+        const topic = work.slug(`${it.title || it.goal}`, 30) + '-' + crypto.randomBytes(2).toString('hex');
+        const dev = await merge.startWork(topic);
+        p = await planner.createProject({ name, goal: it.goal, repoNode: config().name, repoPath: dev.dir });
+        p.selfDev = { branch: dev.branch, topic };
+        p.workspace = { name: 'rigs', title: ws.title, label, kinds: ws.kinds, parts: [], guides: ws.guides };
+      } else {
+        p = await planner.createProject({ name, goal: it.goal, repoNode: it.node, repoPath: ws.path });
+        p.workspace = { name: ws.name, title: ws.title, label, kinds: ws.kinds, parts: ws.parts, guides: ws.guides, unity: ws.unity };
+        if (it.flow) p.flow = { name: it.flow.name, description: it.flow.description, prompt: it.flow.prompt, source: it.flow.source };
+      }
       p.request = it.request || '';
+      p.autoRun = true;
+      if (it.note) p.note = it.note;
       p = await planner.saveProject(p);
-      out.push({ id: p.id, name: p.name, owner: p.owner, node: it.node, path: ws.path, workspace: p.workspace.label });
+      out.push({ id: p.id, name: p.name, owner: p.owner, node: p.repo.node, path: p.repo.path, workspace: label, self: !!it.self, flow: it.flow?.name || '', note: it.note || '' });
       (async () => {
-        await planner.planProject(p.id, plannerCtx);
+        if (p.flow) await planner.planFlow(p.id, plannerCtx);
+        else await planner.planProject(p.id, plannerCtx);
         const d = await planner.dispatchReady(p.id, plannerCtx);
         if (!d.tasks.some((t) => t.status === 'running')) plannerCtx.notify(`${p.name}: planned ${d.tasks.length} tasks, but none could start — open it on the Work dashboard.`, 'error');
       })().catch((e) => { log('work:', e.message); plannerCtx.notify(`Couldn't start "${name}": ${e.message}`, 'error'); });
@@ -312,6 +341,8 @@ export async function startServer() {
     call: callNode,
     ask: askNode,
     notify: (text, level = 'info') => broadcastNotify({ text, level, speak: true, from: config().name }),
+    // A finished RIGS self-change: its worktree lives on the project's own machine (this one — fileWork made it here).
+    propose: (p) => callNode(p.repo.node, 'dev/propose', { method: 'POST', body: { dir: p.repo.path, title: p.name, summary: truncate(`${p.goal}\n\n${p.tasks.map((t) => `- ${t.title}: ${t.summary}`).join('\n')}`, 4000) }, timeout: 60000 }),
   };
 
   async function broadcastNotify(b) {
@@ -580,20 +611,11 @@ export async function startServer() {
     if (sub === 'work/start' && method === 'POST') return work.startTask(await body());
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
+    if (sub === 'work/nudge' && method === 'POST') return work.nudgeTask(await body());
 
     // change policy: work branches → merge steward (see src/merge.js)
     if (sub === 'dev/start' && method === 'POST') { const b = await body(); return merge.startWork(b.topic, { repo: b.repo || undefined }); }
-    if (sub === 'dev/propose' && method === 'POST') {
-      const b = await body();
-      const dir = files.resolvePath(b.dir || '.');
-      const d = await merge.describe(dir);
-      const st = merge.electSteward(discovery.list());
-      if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
-      const reqBody = { node: config().name, dir, branch: d.branch, title: b.title || d.commits[0].replace(/^\w+ /, ''), summary: b.summary || '', commits: d.commits, session: b.session || null };
-      const r = st.self ? await merge.enqueue(reqBody) : await peerJson(st, 'merge/requests', { method: 'POST', body: reqBody, timeout: 20000 });
-      if (st.self) kickMerge();
-      return { ...r, steward: st.name };
-    }
+    if (sub === 'dev/propose' && method === 'POST') return proposeBranch(await body());
     if (sub === 'dev/cleanup' && method === 'POST') { const b = await body(); return merge.cleanupWork(files.resolvePath(b.dir), b.branch); }
     if (sub === 'git/bundle' && method === 'GET') {
       if (!res) throw new HttpError(400, 'stream only');
