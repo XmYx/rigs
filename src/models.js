@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import { bin, ollamaModels } from './tools.js';
+import { HOME } from './util.js';
 
 /**
  * Model catalog: which providers this machine can run, their models and reasoning-effort levels,
@@ -66,13 +69,19 @@ export async function catalog() {
   const extra = config().models || {};
   const out = [];
   if (bin('claude')) out.push({ id: 'claude', ...PROVIDERS.claude, models: uniq([...(extra.claude || []), ...PROVIDERS.claude.models]) });
-  if (bin('codex')) out.push({ id: 'codex', ...PROVIDERS.codex, models: uniq([...(extra.codex || []), ...PROVIDERS.codex.models]) });
+  if (bin('codex')) out.push({ id: 'codex', ...PROVIDERS.codex, models: uniq([...(extra.codex || []), ...PROVIDERS.codex.models]), signedIn: codexSignedIn() });
   const o = await ollamaModels();
   if (o.running) out.push({ id: 'ollama', ...PROVIDERS.ollama, models: o.models.map((m) => m.name), details: o.models });
   return out;
 }
 
 function uniq(a) { return [...new Set(a.filter(Boolean))]; }
+
+/** Codex can only work with credentials: a login (auth.json) or an API key. Installed-but-signed-out is not available. */
+export function codexSignedIn() {
+  if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
+  return fs.existsSync(path.join(process.env.CODEX_HOME || path.join(HOME, '.codex'), 'auth.json'));
+}
 
 /** JARVIS's conversational brain: casual chat and replies to the user (fast, cheap). Heavy work is delegated. */
 export function chatBrain() {
