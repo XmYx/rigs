@@ -1,4 +1,4 @@
-import { COALESCE_MS, MAX_VISIBLE, resumeAfter, toastDuration } from './toasts.js';
+import { COALESCE_MS, MAX_VISIBLE, closedTexts, prefs, resumeAfter, toastAllowed, toastDuration } from './toasts.js';
 // Thin client for the gateway node this page was loaded from. Every machine is reachable as
 // /api/nodes/<id>/… — the gateway proxies to peers over Tailscale.
 
@@ -86,10 +86,11 @@ export function h(tag, attrs = {}, ...children) {
 }
 
 /**
- * A small notification, top-right: closes itself (level default 4–8 s, clamped 3–30 s; 20 s with a button),
+ * A small notification, top-right (nothing when Sir switched notifications off): closes itself (level default 4–8 s, clamped 3–30 s; 20 s with a button),
  * has a × to close it now, pauses while hovered or focused, and at most four stay on screen.
  */
 export function toast(text, level = 'info', ms, action = null) {
+  if (!toastAllowed(text, prefs())) return null; // notifications off, or Sir closed this one already
   let box = document.getElementById('toasts');
   if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   const shown = [...box.querySelectorAll(':scope > .toast:not(.out)')];
@@ -112,7 +113,7 @@ export function toast(text, level = 'info', ms, action = null) {
   const t = h('div', { class: `toast ${level}`, 'data-text': String(text), 'data-at': String(Date.now()) },
     h('span', { class: 'toast-text' }, text),
     action ? h('button', { class: 'btn primary toast-btn', onclick: () => { close(); action.run(); } }, action.label) : null,
-    h('button', { class: 'toast-x', title: 'Close', 'aria-label': 'Close notification', onclick: close }, '×'));
+    h('button', { class: 'toast-x', title: 'Close (it won\'t come back)', 'aria-label': 'Close notification', onclick: () => { closedTexts.add(String(text)); close(); } }, '×'));
   t._restart = () => { t.dataset.at = String(Date.now()); start(total); };
   if (window.matchMedia?.('(hover: hover)').matches) {
     t.addEventListener('mouseenter', pause);
