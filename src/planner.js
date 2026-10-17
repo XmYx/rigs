@@ -604,6 +604,7 @@ export async function tick(ctx, now = Date.now()) {
     }
     if (changed) await saveProject(p);
     if (changed || p.tasks.some((x) => ready(p, x) || (x.status === 'todo' && !x.assign))) await dispatchReady(p.id, ctx).catch((e) => log(`project ${p.id}: dispatch: ${e.message}`));
+    else await settle(p, ctx); // e.g. a task went blocked before this tick existed: nothing can move → escalate once
   }
 }
 
