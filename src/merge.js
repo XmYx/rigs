@@ -187,10 +187,19 @@ let running = false;
  * Process the queue, one request at a time. ctx: { fetchBundle(req) → local file, rollout(),
  * notify(text, level), resolve(req) → starts a resolver agent task }.
  */
+let recovered = false;
+
 export async function processQueue(ctx, repo = APP_DIR) {
   if (running) return;
   running = true;
   try {
+    if (!recovered) {
+      // A merge in flight when the steward restarted (update, crash, reboot) starts over from its branch.
+      recovered = true;
+      for (const r of loadQueue().requests.filter((x) => ['fetching', 'checking', 'merging'].includes(x.status))) {
+        await update(r.id, { status: 'queued', event: `the steward restarted while ${r.status} — starting this merge over` });
+      }
+    }
     for (;;) {
       const next = loadQueue().requests.filter((x) => x.status === 'queued' || x.status === 'resolved').sort((a, b) => a.updatedAt - b.updatedAt)[0];
       if (!next) break;

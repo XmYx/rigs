@@ -626,6 +626,7 @@ export async function startServer() {
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
     if (sub === 'work/nudge' && method === 'POST') return work.nudgeTask(await body());
+    if (sub === 'work/revive' && method === 'POST') return work.reviveTask(await body());
     if (sub === 'work/find' && method === 'POST') return work.findTask(await body());
 
     // change policy: work branches → merge steward (see src/merge.js)
@@ -955,6 +956,13 @@ export async function startServer() {
     await attention.refresh({ projects });
   };
   setTimeout(() => attentionTick().catch(() => {}), 3000).unref();
+  // OpenRig's daemon is not a boot service: keep it running so seats and queues survive reboots and crashes.
+  const keepOpenRig = () => (config().openrig?.keepDaemon === false ? null : work.ensureDaemon()
+    .then((r) => { if (r.started !== undefined) log(`OpenRig daemon was down — ${r.started ? 'started it' : 'could not start it: ' + r.output}`); })
+    .catch((e) => log('openrig keep-alive:', e.message)));
+  setTimeout(keepOpenRig, 12000).unref();
+  setInterval(keepOpenRig, 2 * 60 * 1000).unref();
+
   // Warm the workspace index so the first routed request doesn't wait for a scan.
   setTimeout(() => sessionDirs().then((extraDirs) => workspaces.list({ extraDirs })).catch(() => {}), 10000).unref();
   setInterval(() => attentionTick().catch((e) => log('attention:', e.message)), 5000).unref();

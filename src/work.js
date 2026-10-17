@@ -64,11 +64,12 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   await fsp.writeFile(brief, prompt);
   const pointer = `Read ${brief.split(path.sep).join('/')} and carry out the task it describes. Report back with the project_task_update tool when you are done.`;
   const a = task.assign;
+  if (mode !== 'direct' && !isWin) await ensureDaemon().catch(() => {});
   const rigOk = ['claude', 'codex', 'stub'].includes(a.provider) && !isWin && openrigAgentsDir() && (await openrig.status(true)).daemon === 'running';
   const useRig = mode === 'openrig' ? rigOk : mode === 'direct' ? false : rigOk;
   if (mode === 'openrig' && !rigOk) throw new Error('OpenRig is not available on this machine (needs `rig` + a running daemon, Claude Code or Codex)');
-  if (useRig || a.provider === 'stub') return startOpenRig({ project, task, dir, brief, policy });
-  return startDirect({ project, task, dir, pointer });
+  if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy })), brief };
+  return { ...(await startDirect({ project, task, dir, pointer })), brief };
 }
 
 /** A short, stable tag for a seat id: claude-opus-5-5 → opus, gpt-6.1-sol → codex. */
@@ -209,13 +210,67 @@ async function startDirect({ project, task, dir, pointer }) {
  * idle (the agent sits at its prompt), needsInput (it waits on a permission/question), fingerprint (pane content
  * hash — unchanged between checks means nothing is happening).
  */
+/**
+ * OpenRig's daemon is not a boot service: after a reboot (or a crash) RIGS starts it again, so seats and their
+ * queues come back. Returns what it did.
+ */
+export async function ensureDaemon() {
+  const rig = bin('rig');
+  if (!rig || isWin) return { skipped: true };
+  const st = await openrig.status(true);
+  if (st.daemon === 'running') return { running: true };
+  const r = await run(rig, ['daemon', 'start'], { timeout: 120000 });
+  const after = await openrig.status(true);
+  return { started: after.daemon === 'running', output: (r.stdout + r.stderr).trim().slice(-200) };
+}
+
+/** Is this OpenRig seat's session alive? (false after a reboot, a killed tmux session, a crashed daemon) */
+async function seatAlive(seat) {
+  const st = await openrig.status(true);
+  if (st.daemon !== 'running') return null;
+  const n = (st.nodes || []).find((x) => x.session === seat);
+  return !!n && !GONE.test(n.status || '');
+}
+
+/**
+ * Bring a dead seat back so its agent can carry on: the whole team down (a reboot) → `rig up <rig> --existing`
+ * restores it with every conversation resumed; one seat down among live ones → a fresh occupant for that seat
+ * (`rig seat clean` + `rig seat launch`), which picks the task up from its brief. Waits until the seat is live.
+ */
+export async function reviveTask(run_) {
+  if (run_.mode !== 'openrig' || !run_.seat) return { ok: false, reason: 'not an OpenRig seat' };
+  const rig = bin('rig');
+  const d = await ensureDaemon();
+  if (await seatAlive(run_.seat)) return { ok: true, how: d.started ? 'daemon restarted; seat was alive' : 'alive' };
+  const team = ((await openrig.status(true)).nodes || []).filter((n) => n.rig === run_.rig);
+  const anyLive = team.some((n) => !GONE.test(n.status || ''));
+  let how;
+  if (!anyLive) {
+    const r = await run(rig, ['up', run_.rig, '--existing', '--yes', '--json'], { timeout: 300000 });
+    how = `restored the team (${r.code === 0 ? 'conversations resumed' : 'restore said: ' + (r.stdout + r.stderr).trim().slice(-160)})`;
+  } else {
+    await run(rig, ['seat', 'clean', run_.seat], { timeout: 60000 });
+    const r = await run(rig, ['seat', 'launch', run_.seat], { timeout: 300000 });
+    how = `fresh occupant for the seat (${r.code === 0 ? 'launched' : (r.stdout + r.stderr).trim().slice(-160)})`;
+  }
+  for (let i = 0; i < 45; i++) {
+    if (await seatAlive(run_.seat)) { await sleep(5000); return { ok: true, how }; }
+    await sleep(2000);
+  }
+  return { ok: false, how, reason: 'the seat did not come back' };
+}
+
 export async function taskStatus(run_) {
   if (run_.mode === 'openrig' && run_.qitem) {
+    // A seat that died (reboot, killed session) leaves its queue item "in progress" forever: say so, so it is revived.
+    const alive = await seatAlive(run_.seat).catch(() => true);
+    if (alive === null) return { state: 'daemon-down' };
     const r = await run(bin('rig'), ['queue', 'show', run_.qitem, '--json'], { timeout: 15000 });
     try {
       const j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
       const state = j.state || j.qitem?.state || j.waiting?.state;
       const live = j.waiting?.liveness || {};
+      if (state !== 'done' && !alive) return { state: 'seat-down' };
       return { state, closure: j.closureReason || j.qitem?.closureReason || null, activity: live.activity || null,
         idle: live.activity === 'idle-at-prompt', needsInput: (live.needsInput?.count || 0) > 0 };
     } catch { return { state: 'unknown' }; }
