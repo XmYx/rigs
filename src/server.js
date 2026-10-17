@@ -275,7 +275,7 @@ export async function startServer() {
    * machine, planned by the core brain with the project's own agent guide, then dispatched (an OpenRig team
    * per project). Returns at once; planning and casting run in the background and report via notify.
    */
-  async function fileWork(items) {
+  async function fileWork(items, { chatId = '' } = {}) {
     const out = [];
     for (const it of items) {
       const ws = it.workspace;
@@ -296,6 +296,7 @@ export async function startServer() {
         if (it.flow) p.flow = { name: it.flow.name, description: it.flow.description, prompt: it.flow.prompt, source: it.flow.source };
       }
       p.request = it.request || '';
+      p.chatId = chatId;
       p.autoRun = true;
       if (it.note) p.note = it.note;
       p = await planner.saveProject(p);
@@ -341,6 +342,18 @@ export async function startServer() {
     call: callNode,
     ask: askNode,
     notify: (text, level = 'info') => broadcastNotify({ text, level, speak: true, from: config().name }),
+    // Results and problems are also written into the JARVIS thread (and the request's own thread), then the UI refreshes it.
+    report: async (p, text, level = 'info') => {
+      const r = await chat.postReport({ text, level, chatId: p.chatId || '', project: p });
+      broadcast({ type: 'chat-updated', chats: r.chats });
+      return r;
+    },
+    // A finished project lets its agent team go (rig down keeps transcripts and a snapshot).
+    release: (p) => {
+      const rigs = new Map();
+      for (const t of p.tasks) if (t.run?.mode === 'openrig' && t.run.rig) rigs.set(`${t.assign?.node}|${t.run.rig}`, { node: t.assign?.node, run: t.run });
+      for (const { node, run: r } of rigs.values()) callNode(node, 'work/stop', { method: 'POST', body: r, timeout: 150000 }).catch((e) => log('release:', e.message));
+    },
     // A finished RIGS self-change: its worktree lives on the project's own machine (this one — fileWork made it here).
     propose: (p) => callNode(p.repo.node, 'dev/propose', { method: 'POST', body: { dir: p.repo.path, title: p.name, summary: truncate(`${p.goal}\n\n${p.tasks.map((t) => `- ${t.title}: ${t.summary}`).join('\n')}`, 4000) }, timeout: 60000 }),
   };
