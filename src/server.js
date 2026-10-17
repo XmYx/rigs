@@ -639,7 +639,8 @@ export async function startServer() {
       return planner.saveProject(pr);
     }
     if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
-    if ((mm = m(/^projects\/([\w-]+)\/stop$/)) && method === 'POST') return planner.stopProject(mm[1], plannerCtx);
+    if ((mm = m(/^projects\/([\w-]+)\/(stop|pause)$/)) && method === 'POST') { const b = await body().catch(() => ({})); return planner.stopProject(mm[1], plannerCtx, { reason: b?.reason, by: b?.by }); }
+    if ((mm = m(/^projects\/([\w-]+)\/resume$/)) && method === 'POST') return planner.resumeProject(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
       if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
       return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;
@@ -739,7 +740,18 @@ export async function startServer() {
     }
     if (sub === 'migrations') return migrations.status();
     if (sub === 'root-steps') return rootsteps.pending();
-    if (sub === 'attention' && method === 'GET') return attention.list();
+    if (sub === 'attention' && method === 'GET') {
+      // ?options=1: each waiting terminal agent's question and numbered choices, read off its screen,
+      // so it can be answered from the Work panel without opening the session.
+      const items = attention.list();
+      if (q.get('options') !== '1') return items;
+      return Promise.all(items.map(async (it) => {
+        const s = it.session;
+        if (!s || !['tmux', 'rig'].includes(s.kind)) return it;
+        const o = await sessions.promptOptions(s.kind, s.id).catch(() => null);
+        return o ? { ...it, question: o.question, options: o.options } : it;
+      }));
+    }
     if (sub === 'attention/codex' && method === 'POST') return attention.codexEvent(await body());
     if (sub === 'access' && method === 'GET') return access.status(q.get('force') === '1');
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
@@ -811,7 +823,8 @@ export async function startServer() {
     }
     if (p === '/api/mesh/attention') {
       const nodes = discovery.list().filter((n) => n.online && n.rigs);
-      return Promise.all(nodes.map((n) => (n.self ? Promise.resolve(attention.list()) : peerJson(n, 'attention', { timeout: 5000 }))
+      const opt = url.searchParams.get('options') === '1' ? '?options=1' : '';
+      return Promise.all(nodes.map((n) => (n.self ? localCall('attention' + opt) : peerJson(n, 'attention' + opt, { timeout: 8000 }))
         .then((items) => ({ node: n.name, nodeId: n.id, items })).catch(() => ({ node: n.name, nodeId: n.id, items: [] }))));
     }
     if (p === '/api/mesh/work') {

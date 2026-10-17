@@ -5,10 +5,11 @@ import { augmentedPath, run } from './util.js';
 /** OpenRig (`rig`) integration: rigs/seats become sessions in the mesh, peers become OpenRig hosts. */
 
 let cache = { at: 0, value: null };
+let inflight = null;
 let runner = run;
 
 /** Tests swap the process runner for a fake `rig` (cross-platform, no real OpenRig needed). */
-export function _setRunner(fn) { runner = fn || run; cache = { at: 0, value: null }; }
+export function _setRunner(fn) { runner = fn || run; cache = { at: 0, value: null }; inflight = null; }
 
 const rigBin = () => bin('rig') || (runner !== run ? 'rig' : null);
 
@@ -41,8 +42,20 @@ async function rigJson(args, timeout = 8000) {
   try { return JSON.parse(res.stdout); } catch { return null; }
 }
 
-export async function status(force = false) {
-  if (!force && cache.value && Date.now() - cache.at < 10000) return cache.value;
+/**
+ * OpenRig's state. One refresh at a time: every caller (attention every 5 s, snapshots, the watchdog, keep-alive,
+ * dispatch) shares the refresh in flight. Each refresh is 5-7 `rig` processes; without this, a refresh slower than
+ * the cache under load let callers pile up (40+ concurrent `rig` processes), which made every refresh slower still.
+ * `force` means "newer than 2 s", not "start another one".
+ */
+export function status(force = false) {
+  const age = Date.now() - cache.at;
+  if (cache.value && age < (force ? 2000 : 10000)) return Promise.resolve(cache.value);
+  if (!inflight) inflight = refresh().finally(() => { inflight = null; });
+  return inflight;
+}
+
+async function refresh() {
   const r = rigBin();
   if (!r) { cache = { at: Date.now(), value: { installed: false, healthy: false, health: 'OpenRig (rig) is not installed on this machine.' } }; return cache.value; }
   const [ver, first] = await Promise.all([rigRun(['--version'], { timeout: 6000 }), rigRun(['daemon', 'status'], { timeout: 6000 })]);

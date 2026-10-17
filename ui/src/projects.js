@@ -174,7 +174,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
     });
     right.replaceChildren(
       h('div', { class: 'pad proj-head' },
-        h('div', { class: 'pv-title' }, p.name, h('span', { class: `chip st-${p.status === 'running' ? 'run' : p.status === 'done' ? 'ok' : ''}` }, p.status)),
+        h('div', { class: 'pv-title' }, p.name, h('span', { class: `chip st-${p.status === 'running' ? 'run' : p.status === 'done' ? 'ok' : p.status === 'paused' ? 'warn' : ''}` }, p.status)),
         h('div', { class: 'muted small' }, `owner ${p.owner} · repo ${p.repo.path ? `${p.repo.node}:${p.repo.path}` : '—'}${p.gitUrl ? ' · ' + p.gitUrl : ''} · dispatch ${p.dispatch} · ${p.policy}`),
         h('div', { class: 'proj-goal' }, p.goal),
         p.summary ? h('div', { class: 'muted small' }, p.summary) : null,
@@ -182,7 +182,8 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
           h('button', { class: 'btn', onclick: runPlan, disabled: p.status === 'running', title: 'Plans with the brain selected under the orb' }, `✦ ${p.tasks.length ? 'Re-plan' : 'Plan'} with ${(() => { const cb = coreBrain(); return cb ? `${cb.model || cb.brain}${cb.effort ? ' · ' + cb.effort : ''}` : 'core brain'; })()}`),
           h('button', { class: 'btn', onclick: () => act('route', { unlock: true }, 'Re-routed with the current policy and machine load'), disabled: !p.tasks.length }, '⇄ Re-route'),
           h('button', { class: 'btn primary', onclick: () => act('dispatch', {}, 'Dispatched every ready task'), disabled: !p.tasks.length || p.status === 'done' }, '▶ Dispatch ready tasks'),
-          p.status === 'running' ? h('button', { class: 'btn', onclick: () => act('stop', {}, 'Stopped') }, '■ Stop') : null,
+          ['running', 'blocked', 'planned'].includes(p.status) ? h('button', { class: 'btn', onclick: () => act('stop', {}, 'Paused — nothing of it runs until you resume'), title: 'Stop its agents and keep it from starting or reviving anything' }, '❚❚ Pause') : null,
+          p.status === 'paused' ? h('button', { class: 'btn primary', onclick: () => act('resume', {}, 'Resumed') }, '▶ Resume') : null,
           h('button', { class: 'btn', onclick: () => onFocus?.(p) }, '◎ Galaxy'),
           h('button', { class: 'btn danger', onclick: async () => { if (!confirm(`Delete project ${p.name}? Running agents are stopped.`)) return; await api(base(), { method: 'DELETE' }).catch(() => {}); current = null; loadList(); renderDetail(); } }, '🗑')),
         h('div', { class: 'plan-status muted small' }, Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(' · '))),

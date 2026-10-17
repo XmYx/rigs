@@ -9,7 +9,7 @@ import { AGENT_REF, GONE, agentsDir as openrigAgentsDir, memberFor, memberYaml, 
 import * as openrig from './openrig.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
-import { HOME, expandHome, isWin, run, sleep } from './util.js';
+import { APP_DIR, HOME, expandHome, isWin, run, sleep } from './util.js';
 
 /**
  * Runs ONE planned task on THIS machine. Called by the project's owner node through the mesh.
@@ -42,6 +42,8 @@ async function prepareWorkdir(workdir, gitUrl) {
 
 export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto', source }) {
   const dir = await prepareWorkdir(workdir, project.gitUrl);
+  // The installed checkout is production: agents change RIGS in a dev worktree (rigs_dev_start), never here.
+  if (isInstall(dir)) throw new Error(`refusing to run an agent in the installed RIGS checkout (${dir}) — RIGS changes go through a dev worktree`);
   // The full brief lives on disk — under ~/.rigs, never inside the user's project folder; agents get a short
   // pointer to it (robust quoting on every OS), OpenRig seats get it as their queue item.
   const briefDir = path.join(RIGS_HOME, 'briefs', project.slug);
@@ -59,6 +61,13 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   if (useRig && pin) return { ...(await hubs.dispatchTask({ pin, project, task, dir, brief, pointer, policy, source })), brief };
   if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy, source })), brief };
   return { ...(await startDirect({ project, task, dir, pointer })), brief };
+}
+
+export function isInstall(dir) {
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const d = real(dir);
+  const app = real(APP_DIR);
+  return d === app || d.startsWith(app + path.sep);
 }
 
 /**

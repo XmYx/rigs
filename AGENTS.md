@@ -46,6 +46,9 @@ treat `main` as production.
   (`src/merge.js`) merges one branch at a time onto the latest main, re-runs build + tests on the
   merged tree, pushes and rolls out to every machine. Only a real conflict brings in a resolver agent
   (routing kind `merge`); failing checks come back to you. CI also runs on all three OSes after push.
+- **Playbooks** (`docs/playbooks/*.md`): proven methods for recurring RIGS changes. A JARVIS request whose goal matches a
+  playbook's `match` regex skips LLM planning: one agent follows it, then the final review. When a kind of request
+  repeats, write one (front matter `title`, `match`, `size`; then the files, steps and checks). Example: `ui-theme.md`.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test

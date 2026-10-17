@@ -1,6 +1,8 @@
 // The J.A.R.V.I.S. arc-reactor orb: concentric HUD rings whose motion reflects state
 // (online / listening / thinking / speaking), drawn on a canvas.
 
+import { currentTheme, onTheme } from './themes.js';
+
 const STATE_COLOR = {
   online: [94, 234, 212],
   listening: [74, 222, 128],
@@ -14,7 +16,9 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
   const ctx = canvas.getContext('2d');
   let state = 'online';
   let level = 0; // mic / speech level 0..1
-  let target = STATE_COLOR.online;
+  const stateColor = (k) => currentTheme().orb?.[k] || STATE_COLOR[k] || STATE_COLOR.online;
+  let target = stateColor('online');
+  onTheme(() => { target = stateColor(state); });
   let color = [...target];
   let t0 = performance.now();
 
@@ -105,7 +109,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
   requestAnimationFrame(frame);
 
   return {
-    setState(s) { state = s; target = STATE_COLOR[s] || STATE_COLOR.online; },
+    setState(s) { state = s; target = stateColor(s); },
     setLevel(v) { level = Math.max(0, Math.min(1, v)); },
     get state() { return state; },
   };
