@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Krea Studio</title>
+<style>
+  :root { --bg:#0b0f14; --panel:#121821; --line:#1f2a36; --text:#d8e2ee; --dim:#7f8fa3; --accent:#39c5ff; --bad:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; display:flex; height:100vh; overflow:hidden; }
+  aside { width:340px; flex:none; background:var(--panel); border-right:1px solid var(--line); padding:16px; display:flex; flex-direction:column; gap:12px; overflow:auto; }
+  main { flex:1; overflow:auto; padding:16px; }
+  h1 { margin:0; font-size:16px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+  label { display:flex; flex-direction:column; gap:4px; color:var(--dim); font-size:12px; }
+  textarea, input, select { background:#0a0e13; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
+  textarea { min-height:160px; resize:vertical; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; min-width:0; }
+  .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:13px; }
+  button { background:var(--accent); color:#001018; border:0; border-radius:6px; padding:10px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); padding:6px 8px; font-weight:400; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font-size:12px; color:var(--dim); } #status.bad { color:var(--bad); }
+  #err { color:var(--bad); font-size:12px; white-space:pre-wrap; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; }
+  .card img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in; display:block; background:#000; }
+  .card .ph { aspect-ratio:1; display:grid; place-items:center; color:var(--dim); }
+  .card .ph.bad { color:var(--bad); padding:8px; font-size:12px; }
+  .meta { padding:8px; font-size:12px; display:flex; flex-direction:column; gap:6px; }
+  .meta p { margin:0; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .meta .sub { color:var(--dim); }
+  .acts { display:flex; gap:6px; flex-wrap:wrap; }
+  .spin { width:28px; height:28px; border:3px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg); } }
+  #lb { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:20px; z-index:9; }
+  #lb.on { display:flex; } #lb img { max-width:100%; max-height:80vh; }
+  #lb .cap { max-width:900px; font-size:12px; color:var(--dim); max-height:12vh; overflow:auto; }
+  .empty { color:var(--dim); text-align:center; margin-top:20vh; }
+  @media (max-width:720px) { body { flex-direction:column; height:auto; overflow:auto; } aside { width:100%; } }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Krea Studio</h1>
+  <div id="status">checking ComfyUI…</div>
+  <label>Prompt<textarea id="prompt" placeholder="A lighthouse at dusk, cinematic film still…"></textarea></label>
+  <label class="check"><input type="checkbox" id="enhance"> Enhance prompt with Qwen3-VL (slower)</label>
+  <div class="row">
+    <label>Aspect<select id="aspect">
+      <option value="1024x1024">1:1 · 1024²</option>
+      <option value="1344x768">16:9 · 1344×768</option>
+      <option value="768x1344">9:16 · 768×1344</option>
+      <option value="1152x896">4:3 · 1152×896</option>
+      <option value="896x1152">3:4 · 896×1152</option>
+      <option value="1536x640">21:9 · 1536×640</option>
+    </select></label>
+    <label>Batch<input id="batch" type="number" min="1" max="8" value="1"></label>
+  </div>
+  <div class="row">
+    <label>Steps<input id="steps" type="number" min="1" max="50" value="8"></label>
+    <label>CFG<input id="cfg" type="number" min="1" max="10" step="0.1" value="1"></label>
+  </div>
+  <label>Seed (blank = random)<input id="seed" type="number" placeholder="random"></label>
+  <button id="go">Generate  (Ctrl+Enter)</button>
+  <div id="err"></div>
+</aside>
+<main><div id="grid" class="grid"></div><div id="empty" class="empty" hidden>No images yet, sir. Type a prompt and hit Generate.</div></main>
+<div id="lb"><img id="lbimg" alt=""><div class="cap" id="lbcap"></div><div class="acts"><a id="lbdl" download><button class="ghost">Download</button></a><button class="ghost" id="lbclose">Close (Esc)</button></div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (p, body) => fetch(p, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : {}).then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let last = '', items = [];
+
+try { $('prompt').value = localStorage.getItem('krea.prompt') || ''; } catch {}
+$('prompt').addEventListener('input', () => { try { localStorage.setItem('krea.prompt', $('prompt').value); } catch {} });
+
+async function generate() {
+  const prompt = $('prompt').value.trim();
+  if (!prompt) return;
+  const [width, height] = $('aspect').value.split('x').map(Number);
+  $('err').textContent = ''; $('go').disabled = true;
+  try {
+    await api('api/generate', { prompt, width, height, enhance:$('enhance').checked,
+      steps:+$('steps').value, cfg:+$('cfg').value, batch:+$('batch').value, seed:$('seed').value === '' ? null : +$('seed').value });
+    refresh();
+  } catch (e) { $('err').textContent = e.message; }
+  $('go').disabled = false;
+}
+
+function card(it, pending) {
+  const sub = `${it.width}×${it.height} · seed ${it.seed} · ${it.steps} steps${it.enhance ? ' · enhanced' : ''}`;
+  let media;
+  if (pending) media = `<div class="ph"><div class="spin"></div></div>`;
+  else if (it.error) media = `<div class="ph bad">${esc(it.error)}</div>`;
+  else media = it.images.map(f => `<img loading="lazy" src="img/${encodeURIComponent(f)}" data-id="${it.id}" alt="">`).join('');
+  return `<div class="card">${media}<div class="meta"><p title="${esc(it.prompt)}">${esc(it.prompt)}</p><span class="sub">${sub}</span>
+    ${pending ? '' : `<div class="acts"><button class="ghost" data-act="reuse" data-id="${it.id}">Reuse prompt</button><button class="ghost" data-act="seed" data-id="${it.id}">Reuse + seed</button><button class="ghost" data-act="del" data-id="${it.id}">Delete</button></div>`}</div></div>`;
+}
+
+async function refresh() {
+  try {
+    const h = await api('api/history');
+    items = h.items;
+    const html = h.pending.map(p => card(p, true)).join('') + h.items.map(i => card(i, false)).join('');
+    if (html !== last) { $('grid').innerHTML = html; last = html; }
+    $('empty').hidden = h.pending.length + h.items.length > 0;
+  } catch {}
+}
+
+async function status() {
+  try {
+    const s = await api('api/status');
+    $('status').className = s.online ? '' : 'bad';
+    $('status').textContent = s.online ? `ComfyUI online · ${s.running} running · ${s.queued} queued` : 'ComfyUI offline: start it on port 8188';
+  } catch { $('status').className = 'bad'; $('status').textContent = 'Krea Studio server unreachable'; }
+}
+
+$('grid').addEventListener('click', async (e) => {
+  const t = e.target, it = items.find(i => i.id === t.dataset.id);
+  if (!it) return;
+  if (t.tagName === 'IMG') {
+    $('lbimg').src = t.src; $('lbdl').href = t.src;
+    $('lbcap').textContent = it.enhanced ? 'Enhanced: ' + it.enhanced : it.prompt;
+    $('lb').classList.add('on');
+  } else if (t.dataset.act === 'reuse' || t.dataset.act === 'seed') {
+    $('prompt').value = it.prompt; $('enhance').checked = it.enhance; $('steps').value = it.steps; $('cfg').value = it.cfg; $('batch').value = it.batch;
+    const a = `${it.width}x${it.height}`; if ([...$('aspect').options].some(o => o.value === a)) $('aspect').value = a;
+    $('seed').value = t.dataset.act === 'seed' ? it.seed : '';
+    $('prompt').focus();
+  } else if (t.dataset.act === 'del' && confirm('Delete this generation and its image files?')) {
+    await api('api/delete', { ids:[it.id] }); refresh();
+  }
+});
+$('go').onclick = generate;
+$('prompt').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) generate(); });
+$('lb').onclick = (e) => { if (e.target === $('lb') || e.target === $('lbclose')) $('lb').classList.remove('on'); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lb').classList.remove('on'); });
+
+refresh(); status();
+setInterval(refresh, 1500); setInterval(status, 4000);
+</script>
+</body>
+</html>

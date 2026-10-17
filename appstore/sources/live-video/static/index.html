@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live Video</title>
+<style>
+  :root {
+    --bg: #0d0f12; --panel: #161a20; --line: #262c35; --text: #e7eaee; --muted: #8b95a3;
+    --accent: #5fd0a5; --warn: #f2b45c; --bad: #f07178; --btn: #222831;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 12px 16px 24px; display: grid; gap: 12px;
+    grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--btn); color: var(--muted); }
+  .badge.running { background: #173a2e; color: var(--accent); }
+  .badge.loading, .badge.warming, .badge.starting { background: #3a2f17; color: var(--warn); }
+  .badge.error { background: #3a1a1d; color: var(--bad); }
+  .detail { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 1280 / 704; }
+  canvas { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center;
+    padding: 16px; pointer-events: none; }
+  .side { display: grid; gap: 12px; min-width: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 10px; }
+  textarea { width: 100%; min-height: 84px; resize: vertical; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  button, select { font: inherit; color: var(--text); background: var(--btn); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; min-height: 40px; width: 100%; }
+  button { cursor: pointer; flex: 1; width: auto; }
+  button.primary { background: #1d4d3c; border-color: #2a6b54; }
+  button.stop { background: #4d1d23; border-color: #6b2a33; }
+  button:disabled { opacity: .45; cursor: default; }
+  label { color: var(--muted); font-size: 12px; display: grid; gap: 4px; flex: 1; min-width: 120px; }
+  label.check { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); }
+  dd { margin: 0; text-align: right; }
+  .big { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .big div { background: var(--bg); border-radius: 8px; padding: 6px 8px; }
+  .big b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .big span { color: var(--muted); font-size: 11px; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 20px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Live Video</h1>
+    <span id="state" class="badge">connecting</span>
+    <span id="detail" class="detail"></span>
+  </header>
+  <div class="stage">
+    <canvas id="screen" width="1280" height="704"></canvas>
+    <div id="overlay" class="overlay">Type a prompt and press Start.</div>
+  </div>
+  <div class="side">
+    <div class="panel">
+      <textarea id="prompt" placeholder="Describe the scene…">A cinematic drone shot flying over a foggy pine forest at sunrise, golden light, smooth camera motion</textarea>
+      <div class="row">
+        <button id="go" class="primary">Start</button>
+        <button id="apply">Apply prompt</button>
+        <button id="cut">Cut</button>
+      </div>
+      <label>Prompt change
+        <select id="pmode">
+          <option value="transition">Transition — morph from the current frame</option>
+          <option value="cut">Hard cut — fresh scene</option>
+        </select>
+      </label>
+      <div class="hint">While running, Enter or Apply switches to the edited prompt.</div>
+      <div class="row">
+        <label>Resolution
+          <select id="res">
+            <option value="1280x704">1280×704 (720p)</option>
+            <option value="960x544">960×544</option>
+            <option value="768x448">768×448</option>
+            <option value="704x480">704×480</option>
+            <option value="512x320">512×320</option>
+          </select>
+        </label>
+        <label>Auto cut
+          <select id="auto">
+            <option value="0">off</option>
+            <option value="3">every 3 segments</option>
+            <option value="6">every 6 segments</option>
+            <option value="10">every 10 segments</option>
+          </select>
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="drift"> also cut when the picture drifts far from the scene start</label>
+    </div>
+    <div class="panel">
+      <div class="big">
+        <div><b id="fps">–</b><span>fps shown</span></div>
+        <div><b id="gfps">–</b><span>fps generated</span></div>
+        <div><b id="vram">–</b><span>VRAM peak GB</span></div>
+      </div>
+      <dl>
+        <dt>latency (last action)</dt><dd id="lat">–</dd>
+        <dt>segment · in scene</dt><dd id="seg">–</dd>
+        <dt>buffer</dt><dd id="buf">–</dd>
+        <dt>segment time</dt><dd id="gens">–</dd>
+        <dt>prompt encode (CPU)</dt><dd id="enc">–</dd>
+        <dt>GPU used</dt><dd id="gpu">–</dd>
+        <dt>overseer lease</dt><dd id="lease">–</dd>
+        <dt>drift · next cut</dt><dd id="drifts">–</dd>
+        <dt>stalls · viewers</dt><dd id="misc">–</dd>
+      </dl>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $('screen'), ctx = canvas.getContext('2d');
+let st = {}, pending = 0, chain = Promise.resolve(), draws = [], edited = false;
+
+const api = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {}) }).then((r) => r.ok ? r.json() : r.text().then((t) => { throw new Error(t); }))
+  .then(render).catch((e) => { $('detail').textContent = e.message; });
+
+const running = () => ['running', 'loading', 'warming', 'starting'].includes(st.state);
+const apply = () => (edited = false, running())
+  ? api('api/prompt', { prompt: $('prompt').value, mode: $('pmode').value }) : $('go').click();
+
+$('go').onclick = () => running() ? api('api/stop')
+  : api('api/start', { prompt: $('prompt').value, res: $('res').value });
+$('apply').onclick = apply;
+$('cut').onclick = () => api('api/cut');
+$('res').onchange = () => running() ? api('api/res', { res: $('res').value }) : null;
+$('auto').onchange = () => api('api/settings', { auto_segments: +$('auto').value });
+$('pmode').onchange = () => api('api/settings', { prompt_mode: $('pmode').value });
+$('drift').onchange = () => api('api/settings', { drift_check: $('drift').checked });
+$('prompt').addEventListener('input', () => { edited = true; });
+$('prompt').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); apply(); }
+});
+
+function draw(buf) {
+  if (pending > 2) return; // the browser is behind: skip rather than lag
+  pending++;
+  chain = chain.then(() => createImageBitmap(new Blob([buf], { type: 'image/jpeg' })))
+    .then((bmp) => {
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+        canvas.width = bmp.width; canvas.height = bmp.height;
+        canvas.parentElement.style.aspectRatio = `${bmp.width} / ${bmp.height}`;
+      }
+      ctx.drawImage(bmp, 0, 0); bmp.close();
+      const now = performance.now(); draws.push(now);
+      while (draws.length && now - draws[0] > 2000) draws.shift();
+      $('overlay').textContent = '';
+    }).catch(() => {}).finally(() => pending--);
+}
+
+const f1 = (x) => x == null ? '–' : (+x).toFixed(1);
+function render(s) {
+  st = s;
+  const b = $('state'); b.textContent = s.state; b.className = 'badge ' + s.state;
+  $('detail').textContent = s.detail || '';
+  $('go').textContent = running() ? 'Stop' : 'Start';
+  $('go').className = running() ? 'stop' : 'primary';
+  $('cut').disabled = s.state !== 'running';
+  $('apply').disabled = !running();
+  // show what is playing (another viewer may have changed it) until this viewer starts typing
+  if (s.prompt && !edited && document.activeElement !== $('prompt')) $('prompt').value = s.prompt;
+  if (document.activeElement !== $('res')) $('res').value = s.res;
+  if (s.settings && document.activeElement !== $('auto')) $('auto').value = String(s.settings.auto_segments);
+  if (s.settings) $('drift').checked = !!s.settings.drift_check;
+  if (s.settings && document.activeElement !== $('pmode')) $('pmode').value = s.settings.prompt_mode || 'transition';
+  const now = performance.now();
+  while (draws.length && now - draws[0] > 2000) draws.shift();
+  const shown = draws.length > 1 ? (draws.length - 1) * 1000 / (now - draws[0]) : 0;
+  $('fps').textContent = s.state === 'running' ? shown.toFixed(1) : '–';
+  $('gfps').textContent = f1(s.gen_fps_avg);
+  $('vram').textContent = s.vram ? f1(s.vram.peak_gb) : '–';
+  $('lat').textContent = s.latency ? `${s.latency.s.toFixed(1)} s (${s.latency.kind})` : '–';
+  $('seg').textContent = s.seg ? `#${s.seg} · ${s.scene_seg} (${s.mode})` : '–';
+  $('buf').textContent = `${s.buffer} frames · pace ${f1(s.pace_fps)} fps`;
+  $('gens').textContent = s.gen_s ? `${s.gen_s.toFixed(2)} s` : '–';
+  $('enc').textContent = s.encode_s != null ? `${s.encode_s.toFixed(2)} s` : '–';
+  $('gpu').textContent = s.gpu && s.gpu.total_mb ? `${(s.gpu.used_mb / 1024).toFixed(1)} / ${(s.gpu.total_mb / 1024).toFixed(1)} GB` : '–';
+  $('lease').textContent = s.lease ? 'held' : 'released';
+  $('drifts').textContent = s.drift != null ? `${f1(s.drift)}${s.next_cut ? ' → ' + s.next_cut : ''}` : '–';
+  $('misc').textContent = `${s.stalls} · ${s.viewers}`;
+  if (!running()) $('overlay').textContent = s.state === 'error' ? s.detail
+    : (s.state === 'paused' ? 'Stopped.' : 'Type a prompt and press Start.');
+  else if (s.state !== 'running') $('overlay').textContent = s.detail || 'Starting…';
+}
+
+function connect() {
+  const u = new URL('ws', location.href);
+  u.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(u);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => typeof e.data === 'string' ? render(JSON.parse(e.data)) : draw(e.data);
+  ws.onclose = () => { $('state').textContent = 'reconnecting'; setTimeout(connect, 1500); };
+}
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACE-Step Studio</title>
+<style>
+  :root {
+    --bg: #070b10; --panel: #0d141c; --panel2: #111b25; --line: rgba(94, 234, 212, .16); --text: #d8e3ea;
+    --muted: #6b7f8e; --accent: #2dd4bf; --accent2: #e879f9; --err: #f87171; --ok: #4ade80;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
+  .app { display: grid; grid-template-columns: minmax(340px, 460px) 1fr; height: 100%; }
+  @media (max-width: 820px) { .app { grid-template-columns: 1fr; height: auto; } }
+  .left { border-right: 1px solid var(--line); overflow: auto; padding: 14px 16px 90px; background: var(--panel); }
+  .right { overflow: auto; padding: 14px 16px; }
+  h1 { font: 600 15px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; margin: 2px 0 4px; color: var(--accent); }
+  .sub { color: var(--muted); font: 11px var(--mono); margin-bottom: 12px; }
+  details { border: 1px solid var(--line); border-radius: 9px; margin: 10px 0; background: var(--panel2); }
+  summary { cursor: pointer; padding: 9px 12px; font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); list-style: none; display: flex; justify-content: space-between; }
+  summary::after { content: '+'; } details[open] > summary::after { content: '–'; }
+  details[open] > summary { color: var(--accent); }
+  .fields { padding: 4px 12px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .f.wide { grid-column: 1 / -1; }
+  .f label { font: 11px var(--mono); color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .f .help { color: var(--muted); font-size: 11px; line-height: 1.3; }
+  .f.changed label { color: var(--accent2); }
+  input, select, textarea, button { font: inherit; color: var(--text); }
+  input[type=text], input[type=number], select, textarea { width: 100%; background: #060a0f; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { resize: vertical; min-height: 64px; font-family: var(--mono); font-size: 12px; }
+  textarea[data-name=lyrics] { min-height: 180px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+  button { cursor: pointer; border: 1px solid var(--line); background: rgba(45, 212, 191, .07); border-radius: 7px; padding: 6px 10px; }
+  button:hover { border-color: var(--accent); background: rgba(45, 212, 191, .16); }
+  button.primary { background: var(--accent); color: #031614; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+  .bar { position: sticky; bottom: 0; margin: 14px -16px -90px; padding: 12px 16px; background: linear-gradient(transparent, var(--panel) 30%); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bar .primary { flex: 1; padding: 10px; font-size: 14px; }
+  .audio-pick { display: flex; gap: 6px; }
+  .audio-pick select { flex: 1; }
+  .status .meta { color: var(--muted); font: 11px var(--mono); }
+  .status { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font: 12px var(--mono); color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--muted); }
+  .dot.ready { background: var(--ok); box-shadow: 0 0 6px var(--ok); } .dot.loading { background: #fbbf24; } .dot.error { background: var(--err); }
+  .card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 12px; margin-bottom: 10px; }
+  .card.running { border-color: #fbbf24; } .card.error { border-color: rgba(248, 113, 113, .5); }
+  .card .top { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+  .card .cap { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .card .meta { color: var(--muted); font: 11px var(--mono); margin: 3px 0 6px; }
+  .card audio { width: 100%; height: 34px; margin: 4px 0; }
+  .card .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; align-items: center; }
+  .card .acts button { font-size: 11.5px; padding: 3px 8px; }
+  .card pre { white-space: pre-wrap; font: 11px var(--mono); color: var(--muted); max-height: 160px; overflow: auto; margin: 6px 0 0; }
+  .err { color: var(--err); font: 12px var(--mono); }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  @media (max-width: 820px) { .right { order: -1; } }
+  .jb { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 12px; margin-bottom: 14px; }
+  .jb h2 { font: 600 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent2); margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; }
+  .jb h2 .meta { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--muted); }
+  .jb .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .jb .row input[type=text] { flex: 1 1 220px; min-width: 0; }
+  .jb .row input[type=number] { width: 66px; }
+  .jb .row button { flex: 0 0 auto; }
+  .jb label.sm { font: 11px var(--mono); color: var(--muted); display: flex; gap: 4px; align-items: center; }
+  .jb .err { margin-top: 6px; }
+  .jb .now { margin: 10px 0 6px; padding: 10px; border: 1px solid rgba(232, 121, 249, .35); border-radius: 9px; background: var(--panel2); }
+  .jb .now .t { font-weight: 600; font-size: 15px; }
+  .jb .now .meta { color: var(--muted); font: 11px var(--mono); margin: 2px 0 6px; }
+  .jb .now pre { white-space: pre-wrap; font: 12px/1.5 var(--mono); color: var(--text); max-height: 190px; overflow: auto; margin: 8px 0 0; }
+  .jb audio { width: 100%; height: 34px; }
+  .jb ol { list-style: none; margin: 8px 0 0; padding: 0; }
+  .jb li { display: flex; gap: 8px; align-items: baseline; padding: 5px 2px; border-top: 1px solid var(--line); min-width: 0; }
+  .jb li .n { color: var(--muted); font: 11px var(--mono); width: 20px; flex: 0 0 auto; }
+  .jb li .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb li .st { font: 11px var(--mono); flex: 0 0 auto; color: var(--muted); }
+  .jb li.playing .tt { color: var(--accent2); font-weight: 600; } .jb li.playing .st { color: var(--accent2); }
+  .jb li.ready .st { color: var(--ok); } .jb li.error .st { color: var(--err); }
+  .jb li.writing .st, .jb li.generating .st, .jb li.queued .st { color: #fbbf24; }
+  .jb li.played { opacity: .55; }
+  .jb li button.x { padding: 0 7px; font-size: 12px; line-height: 20px; flex: 0 0 auto; }
+  .toast { position: fixed; bottom: 16px; right: 16px; background: var(--panel2); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="left">
+    <h1>ACE-Step Studio</h1>
+    <div class="sub">ACE-Step 1.5 on magix-system · every parameter · hover a label for details</div>
+    <div id="form"></div>
+    <div class="bar">
+      <button class="primary" id="go">Generate ♪</button>
+      <button id="reset" title="Back to defaults">Reset</button>
+    </div>
+  </div>
+  <div class="right">
+    <section class="jb" id="jb">
+      <h2><span>♪ Jukebox</span><span class="meta" id="jbmeta">idle</span></h2>
+      <div class="row">
+        <input type="text" id="jbkw" placeholder="keywords, e.g. desert, diesel, outlaw country" maxlength="300" autocomplete="off">
+        <label class="sm" title="Songs kept ready beyond the one playing">ahead <input type="number" id="jbahead" min="1" max="5" value="2"></label>
+        <label class="sm" title="Song length in seconds">sec <input type="number" id="jbdur" min="20" max="240" value="60"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="jbstart">Start</button>
+        <button id="jbstop">Stop</button>
+        <button id="jbskip">Skip ⏭</button>
+      </div>
+      <div class="err" id="jberr"></div>
+      <div class="now" id="jbnow" style="display:none">
+        <div class="t" id="jbtitle"></div><div class="meta" id="jbinfo"></div>
+        <audio id="jbaudio" controls preload="auto"></audio>
+        <pre id="jblyrics"></pre>
+      </div>
+      <ol id="jblist"></ol>
+      <div id="jbremoved" style="display:none"><div class="sub" style="margin:10px 0 0">Off the playlist (kept)</div><ol id="jbrmlist"></ol></div>
+    </section>
+    <div class="status"><span class="dot" id="mdot"></span><span id="mstat">models: …</span>
+      <span id="mcomp" class="meta"></span>
+      <button id="unload" title="Free the GPU memory ACE-Step holds">Unload models</button></div>
+    <div id="queue"></div>
+    <div id="history"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+};
+const api = async (path, opts = {}) => {
+  const headers = { ...(typeof opts.body === 'string' ? { 'content-type': 'application/json' } : {}), ...(opts.headers || {}) };
+  const r = await fetch(path, { ...opts, headers });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+};
+const toast = (t) => { const e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => { e.style.display = 'none'; }, 3500); };
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem('ace:' + k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem('ace:' + k, JSON.stringify(v)); } catch {} } };
+
+let schema;
+const inputs = {};
+const MODEL_FIELDS = [
+  { name: 'config_path', kind: 'model-dit', help: 'DiT checkpoint. XL turbo is what the MadMaxUnity radio used; turbo models want ~8 steps.' },
+  { name: 'use_lm', kind: 'bool', help: 'Load the 5Hz language model (needed for "thinking", CoT metadata and caption rewriting).' },
+  { name: 'lm_model_path', kind: 'model-lm', help: '5Hz LM checkpoint.' },
+  { name: 'lm_backend', kind: 'str', choices: ['pt', 'vllm'], help: 'LM backend: pt (PyTorch) or vllm.' },
+  { name: 'device', kind: 'str', choices: ['cuda', 'auto', 'cpu'], help: 'Device for both models.' },
+  { name: 'quantization', kind: 'str', choices: ['', 'int8_weight_only', 'fp8_weight_only', 'w8a8_dynamic'], help: 'DiT weight quantization (empty = none).' },
+  { name: 'use_flash_attention', kind: 'bool', help: 'Flash attention for the DiT (needs flash-attn installed).' },
+  { name: 'compile_model', kind: 'bool', help: 'torch.compile the DiT (slow first run, faster after).' },
+  { name: 'offload_to_cpu', kind: 'bool', help: 'Offload models to CPU between stages (saves VRAM, slower).' },
+  { name: 'offload_dit_to_cpu', kind: 'bool', help: 'Offload only the DiT to CPU when idle.' },
+  { name: 'lm_offload_to_cpu', kind: 'bool', help: 'Offload the LM to CPU when idle.' },
+];
+
+function widget(f, owner = '') {
+  const name = f.name;
+  let w;
+  if (f.kind === 'model-dit' || f.kind === 'model-lm') {
+    w = el('select', { 'data-name': name }, ...(f.kind === 'model-dit' ? schema.models.dit : schema.models.lm).map((m) => el('option', { value: m }, m)));
+  } else if (name === 'dcw_enabled') {
+    w = el('select', { 'data-name': name }, el('option', { value: 'auto' }, 'auto (on for turbo)'), el('option', { value: 'true' }, 'on'), el('option', { value: 'false' }, 'off'));
+  } else if (f.kind === 'bool') {
+    w = el('input', { type: 'checkbox', 'data-name': name });
+  } else if (f.choices) {
+    w = el('select', { 'data-name': name }, ...f.choices.map((c) => el('option', { value: c }, c === '' ? '(none)' : c)));
+  } else if (f.kind === 'int' || f.kind === 'float') {
+    w = el('input', { type: 'number', step: f.kind === 'int' ? '1' : 'any', 'data-name': name, placeholder: f.optional ? 'auto' : '' });
+  } else if (f.kind === 'text') {
+    w = el('textarea', { 'data-name': name, spellcheck: 'false' });
+  } else if (f.kind === 'audio') {
+    w = el('select', { 'data-name': name, class: 'audio-sel' }, el('option', { value: '' }, '(none)'));
+  } else {
+    w = el('input', { type: 'text', 'data-name': name, placeholder: f.kind === 'list' ? 'comma separated' + (f.optional ? ' (empty = auto)' : '') : f.optional ? 'auto' : '' });
+  }
+  const key = owner + name;
+  inputs[key] = { f, w, owner };
+  const onEdit = () => { markChanged(); save(); };
+  w.addEventListener('input', onEdit);
+  w.addEventListener('change', onEdit);
+  const wide = f.kind === 'text' || f.kind === 'audio' || f.kind === 'list';
+  const label = el('label', { title: f.help || '' }, f.kind === 'bool' ? w : null, name);
+  let body = f.kind === 'bool' ? null : w;
+  if (f.kind === 'audio') {
+    const up = el('input', { type: 'file', accept: 'audio/*', style: 'display:none', onchange: async () => {
+      const file = up.files[0];
+      if (!file) return;
+      toast('Uploading ' + file.name + '…');
+      try {
+        const r = await api('api/upload', { method: 'POST', body: file, headers: { 'x-filename': file.name } });
+        await loadAudioChoices();
+        w.value = r.path; onEdit(); toast('Uploaded.');
+      } catch (e) { toast('Upload failed: ' + e.message); }
+    } });
+    body = el('div', { class: 'audio-pick' }, w, el('button', { type: 'button', onclick: () => up.click() }, 'Upload…'), up);
+  }
+  const help = f.help ? el('div', { class: 'help' }, f.help.length > 150 ? f.help.slice(0, 150) + '…' : f.help) : null;
+  return el('div', { class: 'f' + (wide ? ' wide' : ''), 'data-field': key }, label, body, help);
+}
+
+function setVal(rec, v) {
+  const { f, w } = rec;
+  if (f.kind === 'bool') w.checked = !!v;
+  else if (f.name === 'dcw_enabled') w.value = v == null || v === 'auto' ? 'auto' : String(v);
+  else if (Array.isArray(v)) w.value = v.join(', ');
+  else w.value = v == null ? '' : v;
+}
+function getVal(rec) {
+  const { f, w } = rec;
+  if (f.kind === 'bool') return w.checked;
+  if (f.kind === 'int' || f.kind === 'float') return w.value === '' ? null : Number(w.value);
+  if (f.kind === 'audio') return w.value || null;
+  return w.value;
+}
+const defaultOf = (rec) => (rec.owner === 'm:' ? schema.modelDefaults[rec.f.name] : rec.f.name === 'dcw_enabled' ? 'auto' : rec.f.default);
+function norm(v) { return Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v); }
+function markChanged() {
+  for (const [k, rec] of Object.entries(inputs)) {
+    const changed = norm(getVal(rec)) !== norm(defaultOf(rec));
+    document.querySelector(`[data-field="${CSS.escape(k)}"]`)?.classList.toggle('changed', changed);
+  }
+}
+function collect() {
+  const values = {}, models = {};
+  for (const rec of Object.values(inputs)) (rec.owner === 'm:' ? models : values)[rec.f.name] = getVal(rec);
+  return { values, models };
+}
+function save() { store.set('form', collect()); }
+function apply(state) {
+  for (const rec of Object.values(inputs)) {
+    const src = rec.owner === 'm:' ? state.models : state.values;
+    if (src && rec.f.name in src) setVal(rec, src[rec.f.name]);
+  }
+  markChanged();
+}
+function resetDefaults() {
+  for (const rec of Object.values(inputs)) setVal(rec, defaultOf(rec));
+  markChanged(); save();
+}
+
+async function loadAudioChoices() {
+  const [ups, hist] = await Promise.all([api('api/uploads'), api('api/history')]);
+  const choices = [
+    ...ups.map((u) => ['uploads/' + u, '⬆ ' + u]),
+    ...hist.flatMap((h) => (h.files || []).map((fl) => ['outputs/' + fl.file, '♪ ' + ((h.values || {}).caption || '').slice(0, 40) + ' · ' + fl.file])),
+  ];
+  for (const sel of document.querySelectorAll('.audio-sel')) {
+    const cur = sel.value;
+    sel.replaceChildren(el('option', { value: '' }, '(none)'), ...choices.map(([v, t]) => el('option', { value: v }, t)));
+    sel.value = cur;
+  }
+}
+
+function render() {
+  const form = $('#form');
+  form.replaceChildren();
+  schema.groups.forEach((g, i) => {
+    form.append(el('details', { open: i === 0 }, el('summary', {}, g.title), el('div', { class: 'fields' }, ...g.fields.map((f) => widget(f)))));
+  });
+  form.append(el('details', {}, el('summary', {}, 'Model'), el('div', { class: 'fields' }, ...MODEL_FIELDS.map((f) => widget(f, 'm:')))));
+}
+
+// ------------------------------------------------------------------ queue + history
+const fmtT = (s) => (s ? new Date(s * 1000).toLocaleString() : '');
+const took = (a, b) => (a && b ? `${(b - a).toFixed(1)}s` : '');
+function useAsSource(path, task) {
+  inputs.src_audio.w.value = path;
+  if (task) inputs.task_type.w.value = task;
+  markChanged(); save();
+  document.querySelectorAll('details').forEach((d) => { if (d.querySelector('[data-name=src_audio]')) d.open = true; });
+  toast('Source audio set' + (task ? ` · task ${task}` : ''));
+}
+function card(job, live) {
+  const v = job.values || {};
+  const c = el('div', { class: 'card ' + (job.status || '') },
+    el('div', { class: 'top' }, el('span', { class: 'cap', title: v.caption || '' }, (v.caption || '(no caption)').slice(0, 110)), el('span', { class: 'meta' }, job.status)),
+    el('div', { class: 'meta' }, [v.task_type || 'text2music', v.duration > 0 ? `${v.duration}s` : 'auto length', v.bpm ? `${v.bpm} bpm` : '',
+      v.inference_steps ? `${v.inference_steps} steps` : '', (job.models || {}).config_path || '', fmtT(job.created), took(job.started, job.done)].filter(Boolean).join(' · ')));
+  for (const fl of job.files || []) {
+    const src = 'out/' + encodeURIComponent(fl.file);
+    c.append(el('audio', { controls: true, preload: 'none', src }));
+    c.append(el('div', { class: 'acts' },
+      el('span', { class: 'meta' }, `seed ${fl.seed ?? '?'}`),
+      el('button', { onclick: () => { const a = el('a', { href: src, download: fl.file }); a.click(); } }, '⬇ Download'),
+      el('button', { title: 'Regenerate a time range of this take', onclick: () => useAsSource('outputs/' + fl.file, 'repaint') }, 'Repaint'),
+      el('button', { title: 'Restyle this take with a new caption/lyrics', onclick: () => useAsSource('outputs/' + fl.file, 'cover') }, 'Cover'),
+      el('button', { title: 'Continue this take', onclick: () => useAsSource('outputs/' + fl.file, 'complete') }, 'Extend'),
+      fl.seed != null ? el('button', { onclick: () => { apply({ values: { ...v, seed: fl.seed, use_random_seed: false }, models: job.models }); save(); toast('Settings + seed loaded'); } }, 'Reuse seed') : null));
+  }
+  if (job.error) c.append(el('div', { class: 'err' }, job.error));
+  const acts = el('div', { class: 'acts' });
+  if (!live) {
+    acts.append(el('button', { onclick: () => { apply(job); save(); toast('Settings loaded'); } }, '↺ Reuse settings'));
+    if (job.meta && Object.keys(job.meta).length) {
+      const pre = el('pre', { style: 'display:none' }, JSON.stringify(job.meta, null, 1));
+      acts.append(el('button', { onclick: () => { pre.style.display = pre.style.display ? '' : 'none'; } }, 'LM / metadata'));
+      c.append(pre);
+    }
+    acts.append(el('button', { title: 'Move to ~/.rigs/trash', onclick: async () => {
+      if (!confirm('Move this take to ~/.rigs/trash?')) return;
+      await api('api/delete', { method: 'POST', body: JSON.stringify({ id: job.id }) }); refresh();
+    } }, '🗑'));
+  } else if (job.status === 'queued') {
+    acts.append(el('button', { onclick: async () => { await api('api/cancel', { method: 'POST', body: JSON.stringify({ id: job.id }) }); refresh(); } }, 'Cancel'));
+  }
+  c.append(acts);
+  return c;
+}
+let lastHistoryLen = -1, unloadInfo = null;
+const ago = (t) => { if (!t) return ''; const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 90 ? `${s}s ago` : `${Math.round(s / 60)}m ago`; };
+function showUnloadInfo() {
+  const c = unloadInfo, box = $('#mcomp');
+  if (!c) { box.textContent = ''; return; }
+  const part = (n, x) => `${n} ${x.loaded ? 'loaded' + (x.last_used ? ' · used ' + ago(x.last_used) : '') : 'unloaded'}`;
+  let t = `${part('DiT', c.dit)} · ${part('LM', c.lm)}`;
+  if (c.busy) t += ' · busy';
+  else if (c.unload_in_s != null) { const left = Math.max(0, Math.round(c.unload_in_s - (Date.now() - c.at) / 1000)); t += ` · auto-unload in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`; }
+  else if (c.idle_unload_s <= 0 && (c.dit.loaded || c.lm.loaded)) t += ' · auto-unload off';
+  box.textContent = t;
+}
+setInterval(showUnloadInfo, 1000);
+async function refresh() {
+  clearTimeout(refresh.t);
+  try {
+    const [st, hist] = await Promise.all([api('api/status'), api('api/history')]);
+    const m = st.models;
+    $('#mdot').className = 'dot ' + m.status;
+    $('#mstat').textContent = `models: ${m.status}${m.message ? ' — ' + m.message : ''}`;
+    unloadInfo = m.components ? { ...m.components, at: Date.now() } : null;
+    showUnloadInfo();
+    $('#queue').replaceChildren(...st.queue.map((j) => card(j, true)));
+    // Keep players that are playing: only rebuild history when it changed.
+    if (hist.length !== lastHistoryLen) {
+      lastHistoryLen = hist.length;
+      $('#history').replaceChildren(...(hist.length ? hist.map((j) => card(j, false)) : [el('div', { class: 'empty' }, 'No takes yet. Describe a song on the left and press Generate.')]));
+      loadAudioChoices();
+    }
+    refresh.t = setTimeout(refresh, st.queue.length || m.status === 'loading' ? 2000 : 10000);
+  } catch { refresh.t = setTimeout(refresh, 5000); }
+}
+
+// ------------------------------------------------------------------ jukebox
+const jbAudio = $('#jbaudio');
+let jbLoaded = null, jbState = null, jbSent = 0, jbBusy = false;
+const jbPost = (path, body = {}) => api('api/jukebox/' + path, { method: 'POST', body: JSON.stringify(body) });
+function jbRender(s) {
+  jbState = s;
+  $('#jbmeta').textContent = s.running ? `running · ${s.writer || 'writer starting'}` : s.playlist.length ? 'stopped' : 'idle';
+  $('#jberr').textContent = s.error || '';
+  $('#jbstart').textContent = s.running ? 'Update' : 'Start';
+  if (document.activeElement !== $('#jbkw') && s.keywords) $('#jbkw').value = s.keywords;
+  $('#jblist').replaceChildren(...s.playlist.map((p) => el('li', { class: p.status },
+    el('span', { class: 'n' }, p.n), el('span', { class: 'tt', title: p.error || p.keywords }, p.title || (p.status === 'writing' ? 'Haiku is writing…' : '(no title)')),
+    el('span', { class: 'st' }, p.status),
+    el('button', { class: 'x', title: 'Take off the playlist (kept in the library)', onclick: () => jbAct('remove', p.id) }, '✕'))));
+  const rm = s.removed || [];
+  $('#jbremoved').style.display = rm.length ? '' : 'none';
+  $('#jbrmlist').replaceChildren(...rm.map((p) => el('li', { class: 'played' },
+    el('span', { class: 'n' }, p.n), el('span', { class: 'tt', title: p.keywords }, p.title),
+    el('button', { class: 'x', title: 'Put back on the playlist', onclick: () => jbAct('add', p.id) }, '＋'))));
+  const now = s.playlist.find((p) => p.id === s.now_id);
+  $('#jbnow').style.display = now ? '' : 'none';
+  if (now) {
+    $('#jbtitle').textContent = now.title;
+    $('#jbinfo').textContent = [`#${now.n}`, now.keywords, now.bpm ? now.bpm + ' bpm' : '', now.keyscale, now.caption].filter(Boolean).join(' · ');
+    $('#jblyrics').textContent = now.lyrics;
+    if (jbLoaded !== now.id && now.audio) {
+      jbLoaded = now.id; jbSent = 0;
+      jbAudio.src = now.audio;
+      jbAudio.play().catch(() => toast('Press play on the jukebox to start the music.'));
+    }
+  } else { jbLoaded = null; if (!jbAudio.paused) jbAudio.pause(); }
+}
+const jbAct = async (what, id) => { try { jbRender(await jbPost(what, { id })); } catch (e) { toast(e.message); } };
+async function jbRefresh() {
+  clearTimeout(jbRefresh.t);
+  try { jbRender(await api('api/jukebox')); } catch {}
+  jbRefresh.t = setTimeout(jbRefresh, jbState && jbState.running ? 2000 : 5000);
+}
+function jbReport(extra = {}) {
+  if (!jbLoaded) return;
+  return jbPost('playing', { id: jbLoaded, position: jbAudio.currentTime || 0, ...extra }).then(jbRefresh).catch(() => {});
+}
+jbAudio.addEventListener('timeupdate', () => { if (Math.abs(jbAudio.currentTime - jbSent) >= 2) { jbSent = jbAudio.currentTime; jbReport(); } });
+jbAudio.addEventListener('ended', () => { const id = jbLoaded; jbReport({ ended: true }); if (jbLoaded === id) jbLoaded = null; });
+jbAudio.addEventListener('error', () => { if (jbLoaded) { const id = jbLoaded; jbReport({ failed: true }); if (jbLoaded === id) jbLoaded = null; } });
+$('#jbstart').onclick = async () => {
+  const keywords = $('#jbkw').value.trim();
+  if (!keywords) { toast('Add a few keywords first.'); return; }
+  try {
+    if (jbState && jbState.running) jbRender(await api('api/jukebox', { method: 'PATCH', body: JSON.stringify({ keywords, keep_ahead: Number($('#jbahead').value) || 2, duration: Number($('#jbdur').value) || 60 }) }));
+    else jbRender(await jbPost('start', { keywords, keep_ahead: Number($('#jbahead').value) || 2, duration: Number($('#jbdur').value) || 60 }));
+    jbAudio.play().catch(() => {}); // unlock autoplay inside this click for the songs that follow
+    jbRefresh();
+  } catch (e) { toast('Jukebox: ' + e.message); }
+};
+$('#jbstop').onclick = async () => { try { jbRender(await jbPost('stop')); toast('Jukebox stopped — no more songs are written; ready ones still play.'); } catch (e) { toast(e.message); } };
+$('#jbskip').onclick = async () => { try { jbLoaded = null; jbRender(await jbPost('skip')); } catch (e) { toast(e.message); } };
+
+async function main() {
+  jbRefresh();
+  schema = await api('api/schema');
+  render();
+  resetDefaults();
+  const saved = store.get('form', null);
+  await loadAudioChoices();
+  if (saved) apply(saved);
+  $('#go').onclick = async () => {
+    const body = collect();
+    if (!body.values.caption && !body.values.lyrics && body.values.task_type === 'text2music') { toast('Add a caption or lyrics first.'); return; }
+    try { await api('api/generate', { method: 'POST', body: JSON.stringify(body) }); toast('Queued.'); refresh(); } catch (e) { toast('Error: ' + e.message); }
+  };
+  $('#reset').onclick = () => { if (confirm('Reset every parameter to its default?')) resetDefaults(); };
+  $('#unload').onclick = async () => { try { await api('api/unload', { method: 'POST' }); toast('Models unloaded — VRAM freed.'); refresh(); } catch (e) { toast(e.message); } };
+  refresh();
+}
+main().catch((e) => { document.body.prepend(el('div', { class: 'err', style: 'padding:12px' }, 'Failed to load: ' + e.message)); });
+</script>
+</body>
+</html>
