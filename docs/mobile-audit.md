@@ -164,3 +164,33 @@ Other phone changes:
 Check: `scripts/mobile-shots.js` now reports `overflow` per view and, on touch viewports, `smallTargets`; an input is measured by its `<label>`. It ends with a `CHECK` line, and `--strict` makes failures exit 1. A width of 1024 or more is captured as a desktop. `--url` now works. Results are in `docs/mobile-audit/after-layout/` (390x844, 360x740, 1440x900).
 
 Not verifiable headless: the real iOS keyboard, the notch and home-indicator insets, and touch scrolling inside xterm. These follow from the CSS and the `visualViewport` code, not from pixels.
+
+## t4 — visual polish and performance
+
+Reports and captures: `docs/mobile-audit/after-polish/` (Lighthouse JSON + HTML, `perf.json`, 15 PNGs at 390×844, axe `report.json`), `docs/mobile-audit/before-polish/` (same probes against commit 616b74c, i.e. t2 + t3 without t4). Probes: `scripts/mobile-perf.js` (390×844 @3x, touch, 4× CPU throttle, 15 s idle after load, then a hidden tab) and Lighthouse mobile (default throttling).
+
+### What changed
+- **PWA**: `ui/manifest.webmanifest` (standalone, `#04060a`), icons `icon.svg`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png`; `theme-color`, `color-scheme`, `mobile-web-app-capable`, `apple-mobile-web-app-*`, description. Static icons/manifest are cached for an hour (`src/server.js`). Chromium `Page.getAppManifest` reports 0 errors and `Page.getInstallabilityErrors` is empty.
+- **Type, measure, spacing** (`POLISH (t4)` block in `styles.css`): scale tokens (12/13/14/16px), nothing below 12px on phones (it was 10–11px mono), 14px/1.5 body, 15px reply text, 8/12/16px spacing tokens, 68ch line length for running text, `overflow-wrap: anywhere`.
+- **Touch feedback**: `:active` (colour + 0.97 scale) for buttons, pills, tiles and rows; hover looks are reset under `(hover: none)` so a tap leaves nothing stuck; `touch-action: manipulation`; no tap-highlight flash.
+- **Visual cards at 390px**: weather decoration hidden, 4-up forecast, metrics grid with ellipsised labels, 2-column status tiles, shorter bar chart, 12px code. Reduced motion renders count-ups and the typewriter at their end state.
+- **Galaxy budget on phones / data-saver / ≤2 GB devices** (`ui/src/perf.js`): pixel ratio 1 (orb and face capped at 1.5), no bloom pass, 8-segment nodes, 800 stars, no link particles or node pulsing, orbit off by default, 150-tick layout instead of 400. Larger invisible hit spheres make nodes easier to tap on coarse pointers (T6).
+- **Pausing**: the galaxy render loop stops when the tab is hidden and resumes on return; the orb and face loops idle while hidden; the 15 s and 4 s polls skip hidden tabs and refresh on return. On low-power devices an idle galaxy (no orbit, no alerts, no input for 6 s) stops drawing until the next touch, key or data change.
+- **Lazy init**: the WebGL face is only created when wanted (phones: after “show your face”), and xterm lives in a lazy chunk (`terminal-lazy.js`, esbuild `splitting`) that loads on the first terminal.
+
+### Numbers (same machine, same live mesh; Chromium headless, software GL, machine load ≈ 150, so absolute values are pessimistic and noisy)
+| Metric | Before (616b74c) | After |
+| --- | --- | --- |
+| Entry bundle `app.js` | 1876 KB (516 KB gzip) | 1516 KB (419 KB gzip) |
+| Lazy chunk (xterm), loaded on first terminal | — | 362 KB (190 KB gzip) |
+| `app.css` | 48.9 KB (11.9 KB gzip) | 51.8 KB |
+| Idle FPS, 4× CPU (4 runs / 3 runs) | 0.2–1.1 (median 0.4) | 1.7–57 (median 21.7) |
+| Long-task time in 15 s (4× CPU) | 16.2–32.5 s | 1.2–15.5 s (median 10.0 s) |
+| Main-thread busy, 15 s idle | 113–227 % of one core-second per second | 49–105 % (median 77 %) |
+| Main-thread busy, hidden tab | 119–311 % | 4–7 % (one run 67 % under contention) |
+| Load → idle, 4× CPU | 11–29 s | 1.8–2.5 s |
+| Lighthouse mobile performance | 26 | 42 |
+| Lighthouse FCP / TBT | 10.5 s / 3390 ms | 1.1 s / 1880 ms |
+| Lighthouse accessibility / best practices / SEO | 100 / 100 / 82 | 100 / 100 / 91 (`meta-description` fixed; `robots-txt` remains) |
+
+Lighthouse performance stays low in absolute terms: the three.js galaxy (≈1.2 MB) must run before the first useful screen, and the run is software-rendered. The criterion is “not below baseline”: 26 → 42 (an earlier run scored 30 before the lazy chunk and FCP fix).

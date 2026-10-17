@@ -10,6 +10,8 @@ const STATE_COLOR = {
   offline: [100, 116, 139],
 };
 
+import { lowPower } from './perf.js';
+
 export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
   const ctx = canvas.getContext('2d');
   let state = 'online';
@@ -19,7 +21,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
   let t0 = performance.now();
 
   function size() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, lowPower() ? 1.5 : 2);
     const r = canvas.getBoundingClientRect();
     canvas.width = r.width * dpr;
     canvas.height = r.height * dpr;
@@ -103,7 +105,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = rgba(0.9);
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = lowPower() ? 0 : 12;
     ctx.fillText(label, cx, cy);
     ctx.shadowBlur = 0;
     if (still) setTimeout(() => requestAnimationFrame(frame), 400); else requestAnimationFrame(frame);

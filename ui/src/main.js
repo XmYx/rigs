@@ -15,9 +15,10 @@ import { openMesh } from './mesh.js';
 import { openProjects } from './projects.js';
 import { createFace } from './face.js';
 import { createOrb } from './orb.js';
+import { lowPower } from './perf.js';
 import { announce, initA11y, initPopovers, prefersReducedMotion } from './a11y.js';
 import { openSessions } from './sessions.js';
-import { openTerminal } from './terminal.js';
+import { openTerminal } from './terminal-lazy.js';
 import { createVoice } from './voice.js';
 import { openWindow } from './wm.js';
 
@@ -43,10 +44,14 @@ const graph = createGraph($('#graph'), { onSelect: (n) => { select(n.id); reveal
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
-try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
-if (localStorage.getItem('rigs.face') === '0') $('#face').classList.add('off');
+// The face is the heaviest WebGL scene after the galaxy, so it is created lazily: on low-power devices only once
+// the user asks for it ("show your face"), elsewhere unless they hid it.
+function makeFace() {
+  try { face = createFace($('#face')); window.jarvisFace = face; } catch { $('#face').classList.add('off'); } // no WebGL: the orb alone (window.jarvisFace: for the devtools console)
+}
+{ const pref = localStorage.getItem('rigs.face'); if (pref === '1' || (pref == null && !lowPower())) makeFace(); else $('#face').classList.add('off'); }
 $('#face').onclick = () => $('#face').classList.toggle('big');
-function showFace(on) { $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
+function showFace(on) { if (on && !face) makeFace(); $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
 // The face's emotion for each line JARVIS says (LocalJev on the mesh decides; see src/senses.js)
 let feelSeq = 0;
 function feel(text) {
@@ -1046,7 +1051,7 @@ function wire() {
   len.oninput = () => { store.set('linklen', Number(len.value)); graph.setForces({ linkLength: Number(len.value) }); };
   for (const k of ['labels', 'particles', 'rotate']) {
     const el = $('#d-' + k);
-    el.checked = store.get('d-' + k, true);
+    el.checked = store.get('d-' + k, k === 'particles' || k === 'rotate' ? !lowPower() : true);
     graph.setDisplay({ [k]: el.checked });
     el.onchange = () => { store.set('d-' + k, el.checked); graph.setDisplay({ [k]: el.checked }); };
   }
@@ -1077,8 +1082,9 @@ api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholde
 await refresh();
 graph.fit();
 connectEvents();
-setInterval(refresh, 15000);
-setInterval(refreshAttention, 4000);
+setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
 refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
 
