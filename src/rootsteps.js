@@ -94,3 +94,22 @@ export async function preferOpenSsh(tailscaleBin) {
   ]);
   return { tailscaleSsh: true, pendingRoot: true };
 }
+
+/** Shell lines for the uinput step: a uaccess rule (seat user only), never membership of the `input` group. */
+export function uinputStepLines() {
+  return [
+    `printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/60-rigs-uinput.rules >/dev/null`,
+    `echo uinput | sudo tee /etc/modules-load.d/rigs-uinput.conf >/dev/null`,
+    'sudo modprobe uinput',
+    'sudo udevadm control --reload-rules',
+    'sudo udevadm trigger --name-match=uinput',
+  ];
+}
+
+/** Linux: let the logged-in user inject keyboard/mouse input through /dev/uinput (fallback when the compositor has no input API). */
+export async function ensureUinput() {
+  if (process.platform !== 'linux') return { skipped: true };
+  try { fs.accessSync('/dev/uinput', fs.constants.W_OK); await remove('uinput'); return { uinput: true }; } catch {}
+  await add('uinput', 'Control: let the logged-in user write /dev/uinput (udev uaccess rule)', uinputStepLines());
+  return { uinput: false, pendingRoot: true };
+}

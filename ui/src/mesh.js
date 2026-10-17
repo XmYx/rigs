@@ -1,5 +1,6 @@
 import { api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
+import { openControl } from './control.js';
 
 const AGENTS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig'], ['rea', 'REA'], ['sunshine', 'Sunshine'], ['moonlight', 'Moonlight'], ['tmux', 'tmux']];
 
@@ -35,6 +36,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
         h('div', { class: 'mr-actions' },
           up ? h('button', { class: 'btn', onclick: () => onTerminal(n) }, '⌨') : null,
           h('button', { class: 'btn', onclick: () => onDesktop(n) }, '🖥'),
+          up ? h('button', { class: 'btn', title: 'Access & control: permissions, full-control switch, stop', onclick: () => openControl({ machine: n }) }, '🛡') : null,
           h('button', { class: 'btn', title: 'SSH in (opens a session visible in JARVIS)', onclick: () => onSsh(n) }, 'ssh'),
           up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null));
     }));

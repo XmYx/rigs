@@ -1,0 +1,7 @@
+{
+  "uuid": "rigs-control@rigs.dev",
+  "name": "RIGS Control",
+  "description": "Lets the RIGS daemon list and focus windows (dev.rigs.Control on the session bus). Only used while control is enabled for this machine in JARVIS.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

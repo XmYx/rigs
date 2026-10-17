@@ -102,6 +102,20 @@ MIGRATIONS.push({
   },
 });
 
+// OS control (screen access + input) is on by default. Machines that saved the old off defaults are switched on;
+// one where a person switched it or the kill switch fired stays as it is. The server runs the first-run setup after.
+MIGRATIONS.push({
+  id: '2026-10-17-control-default-on',
+  run: async () => {
+    const { config, saveConfig } = await import('./config.js');
+    const { controlHistory, defaultOnDecision } = await import('./control-setup.js');
+    const c = config();
+    const d = defaultOnDecision({ control: c.control, ...controlHistory(RIGS_HOME) });
+    if (d.change) { c.control = { ...c.control, enabled: true, input: true }; saveConfig(c); }
+    return { ...d, enabled: !!c.control?.enabled, input: !!c.control?.input };
+  },
+});
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {
