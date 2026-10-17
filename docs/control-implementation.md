@@ -86,10 +86,8 @@ Other limits are explicit errors, never silent substitutions:
   clicks/scroll and compositor absolute motion; held buttons/drag require uinput or portal.
 - The X11 CLI fallback requires xdotool plus import/scrot and wmctrl. Capture is the whole X11 desktop;
   optional region/downscale capture is refused by this fallback. No native ctypes X11 fallback was added.
-- macOS socket behavior is tested against a local fixture; actual native operations/permissions wait for
-  the dedicated Swift helper, which is **not yet present in this branch**. t6 must supply/install that
-  helper or route its implementation before macOS live acceptance. The optional `mac-jxa` backend is not
-  implemented and remains unavailable.
+- macOS: the native helper exists since project 8eb2687046 (see "macOS helper" below). The optional `mac-jxa`
+  backend is not implemented and remains unavailable.
 - Windows GDI/SendInput/EnumWindows/focus operations are implemented in the PowerShell/C# helper but
   **not live verified** (no Windows node available). UIPI, secure desktop and foreground restrictions apply.
 - Portal fallback, wlroots, X11, GNOME extension, native hotkey setup and Windows were not exercised on

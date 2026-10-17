@@ -273,9 +273,13 @@ test('wlroots shortcuts stay in one virtual keyboard lifetime; text uses stdin',
 
 test('macOS adapter exchanges authenticated JSONL with independent helper; missing helper gives fix', { skip: process.platform === 'win32' }, async () => {
   const home = fs.mkdtempSync(path.join(root, 'mac-'));
-  const missing = createMacAdapter({ home });
-  assert.deepEqual((await missing.inspect()).available, {});
-  await assert.rejects(missing.request('locked'), { code: 'needs-permission' });
+  const missing = createMacAdapter({ home, stopHelper: async () => {} });
+  const none = await missing.inspect();
+  assert.deepEqual(none.available, {});
+  // Not running: every control permission says how to start RIGS Control, never "grant node".
+  assert.equal(none.permissions.screenCapture.ok, false);
+  assert.equal(none.permissions.input.fix.kind, 'helper');
+  await assert.rejects(missing.request('locked'), (e) => e.code === 'needs-permission' && e.fix.kind === 'helper');
   fs.mkdirSync(path.join(home, 'run'));
   fs.writeFileSync(path.join(home, 'run/control.token'), 'test-token', { mode: 0o600 });
   const received = [];
@@ -286,18 +290,33 @@ test('macOS adapter exchanges authenticated JSONL with independent helper; missi
       while (buffer.includes('\n')) {
         const i = buffer.indexOf('\n'), req = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1);
         received.push(req);
-        socket.write(JSON.stringify({ id: req.id, ok: true, result: req.op === 'probe' ? { locked: false, displays: [] } : { ok: true } }) + '\n');
+        socket.write(JSON.stringify({ id: req.id, ok: true, result: req.op === 'probe' ? { locked: false, displays: [], grants: { screen: false, ax: true, post: true } } : { ok: true } }) + '\n');
+        if (req.op === 'hello') socket.write(JSON.stringify({ event: 'hotkey', reason: 'test' }) + '\n');
       }
     });
   });
   await new Promise((resolve) => server.listen(path.join(home, 'run/control.sock'), resolve));
-  const a = createMacAdapter({ home });
+  let stopped = 0;
+  const a = createMacAdapter({ home, stopHelper: async () => { stopped++; } });
+  const events = [];
+  a.events.on('event', (m) => events.push(m));
   try {
-    assert.equal((await a.inspect()).available.macHelper, true);
+    const info = await a.inspect();
+    assert.equal(info.available.macHelper, true);
+    // The helper's own grants decide, with the System Settings pane for the missing one.
+    assert.equal(info.permissions.screenCapture.ok, false);
+    assert.match(info.permissions.screenCapture.fix.url, /Privacy_ScreenCapture$/);
+    assert.equal(info.permissions.input.ok, true);
     await a.request('focus', { windowId: '234' });
-    assert.equal(received[1].windowId, '234');
-    assert.equal(received[1].token, 'test-token');
-  } finally { await a.stop(); await new Promise((resolve) => server.close(resolve)); }
+    const focus = received.find((r) => r.op === 'focus');
+    assert.equal(focus.windowId, '234');
+    assert.equal(focus.token, 'test-token');
+    // A second connection listens for the kill hotkey between leases.
+    for (let i = 0; i < 50 && !events.length; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(events.map((e) => e.event), ['hotkey']);
+    assert.equal(received.find((r) => r.op === 'hello').token, 'test-token');
+  } finally { await a.shutdown(); await new Promise((resolve) => server.close(resolve)); }
+  assert.equal(stopped, 1);
 });
 
 test('run AbortSignal terminates in-flight commands and rejects no process for pre-abort', async () => {

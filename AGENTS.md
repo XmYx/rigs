@@ -30,9 +30,10 @@ treat `main` as production.
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
 | `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), lease, rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`. Design: `docs/full-access.md` |
 | `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
-| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, Linux uinput root step, GNOME extension) |
+| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, macOS helper install, Linux uinput root step, GNOME extension) |
+| `src/control-mac-helper.js` | macOS RIGS Control.app: build when the source hash changes, its own LaunchAgent (`dev.rigs.control`; a scratch `RIGS_HOME` gets `dev.rigs.control.<hash8>`), one-shot socket requests, stale-grant reset. CLI `rigs control helper`. Tests inject the runner: never load a real LaunchAgent from a test |
 | `src/control-{linux,mac,win}.js`, `src/control-rpc.js`, `src/control-error.js` | Platform adapters that start and talk to the helper, the JSON-lines helper transport and the error type |
-| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`) and `rigs-control.ps1`. The macOS helper (`macos/RigsControl.swift`) is not written yet; until it is, macOS reports no backend and fails closed |
+| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`), `rigs-control.ps1`, and `macos/` (`RigsControl.swift`, `Info.plist`, `build.sh`): the macOS helper that holds Screen Recording + Accessibility itself, so `node` never needs them |
 | `src/access.js` | Permission status per OS (files, screen capture, input, accessibility) with fix hints and the guided grant |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |

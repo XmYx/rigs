@@ -160,6 +160,17 @@ test('first-run setup at boot: helper started, Linux root step and GNOME extensi
   assert.equal(headless.uinput, undefined);
   assert.equal(uinputCalls, 1, 'no root step when off, killed or headless');
 
-  const mac = await ensureControlSetup({ control: control({ enabled: true, session: 'quartz', backend: {}, permissions: { screenCapture: { ok: true }, accessibility: { ok: false } } }), platform: 'mac', home, runner, uinput });
+  // macOS: RIGS Control.app is built and started (its own LaunchAgent) before the probe; never when control is off.
+  let installs = 0;
+  const macHelper = async () => { installs++; return { label: 'dev.rigs.control', built: false }; };
+  const macOn = control({ enabled: true, session: 'quartz', backend: {}, permissions: { screenCapture: { ok: true }, accessibility: { ok: false } } });
+  const mac = await ensureControlSetup({ control: macOn, platform: 'mac', home, runner, uinput, macHelper });
   assert.deepEqual(mac.grants, ['accessibility']);
+  assert.deepEqual(mac.install, { label: 'dev.rigs.control', built: false });
+  assert.deepEqual(macOn.forced, [undefined, true]);
+  const macOff = await ensureControlSetup({ control: control({ enabled: false, killed: { at: 'x' } }), platform: 'mac', home, runner, uinput, macHelper });
+  assert.deepEqual(macOff, { skipped: 'killed' });
+  assert.equal(installs, 1);
+  const broken = await ensureControlSetup({ control: control({ enabled: true, session: 'quartz', backend: {}, permissions: {} }), platform: 'mac', home, runner, uinput, macHelper: async () => { throw Object.assign(new Error('no swiftc'), { fix: { text: 'xcode-select --install' } }); } });
+  assert.deepEqual(broken.install, { error: 'no swiftc', fix: { text: 'xcode-select --install' } });
 });

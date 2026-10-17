@@ -5,6 +5,7 @@ import { RIGS_HOME } from './config.js';
 import { APP_DIR, platformName, run } from './util.js';
 import { refreshSessionEnv, guiEnv } from './desktop.js';
 import * as rootsteps from './rootsteps.js';
+import { installMacHelper } from './control-mac-helper.js';
 
 // Control is on by default (docs/full-access.md). This module holds what used to wait for a person's
 // control.enable(): the one-time switch-on of machines still on the old off defaults, and the first-run setup
@@ -71,11 +72,18 @@ export async function installGnomeExtension({ home = os.homedir(), runner = run,
   return { copied, enabled: set.code === 0, path: dst, relogin: true, ...(set.code ? { error: (set.stderr || 'gsettings failed').trim() } : {}) };
 }
 
-async function setup({ control, platform = platformName(), home = os.homedir(), runner = run, env, uinput = rootsteps.ensureUinput } = {}) {
+async function setup({ control, platform = platformName(), home = os.homedir(), runner = run, env, uinput = rootsteps.ensureUinput, macHelper = installMacHelper } = {}) {
+  let installed = null;
+  if (platform === 'mac') {
+    // macOS: RIGS Control.app is its own LaunchAgent; build it (sources changed) and start it before inspecting.
+    const pre = await control.status();
+    if (!pre.enabled) return { skipped: pre.killed ? 'killed' : 'off' };
+    installed = await macHelper().catch((e) => ({ error: e.message, ...(e.fix ? { fix: e.fix } : {}) }));
+  }
   // Inspecting starts the helper (Linux python, Windows PowerShell) and probes the desktop.
   const st = await control.status({ force: true });
   if (!st.enabled) return { skipped: st.killed ? 'killed' : 'off' };
-  const out = { session: st.session, desktop: st.desktop, helper: st.backend?.helper || null };
+  const out = { session: st.session, desktop: st.desktop, helper: st.backend?.helper || null, ...(installed ? { install: installed } : {}) };
   if (platform === 'linux' && st.session !== 'none') {
     out.uinput = await uinput();
     if (st.desktop === 'gnome') out.extension = await installGnomeExtension({ home, runner, env }).catch((e) => ({ error: e.message }));
