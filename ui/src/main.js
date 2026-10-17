@@ -1,3 +1,4 @@
+import { attnKey, bannerVisible } from './toasts.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -22,6 +23,9 @@ import { createPopups } from './popups.js';
 import { openTerminal } from './terminal-lazy.js';
 import { createVoice } from './voice.js';
 import { openWindow } from './wm.js';
+import { THEMES, applyTheme, themeId } from './themes.js';
+
+applyTheme();
 
 const $ = (s) => document.querySelector(s);
 const store = {
@@ -125,6 +129,10 @@ async function refreshAttention() {
   renderAttention();
 }
 
+// Keys (key@since) of the attention items on screen when Sir closed the banner; it stays closed until a new one comes.
+let attnDismissed = new Set();
+const bannerOn = () => $('#attn')?.classList.contains('on');
+
 function renderAttention() {
   const items = attnItems();
   // The banner heads the toast column, so toasts stack under it instead of on top of it.
@@ -135,16 +143,19 @@ function renderAttention() {
   if (box.firstChild !== bar) box.prepend(bar);
   document.title = items.length ? `(${items.length}) ⚠ ${baseTitle}` : baseTitle;
   $('#orb-wrap').classList.toggle('alert', items.length > 0);
-  if (!items.length) { bar.replaceChildren(); bar.classList.remove('on'); return; }
+  if (!items.length) attnDismissed = new Set();
+  if (!bannerVisible(items, attnDismissed)) { bar.replaceChildren(); bar.classList.remove('on'); return; }
+  attnDismissed = new Set();
   bar.classList.add('on');
   const who = (a) => ({ claude: 'Claude', codex: 'Codex', ollama: 'Ollama' }[a] || a || 'agent');
   bar.replaceChildren(
-    h('div', { class: 'attn-head' }, h('b', {}, `⚠ ${items.length} agent${items.length > 1 ? 's' : ''} need${items.length > 1 ? '' : 's'} you`)),
-    ...items.slice(0, 5).map((it) => h('div', { class: 'attn-row' },
+    h('div', { class: 'attn-head' }, h('b', {}, `⚠ ${items.length} agent${items.length > 1 ? 's' : ''} need${items.length > 1 ? '' : 's'} you`),
+      h('button', { class: 'toast-x', title: 'Close (comes back when another agent needs you)', 'aria-label': 'Close attention banner', onclick: () => { attnDismissed = new Set(attnItems().map(attnKey)); renderAttention(); } }, '×')),
+    ...items.slice(0, 3).map((it) => h('div', { class: 'attn-row' },
       h('div', { class: 'attn-what' }, h('b', {}, `${who(it.agent)} · ${it.nodeName}`), ' ', h('span', {}, it.title || ''), h('div', { class: 'muted small' }, `${it.reason || ''}${it.since ? ' · ' + ago(it.since) : ''}${it.where && it.where !== 'tmux' ? ' · in ' + it.where : ''}`)),
       h('div', { class: 'attn-btns' }, act('⌨ Answer', () => openAttention(it), 'primary'), act('◎', () => showAttention(it), 'icon')))),
     // (replaceChildren would print a literal "null", unlike h())
-    ...(items.length > 5 ? [h('div', { class: 'muted small' }, `+${items.length - 5} more — see the blinking planets`)] : []));
+    ...(items.length > 3 ? [h('div', { class: 'muted small' }, `+${items.length - 3} more — see the blinking planets`)] : []));
 }
 
 function showAttention(it) {
@@ -168,11 +179,12 @@ async function openAttention(it) {
   attachSession(m, s);
 }
 
-function attentionNotify(m) {
+async function attentionNotify(m) {
   const it = m.action?.item ? { ...m.action.item, nodeName: m.action.node, nodeId: snap.find((e) => e.node.name === m.action.node)?.node.id } : null;
-  refreshAttention();
+  await refreshAttention();
   if (!it) return;
-  toast(`⚠ ${m.text}`, 'attn', 60000, { label: 'Answer', run: () => openAttention(it) });
+  // The banner (which re-opens for a new item) already shows it: a toast too would just repeat it.
+  if (!bannerOn()) toast(`⚠ ${m.text}`, 'attn', undefined, { label: 'Answer', run: () => openAttention(it) });
   try {
     if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
       const n = new Notification(`${m.from}: an agent needs you`, { body: m.text, tag: it.key, requireInteraction: true });
@@ -218,7 +230,7 @@ function connectEvents() {
       if (m.speak) voice.say(spokenText(m.text, true));
     } else if (m.type === 'notify') {
       const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
-      toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', act ? 60000 : 9000, act);
+      toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', undefined, act);
       showSubtitle(m.text, 'jarvis');
       if (m.speak) voice.say(spokenText(m.text, true));
     }
@@ -1051,9 +1063,8 @@ function wire() {
   makeFloating($('#orb-wrap'), { id: 'orb', title: 'JARVIS face', keep: [$('#orb'), $('#orb-state')] });
   makeFloating($('#chat-dock'), { id: 'dock', title: 'Chat', into: $('#chat-dock .dock-head'), keep: [$('#chat-dock .dock-head')] });
   const work = createWork($('#work'), {
-    onOpenSession: (n, s) => { const m = machineById(n.nodeId); if (m) sessionsWindow('', { node: m, s: { ...s, kind: 'claude' } }); },
-    onOpenTask: (t) => { const m = findMachine(t.node); if (m && t.session) sessionsWindow('', { node: m, s: { kind: t.session.kind, id: t.session.id, title: t.title, live: true } }); else toast('That agent has no session to show yet.'); },
     onOpenProject: (n, pj) => projectsWindow({ owner: n.nodeId, id: pj.id }),
+    onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }),
   });
   makeFloating($('#work'), { id: 'work', title: 'Work dashboard', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
   { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
@@ -1107,6 +1118,10 @@ function wire() {
   const auto = $('#d-autosess');
   auto.checked = store.get('autoOpenSessions', true);
   auto.onchange = () => store.set('autoOpenSessions', auto.checked);
+  const themeSel = $('#d-theme');
+  themeSel.replaceChildren(...Object.entries(THEMES).map(([id, t]) => h('option', { value: id }, t.name)));
+  themeSel.value = themeId();
+  themeSel.onchange = () => applyTheme(themeSel.value);
   const search = $('#search');
   const results = $('#search-results');
   search.addEventListener('input', () => {
