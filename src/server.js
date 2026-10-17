@@ -93,7 +93,7 @@ async function selfInfo() {
     canPush: await merge.canPush().catch(() => false),
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
     rootSteps: rootsteps.pending(),
-    access: await access.status().then((a) => ({ ok: a.ok, home: a.home, blocked: a.blocked, fullDiskAccess: a.fullDiskAccess, controlledFolderAccess: a.controlledFolderAccess, runtime: a.runtime })).catch(() => null),
+    access: await access.status().then((a) => ({ ok: a.ok, home: a.home, blocked: a.blocked, fullDiskAccess: a.fullDiskAccess, screenCapture: a.screenCapture, input: a.input, accessibility: a.accessibility, controlledFolderAccess: a.controlledFolderAccess, runtime: a.runtime })).catch(() => null),
   };
 }
 
@@ -684,6 +684,7 @@ export async function startServer() {
     if (sub === 'attention/codex' && method === 'POST') return attention.codexEvent(await body());
     if (sub === 'access' && method === 'GET') return access.status(q.get('force') === '1');
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
+    if (sub === 'access/grant' && method === 'POST') return access.grant((await body()).permission);
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), hostKeys: await ssh.hostKeys(), server: await ssh.serverStatus(), alias: config().name };

@@ -112,7 +112,7 @@ export async function sunshinePin(pin, name = 'rigs', clientAddress = '') {
 let sessionEnv = { at: 0, vars: {} };
 
 /** Linux: the graphical session's DISPLAY / WAYLAND_DISPLAY / XAUTHORITY as GNOME/KDE export them to systemd. */
-async function refreshSessionEnv() {
+export async function refreshSessionEnv() {
   if (!isLinux || Date.now() - sessionEnv.at < 30000) return;
   const r = await run('systemctl', ['--user', 'show-environment'], { timeout: 5000 });
   const vars = {};
@@ -124,7 +124,7 @@ async function refreshSessionEnv() {
 }
 
 /** Env for GUI apps launched by the background service: point them at the user's desktop session. */
-function guiEnv() {
+export function guiEnv() {
   const env = { ...process.env, ...sessionEnv.vars };
   if (isLinux) {
     const uid = os.userInfo().uid;
