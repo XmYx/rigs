@@ -19,7 +19,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
 
   function renderMachines() {
     const data = snapshot();
-    table.replaceChildren(...data.map(({ node: n, sessions = [] }) => {
+    table.replaceChildren(...data.map(({ node: n, sessions = [], openrig, hubs }) => {
       const up = n.online && n.rigs;
       const mem = n.stats ? Math.round((n.stats.memUsed / n.stats.memTotal) * 100) : 0;
       return h('div', { class: 'mesh-row' + (up ? '' : ' down') },
@@ -30,13 +30,23 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
         h('div', { class: 'mr-agents' }, ...AGENTS.map(([k, label]) => h('span', { class: 'badge' + (n.tools?.[k] ? ' on' : ''), title: n.tools?.[k] || 'not installed' }, label)),
           n.tools?.reaRegistered ? h('span', { class: 'muted small' }, `REA→ claude:${n.tools.reaRegistered.claude ? '✓' : '✗'} codex:${n.tools.reaRegistered.codex ? '✓' : '✗'}`) : null,
           up ? desktopChip(n) : null,
-          up ? accessChip(n) : null),
+          up ? accessChip(n) : null,
+          up ? openrigChip(n, hubs?.openrig || openrig) : null),
         h('div', { class: 'mr-actions' },
           up ? h('button', { class: 'btn', onclick: () => onTerminal(n) }, '⌨') : null,
           h('button', { class: 'btn', onclick: () => onDesktop(n) }, '🖥'),
           h('button', { class: 'btn', title: 'SSH in (opens a session visible in JARVIS)', onclick: () => onSsh(n) }, 'ssh'),
           up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null));
     }));
+  }
+
+  /** OpenRig health on this machine: unusable (e.g. its Node is broken) is spelled out, not just a grey badge. */
+  function openrigChip(n, o) {
+    if (!o || !n.tools?.rig && o.installed === false) return null;
+    if (o.healthy === false) return h('div', { class: 'chip st-bad wrap mr-health', title: o.health }, `⛭ ${o.health || 'OpenRig is not usable here.'}`);
+    if (o.daemon === 'stopped') return h('span', { class: 'chip st-warn', title: o.health || '' }, 'OpenRig daemon stopped');
+    if (o.daemon === 'running') return h('span', { class: 'chip st-ok' }, 'OpenRig ✓');
+    return null;
   }
 
   function accessChip(n) {

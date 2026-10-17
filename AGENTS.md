@@ -17,12 +17,13 @@ treat `main` as production.
 | `src/chat.js` | JARVIS brains: Claude Code (`claude -p`), Codex (`codex exec --json`), Ollama (HTTP). Hot-swappable mid-conversation |
 | `src/models.js` | Provider → model → effort catalog and the per-harness flags (`--model/--effort`, `-m/-c model_reasoning_effort`, Ollama `think`); core brain |
 | `src/planner.js` | Projects: core-brain planning → routing policy (`config.routing.rules`) → dispatch → tracking. `routeProject` is pure and unit-tested |
-| `src/work.js` | Runs one task on this machine: one-seat OpenRig rig + queue item, or a direct agent session |
+| `src/work.js` | Runs one task on this machine: the pinned project's hub rig, the project's OpenRig team (seat per role + model) + queue item, or a direct agent session where OpenRig is unavailable |
+| `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |
-| `src/openrig.js` | OpenRig (`rig`) status, seats, and peer registration as OpenRig hosts |
+| `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
