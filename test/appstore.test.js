@@ -19,6 +19,7 @@ delete process.env.RIGS_APPS_DIR;
 delete process.env.HF_TOKEN;
 delete process.env.HUGGING_FACE_HUB_TOKEN;
 const S = await import('../src/appstore.js');
+const A = await import('../src/apps.js');
 const { config, saveConfig } = await import('../src/config.js');
 
 const CATALOG = path.join(HOME, 'appstore', 'catalog');
@@ -703,4 +704,90 @@ test('status after a restart: an install that was running reads as interrupted, 
   assert.equal(j.state, 'failed');
   assert.equal(j.steps.find((x) => x.id === 'models').status, 'done');
   assert.ok(j.log.length > 0);
+});
+
+// ---------------------------------------------------------------- Windows paths and recipes
+
+test('Windows paths: venv Scripts\\python.exe, native exe paths, trash names', () => {
+  assert.equal(S.venvPython('C:\\Users\\me\\.rigs\\apps\\x\\venv', 'win32'), 'C:\\Users\\me\\.rigs\\apps\\x\\venv\\Scripts\\python.exe');
+  assert.equal(S.venvBin('C:\\Users\\me\\.rigs\\apps\\x\\venv', 'win32'), 'C:\\Users\\me\\.rigs\\apps\\x\\venv\\Scripts');
+  assert.equal(S.venvPython('/home/me/.rigs/apps/x/venv', 'linux'), '/home/me/.rigs/apps/x/venv/bin/python');
+  assert.equal(S.venvPython('/Users/me/.rigs/apps/x/venv', 'darwin'), '/Users/me/.rigs/apps/x/venv/bin/python');
+  assert.equal(S.venvPython(path.join(HOME, 'venv')), path.join(HOME, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python'));
+  // "{appDir}/run.cmd" rendered on Windows mixes separators; argv[0] becomes a native path. Bare names stay for PATH lookup.
+  assert.equal(S.nativeExe('C:\\Users\\me\\.rigs\\apps\\x\\app/bin/run.cmd', 'win32'), 'C:\\Users\\me\\.rigs\\apps\\x\\app\\bin\\run.cmd');
+  assert.equal(S.nativeExe('python', 'win32'), 'python');
+  assert.equal(S.nativeExe('/opt/x//bin/run', 'linux'), '/opt/x/bin/run');
+  assert.equal(S.trashName('appstore-rigs-app-x@a:b.service', 1), '1-appstore-rigs-app-x@a_b.service');
+  assert.equal(S.trashName('appstore-x', 2), '2-appstore-x');
+});
+
+test('launcherRecipe: { command } through the shell on macOS/Linux, { windows: { command } } on Windows', () => {
+  assert.deepEqual(S.launcherRecipe({ node: '/usr/local/bin/node', file: "/home/o'neil/.rigs/apps/x/launch.mjs", platform: 'linux' }), { command: `'/usr/local/bin/node' '/home/o'\\''neil/.rigs/apps/x/launch.mjs'` });
+  const win = S.launcherRecipe({ node: 'C:\\Program Files\\nodejs\\node.exe', file: 'C:\\Users\\me\\.rigs\\apps\\x\\launch.mjs', platform: 'win32' });
+  assert.deepEqual(win, { windows: { command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.rigs\\apps\\x\\launch.mjs"' } });
+  // apps.js runs it on Windows without a shell: node.exe with the launcher as its one argument.
+  const plan = A.commandPlan(A.launchFor(win, 'win32'), { platform: 'win32', home: 'C:\\Users\\me' });
+  assert.deepEqual([plan.cmd, plan.args, plan.shell], ['C:\\Program Files\\nodejs\\node.exe', ['C:\\Users\\me\\.rigs\\apps\\x\\launch.mjs'], false]);
+  assert.equal(A.launchFor(win, 'linux'), null, 'a Windows install registers nothing for other OSes');
+});
+
+test('system Python: python / py first on Windows (python3 is the Store stub there), python3 elsewhere', () => {
+  const find = (have) => (n) => (have.includes(n) ? `/bin/${n}` : null);
+  assert.equal(S.systemPython(find(['python3', 'python', 'py']), 'python', true), '/bin/python');
+  assert.equal(S.systemPython(find(['python3', 'py']), 'python', true), '/bin/py');
+  assert.equal(S.systemPython(find(['python3', 'python']), 'python3', false), '/bin/python3');
+  assert.equal(S.systemPython(find([]), null, true), null);
+});
+
+test('postInstall: per-OS steps, and a bash-only step blocks a Windows install with a clear reason', async () => {
+  const { manifest, errors } = S.validateManifest({ id: 'p', name: 'P', source: { type: 'rigs', path: 'applets/navigation' }, port: 9000, launch: { command: ['{node}', 'x.js'] },
+    postInstall: [{ name: 'unix', run: ['bash', '-c', 'make'], platforms: ['linux', 'mac'] }, { name: 'win', run: ['{python}', 'build.py'], platforms: ['windows'] }, { name: 'all', run: ['{node}', 'x.js'] }] });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(S.postStepsFor(manifest, 'windows').map((p) => p.name), ['win', 'all']);
+  assert.deepEqual(S.postStepsFor(manifest, 'linux').map((p) => p.name), ['unix', 'all']);
+  assert.match(S.validateManifest({ ...manifest, file: undefined, postInstall: [{ run: ['x'], platforms: ['beos'] }] }).errors.join(), /postInstall\[0\].platforms must be a non-empty list/);
+  for (const argv of [['bash', '-c', 'x'], ['/bin/sh', 'x'], ['C:\\Git\\bin\\bash.exe'], ['{appDir}/setup.sh']]) assert.equal(S.needsPosixShell(argv), true, argv[0]);
+  for (const argv of [['{python}', 'setup.py'], ['node'], ['shasum']]) assert.equal(S.needsPosixShell(argv), false, argv[0]);
+
+  putManifest({ id: 'bashy', name: 'Bashy', version: '1', source: { type: 'rigs', path: 'test/fixtures/appstore-hello', copy: true }, runtime: { type: 'none' }, port: 18231, launch: { command: ['{node}', '{appDir}/server.mjs'] }, postInstall: [{ name: 'gen', run: ['bash', 'gen.sh'] }] });
+  const job = await installAndWait('bashy', { dryRun: true }, world({ systemd: false, platform: 'windows' }));
+  assert.equal(job.state, 'failed');
+  assert.match(job.error, /post-install step "gen" needs a POSIX shell/);
+  assert.equal((await installAndWait('bashy', { dryRun: true }, world({ systemd: false, platform: 'linux' }))).state, 'done', 'fine where there is a shell');
+});
+
+test('install on Windows: the launcher is registered as a windows command (no systemd), and uninstall trashes it', async () => {
+  putManifest({ id: 'winhello', name: 'Win Hello', version: '1', source: { type: 'rigs', path: 'test/fixtures/appstore-hello', copy: true }, runtime: { type: 'node' }, port: 18232, healthPath: '/healthz', launch: { command: ['{node}', '{appDir}/server.mjs'] } });
+  const w = world({ systemd: false, platform: 'windows' });
+  const job = await installAndWait('winhello', {}, w);
+  assert.equal(job.state, 'done', job.error);
+  const entry = config().apps.find((a) => a.id === 'winhello');
+  assert.deepEqual(Object.keys(entry.launch), ['windows']);
+  assert.ok(entry.launch.windows.command.startsWith(`"${process.execPath}" "`), entry.launch.windows.command);
+  assert.ok(entry.launch.windows.command.endsWith(`${path.join(root('winhello'), 'launch.mjs')}"`), entry.launch.windows.command);
+  assert.ok(!w.calls.some((c) => c.name === 'systemctl'));
+  assert.deepEqual(w.started, ['winhello']);
+  const out = await S.uninstall('winhello', w.deps);
+  assert.equal(out.unregistered, true);
+  assert.equal(out.unit, null);
+  assert.ok(out.trashed.some((p) => p.startsWith(path.join(HOME, 'trash') + path.sep) && p.endsWith('-appstore-winhello')), out.trashed.join());
+  assert.ok(!fs.existsSync(root('winhello')));
+});
+
+test('HF cache blobs: symlink, else a hard link, else a copy (Windows without Developer Mode)', async () => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'blob-'));
+  const blob = path.join(dir, 'blobs', 'abc');
+  fs.mkdirSync(path.dirname(blob), { recursive: true });
+  fs.writeFileSync(blob, 'weights');
+  const link = path.join(dir, 'snapshots', 'rev', 'model.bin');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  const fsp = fs.promises;
+  const eperm = async () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+  assert.equal(await S._linkBlob(blob, link, { ...fsp, symlink: eperm, link: fsp.link.bind(fsp), copyFile: fsp.copyFile.bind(fsp) }), 'hardlink');
+  assert.equal(fs.readFileSync(link, 'utf8'), 'weights');
+  fs.rmSync(link);
+  assert.equal(await S._linkBlob(blob, link, { symlink: eperm, link: eperm, copyFile: fsp.copyFile.bind(fsp) }), 'copy');
+  assert.equal(fs.readFileSync(link, 'utf8'), 'weights');
+  await assert.rejects(S._linkBlob(blob, path.join(dir, 'x'), { symlink: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } }), /ENOENT/);
 });

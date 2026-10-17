@@ -37,6 +37,9 @@ The id is not `live-video` because that is already taken on magix-system by a se
 mesh_app_register  id=live-video-comfy  port=8741  healthPath=/healthz  launch={"systemd":"rigs-live-video.service"}
 ```
 
+On Windows the recipe is `launch={"windows":{"command":"node \"C:\\Users\\<you>\\.rigs\\app\\applets\\live-video\\server.js\"","cwd":"C:\\Users\\<you>\\.rigs\\app"}}`
+(the migration writes it; the applet itself uses no shell, signals or Unix paths).
+
 It opens at `/api/nodes/<node>/apps/live-video-comfy/`.
 
 GPU overseer (`~/apps/gpu-overseer/clients.json`): the lease is taken in ComfyUI's name (`comfyui` is already a

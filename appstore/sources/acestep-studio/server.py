@@ -2,7 +2,7 @@
 """ACE-Step Studio: a web front-end for ACE-Step 1.5 music generation (the model MadMaxUnity's radio used).
 
 Run with ACE-Step's own venv, from a studio/ folder inside the ACE-Step 1.5 checkout (or set ACESTEP_ROOT):
-    <ace-step>/.venv/bin/python <ace-step>/studio/server.py [--port 8191]
+    <ace-step>/.venv/bin/python <ace-step>/studio/server.py [--port 8191]   (Windows: .venv\\Scripts\\python.exe)
 
 Every GenerationParams / GenerationConfig field is exposed: the schema is read from the dataclasses at
 startup (types, defaults, and the descriptions from their docstring and inline comments), so new ACE-Step
@@ -548,12 +548,13 @@ def jb_ask(prompt):
             pass  # SDK not installed in this venv: use the CLI route
         except Exception as e:
             print(f"[jukebox] anthropic SDK failed ({type(e).__name__}); trying the claude CLI", flush=True)
-    exe = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
-    if not os.path.exists(exe):
+    exe = shutil.which("claude") or next((c for c in (os.path.expanduser("~/.local/bin/claude"), os.path.expanduser("~/.local/bin/claude.exe"))
+                                          if os.path.exists(c)), "")
+    if not exe or not os.path.exists(exe):
         raise RuntimeError("song writer unavailable: no ANTHROPIC_API_KEY/anthropic SDK and no `claude` CLI found")
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "CLAUDECODE")}
     env.setdefault("HOME", os.path.expanduser("~"))
-    env["PATH"] = os.path.dirname(exe) + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+    env["PATH"] = os.path.dirname(exe) + os.pathsep + env.get("PATH", os.defpath)
     try:
         r = subprocess.run([exe, "-p", "--model", JB_MODEL, "--output-format", "json", "--tools", "", "--no-session-persistence",
                             "--strict-mcp-config", "--disable-slash-commands"], input=prompt, capture_output=True, text=True,

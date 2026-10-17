@@ -60,6 +60,9 @@ let busy = null;
 // ------------------------------------------------------------------ boot
 const graph = createGraph($('#graph'), { onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {} });
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
+/** The launch recipe an app's host runs on its own OS (launchHere); older peers send only launch. */
+const launchOf = (a) => (a.launchHere !== undefined ? a.launchHere : a.launch);
+
 // The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
 let face = null;
 // The face is the heaviest WebGL scene after the galaxy, so it is created lazily: on low-power devices only once
@@ -284,7 +287,7 @@ function renderAppList() {
   const fresh = freshIds('apps', apps.map((a) => a.id));
   $('#app-list').replaceChildren(...(apps.length ? apps.map((a) => {
     const st = a.health?.status || 'unknown';
-    return h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${a.launch ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
+    return h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${launchOf(a) ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
       h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node));
   }) : [h('div', { class: 'muted small' }, 'No apps yet.')]), h('div', { class: 'hub app-row store-row', title: 'App Store — install new apps', onclick: () => openAppStore() }, h('i', { style: { background: 'var(--accent)' } }), h('span', {}, '🛍 App Store'), h('em', {}, 'install')));
 }
@@ -502,7 +505,7 @@ function renderInspector(id) {
   } else if (n.type === 'app') {
     const a = n.app;
     const st = a.health?.status || 'unknown';
-    out.push(h('div', { class: 'ins-meta' }, `${a.node} · ${st}${a.health?.latencyMs != null ? ` · ${a.health.latencyMs} ms` : ''}`, h('br'), a.launch ? `starts with ${a.launch.systemd || a.launch.command}` : 'no launch recipe — start it by hand'));
+    out.push(h('div', { class: 'ins-meta' }, `${a.node} · ${st}${a.health?.latencyMs != null ? ` · ${a.health.latencyMs} ms` : ''}`, h('br'), launchOf(a) ? `starts with ${launchOf(a).systemd || launchOf(a).command}` : `no launch recipe${a.launch ? ' for its OS' : ''} — start it by hand`));
     out.push(h('div', { class: 'ins-actions' }, act(st === 'up' ? '▦ Open' : '▶ Start & open', () => openApp(a)), act('↗ Tab', () => window.open(`/api/nodes/${encodeURIComponent(a.node)}/apps/${encodeURIComponent(a.id)}/`, '_blank', 'noopener'))));
   } else if (n.type === 'mesh') {
     out.push(h('div', { class: 'ins-meta' }, `${machines().length} RIGS nodes online on your tailnet.`));

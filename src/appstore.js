@@ -26,7 +26,8 @@ import { APP_DIR, HOME, augmentedPath, expandHome, isWin, platformName, run, spa
  * install.json (step state) and install.log. A step records a key (a hash of what it depends on) when it
  * finishes, so installing again skips what is done and redoes only what changed; a failed or cancelled install
  * resumes from the failed step. Linux with a user systemd gets an enabled `systemctl --user` unit; elsewhere a
- * launcher script that apps.js startApp runs. The app is registered in config.apps (installedBy: "appstore")
+ * launcher script that apps.js startApp runs (registered as { command } on macOS/Linux, { windows: { command } } on
+ * Windows). Paths are built with path.join, so a Windows install uses venv\Scripts\python.exe and backslashes. The app is registered in config.apps (installedBy: "appstore")
  * and started. Uninstall unregisters it, disables the unit and moves the files to ~/.rigs/trash — never deletes.
  *
  * Test hooks: RIGS_APPS_DIR, RIGS_NO_SYSTEMD=1, RIGS_SYSTEMD_USER_DIR, RIGS_GPU_OVERSEER_CLIENTS; every entry
@@ -246,11 +247,12 @@ export function validateManifest(raw, { file = '' } = {}) {
   for (const [i, p] of (Array.isArray(raw.postInstall) ? raw.postInstall : []).entries()) {
     const f = `postInstall[${i}]`;
     if (!isObj(p)) { bad(f, 'must be an object'); continue; }
-    unknownKeys(p, ['name', 'run', 'cwd', 'timeoutSec'], f, bad);
+    unknownKeys(p, ['name', 'run', 'cwd', 'timeoutSec', 'platforms'], f, bad);
     if (!Array.isArray(p.run) || !p.run.length || !p.run.every((a) => typeof a === 'string') || !isStr(p.run[0])) bad(`${f}.run`, 'must be the argv list, e.g. ["{python}", "scripts/setup.py"]');
     if (p.cwd !== undefined && typeof p.cwd !== 'string') bad(`${f}.cwd`, 'must be a path');
     if (p.timeoutSec !== undefined && !(isNum(p.timeoutSec) && p.timeoutSec > 0)) bad(`${f}.timeoutSec`, 'must be a number of seconds > 0');
-    postInstall.push({ name: String(p.name || (Array.isArray(p.run) ? p.run.join(' ') : '')), run: Array.isArray(p.run) ? p.run.map(String) : [], cwd: typeof p.cwd === 'string' ? p.cwd : '', timeoutSec: p.timeoutSec || 1800 });
+    if (p.platforms !== undefined && !(Array.isArray(p.platforms) && p.platforms.length && p.platforms.every((x) => PLATFORMS.includes(x)))) bad(`${f}.platforms`, `must be a non-empty list of ${PLATFORMS.join(', ')}`);
+    postInstall.push({ name: String(p.name || (Array.isArray(p.run) ? p.run.join(' ') : '')), run: Array.isArray(p.run) ? p.run.map(String) : [], cwd: typeof p.cwd === 'string' ? p.cwd : '', timeoutSec: p.timeoutSec || 1800, platforms: Array.isArray(p.platforms) ? p.platforms : [] });
   }
 
   let rewrite = {};
@@ -421,8 +423,12 @@ const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 const normId = (id) => String(id || '').trim().toLowerCase();
 const lastLines = (s, n = 4) => redact(String(s || '').trim().split('\n').slice(-n).map((l) => l.trim()).filter(Boolean).join(' | '));
 
-export const venvPython = (venv) => (isWin ? path.join(venv, 'Scripts', 'python.exe') : path.join(venv, 'bin', 'python'));
-const venvBin = (venv) => path.join(venv, isWin ? 'Scripts' : 'bin');
+/** Path flavour for a Node platform name, so Windows paths can be built (and tested) anywhere. */
+const pathFor = (platform) => (platform === 'win32' ? path.win32 : path.posix);
+/** The venv's Python: venv\Scripts\python.exe on Windows, venv/bin/python elsewhere. */
+export const venvPython = (venv, platform = process.platform) => (platform === 'win32' ? pathFor(platform).join(venv, 'Scripts', 'python.exe') : pathFor(platform).join(venv, 'bin', 'python'));
+/** The venv's script folder (put first on PATH for post-install steps). */
+export const venvBin = (venv, platform = process.platform) => pathFor(platform).join(venv, platform === 'win32' ? 'Scripts' : 'bin');
 const hfHome = () => path.resolve(expandHome(process.env.HF_HOME || path.join(HOME, '.cache', 'huggingface')));
 function hfRepoCacheDir(x) {
   const hub = process.env.HF_HUB_CACHE ? path.resolve(expandHome(process.env.HF_HUB_CACHE)) : path.join(hfHome(), 'hub');
@@ -496,16 +502,29 @@ function hasIncomplete(dir) {
 async function moveToTrash(src, name) {
   const dir = path.join(RIGS_HOME, 'trash');
   await fsp.mkdir(dir, { recursive: true });
-  const dest = path.join(dir, `${Date.now()}-${name}`);
-  try { await fsp.rename(src, dest); return dest; } catch (e) { if (e.code !== 'EXDEV') throw e; }
+  const dest = path.join(dir, trashName(name));
+  try { await renameRetry(src, dest); return dest; } catch (e) { if (e.code !== 'EXDEV') throw e; }
   const near = path.join(appsDir(), '.trash');
   await fsp.mkdir(near, { recursive: true });
-  const alt = path.join(near, `${Date.now()}-${name}`);
-  try { await fsp.rename(src, alt); return alt; } catch (e) { if (e.code !== 'EXDEV') throw e; }
+  const alt = path.join(near, trashName(name));
+  try { await renameRetry(src, alt); return alt; } catch (e) { if (e.code !== 'EXDEV') throw e; }
   // A third disk (e.g. the systemd unit dir on /home while RIGS_HOME and the apps are elsewhere): copy, verify, remove.
   await fsp.cp(src, dest, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
   await fsp.rm(src, { recursive: true, force: true });
   return dest;
+}
+
+/** "<ms>-<name>" with characters Windows forbids in file names (: * ? " < > |, e.g. from a unit name) replaced. Pure. */
+export const trashName = (name, now = Date.now()) => `${now}-${String(name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}`;
+
+/** fs.rename that rides out Windows' brief EPERM/EBUSY locks (an app just stopped, a virus scanner) for ~3 s. */
+async function renameRetry(src, dest, tries = isWin ? 15 : 1) {
+  for (let i = 1; ; i++) {
+    try { return await fsp.rename(src, dest); } catch (e) {
+      if (i >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
 }
 
 function writeFileAtomic(file, text) {
@@ -627,8 +646,13 @@ function instanceFor(m, opts = {}, prev = null) {
   return { root, appDir, inPlace, venv: path.join(root, 'venv'), port, suffix, unit: `${unitBase}${suffix}.service`, overseerId: `${m.id}${suffix}` };
 }
 
+/** The system Python. On Windows `python3` is often the Microsoft Store stub, so python / py come first there. */
+export function systemPython(find, fallback = isWin ? 'python' : 'python3', win = isWin) {
+  return (win ? find('python') || find('py') : find('python3') || find('python')) || fallback;
+}
+
 function placeholderVars(m, inst) {
-  const python = m.runtime.type === 'python' ? venvPython(inst.venv) : which('python3') || which('python') || 'python3';
+  const python = m.runtime.type === 'python' ? venvPython(inst.venv) : systemPython(which);
   return {
     id: m.id, root: inst.root, appDir: inst.appDir, venv: inst.venv, python, node: process.execPath, port: String(inst.port),
     home: HOME, rigsApp: APP_DIR, modelsDir: path.join(inst.root, 'models'), hfHome: hfHome(),
@@ -661,7 +685,25 @@ function modelPresent(ctx, x) {
 // ---------------------------------------------------------------- launch recipe
 
 const sdQuote = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`;
-const shQuote = (s) => (isWin ? `"${s}"` : `'${String(s).replace(/'/g, `'\\''`)}'`);
+const shQuote = (s, platform = process.platform) => (platform === 'win32' ? `"${s}"` : `'${String(s).replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The App Cloud recipe that runs a launcher script: { command } through the shell on macOS/Linux, and
+ * { windows: { command } } on Windows, a "node.exe" "launch.mjs" line that apps.js runs without any shell. Pure.
+ */
+export function launcherRecipe({ node, file, platform = process.platform }) {
+  const command = `${shQuote(node, platform)} ${shQuote(file, platform)}`;
+  return platform === 'win32' ? { windows: { command } } : { command };
+}
+
+/** A rendered argv[0] like "{appDir}/run.cmd" → a native absolute path (C:\…\app\run.cmd on Windows). Pure. */
+export const nativeExe = (s, platform = process.platform) => (pathFor(platform).isAbsolute(s) ? pathFor(platform).normalize(s) : s);
+
+/** The postInstall steps that run on `platform` (linux | mac | windows): those without `platforms`, or listing it. Pure. */
+export const postStepsFor = (m, platform) => m.postInstall.filter((p) => !p.platforms.length || p.platforms.includes(platform));
+
+/** A step that needs a POSIX shell (bash/sh/zsh, or a .sh script), which a Windows machine does not have. Pure. */
+export const needsPosixShell = (argv) => /^(ba|z)?sh(\.exe)?$/i.test(path.posix.basename(String(argv[0] || '').replace(/\\/g, '/'))) || /\.sh$/i.test(String(argv[0] || ''));
 
 /** The systemd --user unit for an app. Pure. */
 export function renderUnit({ m, argv, cwd, env }) {
@@ -706,7 +748,7 @@ child.on('exit', (code, sig) => process.exit(code ?? (sig ? 1 : 0)));
 
 async function launchPlan(ctx) {
   const { m, inst, vars, d } = ctx;
-  const argv = m.launch.command.map((a) => render(a, vars));
+  const argv = m.launch.command.map((a, i) => (i ? render(a, vars) : nativeExe(render(a, vars))));
   const cwd = m.launch.cwd ? path.resolve(inst.appDir, render(m.launch.cwd, vars)) : inst.appDir;
   const env = { ...(m.runtime.type === 'python' ? { PYTHONUNBUFFERED: '1' } : {}), ...Object.fromEntries(Object.entries(m.env).map(([k, v]) => [k, render(v, vars)])) };
   if (await d.systemd()) {
@@ -715,7 +757,8 @@ async function launchPlan(ctx) {
   }
   const file = path.join(inst.root, 'launch.mjs');
   const text = renderLauncher({ m, argv, cwd, env, pidFile: path.join(inst.root, 'app.pid') });
-  return { kind: 'command', file, text, key: keyOf(text), recipe: { command: `${shQuote(process.execPath)} ${shQuote(file)}` } };
+  const platform = d.platform() === 'windows' ? 'win32' : process.platform;
+  return { kind: 'command', file, text, key: keyOf(text), recipe: launcherRecipe({ node: process.execPath, file, platform }) };
 }
 
 function pidAlive(pid) {
@@ -733,7 +776,10 @@ async function stopLaunched(root) {
   };
   const targets = [[rec.child, path.basename(String(rec.argv0 || ''))], [rec.launcher, 'launch.mjs']]
     .filter(([pid, needle]) => Number.isInteger(pid) && pid > 0 && pid !== process.pid && pidAlive(pid) && owns(pid, needle)).map(([pid]) => pid);
-  for (const pid of targets) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+  if (isWin) {
+    // No signals on Windows: end each process with its tree (a .cmd shim's cmd.exe and the app under it).
+    for (const pid of targets) await run('taskkill', ['/pid', String(pid), '/T', '/F'], { timeout: 15000 });
+  } else for (const pid of targets) { try { process.kill(pid, 'SIGTERM'); } catch {} }
   for (let i = 0; i < 30 && targets.some(pidAlive); i++) await new Promise((r) => setTimeout(r, 100));
   for (const pid of targets) if (pidAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
   return targets;
@@ -841,6 +887,9 @@ const STEP_IMPL = {
       problems.push(`needs Python ${m.needs.python || '3'}: install uv (https://docs.astral.sh/uv/) or python${m.needs.python || '3'}`);
     }
     for (const x of m.models) if (x.gated && !hfToken() && !modelPresent(ctx, x)) problems.push(`${x.name} is gated on Hugging Face: accept its license at https://huggingface.co/${x.repo} and run "hf auth login" on this machine`);
+    if (facts.platform === 'windows') {
+      for (const p of postStepsFor(m, facts.platform)) if (needsPosixShell(p.run)) problems.push(`post-install step "${p.name}" needs a POSIX shell, which Windows lacks: give it "platforms": ["linux", "mac"] and add a Windows step (e.g. {python} or {node})`);
+    }
     const reg = registryEntry(m.id);
     if (reg && reg.installedBy !== STORE_TAG) problems.push(`"${m.id}" is already in the App Cloud, registered by hand (port ${reg.port ?? reg.url}) — remove that entry first`);
     const clash = (appsReg.declaredApps() || []).find((a) => normId(a.id) !== m.id && Number(a.port) === inst.port && (!a.host || /^(127\.0\.0\.1|localhost)$/.test(a.host)));
@@ -1014,17 +1063,19 @@ const STEP_IMPL = {
 
   async post(ctx) {
     const { m, inst } = ctx;
-    if (!m.postInstall.length) return { skipped: true, key: 'none', detail: 'none' };
+    const steps = postStepsFor(m, ctx.d.platform());
+    if (!steps.length) return { skipped: true, key: 'none', detail: 'none' };
     // The version is in the key so a new release reruns steps that copy files from outside the source.
-    const key = keyOf({ post: m.postInstall, rev: ctx.state.sourceRev || '', deps: ctx.state.steps?.deps?.at || 0, port: inst.port, version: m.version });
+    // Steps without platforms keep their pre-`platforms` shape, so existing installs keep their key.
+    const key = keyOf({ post: steps.map(({ platforms, ...p }) => (platforms.length ? { ...p, platforms } : p)), rev: ctx.state.sourceRev || '', deps: ctx.state.steps?.deps?.at || 0, port: inst.port, version: m.version });
     if (done(ctx, 'post', key)) return { skipped: true, key, detail: 'already done' };
-    if (ctx.dryRun) return { skipped: true, key, detail: `dry run: would run ${m.postInstall.map((p) => p.name).join(', ')}` };
-    for (const [i, p] of m.postInstall.entries()) {
-      ctx.progress((i / m.postInstall.length) * 100, p.name);
-      const argv = p.run.map((a) => render(a, ctx.vars));
+    if (ctx.dryRun) return { skipped: true, key, detail: `dry run: would run ${steps.map((p) => p.name).join(', ')}` };
+    for (const [i, p] of steps.entries()) {
+      ctx.progress((i / steps.length) * 100, p.name);
+      const argv = p.run.map((a, j) => (j ? render(a, ctx.vars) : nativeExe(render(a, ctx.vars))));
       await ctx.sh(argv[0], argv.slice(1), { cwd: p.cwd ? path.resolve(inst.appDir, render(p.cwd, ctx.vars)) : inst.appDir, env: runEnv(ctx), timeout: p.timeoutSec * 1000 });
     }
-    return { key, detail: m.postInstall.map((p) => p.name).join(', ') };
+    return { key, detail: steps.map((p) => p.name).join(', ') };
   },
 
   async launch(ctx) {
@@ -1128,9 +1179,22 @@ async function downloadHfFiles(ctx, x, dest, onBytes) {
     const link = path.join(repoDir, 'snapshots', x.revision, file);
     await fsp.mkdir(path.dirname(link), { recursive: true });
     await fsp.rm(link, { force: true });
-    await fsp.symlink(path.relative(path.dirname(link), blob), link);
+    await linkBlob(blob, link);
   }
 }
+
+/**
+ * snapshots/<rev>/<file> → blobs/<etag>: a relative symlink, as huggingface_hub makes. Windows without Developer Mode
+ * may not create symlinks (EPERM); then a hard link (same disk, no extra space), else a copy — which is what
+ * huggingface_hub itself falls back to there.
+ */
+async function linkBlob(blob, link, fsx = fsp) {
+  try { await fsx.symlink(path.relative(path.dirname(link), blob), link); return 'symlink'; } catch (e) { if (!['EPERM', 'EACCES', 'ENOTSUP', 'EINVAL'].includes(e.code)) throw e; }
+  try { await fsx.link(blob, link); return 'hardlink'; } catch { /* another disk or no hard links */ }
+  await fsx.copyFile(blob, link);
+  return 'copy';
+}
+export { linkBlob as _linkBlob };
 
 /** Every file of a repo at a pinned revision, from the Hub tree API (follows its Link: rel="next" pages). */
 async function listHfFiles(ctx, x) {
@@ -1168,7 +1232,7 @@ async function downloadHfModel(ctx, x, onBytes) {
       await ctx.sh(cli, args, { env: { HF_HUB_DISABLE_TELEMETRY: '1' }, timeout: 0 });
     } else {
       // No CLI: huggingface_hub's snapshot_download, from the app's venv (installed there when missing).
-      const py = exists(venvPython(inst.venv)) ? venvPython(inst.venv) : d.which('python3') || d.which('python');
+      const py = exists(venvPython(inst.venv)) ? venvPython(inst.venv) : systemPython(d.which, null);
       if (!py) throw new Error('downloading from Hugging Face needs the hf CLI: pip install -U huggingface_hub');
       const kw = { repo_id: x.repo, repo_type: x.repoType, ...(x.revision ? { revision: x.revision } : {}), ...(x.files.length || x.include.length ? { allow_patterns: [...x.files, ...x.include] } : {}), ...(dest ? { local_dir: dest } : {}) };
       const script = 'import json,sys\nfrom huggingface_hub import snapshot_download\nprint(snapshot_download(**json.loads(sys.argv[1])))';
