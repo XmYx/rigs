@@ -625,6 +625,7 @@ export async function startServer() {
     if (sub === 'work/status' && method === 'POST') return work.taskStatus(await body());
     if (sub === 'work/stop' && method === 'POST') return work.stopTask(await body());
     if (sub === 'work/nudge' && method === 'POST') return work.nudgeTask(await body());
+    if (sub === 'work/find' && method === 'POST') return work.findTask(await body());
 
     // change policy: work branches → merge steward (see src/merge.js)
     if (sub === 'dev/start' && method === 'POST') { const b = await body(); return merge.startWork(b.topic, { repo: b.repo || undefined }); }

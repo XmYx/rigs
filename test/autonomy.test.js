@@ -97,6 +97,7 @@ function ctx(extra = {}) {
       if (sub === 'work/status') return c.status[body.qitem] || { state: 'in-progress' };
       if (sub === 'work/nudge') return { ok: true };
       if (sub === 'merge') return { queue: c.merge ? [c.merge] : [] };
+      if (sub === 'work/find') return { run: c.found?.[`${body.project.id}-${body.task.id}`] || null };
       throw new Error('unexpected ' + sub);
     },
     ask: async () => ({ text: JSON.stringify({ summary: 's', tasks: [
@@ -243,4 +244,30 @@ test('a running project that nothing can move any more is escalated by the tick'
   await P.tick(c);
   assert.equal((await P.getProject(p.id)).status, 'blocked');
   assert.ok(c.notes.some((n) => /needs you/.test(n.text)));
+});
+
+test('concurrent reports and ticks never lose a write or cast a second agent', async () => {
+  const c = ctx();
+  const p = await runningProject(c);
+  // The audit reports done while a tick runs: t2 starts exactly once and stays running.
+  await Promise.all([P.updateTask(p.id, 't1', { status: 'done', summary: 'audit' }, c), P.tick(c), P.tick(c)]);
+  const after = await P.getProject(p.id);
+  assert.equal(after.tasks[1].status, 'running');
+  assert.ok(after.tasks[1].run, 'its run handle survived');
+  assert.equal(c.calls.filter((x) => x.sub === 'work/start' && x.body.task.id === 't2' && x.body.project.id === p.id).length, 1);
+});
+
+test('a task stuck "starting" whose agent is in fact running is adopted, not cast again', async () => {
+  const c = ctx();
+  const p = await runningProject(c);
+  const pr = await P.getProject(p.id);
+  Object.assign(pr.tasks[0], { status: 'starting', run: null, startingAt: Date.now() - 20 * 60 * 1000 });
+  await P.saveProject(pr);
+  c.found = { [`${p.id}-t1`]: { mode: 'openrig', seat: 'team-code-opus@x', qitem: 'q-live', session: { kind: 'rig', id: 'team-code-opus@x' } } };
+  const starts = c.calls.filter((x) => x.sub === 'work/start').length;
+  await P.tick(c);
+  const t = (await P.getProject(p.id)).tasks[0];
+  assert.equal(t.status, 'running');
+  assert.equal(t.run.qitem, 'q-live');
+  assert.equal(c.calls.filter((x) => x.sub === 'work/start').length, starts, 'no second agent');
 });
