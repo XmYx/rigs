@@ -147,7 +147,7 @@ async function mac(st) {
 async function linux(st) {
   const os = osRelease();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
-  // Moonlight: AppImage, no root needed.
+  // Moonlight: AppImage, no root needed (see ensureMoonlightWrapper for how it is launched).
   if (!bin('moonlight') && !fs.existsSync(path.join(HOME, '.local', 'bin', 'moonlight'))) {
     if (arch !== 'amd64') st.steps.push('Moonlight: no AppImage for arm64 — install from Flathub (com.moonlight_stream.Moonlight)');
     else {
@@ -158,10 +158,7 @@ async function linux(st) {
       const target = path.join(APPS, 'Moonlight.AppImage');
       await fsp.copyFile(file, target);
       await fsp.chmod(target, 0o755);
-      const wrapper = path.join(HOME, '.local', 'bin', 'moonlight');
-      await fsp.mkdir(path.dirname(wrapper), { recursive: true });
-      // Extract-and-run avoids needing libfuse2 on newer Ubuntu.
-      await fsp.writeFile(wrapper, `#!/bin/sh\nAPPIMAGE_EXTRACT_AND_RUN=1 exec "${target}" "$@"\n`, { mode: 0o755 });
+      const wrapper = (await ensureMoonlightWrapper()).wrapper;
       const desktop = path.join(HOME, '.local', 'share', 'applications', 'moonlight-rigs.desktop');
       await fsp.mkdir(path.dirname(desktop), { recursive: true });
       await fsp.writeFile(desktop, `[Desktop Entry]\nName=Moonlight\nComment=Hardware-accelerated remote desktop (RIGS)\nExec=${wrapper}\nTerminal=false\nType=Application\nCategories=Network;RemoteAccess;\n`);
@@ -296,4 +293,62 @@ export function ensure({ force = false } = {}) {
     return writeState(st);
   })().finally(() => { busy = null; });
   return busy;
+}
+
+
+// ---------------------------------------------------------------- Moonlight on Linux
+const MOONLIGHT_APPIMAGE = () => path.join(APPS, 'Moonlight.AppImage');
+const MOONLIGHT_DIR = () => path.join(APPS, 'moonlight-app');
+const MOONLIGHT_WRAPPER = () => path.join(HOME, '.local', 'bin', 'moonlight');
+
+/**
+ * The `moonlight` command RIGS installs. On a Wayland desktop the stream window runs natively on Wayland with
+ * Moonlight's Vulkan renderer: the AppImage's Qt only speaks X11, and NVIDIA's VDPAU path through XWayland
+ * locks the stream up and can crash XWayland (taking every X11 window of the session with it). The AppImage
+ * is extracted once (no libfuse2 needed, and no re-extraction on every start).
+ */
+export function moonlightWrapperText(appRun, appImage) {
+  return `#!/bin/sh
+# Managed by RIGS (rewritten on update).
+if [ -n "$WAYLAND_DISPLAY" ] || [ "$XDG_SESSION_TYPE" = wayland ]; then
+  # Stream window on native Wayland + Vulkan; never VDPAU through XWayland (set RIGS_MOONLIGHT_VDPAU=1 to allow it).
+  export SDL_VIDEODRIVER="\${SDL_VIDEODRIVER:-wayland}" PREFER_VULKAN="\${PREFER_VULKAN:-1}"
+  [ -n "$RIGS_MOONLIGHT_VDPAU" ] || export VDPAU_DRIVER=rigs-disabled
+fi
+[ -x "${appRun}" ] && exec "${appRun}" "$@"
+APPIMAGE_EXTRACT_AND_RUN=1 exec "${appImage}" "$@"
+`;
+}
+
+export async function ensureMoonlightWrapper() {
+  if (!isLinux) return { skipped: 'not Linux' };
+  const appImage = MOONLIGHT_APPIMAGE();
+  if (!fs.existsSync(appImage)) return { skipped: 'Moonlight AppImage not installed by RIGS' };
+  const dir = MOONLIGHT_DIR();
+  const appRun = path.join(dir, 'AppRun');
+  const stale = !fs.existsSync(appRun) || fs.statSync(appRun).mtimeMs < fs.statSync(appImage).mtimeMs;
+  const out = {};
+  if (stale) {
+    const tmp = path.join(APPS, `.extract-${process.pid}`);
+    await fsp.rm(tmp, { recursive: true, force: true });
+    await fsp.mkdir(tmp, { recursive: true });
+    const r = await run(appImage, ['--appimage-extract'], { cwd: tmp, timeout: 180000, env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: '' } });
+    if (r.code === 0 && fs.existsSync(path.join(tmp, 'squashfs-root', 'AppRun'))) {
+      await fsp.rm(dir, { recursive: true, force: true });
+      await fsp.rename(path.join(tmp, 'squashfs-root'), dir);
+      out.extracted = dir;
+    } else out.extractError = (r.stderr || r.stdout).trim().slice(-200);
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+  const wrapper = MOONLIGHT_WRAPPER();
+  const text = moonlightWrapperText(appRun, appImage);
+  let cur = '';
+  try { cur = await fsp.readFile(wrapper, 'utf8'); } catch {}
+  if (cur !== text) {
+    await fsp.mkdir(path.dirname(wrapper), { recursive: true });
+    await fsp.writeFile(wrapper, text, { mode: 0o755 });
+    out.wrapper = wrapper;
+  }
+  clearWhichCache();
+  return { wrapper, ...out };
 }

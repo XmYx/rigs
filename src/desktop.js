@@ -120,7 +120,28 @@ async function refreshSessionEnv() {
     const m = l.match(/^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP)=(.*)$/);
     if (m) vars[m[1]] = m[2];
   }
+  // After an XWayland crash/restart the session's X display can move (:0 → :1) while systemd still says :0.
+  const ss = await run('ss', ['-xlH'], { timeout: 4000 }).catch(() => ({ stdout: '' }));
+  const live = liveXDisplay(ss.stdout, vars.DISPLAY);
+  if (live && live !== vars.DISPLAY) vars.DISPLAY = live;
+  const rt = vars.XDG_RUNTIME_DIR || `/run/user/${os.userInfo().uid}`;
+  if (!vars.XAUTHORITY || !fs.existsSync(vars.XAUTHORITY)) {
+    try {
+      const auth = fs.readdirSync(rt).filter((f) => f.startsWith('.mutter-Xwaylandauth.')).map((f) => path.join(rt, f))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+      if (auth) vars.XAUTHORITY = auth;
+    } catch {}
+  }
   sessionEnv = { at: Date.now(), vars };
+}
+
+/** Which X display is really being served? `ss -xl` lists the X11 sockets; keep the wanted one if it is live. */
+export function liveXDisplay(ssOutput, wanted = '') {
+  const nums = [...new Set([...String(ssOutput || '').matchAll(/\/tmp\/\.X11-unix\/X(\d+)/g)].map((m) => Number(m[1])))].sort((a, b) => a - b);
+  if (!nums.length) return wanted || '';
+  const w = Number(String(wanted).replace(/^:/, '').split('.')[0]);
+  if (wanted && nums.includes(w)) return wanted;
+  return `:${nums[nums.length - 1]}`;
 }
 
 /** Env for GUI apps launched by the background service: point them at the user's desktop session. */

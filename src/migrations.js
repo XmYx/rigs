@@ -68,6 +68,10 @@ MIGRATIONS.push({ id: '2026-10-16-node-cli-wrappers', run: async () => (await im
 // Every agent on every machine learns Sir's autonomy rule (non-destructive = go; other projects: no commits unasked).
 MIGRATIONS.push({ id: '2026-10-17-autonomy-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
 
+// Moonlight on Wayland: native Wayland stream window + Vulkan, no VDPAU through XWayland (it locked up and
+// crashed XWayland on NVIDIA); the AppImage is extracted once instead of on every start.
+MIGRATIONS.push({ id: '2026-10-17-moonlight-wayland', run: () => desktopInstall.ensureMoonlightWrapper() });
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {
