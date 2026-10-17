@@ -179,7 +179,7 @@ function daemon(name, port, extraEnv, cfg) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `rigs-proxy-${name}-`));
   homes.push(home);
   if (cfg) fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(cfg));
-  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_PORT: String(port), RIGS_NAME: name, RIGS_PEERS: '', RIGS_MESH_TOKEN: TOKEN, RIGS_BIND: '127.0.0.1', ...extraEnv };
+  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: home, RIGS_SSH_DIR: path.join(home, 'ssh'), RIGS_PORT: String(port), RIGS_NAME: name, RIGS_PEERS: '', RIGS_MESH_TOKEN: TOKEN, RIGS_BIND: '127.0.0.1', ...extraEnv };
   const p = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'serve'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   p.log = '';
   p.stdout.on('data', (d) => { p.log += d; });

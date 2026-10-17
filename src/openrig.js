@@ -14,7 +14,9 @@ export function _setRunner(fn) { runner = fn || run; cache = { at: 0, value: nul
 /** Something changed outside `rig` (or a test changed its fake): the next status() reads it again. */
 export function invalidate() { cache.at = 0; }
 
-const rigBin = () => bin('rig') || (runner !== run ? 'rig' : null);
+// RIGS_NO_OPENRIG=1: test/scratch nodes must never reach the real OpenRig daemon (and so never queue work into the
+// live JARVIS overseer). An injected fake runner (unit tests) is still allowed.
+const rigBin = () => (process.env.RIGS_NO_OPENRIG === '1' && runner === run ? null : (bin('rig') || (runner !== run ? 'rig' : null)));
 
 /**
  * Every `rig` call goes through here. The daemon's own Node (>= 22, known good) leads PATH, so an npm-installed

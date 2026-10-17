@@ -241,7 +241,7 @@ let server;
 before(async () => {
   // Every provider switched off: the intake files and routes the task but casts no real agent.
   fs.writeFileSync(path.join(NODE_HOME, 'config.json'), JSON.stringify({ routing: { avoid: ['claude', 'codex', 'ollama', 'stub'] } }));
-  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_HOME: NODE_HOME, RIGS_SSH_DIR: path.join(NODE_HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'intake-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
+  const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: NODE_HOME, RIGS_SSH_DIR: path.join(NODE_HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'intake-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
   server = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'serve'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(BASE + '/api/nodes/self/info')).ok) return; } catch {}
@@ -273,4 +273,15 @@ test('jarvis_task with newProject creates the project on the node that handles t
   const unknown = await intake({ title: 'x', instruction: 'x', project: 'nope123' });
   assert.equal(unknown.status, 404);
   assert.match(unknown.body.error, /nope123 not found on any machine/);
+});
+
+test('RIGS_NO_OPENRIG=1 keeps a scratch node away from the real rig CLI (no overseer intake)', async () => {
+  openrig._setRunner(null);
+  process.env.RIGS_NO_OPENRIG = '1';
+  try {
+    const r = await openrig.rigRun(['queue', 'create']);
+    assert.equal(r.code, -1);
+    assert.equal(await hubs.overseer(), null);
+    assert.equal(await hubs.overseerIntake({ instruction: 'x', project: { id: 'rigs', name: 'r', owner: 'o' }, task: { id: 't1', title: 'x', kind: 'code', size: 'S' } }), null);
+  } finally { delete process.env.RIGS_NO_OPENRIG; }
 });
