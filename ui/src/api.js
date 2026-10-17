@@ -73,7 +73,10 @@ export function h(tag, attrs = {}, ...children) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
-    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k.startsWith('on') && typeof v === 'function') {
+      el.addEventListener(k.slice(2).toLowerCase(), v);
+      if (k === 'onclick' && !['button', 'input', 'select', 'textarea', 'label', 'summary'].includes(tag)) el.dataset.a11yClick = '1'; // a11y.js makes it keyboard operable
+    }
     else if (k === 'html') el.innerHTML = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
@@ -83,7 +86,7 @@ export function h(tag, attrs = {}, ...children) {
 
 export function toast(text, level = 'info', ms = 5000, action = null) {
   let box = document.getElementById('toasts');
-  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   const t = h('div', { class: `toast ${level}` }, text, action ? h('button', { class: 'btn primary toast-btn', onclick: () => { t.remove(); action.run(); } }, action.label) : null);
   box.append(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 400); }, ms);

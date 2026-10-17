@@ -2,32 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>RIGS OS</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%232dd4bf' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%232dd4bf'/%3E%3C/svg%3E">
+  <meta name="description" content="RIGS OS · JARVIS — your mesh of machines and agents, with a voice.">
+  <meta name="theme-color" content="#04060a">
+  <meta name="color-scheme" content="dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="JARVIS">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/dist/app.css">
 </head>
 <body>
-  <div id="graph"></div>
+  <main id="graph" aria-label="Mesh galaxy — use the Top hubs list in the side panel to browse machines by keyboard"></main>
 
-  <aside id="left" class="panel">
+  <aside id="left" class="panel" aria-label="Mesh inspector">
     <div class="brand">
-      <div class="title">RIGS OS</div>
+      <h1 class="title">RIGS OS</h1>
       <div id="counts" class="sub">connecting…</div>
-      <a id="back" class="back" style="visibility:hidden">← back to mesh</a>
+      <button id="back" class="back" style="visibility:hidden">← back to mesh</button>
     </div>
-    <input id="search" class="search" placeholder="Search the mesh…" autocomplete="off" spellcheck="false">
+    <input id="search" class="search" aria-label="Search the mesh" placeholder="Search the mesh…" autocomplete="off" spellcheck="false">
     <div id="search-results"></div>
-    <section><h4>Inspector</h4><div id="inspector"></div></section>
-    <section><h4>Apps</h4><div id="app-list"></div></section>
-    <section><h4>Top hubs</h4><div id="hubs"></div></section>
+    <section><h2 class="sec-h">Inspector</h2><div id="inspector"></div></section>
+    <section><h2 class="sec-h">Apps</h2><div id="app-list"></div></section>
+    <section><h2 class="sec-h">Top hubs</h2><div id="hubs"></div></section>
     <section>
-      <h4>Forces</h4>
+      <h2 class="sec-h">Forces</h2>
       <label class="slider">Repel <input id="repel" type="range" min="20" max="400"></label>
       <label class="slider">Link length <input id="linklen" type="range" min="8" max="80"></label>
     </section>
     <section>
-      <h4>Display</h4>
+      <h2 class="sec-h">Display</h2>
       <label class="check"><input id="d-labels" type="checkbox"> labels</label>
       <label class="check"><input id="d-particles" type="checkbox"> traffic</label>
       <label class="check"><input id="d-rotate" type="checkbox"> orbit</label>
@@ -35,43 +45,43 @@
     </section>
   </aside>
 
-  <div id="topbar">
+  <nav id="topbar" aria-label="Graph view">
     <button id="fit" class="pill" title="Fit the whole mesh">◎ Fit</button>
-    <button id="refresh" class="pill" title="Rescan the tailnet">↻</button>
-  </div>
+    <button id="refresh" class="pill" title="Rescan the tailnet" aria-label="Rescan the tailnet">↻</button>
+  </nav>
 
-  <aside id="legend" class="panel"><h4>Filters</h4><div id="filters"></div></aside>
+  <aside id="legend" class="panel" aria-label="Filters"><h2 class="sec-h">Filters</h2><div id="filters"></div></aside>
 
-  <div id="orb-wrap">
-    <div id="face" title="JARVIS — click to enlarge"></div>
-    <canvas id="orb" title="Click to talk"></canvas>
+  <section id="orb-wrap" aria-label="JARVIS">
+    <div id="face" role="button" tabindex="0" aria-label="JARVIS face — enlarge" title="JARVIS — click to enlarge"></div>
+    <canvas id="orb" role="button" tabindex="0" aria-label="Talk to JARVIS" title="Click to talk"></canvas>
     <div id="orb-state"></div>
     <button id="brain-badge" class="pill" title="Switch brain (model + machine)"></button>
     <div id="brain-menu" class="panel"></div>
-  </div>
+  </section>
 
-  <aside id="work" class="panel"></aside>
+  <aside id="work" class="panel" aria-label="Work dashboard"></aside>
 
-  <div id="chat-dock">
-    <div class="dock-head"><span id="dock-target" title="Chatting with JARVIS">◆ JARVIS</span><button id="dock-detach" class="pclose hidden" title="Detach — talk to JARVIS again">⏏</button></div>
+  <section id="chat-dock" aria-label="Conversation with JARVIS">
+    <div class="dock-head"><span id="dock-target" title="Chatting with JARVIS">◆ JARVIS</span><button id="dock-detach" class="pclose hidden" title="Detach — talk to JARVIS again" aria-label="Detach — talk to JARVIS again">⏏</button></div>
     <div id="subtitle"></div>
-  </div>
+  </section>
 
-  <div id="bar">
-    <input id="ask" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS…">
-    <button id="btn-mic" class="round" title="Push to talk">🎙</button>
-    <button id="btn-hands" class="round" title="Hands-free — just say “Jarvis…”">👂</button>
-    <button id="btn-term" class="round" title="Terminal on the focused machine">⌨</button>
-    <button id="btn-files" class="round" title="Files on the focused machine">📁</button>
-    <button id="btn-desk" class="round" title="Remote desktop to the focused machine">🖥</button>
-    <button id="btn-sess" class="round" title="All sessions on all machines">💬</button>
-    <button id="btn-proj" class="round" title="Projects — plan and delegate work across machines and models">📋</button>
-    <button id="btn-work" class="round" title="Work — everything running across the mesh, progress, tokens and plan limits">📊</button>
-    <button id="btn-apps" class="round" title="Apps — web apps hosted on your machines, opened right here">▦</button>
-    <button id="btn-mesh" class="round" title="Mesh control, updates, settings">⚙</button>
-    <button id="btn-mute" class="round" title="Voice output on/off">🔊</button>
-  </div>
-  <div id="footer">RIGS OS · OpenRig · REA · built with Claude Code</div>
+  <nav id="bar" aria-label="JARVIS controls">
+    <input id="ask" aria-label="Ask JARVIS" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS…">
+    <button id="btn-mic" class="round" title="Push to talk" aria-label="Push to talk">🎙</button>
+    <button id="btn-hands" class="round" aria-pressed="false" title="Hands-free — just say “Jarvis…”" aria-label="Hands-free — just say “Jarvis…”">👂</button>
+    <button id="btn-term" class="round" title="Terminal on the focused machine" aria-label="Terminal on the focused machine">⌨</button>
+    <button id="btn-files" class="round" title="Files on the focused machine" aria-label="Files on the focused machine">📁</button>
+    <button id="btn-desk" class="round" title="Remote desktop to the focused machine" aria-label="Remote desktop to the focused machine">🖥</button>
+    <button id="btn-sess" class="round" title="All sessions on all machines" aria-label="All sessions on all machines">💬</button>
+    <button id="btn-proj" class="round" title="Projects — plan and delegate work across machines and models" aria-label="Projects — plan and delegate work across machines and models">📋</button>
+    <button id="btn-work" class="round" title="Work — everything running across the mesh, progress, tokens and plan limits" aria-label="Work — everything running across the mesh, progress, tokens and plan limits">📊</button>
+    <button id="btn-apps" class="round" title="Apps — web apps hosted on your machines, opened right here" aria-label="Apps — web apps hosted on your machines, opened right here">▦</button>
+    <button id="btn-mesh" class="round" title="Mesh control, updates, settings" aria-label="Mesh control, updates, settings">⚙</button>
+    <button id="btn-mute" class="round" aria-pressed="false" title="Voice output on/off" aria-label="Voice output on/off">🔊</button>
+  </nav>
+  <footer id="footer">RIGS OS · OpenRig · REA · built with Claude Code</footer>
 
   <script type="module" src="/dist/app.js"></script>
 </body>

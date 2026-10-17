@@ -1,5 +1,5 @@
 import { ago, api, h, node, toast } from './api.js';
-import { openTerminal } from './terminal.js';
+import { openTerminal } from './terminal-lazy.js';
 import { openWindow } from './wm.js';
 
 const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];

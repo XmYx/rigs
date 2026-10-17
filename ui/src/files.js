@@ -11,11 +11,11 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
   let showHidden = false;
   let selected = null;
 
-  const pathInput = h('input', { class: 'path-input', value: path, spellcheck: 'false' });
+  const pathInput = h('input', { class: 'path-input', 'aria-label': 'Folder path', value: path, spellcheck: 'false' });
   const list = h('div', { class: 'file-list' });
   const preview = h('div', { class: 'file-preview' }, h('div', { class: 'muted pad' }, 'Select a file to preview it.'));
   const rootsSel = h('select', { class: 'mini', title: 'Roots' });
-  const upload = h('input', { type: 'file', multiple: true, style: { display: 'none' } });
+  const upload = h('input', { type: 'file', multiple: true, 'aria-hidden': 'true', tabindex: '-1', style: { display: 'none' } });
 
   const w = openWindow({
     title: `${nodeName} — files`, icon: '📁', width: 980, height: 560, className: 'files-win',
