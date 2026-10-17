@@ -116,7 +116,9 @@ Rules:
 - This is a change to RIGS itself. Every task works in the same dev worktree (${p.repo.path}, branch ${p.selfDev.branch}) and
   commits there; \`npm test\` (and \`npm run build\` when ui/ changed) must pass before a task reports done. Do NOT plan a task
   to merge, push, propose or roll out: when every task is done RIGS proposes the branch to the merge steward itself.` : ''}
-- Size the plan to the goal: an outline or survey is 1-3 tasks; a measurable improvement is measure → change → verify.
+- Size the plan to the goal: an outline or survey is 1-3 tasks; a measurable improvement is measure → change → verify.${p.selfDev ? '' : `
+- Commits on this project need Sir's OK: never plan a task to commit, push, merge or switch branches in its repositories.
+  Tasks leave their changes in the working tree and list them; non-destructive steps (builds, tests, runs) need no asking.`}
 - Unity (or any live editor): only ONE agent can drive the running editor at a time — chain editor-bound tasks with deps,
   and let other tasks work on files, data or analysis. Measure before and after (the guide may name fps/profiling hooks).
 - OpenRig vocabulary: an "OpenRig project" is an OpenRig project workspace — SPEC.md (intent), project.yaml (install:
@@ -357,6 +359,25 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
 
 // ------------------------------------------------------------------ dispatch + tracking
 
+/**
+ * What an agent may do on its own. Sir's standing rule: non-destructive work runs without asking; RIGS
+ * changes go to the merge steward; work on other projects is not committed until Sir says so.
+ */
+export function autonomyBrief(p) {
+  const commit = config().agents?.commitOtherProjects || 'ask';
+  return `## What you may do without asking
+- Pre-approved by Sir: everything non-destructive — reading, editing files in the project folder, builds, tests,
+  profiling and benchmark runs, launching the app, game or editor, project-local installs. This overrides any saved
+  habit of confirming such steps first: do them.
+- Not pre-approved: destructive or irreversible steps — deleting or overwriting data you did not create, reverting,
+  resetting, stashing or discarding changes, force-pushes and history rewrites, publishing or deploying, spending money,
+  changing system settings. If one is truly needed, don't do it: report status "blocked" naming the exact step and why.
+${p.selfDev ? '- Commits: this is RIGS itself — commit in your dev worktree; RIGS proposes the branch to the merge steward, which tests and pushes it.'
+    : commit === 'branch' ? '- Commits: you may commit on a work branch of your own (never main/master, never push); say which branch in your summary.'
+      : '- Commits: Sir approves commits on this project. Do not commit, push, merge, rebase or switch branches in its repositories — leave your changes in the working tree and list every file you changed plus a suggested commit message in your summary.'}
+`;
+}
+
 function taskPrompt(p, t) {
   const done = t.deps.map((d) => p.tasks.find((x) => x.id === d)).filter(Boolean);
   const others = p.tasks.filter((x) => x.id !== t.id && x.status === 'running').map((x) => `- ${x.id} ${x.title} (${x.assign?.provider} on ${x.assign?.node})`);
@@ -383,7 +404,8 @@ ${t.needs?.tool ? `## Tool for this task\nThis machine provides **${t.needs.tool
 - Do not call rigs_dev_start or rigs_propose: when every task of this project is done, RIGS proposes the branch to the merge steward, which re-runs build + tests, merges, pushes and rolls out.
 - Before reporting done: \`npm test\` passes (and \`npm run build\` when ui/ changed), and your work is committed.
 
-` : ''}${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\nPick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}## How to work
+` : ''}${autonomyBrief(p)}
+${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\nPick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}## How to work
 - Stay inside your task. If you need something from another machine, use the rigs MCP tools (mesh_*).
 - To understand existing software, binaries or apps, use REA (the \`rea\` MCP / \`npx -y rea-agents@latest\`).
 - Nobody is watching this session: never stop to ask a question or wait for a reply. Decide sensibly, note the assumption in your summary.

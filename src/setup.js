@@ -79,6 +79,11 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   \`mesh_app_register\` (node, id, name, icon, port, healthPath, launch). It then shows up in every
   JARVIS on the mesh — in the galaxy and the Apps list — and opening it spins it up on its machine
   (\`mesh_app_start\`) and shows it in a floating window. \`mesh_apps\` lists what is published.
+- **Working for Sir — what needs asking**: non-destructive work (reading, editing in the project, builds,
+  tests, profiling runs, launching apps/editors) is pre-approved: do it, don't stop to confirm. Destructive or
+  irreversible steps (deleting data you didn't create, discarding/reverting changes, force-push, publishing) need
+  his OK. RIGS changes go through the merge steward (below); in any other project, don't commit, push or switch
+  branches until he says so — leave the changes and list them.
 - **SSH**: \`ssh <machine-name>\` works between all nodes (aliases in ~/.ssh/config).
 - **Changing the mesh itself** (policy): never edit \`${APP_DIR}\` and never commit to \`main\`.
   Start with \`rigs_dev_start\` (CLI: \`rigs dev <topic>\`) — a worktree on branch
@@ -89,7 +94,7 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
 `;
 }
 
-async function writeInstructions() {
+export async function writeInstructions() {
   const md = { start: '<!-- >>> rigs mesh >>> -->', end: '<!-- <<< rigs mesh <<< -->' };
   const targets = [path.join(HOME, '.claude', 'CLAUDE.md'), path.join(process.env.CODEX_HOME || path.join(HOME, '.codex'), 'AGENTS.md')];
   for (const f of targets) {
