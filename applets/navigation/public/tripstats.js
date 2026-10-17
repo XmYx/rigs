@@ -156,13 +156,17 @@ export function tripStats(points, { timeline = true, timelinePoints = TIMELINE_P
 }
 
 /**
- * The cleaned fixes with the same smoothed speed tripStats measures (m/s): [{t, lat, lon, v}]. For
+ * The cleaned fixes with the same smoothed speed tripStats measures (m/s): [{t, lat, lon, v, lim?, camD?, camLim?}]. For
  * colouring a track by speed and for replay, so neither shows the raw GPS spikes the stats rejected.
  */
 export function speedProfile(points) {
   const fx = cleanFixes(points);
   const v = fx.length < 2 ? fx.map(() => 0) : speedSeries(fx, smoothPositions(fx));
-  return fx.map((p, i) => ({ t: p.t, lat: p.lat, lon: p.lon, v: v[i] }));
+  return fx.map((p, i) => {
+    const out = { t: p.t, lat: p.lat, lon: p.lon, v: v[i] };
+    for (const k of ['lim', 'camD', 'camLim']) if (finite(p[k])) out[k] = p[k]; // speed-warning inputs, for the replay
+    return out;
+  });
 }
 
 const round = (x, dp) => { const f = 10 ** dp; return Math.round(x * f) / f; };

@@ -36,7 +36,8 @@ test('validateApp: rejects bad input with readable errors', () => {
   assert.match(bad({ id: 'x', port: 70000 }), /port must be/);
   assert.match(bad({ id: 'x', url: 'ftp://a' }), /http/);
   assert.match(bad({ id: 'x', port: 80, healthPath: 'health' }), /healthPath must start/);
-  assert.match(bad({ id: 'x', port: 80, launch: { systemd: 'a', command: 'b' } }), /launch needs exactly one/);
+  assert.match(bad({ id: 'x', port: 80, launch: {} }), /launch needs systemd \(unit name\), command, or a per-OS recipe/);
+  assert.match(bad({ id: 'x', port: 80, launch: { systemd: 'bad unit' } }), /launch.systemd is not a valid unit name/);
   assert.match(bad({ id: 'x', port: 80, rewrite: { nope: true } }), /not a known hint/);
   assert.match(bad({ id: 'x', port: 80, rewrite: { basePath: 'ui' } }), /basePath must start/);
   assert.match(bad(null), /must be an object/);
@@ -179,6 +180,7 @@ test('startApp: already up is a no-op; systemd unit is started and awaited; no r
     probe: async () => (up ? { ok: true, latencyMs: 1 } : { ok: false, error: 'ECONNREFUSED' }),
     run: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); setTimeout(() => { up = true; }, 5); return { code: 0, stdout: '', stderr: '' }; },
     sleep: (ms) => new Promise((ok) => setTimeout(ok, 10)),
+    platform: 'linux', // systemd units are Linux-only
   };
   const r = await A.startApp('svc', { deps, pollMs: 10, waitMs: 2000 });
   assert.equal(r.started, true);
@@ -202,7 +204,125 @@ test('startApp: command recipe spawns detached and times out if the app never an
     probe: async () => ({ ok: false, error: 'ECONNREFUSED' }),
     spawn: (command, opts) => { spawned.push([command, opts.detached]); return { unref() {}, on() {} }; },
     sleep: () => new Promise((ok) => setTimeout(ok, 5)),
+    platform: 'linux',
   };
   await assert.rejects(A.startApp('cmd', { deps, pollMs: 5, waitMs: 40 }), /did not answer \/ within/);
   assert.deepEqual(spawned, [['python3 -m http.server 9', true]]);
+});
+
+// ---------------------------------------------------------------- per-OS launch recipes
+
+test('launch recipe: old shapes validate and normalize exactly as before', () => {
+  assert.deepEqual(A.validateApp({ id: 'a', port: 1, launch: { systemd: 'a.service' } }).app.launch, { systemd: 'a.service' });
+  assert.deepEqual(A.validateApp({ id: 'b', port: 1, launch: { command: 'node server.js' } }).app.launch, { command: 'node server.js' });
+  assert.equal(A.validateApp({ id: 'c', port: 1 }).app.launch, null);
+});
+
+test('launch recipe: per-OS entries beside the systemd unit, with cwd/env, aliases and string shorthand', () => {
+  const { app, errors } = A.validateApp({ id: 'x', port: 1, launch: {
+    systemd: 'x.service', command: 'x-serve', cwd: '~/x', env: { PORT: 8080 },
+    win32: { command: 'x.cmd --port 1', cwd: '~\\x', env: { DEBUG: true } },
+    mac: 'x-mac',
+  } });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(app.launch, {
+    systemd: 'x.service', command: 'x-serve', cwd: '~/x', env: { PORT: '8080' },
+    darwin: { command: 'x-mac' },
+    windows: { command: 'x.cmd --port 1', cwd: '~\\x', env: { DEBUG: 'true' } },
+  });
+  const perOsOnly = A.validateApp({ id: 'y', port: 1, launch: { windows: { command: 'y.exe' } } });
+  assert.deepEqual(perOsOnly.app.launch, { windows: { command: 'y.exe' } });
+  assert.deepEqual(A.validateApp({ id: 'z', port: 1, launch: { linux: { systemd: 'z.service' } } }).app.launch, { linux: { systemd: 'z.service' } });
+});
+
+test('launch recipe: invalid per-OS entries are rejected with readable errors', () => {
+  const bad = (launch) => A.validateApp({ id: 'x', port: 1, launch }).errors.join(' | ');
+  assert.match(bad({ windows: { systemd: 'x.service' } }), /launch.windows.systemd is Linux only/);
+  assert.match(bad({ darwin: {} }), /launch.darwin needs a command/);
+  assert.match(bad({ linux: { systemd: 'a', command: 'b' } }), /launch.linux needs exactly one of systemd/);
+  assert.match(bad({ windows: { command: 'x', env: { 'BAD-NAME': '1' } } }), /launch.windows.env.BAD-NAME is not a valid variable name/);
+  assert.match(bad({ windows: { command: 'x' }, win32: { command: 'y' } }), /repeats launch.windows/);
+  assert.match(bad({ command: 'x', cwd: 5 }), /launch.cwd must be a path/);
+  assert.match(bad('node x'), /launch must be an object/);
+});
+
+test('launchFor: picks the recipe per platform (linux, darwin, win32)', () => {
+  const both = { systemd: 'x.service', command: 'x-serve', windows: { command: 'x.cmd', cwd: 'C:\\x' } };
+  assert.deepEqual(A.launchFor(both, 'linux'), { systemd: 'x.service' });
+  assert.deepEqual(A.launchFor(both, 'darwin'), { command: 'x-serve', cwd: '', env: {} });
+  assert.deepEqual(A.launchFor(both, 'win32'), { command: 'x.cmd', cwd: 'C:\\x', env: {} });
+  // A systemd-only app has nothing to run off Linux; a command-only app runs everywhere.
+  assert.equal(A.launchFor({ systemd: 'x.service' }, 'win32'), null);
+  assert.equal(A.launchFor({ systemd: 'x.service' }, 'darwin'), null);
+  for (const p of ['linux', 'darwin', 'win32']) assert.deepEqual(A.launchFor({ command: 'go' }, p), { command: 'go', cwd: '', env: {} });
+  // A per-OS linux entry replaces the top-level unit there.
+  assert.deepEqual(A.launchFor({ systemd: 'x.service', linux: { command: 'x-linux' } }, 'linux'), { command: 'x-linux', cwd: '', env: {} });
+  assert.equal(A.launchFor(null, 'linux'), null);
+  // localApps exposes the recipe this node runs.
+  assert.deepEqual(A.validateApp({ id: 'h', port: 1, launch: { command: 'go' } }).app.launchHere, { command: 'go', cwd: '', env: {} });
+});
+
+test('splitWinCommand: Windows command-line quoting', () => {
+  assert.deepEqual(A.splitWinCommand('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.rigs\\apps\\x\\launch.mjs"'), ['C:\\Program Files\\nodejs\\node.exe', 'C:\\Users\\me\\.rigs\\apps\\x\\launch.mjs']);
+  assert.deepEqual(A.splitWinCommand('python  -m http.server 9'), ['python', '-m', 'http.server', '9']);
+  assert.deepEqual(A.splitWinCommand('x "" "a ""b"" c" d\\e'), ['x', '', 'a "b" c', 'd\\e']);
+});
+
+test('commandPlan: shell on POSIX; on win32 argv + PATH lookup for spawnCmd, cmd.exe only for cmd syntax', () => {
+  const posix = A.commandPlan({ command: 'python3 -m http.server 9', cwd: '~/app', env: { A: '1' } }, { platform: 'linux', home: '/home/me', shellEnv: '/bin/zsh' });
+  assert.deepEqual(posix, { cmd: 'python3 -m http.server 9', args: [], shell: '/bin/zsh', cwd: '/home/me/app', env: { A: '1' } });
+  assert.equal(A.commandPlan({ command: 'x' }, { platform: 'darwin', home: '/Users/me', shellEnv: '' }).shell, '/bin/sh');
+
+  const looked = [];
+  const which = (n) => { looked.push(n); return n === 'serve' ? 'C:\\Users\\me\\AppData\\Roaming\\npm\\serve.cmd' : null; };
+  const win = A.commandPlan({ command: 'serve -l 8080 ~\\site', cwd: '~\\apps' }, { platform: 'win32', home: 'C:\\Users\\me', which });
+  assert.deepEqual(win, { cmd: 'C:\\Users\\me\\AppData\\Roaming\\npm\\serve.cmd', args: ['-l', '8080', 'C:\\Users\\me\\site'], shell: false, cwd: 'C:\\Users\\me\\apps', env: {} });
+  assert.deepEqual(looked, ['serve']);
+  const rel = A.commandPlan({ command: '.\\run.ps1 --fast', cwd: 'D:\\app' }, { platform: 'win32', home: 'C:\\Users\\me', which });
+  assert.deepEqual([rel.cmd, rel.args, rel.shell], ['D:\\app\\run.ps1', ['--fast'], false]);
+  const cmdSyntax = A.commandPlan({ command: 'set X=1 && node server.js' }, { platform: 'win32', home: 'C:\\Users\\me', which });
+  assert.deepEqual([cmdSyntax.cmd, cmdSyntax.shell, cmdSyntax.cwd], ['set X=1 && node server.js', true, 'C:\\Users\\me']);
+});
+
+test('startApp on win32: the windows command goes through spawnCmd — no systemctl, no POSIX shell', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'dual', port: 9, launch: { systemd: 'dual.service', windows: { command: 'dual-serve --port 9', env: { DUAL: '1' } } } }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const calls = [];
+  let up = false;
+  const deps = {
+    platform: 'win32',
+    probe: async () => (up ? { ok: true, latencyMs: 1 } : { ok: false, error: 'ECONNREFUSED' }),
+    run: async (cmd, args) => { calls.push(['run', cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; },
+    spawn: (cmd) => { calls.push(['spawn', cmd]); return { unref() {}, on() {} }; },
+    which: (n) => (n === 'dual-serve' ? 'C:\\tools\\dual-serve.cmd' : null),
+    spawnCmd: (cmd, args, opts) => {
+      calls.push(['spawnCmd', cmd, ...args]);
+      assert.equal(opts.detached, true);
+      assert.equal(opts.windowsHide, true);
+      assert.equal(opts.shell, undefined);
+      assert.equal(opts.env.DUAL, '1');
+      assert.ok(opts.env.PATH);
+      setTimeout(() => { up = true; }, 5);
+      return { unref() {}, on() {} };
+    },
+    sleep: () => new Promise((ok) => setTimeout(ok, 5)),
+  };
+  const r = await A.startApp('dual', { deps, pollMs: 5, waitMs: 2000 });
+  assert.equal(r.started, true);
+  assert.deepEqual(calls, [['spawnCmd', 'C:\\tools\\dual-serve.cmd', '--port', '9']]);
+
+  // The same app on Linux uses its systemd unit.
+  up = false;
+  calls.length = 0;
+  deps.platform = 'linux';
+  deps.run = async (cmd, args) => { calls.push(['run', cmd, ...args]); setTimeout(() => { up = true; }, 5); return { code: 0, stdout: '', stderr: '' }; };
+  await A.startApp('dual', { deps, pollMs: 5, waitMs: 2000 });
+  assert.deepEqual(calls, [['run', 'systemctl', '--user', 'start', 'dual.service']]);
+
+  // On macOS it has no recipe: a clear error that says which OS key to add.
+  up = false;
+  deps.platform = 'darwin';
+  await assert.rejects(A.startApp('dual', { deps }), /no launch recipe for darwin \(add "launch": \{ "darwin"/);
 });

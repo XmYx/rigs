@@ -42,7 +42,10 @@ export function newTripId(t = Date.now(), rnd = Math.random) {
 
 /** The stored shape of a fix, rounded to what GPS can actually resolve to keep chunks small. */
 function compact(f) {
-  return { t: Math.round(f.t), lat: round(f.lat, 6), lon: round(f.lon, 6), speed: round(f.speed, 2), heading: round(f.heading, 1), accuracy: round(f.accuracy, 1), alt: round(f.alt, 1) };
+  const out = { t: Math.round(f.t), lat: round(f.lat, 6), lon: round(f.lon, 6), speed: round(f.speed, 2), heading: round(f.heading, 1), accuracy: round(f.accuracy, 1), alt: round(f.alt, 1) };
+  // The speed limit and camera ahead the HUD showed (app.js), kept only when known.
+  for (const k of ['lim', 'camD', 'camLim']) if (finite(f[k])) out[k] = Math.round(f[k]);
+  return out;
 }
 
 /** localStorage-like wrapper that never throws (private mode, quota full, no storage at all). */

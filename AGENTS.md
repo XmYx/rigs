@@ -20,6 +20,7 @@ treat `main` as production.
 | `src/autonomy.js` | The completion loop's policy (pure, unit-tested): retry budget + model ladder (`config.autonomy`), the safe-default answer to agent questions, the git guard for briefs and direct agents (no commit/push/branch switch outside a dev worktree), and the one "How did it work out, sir?" report. Wired in by `planner.js` / `work.js`; e2e: `scripts/e2e-completion-loop.js` |
 | `src/work.js` | Runs one task on this machine: the pinned project's hub rig, the project's OpenRig team (seat per role + model) + queue item, or a direct agent session where OpenRig is unavailable |
 | `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
+| `src/usage.js` | Work dashboard data (live Claude sessions, plan limits) and the **usage ledger**: one JSONL record per chat turn, planning call and task run in `RIGS_HOME/usage/<YYYY-MM>.jsonl` (model, node, time, tokens, cost, status, outcome). Chat turns take tokens from the harness (`claude -p` result, Codex `turn.completed`, Ollama's final chunk); task runs from their seat's transcript slice between start and end (`planner.onRunEnd` → `usage/slice` on the machine that ran it). `GET /api/local/usage`, mesh `GET /api/usage`, MCP `usage_report`, `rigs usage [backfill]` |
 | `src/capabilities.js` | Machine tools (ComfyUI detector + declared tools). Add a detector here when introducing a new tool |
 | `src/comfyui.js`, `src/comfyui-workflows.js` | Shared connector to a user-provided ComfyUI (`/api/local/comfyui/*`): per-machine URL + secret auth header in `config.comfyui`, test, models, txt2img/img2img/upscale templates, jobs over `/prompt` + `/ws` with lanes, GPU-overseer leases. Every graph is checked against `/object_info` first — never `/prompt` a missing model (some installs auto-download it). Used by `applets/krea-studio` |
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
@@ -38,7 +39,7 @@ treat `main` as production.
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
-| `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist` |
+| `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist`. `usage-panel.js` is the ⏱ "Tokens & time" panel (mesh `/api/usage`: totals, by model/project/task, latest runs) |
 | `ui/src/control.js` | Access & control panel per machine: permissions + guided grants, the access/full-control switches, live "in control" banner, Stop / Stop on every machine |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
@@ -85,8 +86,22 @@ Every web app or applet built on the mesh is published so it opens inside JARVIS
 
 1. Serve it with **relative URLs** (it is reached under `/api/nodes/<node>/apps/<id>/`) and a cheap
    health endpoint (`/healthz`).
-2. Give it a **launch recipe**: on Linux a `systemctl --user` unit (enabled, so it survives reboots);
-   elsewhere a `command`. JARVIS uses it to spin the app up when someone opens it while it is down.
+2. Give it a **launch recipe** for every OS it can run on. JARVIS uses it to spin the app up when someone
+   opens it while it is down. `launch` takes, side by side:
+   - `systemd`: a `systemctl --user` unit (enabled, so it survives reboots), used on **Linux only**;
+   - `command` (+ optional `cwd`, default `~`, and `env`): a command line, used on any OS (on Linux only
+     when there is no `systemd`);
+   - `linux` / `darwin` / `windows`: `{ command, cwd, env }` for that OS, replacing the top-level recipe
+     there (`linux` may give `{ systemd }`).
+
+   ```json
+   "launch": { "systemd": "szuf.service", "command": "~/szuf/run.sh",
+               "windows": { "command": "python server.py --port 8787", "cwd": "~\\szuf" } }
+   ```
+   On Windows a command runs **without a POSIX shell**: its program is found on PATH (`.exe`, `.cmd`, `.bat`,
+   `.ps1` through `util.spawnCmd`); only a line with cmd.exe syntax (`&&`, `|`, `%VAR%`) goes through cmd.exe.
+   `launchFor(launch, platform)` in `src/apps.js` picks the recipe; each app's `launchHere` is the one its host runs.
+   Old `{ systemd }` / `{ command }` recipes keep working unchanged.
 3. **Register** it on its host: MCP `mesh_app_register` (or `POST /api/local/apps`, or `apps` in
    `~/.rigs/config.json` — picked up live). It appears in the galaxy (Apps), the left-panel Apps list
    and the ▦ launcher on every JARVIS; "open <name>" works by voice.

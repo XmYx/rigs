@@ -273,3 +273,37 @@ test('App Store MCP tools: appstore_list and appstore_install (wait, then uninst
     assert.ok(await waitFor(async () => !(await helloAnswers())), 'the app is stopped');
   } finally { mcp.kill(); }
 });
+
+test('App Cloud registration accepts and persists per-OS launch recipes (POST /api/local/apps and mesh_app_register)', async () => {
+  const launch = { systemd: 'dual.service', windows: { command: 'dual.cmd --port 18299', cwd: '~\\dual', env: { DUAL: '1' } }, darwin: { command: 'dual-mac' } };
+  const r = await post('/api/local/apps', { id: 'dual', name: 'Dual', port: 18299, healthPath: '/healthz', launch });
+  const app = r.apps.find((a) => a.id === 'dual');
+  assert.deepEqual(app.launch, launch);
+  const here = { linux: { systemd: 'dual.service' }, darwin: { command: 'dual-mac', cwd: '', env: {} }, win32: { command: 'dual.cmd --port 18299', cwd: '~\\dual', env: { DUAL: '1' } } }[process.platform];
+  assert.deepEqual(app.launchHere, here);
+  const saved = JSON.parse(fs.readFileSync(path.join(HOME, 'config.json'), 'utf8')).apps.find((a) => a.id === 'dual');
+  assert.deepEqual(saved.launch, launch);
+  const bad = await fetch(`${BASE}/api/local/apps`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'bad', port: 1, launch: { windows: { systemd: 'x' } } }) });
+  assert.equal(bad.status, 400);
+  assert.match(await bad.text(), /Linux only/);
+
+  // mesh_app_register goes through /api/nodes/self/…, which answers once the first discovery scan has run.
+  assert.ok(await waitFor(async () => (await fetch(`${BASE}/api/nodes/self/apps`)).ok, 30000), 'discovery knows this node');
+  const mcp = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'mcp'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+  const replies = new Map();
+  let buf = '';
+  mcp.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const msg = JSON.parse(buf.slice(0, i)); replies.set(msg.id, msg); buf = buf.slice(i + 1); } });
+  try {
+    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }) + '\n');
+    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+    await waitFor(() => replies.has(2), 30000);
+    const schema = replies.get(2).result.tools.find((t) => t.name === 'mesh_app_register').inputSchema.properties.launch;
+    for (const k of ['systemd', 'command', 'linux', 'darwin', 'windows']) assert.ok(schema.properties[k], `launch.${k} in the schema`);
+    const mlaunch = { systemd: 'mcpdual.service', windows: { command: 'mcpdual.exe' } };
+    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'mesh_app_register', arguments: { node: 'self', id: 'mcpdual', port: 18298, launch: mlaunch } } }) + '\n');
+    await waitFor(() => replies.has(3), 30000);
+    assert.ok(!replies.get(3).result.isError, replies.get(3).result.content[0].text);
+    assert.deepEqual((await get('/api/local/apps')).apps.find((a) => a.id === 'mcpdual').launch, mlaunch);
+  } finally { mcp.kill(); }
+  for (const id of ['dual', 'mcpdual']) await post('/api/local/apps', { id, remove: true });
+});

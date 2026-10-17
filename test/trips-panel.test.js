@@ -87,6 +87,23 @@ test('tripsview: replay follows the real timestamps, interpolates, and holds hea
   assert.equal(V.replayAt({ pts: [] }, 0), null);
 });
 
+test('tripsview: replay carries the recorded speed limit and camera distance, so the HUD shows the same warning', async () => {
+  const W = await import('../applets/navigation/public/speedwarn.js');
+  const fixes = track([[3, 20, 0]]).map((p, i) => ({ ...p, lim: 50, ...(i > 0 ? { camD: 400 - i * 100, camLim: 40 } : {}) }));
+  const prof = speedProfile(fixes);
+  assert.deepEqual(prof.map((p) => [p.lim, p.camD ?? null, p.camLim ?? null]), [[50, null, null], [50, 300, 40], [50, 200, 40], [50, 100, 40]]);
+  const tr = V.replayTrack(prof);
+  const first = V.replayAt(tr, tr.t0);
+  assert.deepEqual([first.lim, first.camD, first.camLim], [50, null, null], 'not recorded → null');
+  const mid = V.replayAt(tr, (tr.pts[1].t + tr.pts[2].t) / 2);
+  assert.equal(mid.camD, 250, 'the camera distance counts down between fixes');
+  const hud = W.speedHud({ speedKmh: mid.v * 3.6, limitKmh: mid.lim, camera: { maxspeed: mid.camLim }, distanceM: mid.camD });
+  assert.equal(hud.state, 'camera-speeding');
+  assert.equal(hud.limit, 40);
+  const old = V.replayAt(V.replayTrack(speedProfile(track([[2, 20, 0]]))), 0);
+  assert.deepEqual([old.lim, old.camD, old.camLim], [null, null, null], 'trips recorded before limits replay without a sign');
+});
+
 test('tripsview: speed chart geometry, axis in the display unit, labels', () => {
   const s = tripStats(track([[60, 25, 0], [60, 10, 0]]));
   const m = V.chartModel(s.timeline, { w: 340, h: 132, unit: 'kmh' });

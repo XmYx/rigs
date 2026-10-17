@@ -84,7 +84,9 @@ MIGRATIONS.push({
     const dir = path.join(root, 'applets', 'live-video');
     if (!fs.existsSync(path.join(dir, 'server.js'))) return { skipped: 'applet not in this checkout' };
     const { config, saveConfig } = await import('./config.js');
-    let launch = { command: `node ${JSON.stringify(path.join(dir, 'server.js'))}` };
+    // Quote with plain "" (JSON.stringify would double the backslashes of a Windows path).
+    const command = `node "${path.join(dir, 'server.js')}"`;
+    let launch = process.platform === 'win32' ? { windows: { command, cwd: root } } : { command };
     if (process.platform === 'linux' && which('systemctl')) {
       const unit = 'rigs-live-video.service';
       const dest = path.join(os.homedir(), '.config', 'systemd', 'user');
@@ -118,6 +120,17 @@ MIGRATIONS.push({
 
 // Every agent learns the screen-control tools and rules (on by default, ask first, never re-enable or bypass).
 MIGRATIONS.push({ id: '2026-10-17-control-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
+
+// Usage ledger: estimated records for the project task runs and JARVIS chat turns from before it existed. Waits for
+// peer discovery first, since a task's transcript lives on the machine that ran it (`rigs usage backfill` re-runs it).
+MIGRATIONS.push({
+  id: '2026-10-17-usage-backfill',
+  run: async () => {
+    await new Promise((r) => setTimeout(r, 20000));
+    const usage = await import('./usage.js');
+    return usage.backfill();
+  },
+});
 
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 

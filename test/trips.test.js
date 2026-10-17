@@ -11,7 +11,7 @@ import { test } from 'node:test';
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-trips-'));
 const { tripStats, aggregateTrips, cleanFixes } = await import('../applets/navigation/public/tripstats.js');
 const R = await import('../applets/navigation/public/trips.js');
-const { createTripStore } = await import('../applets/navigation/tripstore.js');
+const { createTripStore, normalizePoint } = await import('../applets/navigation/tripstore.js');
 const S = await import('../applets/navigation/server.js');
 
 const M_PER_DEG = 111195; // metres per degree of latitude (geo.js EARTH_RADIUS_M)
@@ -189,6 +189,24 @@ test('recorder: drops inaccurate fixes and jitter, starts above 5 km/h, chunks e
   assert.equal(last.reason, 'stopped');
   assert.equal(rec.status().outbox, 0);
   assert.equal(storage.getItem(R.CURRENT_KEY), null, 'no open trip remembered');
+});
+
+test('recorder and store keep the speed limit and camera distance the HUD showed, for the replay', async () => {
+  const clock = { t: 0 };
+  const posted = [];
+  const rec = R.createTripRecorder({ fetchImpl: async (url, init) => { posted.push(JSON.parse(init.body)); return { ok: true, status: 200 }; }, now: () => clock.t });
+  for (let i = 0; i < 20; i++) {
+    clock.t = i * 1000;
+    rec.addFix({ t: clock.t, lat: 47 + (i * 10) / M_PER_DEG, lon: 19, speed: 10, accuracy: 5, lim: 50, camD: i > 10 ? 412.6 : null, camLim: i > 10 ? 40 : undefined });
+  }
+  await rec.end();
+  const pts = posted.flatMap((c) => c.points);
+  assert.ok(pts.length >= 19);
+  assert.deepEqual(Object.keys(pts[0]).join(), 't,lat,lon,speed,heading,accuracy,alt,lim', 'no camera fields while none was ahead');
+  assert.deepEqual([pts.at(-1).lim, pts.at(-1).camD, pts.at(-1).camLim], [50, 413, 40]);
+  const stored = normalizePoint({ t: 1, lat: 47, lon: 19, lim: 50, camD: 'near', camLim: 40 });
+  assert.deepEqual([stored.lim, 'camD' in stored, stored.camLim], [50, false, 40], 'numbers kept, anything else dropped');
+  assert.ok(!('lim' in normalizePoint({ t: 1, lat: 47, lon: 19 })), 'older points keep their shape');
 });
 
 test('recorder: derived speed (no coords.speed) starts a trip; GPS wobble does not', () => {

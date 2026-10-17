@@ -96,8 +96,8 @@ const TOOLS = [
     },
   },
   {
-    name: 'mesh_app_register', description: 'Publish a web app running on a machine to the App Cloud so JARVIS can open it in a floating window (served at /api/nodes/<node>/apps/<id>/). Give exactly one of port (+ optional host, default 127.0.0.1) or url. remove:true unregisters. The app should use relative URLs; it is served under a path prefix.',
-    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine hosting the app; "self" for this one' }, id: { type: 'string', description: 'a-z0-9_- id' }, name: { type: 'string' }, icon: { type: 'string', description: 'one emoji' }, port: { type: 'number' }, host: { type: 'string' }, url: { type: 'string' }, healthPath: { type: 'string' }, launch: { type: 'object', description: '{ systemd: "unit.service" } or { command: "…" }' }, remove: { type: 'boolean' } }, required: ['node', 'id'] },
+    name: 'mesh_app_register', description: 'Publish a web app running on a machine to the App Cloud so JARVIS can open it in a floating window (served at /api/nodes/<node>/apps/<id>/). Give exactly one of port (+ optional host, default 127.0.0.1) or url. remove:true unregisters. The app should use relative URLs; it is served under a path prefix. launch is how JARVIS starts it when it is down, per OS: systemd (a systemctl --user unit, Linux only) and/or command (any OS), plus optional linux / darwin / windows recipes that replace the top-level one on that OS, e.g. { "systemd": "x.service", "windows": { "command": "x.cmd --port 8080", "cwd": "~\\\\x" } }. A Windows command runs without a POSIX shell (its program is found on PATH, .exe/.cmd/.bat/.ps1); cmd.exe syntax (&&, |, %VAR%) runs through cmd.exe.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine hosting the app; "self" for this one' }, id: { type: 'string', description: 'a-z0-9_- id' }, name: { type: 'string' }, icon: { type: 'string', description: 'one emoji' }, port: { type: 'number' }, host: { type: 'string' }, url: { type: 'string' }, healthPath: { type: 'string' }, launch: { type: 'object', description: '{ systemd: "unit.service" } or { command: "…" }, and/or per-OS { linux | darwin | windows: { command, cwd, env } } (linux may give { systemd })', properties: { systemd: { type: 'string', description: 'systemctl --user unit (Linux only)' }, command: { type: 'string', description: 'command line, any OS (on Linux only without a systemd unit)' }, cwd: { type: 'string', description: 'for command; default ~' }, env: { type: 'object', description: 'for command: NAME: "value"' }, linux: { type: 'object', properties: { systemd: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, darwin: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, windows: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } } } }, remove: { type: 'boolean' } }, required: ['node', 'id'] },
     run: async (a) => { const { node, ...app } = a; const r = await api(`/api/nodes/${n(node)}/apps`, { method: 'POST', body: app }); return { apps: r.apps.map((x) => ({ id: x.id, name: x.name, target: x.target })), errors: r.errors }; },
   },
   {
@@ -226,6 +226,19 @@ const TOOLS = [
         via: t.run ? (t.run.mode === 'openrig' ? `OpenRig seat ${t.run.seat} (rig ${t.run.rig})` : `${t.run.session?.kind} ${t.run.session?.id}`) : null,
         why: r.why || t.reason || '', error: t.status === 'failed' ? t.summary : undefined,
       };
+    },
+  },
+  {
+    name: 'usage_report', description: 'The usage ledger across the mesh: which model spent how much time and how many tokens on which JARVIS chat turns, planning calls and project tasks, with each run\'s status and outcome. Returns totals, groupings (model, project, task, node, day, provider, kind) and the newest records. since/until take ms, an ISO date or a relative "24h" / "7d".',
+    inputSchema: { type: 'object', properties: {
+      since: { type: 'string', description: 'start of the range, e.g. "7d" (default), "24h", "2026-10-01"' }, until: { type: 'string' },
+      groupBy: { type: 'string', description: 'comma-separated: model, project, task, node, day, provider, kind (default model,project,task,node,day)' },
+      node: { type: 'string', description: 'one machine only; omit for the whole mesh' }, project: { type: 'string', description: 'project id filter' },
+      kind: { type: 'string', enum: ['chat-turn', 'task', 'plan', 'review', 'merge'] }, limit: { type: 'number', description: 'records to return (default 50)' },
+    } },
+    run: async (a) => {
+      const qs = new URLSearchParams({ since: a.since || '7d', ...(a.until ? { until: a.until } : {}), ...(a.groupBy ? { groupBy: a.groupBy } : {}), ...(a.project ? { project: a.project } : {}), ...(a.kind ? { kind: a.kind } : {}), limit: String(a.limit ?? 50) });
+      return api(a.node ? `/api/nodes/${n(a.node)}/usage?${qs}` : `/api/usage?${qs}`, { timeout: 60000 });
     },
   },
   {
