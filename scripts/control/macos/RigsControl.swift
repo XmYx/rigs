@@ -32,7 +32,18 @@ func argValue(_ name: String) -> String? {
   return nil
 }
 
-let home = argValue("--home") ?? ProcessInfo.processInfo.environment["RIGS_HOME"] ?? (NSHomeDirectory() + "/.rigs")
+/**
+ * The app always lives in <home>/bin/RIGS Control.app. When macOS starts it on its own (System Settings
+ * "Quit & Reopen" goes through LaunchServices, without --home), that location still names the right home,
+ * so it can never serve another RIGS install's socket.
+ */
+func bundleHome() -> String? {
+  let bundle = URL(fileURLWithPath: Bundle.main.bundlePath)
+  guard bundle.pathExtension == "app", bundle.deletingLastPathComponent().lastPathComponent == "bin" else { return nil }
+  return bundle.deletingLastPathComponent().deletingLastPathComponent().path
+}
+
+let home = argValue("--home") ?? bundleHome() ?? ProcessInfo.processInfo.environment["RIGS_HOME"] ?? (NSHomeDirectory() + "/.rigs")
 let runDir = home + "/run"
 let sockPath = runDir + "/control.sock"
 let tokenPath = runDir + "/control.token"
@@ -626,6 +637,11 @@ func serve() throws {
   addr.sun_family = sa_family_t(AF_UNIX)
   addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
   withUnsafeMutableBytes(of: &addr.sun_path) { p in for (i, b) in path.enumerated() { p[i] = b }; p[path.count] = 0 }
+  // One helper per home: a second copy (started by macOS rather than launchd) leaves the running one alone.
+  let probe = socket(AF_UNIX, SOCK_STREAM, 0)
+  let live = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+  close(probe)
+  if live == 0 { log("another RIGS Control already serves \(sockPath); exiting"); exit(0) }
   unlink(sockPath)
   let old = umask(0o177)
   let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
@@ -684,7 +700,20 @@ term.resume()
 if CommandLine.arguments.contains("--version") { print(VERSION); exit(0) }
 if CommandLine.arguments.contains("--preflight") { exit(CGPreflightScreenCaptureAccess() ? 0 : 1) }
 do { try serve() } catch let f as Fail { log("cannot start: \(f.message)"); exit(1) } catch { log("cannot start: \(error)"); exit(1) }
+/**
+ * After a Screen Recording switch, System Settings offers "Quit & Reopen". Quitting is not needed (grants are
+ * re-checked in a fresh child) and would leave launchd's job stopped, so the quit request is declined. The daemon
+ * stops the helper with launchctl bootout (SIGTERM), which does not go through here.
+ */
+final class AppDelegate: NSObject, NSApplicationDelegate {
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    log("declined a quit request (stop RIGS Control with: rigs control helper stop)")
+    return .terminateCancel
+  }
+}
+let delegate = AppDelegate()
 let app = NSApplication.shared
+app.delegate = delegate
 app.setActivationPolicy(.accessory)
 registerHotkey()
 app.run()
