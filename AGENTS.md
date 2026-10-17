@@ -17,6 +17,7 @@ treat `main` as production.
 | `src/chat.js` | JARVIS brains: Claude Code (`claude -p`), Codex (`codex exec --json`), Ollama (HTTP). Hot-swappable mid-conversation |
 | `src/models.js` | Provider → model → effort catalog and the per-harness flags (`--model/--effort`, `-m/-c model_reasoning_effort`, Ollama `think`); core brain |
 | `src/planner.js` | Projects: core-brain planning → routing policy (`config.routing.rules`) → dispatch → tracking. `routeProject` is pure and unit-tested |
+| `src/autonomy.js` | The completion loop's policy (pure, unit-tested): retry budget + model ladder (`config.autonomy`), the safe-default answer to agent questions, the git guard for briefs and direct agents (no commit/push/branch switch outside a dev worktree), and the one "How did it work out, sir?" report. Wired in by `planner.js` / `work.js`; e2e: `scripts/e2e-completion-loop.js` |
 | `src/work.js` | Runs one task on this machine: the pinned project's hub rig, the project's OpenRig team (seat per role + model) + queue item, or a direct agent session where OpenRig is unavailable |
 | `src/hubs.js` | Persistent OpenRig rigs: one per pinned project (`hub-<name>-<hash>`, lead seat + on-demand workers, idle workers stopped after `openrig.hubs.idleMinutes`, tasks via `rig queue`, follow-ups via `rig send`) and JARVIS's `jarvis` rig whose overseer seat receives the intake. `GET /api/local/hubs`, `hubs/up`, `hubs/down`, `hubs/send` |
 | `src/usage.js` | Work dashboard data (live Claude sessions, plan limits) and the **usage ledger**: one JSONL record per chat turn, planning call and task run in `RIGS_HOME/usage/<YYYY-MM>.jsonl` (model, node, time, tokens, cost, status, outcome). Chat turns take tokens from the harness (`claude -p` result, Codex `turn.completed`, Ollama's final chunk); task runs from their seat's transcript slice between start and end (`planner.onRunEnd` → `usage/slice` on the machine that ran it). `GET /api/local/usage`, mesh `GET /api/usage`, MCP `usage_report`, `rigs usage [backfill]` |
@@ -25,13 +26,20 @@ treat `main` as production.
 | `src/apps.js` | App registry (App Cloud): validates `config.apps`, health-probes each app, `GET /api/local/apps`, `aggregateApps`, and `resolveApp(node,id)` for the proxy. Mesh catalog: `GET /api/apps`, MCP `mesh_apps` |
 | `src/appstore.js` | App Store: catalog of installable apps (`appstore/catalog/*.json`, format in `appstore/README.md`; sources of apps without a public repo vendored in `appstore/sources/<id>`), manifest validation, and the resumable install job (fetch → venv → deps → models → post → launch → register → health) with progress; uninstall moves files to `~/.rigs/trash`. `GET /api/local/appstore`, `…/<id>/install|job|cancel|uninstall`, MCP `appstore_list` / `appstore_install` |
 | `src/pty.js` | Terminals (node-pty prebuilds for macOS/Linux/Windows) shared over WebSockets |
-| `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools |
+| `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools (incl. `mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`; no tool can enable control) |
 | `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
+| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), lease, rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`. Design: `docs/full-access.md` |
+| `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
+| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, Linux uinput root step, GNOME extension) |
+| `src/control-{linux,mac,win}.js`, `src/control-rpc.js`, `src/control-error.js` | Platform adapters that start and talk to the helper, the JSON-lines helper transport and the error type |
+| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`) and `rigs-control.ps1`. The macOS helper (`macos/RigsControl.swift`) is not written yet; until it is, macOS reports no backend and fails closed |
+| `src/access.js` | Permission status per OS (files, screen capture, input, accessibility) with fix hints and the guided grant |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
 | `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist`. `usage-panel.js` is the ⏱ "Tokens & time" panel (mesh `/api/usage`: totals, by model/project/task, latest runs) |
+| `ui/src/control.js` | Access & control panel per machine: permissions + guided grants, the access/full-control switches, live "in control" banner, Stop / Stop on every machine |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
 ## Rules
@@ -52,6 +60,12 @@ treat `main` as production.
 - **Playbooks** (`docs/playbooks/*.md`): proven methods for recurring RIGS changes. A JARVIS request whose goal matches a
   playbook's `match` regex skips LLM planning: one agent follows it, then the final review. When a kind of request
   repeats, write one (front matter `title`, `match`, `size`; then the files, steps and checks). Example: `ui-theme.md`.
+- **Screen control is gated (`src/control.js`, design in `docs/full-access.md` §7).** Control is on by default, and
+  a person or the kill switch switches it off per machine. `config.control` is in `patchConfig`'s blocked set, so no
+  generic settings save or agent `POST config` can switch it back on. Only a confirmed human surface may do that. Do
+  not add a route or MCP tool that bypasses the gate, the lease, the audit log or the kill switch. Every refusal is
+  audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
+  or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test
@@ -71,8 +85,22 @@ Every web app or applet built on the mesh is published so it opens inside JARVIS
 
 1. Serve it with **relative URLs** (it is reached under `/api/nodes/<node>/apps/<id>/`) and a cheap
    health endpoint (`/healthz`).
-2. Give it a **launch recipe**: on Linux a `systemctl --user` unit (enabled, so it survives reboots);
-   elsewhere a `command`. JARVIS uses it to spin the app up when someone opens it while it is down.
+2. Give it a **launch recipe** for every OS it can run on. JARVIS uses it to spin the app up when someone
+   opens it while it is down. `launch` takes, side by side:
+   - `systemd`: a `systemctl --user` unit (enabled, so it survives reboots), used on **Linux only**;
+   - `command` (+ optional `cwd`, default `~`, and `env`): a command line, used on any OS (on Linux only
+     when there is no `systemd`);
+   - `linux` / `darwin` / `windows`: `{ command, cwd, env }` for that OS, replacing the top-level recipe
+     there (`linux` may give `{ systemd }`).
+
+   ```json
+   "launch": { "systemd": "szuf.service", "command": "~/szuf/run.sh",
+               "windows": { "command": "python server.py --port 8787", "cwd": "~\\szuf" } }
+   ```
+   On Windows a command runs **without a POSIX shell**: its program is found on PATH (`.exe`, `.cmd`, `.bat`,
+   `.ps1` through `util.spawnCmd`); only a line with cmd.exe syntax (`&&`, `|`, `%VAR%`) goes through cmd.exe.
+   `launchFor(launch, platform)` in `src/apps.js` picks the recipe; each app's `launchHere` is the one its host runs.
+   Old `{ systemd }` / `{ command }` recipes keep working unchanged.
 3. **Register** it on its host: MCP `mesh_app_register` (or `POST /api/local/apps`, or `apps` in
    `~/.rigs/config.json` — picked up live). It appears in the galaxy (Apps), the left-panel Apps list
    and the ▦ launcher on every JARVIS; "open <name>" works by voice.

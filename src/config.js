@@ -41,9 +41,16 @@ function defaults() {
     // How agents RIGS starts (terminal agents, project tasks, OpenRig seats) handle permissions. "auto" = work
     // unattended: Claude's auto mode (a classifier approves safe actions), Codex in its workspace-write sandbox
     // with network, asking only to escalate. Anything that still asks shows up as "needs you" (blinking planet).
-    // commitOtherProjects: 'ask' = agents leave changes uncommitted in projects other than RIGS and list them for Sir;
-    // 'branch' = they may commit on a work branch there. RIGS itself always goes through the merge steward.
+    // commitOtherProjects: 'ask' = agents leave changes uncommitted in projects other than RIGS and list them for Sir.
+    // Task agents never commit, push or switch branches outside a RIGS dev worktree (src/autonomy.js guardBrief), so
+    // 'branch' no longer lets them commit there. RIGS itself always goes through the merge steward.
     agents: { claudePermissionMode: 'auto', codexSandbox: 'workspace-write', codexApproval: 'on-request', codexNetwork: true, rigPolicy: 'builtin:auto', commitOtherProjects: 'ask' },
+    // The completion loop (src/autonomy.js): a task that fails, stalls (no progress for stallMinutes) or goes silent is
+    // retried with a fresh brief, one rung up the ladder each time, up to maxAttempts attempts per task (a project can
+    // override it with its own `autonomy`); questions agents ask are answered with the safe default after
+    // answerAfterSec, at most maxSelfAnswers times per attempt; Sir gets one report when the loop ends.
+    // ladder: [] = the built-in Sonnet medium → Opus high → Opus xhigh. Providers in routing.avoid are skipped.
+    autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60 },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
@@ -97,6 +104,14 @@ function defaults() {
     // Change policy: work branches merged by one steward. steward: '' = auto (first machine that can push).
     merge: { steward: '' },
     desktop: { sunshineUser: 'rigs', sunshinePass: crypto.randomBytes(12).toString('base64url') },
+    // Full access (enabled: screenshots + window list) and full control (input: pointer, keys, focus) of this
+    // machine's screen, see docs/full-access.md and src/control.js. On by default; the kill switch or a person
+    // switches it off per machine, and only control.enable() from a human surface switches it back on, never the
+    // settings patch. backend: 'auto' or a forced one (mutter, portal, …).
+    control: {
+      enabled: true, input: true, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
+      maxActionsPerMin: 120, maxShotsPerMin: 30, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+    },
   };
 }
 
@@ -147,7 +162,7 @@ export function saveConfig(cfg = current) {
 export function patchConfig(patch) {
   const cfg = config();
   // comfyui holds a secret and has its own validated endpoint (/api/local/comfyui/config).
-  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui']);
+  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui', 'control']);
   for (const k of Object.keys(patch || {})) if (blocked.has(k)) delete patch[k];
   const next = merge(cfg, patch);
   saveConfig(next);
@@ -161,5 +176,6 @@ export function publicConfig() {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
     models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects,
+    control: { ...c.control },
   };
 }

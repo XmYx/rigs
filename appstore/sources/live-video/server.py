@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live video generator applet: web UI + player for engine.py (LTX-Video 2B on the RTX 4090).
 
-    livevideo/.venv/bin/python livevideo/server.py --port 8211
+    livevideo/.venv/bin/python livevideo/server.py --port 8211   (Windows: .venv\\Scripts\\python.exe)
 
 This process never touches CUDA. On Start it leases VRAM from the GPU overseer (localhost:8195), spawns
 engine.py (GPU) and plays the segments it produces to every browser over one WebSocket (JPEG frames, paced on
@@ -24,7 +24,7 @@ from aiohttp import web
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("LIVEVIDEO_ROOT") or HERE)  # recordings (api/record) must stay inside it
-VENV_PY = HERE / ".venv/bin/python"
+VENV_PY = HERE / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 LOGS = HERE / "logs"
 STOPPED_UNITS = LOGS / "stopped_units.json"
 OVERSEER = os.environ.get("GPU_OVERSEER", "http://127.0.0.1:8195")
@@ -178,6 +178,8 @@ class Live:
         log(f"engine pid {self.proc.pid}")
 
     async def systemctl(self, *args):
+        if not sys.platform.startswith("linux"):
+            return 1  # no systemd: nothing to pause or resume
         p = await asyncio.create_subprocess_exec("systemctl", "--user", *args)
         return await p.wait()
 

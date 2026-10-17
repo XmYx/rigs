@@ -7,6 +7,9 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
+import * as control from './control.js';
+import { createControlApi, wireControlEvents } from './control-api.js';
+import { ensureControlSetup } from './control-setup.js';
 import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
 import * as caps from './capabilities.js';
@@ -97,7 +100,7 @@ async function selfInfo() {
     canPush: await merge.canPush().catch(() => false),
     desktopInstall: await desktopInstall.status().then((d) => ({ state: d.state, command: d.command, note: d.note, sunshine: d.sunshine, moonlight: d.moonlight, steps: d.steps.slice(-4) })).catch(() => null),
     rootSteps: rootsteps.pending(),
-    access: await access.status().then((a) => ({ ok: a.ok, home: a.home, blocked: a.blocked, fullDiskAccess: a.fullDiskAccess, controlledFolderAccess: a.controlledFolderAccess, runtime: a.runtime })).catch(() => null),
+    access: await access.status().then((a) => ({ ok: a.ok, home: a.home, blocked: a.blocked, fullDiskAccess: a.fullDiskAccess, screenCapture: a.screenCapture, input: a.input, accessibility: a.accessibility, controlledFolderAccess: a.controlledFolderAccess, runtime: a.runtime })).catch(() => null),
   };
 }
 
@@ -187,7 +190,7 @@ export async function startServer() {
       pr.tasks = [{
         id: 't1', kind: 'merge', size: 'L', deps: [], needs: { platform: 'any', gpu: false, tool: '' }, suggest: {}, status: 'todo', assign: null, reason: '', run: null, summary: '',
         title: `Resolve merge conflicts: ${req.branch}`,
-        description: `The merge steward is merging ${req.branch} (from ${req.node}) into the latest main in this worktree:\n  ${req.worktree}\nThe merge stopped on conflicts in:\n${req.conflicts.map((f) => '  - ' + f).join('\n')}\n\nThe branch's commits (its intent):\n${log_}\n\nResolve every conflict so BOTH sides' changes survive (read 'git log origin/main' for what landed on main meanwhile; never drop either side's work silently). Then run 'npm test', 'git add' the files and finish the merge with 'git commit --no-edit'. Do not push — when the merge is committed, call the rigs MCP tool rigs_merge_resolved with {"id": "${req.id}"}; the steward re-runs the checks and pushes.`,
+        description: `The merge steward is merging ${req.branch} (from ${req.node}) into the latest main in this worktree:\n  ${req.worktree}\nThe merge stopped on conflicts in:\n${req.conflicts.map((f) => '  - ' + f).join('\n')}\n\nThe branch's commits (its intent):\n${log_}\n\nResolve every conflict so BOTH sides' changes survive (read 'git log origin/main' for what landed on main meanwhile; never drop either side's work silently). Then run 'npm test' and 'git add' the resolved files. Do not commit and do not push: call the rigs MCP tool rigs_merge_resolved with {"id": "${req.id}"} — it commits the merge, and the steward re-runs the checks and pushes.`,
       }];
       planner.routeProject(pr, await meshSnapshot());
       pr.tasks[0].assign = { ...(pr.tasks[0].assign || { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }), node: config().name, locked: true };
@@ -204,6 +207,7 @@ export async function startServer() {
     const dir = files.resolvePath(b.dir || '.');
     if (b.stripManaged) await merge.stripManagedBlocks(dir);
     const d = await merge.describe(dir);
+    if (d.empty) return { empty: true, branch: d.branch };
     const st = merge.electSteward(discovery.list());
     if (!st) throw new HttpError(503, 'no merge steward online (a machine that can push to the repo)');
     const reqBody = { node: config().name, dir, branch: d.branch, title: b.title || d.commits[0].replace(/^\w+ /, ''), summary: b.summary || '', commits: d.commits, session: b.session || null };
@@ -676,6 +680,8 @@ export async function startServer() {
     if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
     if ((mm = m(/^projects\/([\w-]+)\/(stop|pause)$/)) && method === 'POST') { const b = await body().catch(() => ({})); return planner.stopProject(mm[1], plannerCtx, { reason: b?.reason, by: b?.by }); }
     if ((mm = m(/^projects\/([\w-]+)\/resume$/)) && method === 'POST') return planner.resumeProject(mm[1], plannerCtx);
+    // Sir's answer to "How did it work out?" (the completion loop's last question), kept on the project.
+    if ((mm = m(/^projects\/([\w-]+)\/feedback$/)) && method === 'POST') { const b = await body(); return planner.addFeedback(mm[1], { text: b.text, by: b.by }); }
     if ((mm = m(/^projects\/([\w-]+)\/tasks$/)) && method === 'POST') {
       if (!(await planner.getProject(mm[1]))) throw new HttpError(404, 'project not found');
       return (await planner.addTask(mm[1], await body(), await meshSnapshot())).project;
@@ -790,6 +796,8 @@ export async function startServer() {
     if (sub === 'attention/codex' && method === 'POST') return attention.codexEvent(await body());
     if (sub === 'access' && method === 'GET') return access.status(q.get('force') === '1');
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
+    if (sub === 'access/grant' && method === 'POST') return access.grant((await body()).permission);
+    if (sub === 'control' || sub.startsWith('control/')) return controlApi(sub.slice('control'.length).replace(/^\//, ''), req, res, q, body);
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), hostKeys: await ssh.hostKeys(), server: await ssh.serverStatus(), alias: config().name };
@@ -851,6 +859,13 @@ export async function startServer() {
       return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
+    if (p === '/api/mesh/control/kill' && req.method === 'POST') {
+      // "Hands off everywhere": switch screen control off on every online machine.
+      const b = await readBody(req);
+      const nodes = discovery.list().filter((n) => n.online && n.rigs);
+      return Promise.all(nodes.map((n) => (n.self ? localCall('control/kill', 'POST', b) : peerJson(n, 'control/kill', { method: 'POST', body: b, timeout: 15000 }))
+        .then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
+    }
     if (p === '/api/mesh/workspaces') {
       const catalog = await meshWorkspaces({ force: url.searchParams.get('force') === '1' });
       const query = url.searchParams.get('q');
@@ -941,7 +956,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }
@@ -1046,9 +1061,24 @@ export async function startServer() {
   // RIGS_NO_MIGRATIONS: throwaway nodes (tests) must never install software or touch dotfiles.
   if (!process.env.RIGS_NO_MIGRATIONS) setTimeout(() => migrations.runPending((m, res) => {
     if (m.id.includes('desktop') && res.ok && res.result?.state !== 'needs-sudo') desktopInstall.status().then(announceDesktop).catch(() => {});
-  }).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+  }).then(() => setupControl()).then(() => announceRoot()).catch((e) => log('migrations:', e.message)), 4000).unref();
+
+  // Control is on by default: its first-run setup (helper, Linux uinput root step, GNOME extension) runs at boot and
+  // again when a person switches it back on, never only on enable(). Same throwaway-node rule as the migrations.
+  function setupControl() {
+    return ensureControlSetup({ control }).then((r) => { if (!r.skipped) log('control setup:', JSON.stringify(r)); })
+      .catch((e) => log('control setup:', e.message));
+  }
+  if (!process.env.RIGS_NO_MIGRATIONS) control.events.on('change', (c) => { if (c.enabled) setupControl().then(() => announceRoot()); });
 
   // "An agent needs you": watch every agent on this machine; announce new waits mesh-wide.
+  // Screen access/control: routes for this machine, plus the announcements that make every action visible.
+  const controlApi = createControlApi({ control, access, nodeName: () => config().name });
+  attention.addSource(wireControlEvents({
+    events: control.events, nodeName: () => config().name, settings: () => config().control || {}, broadcast, log,
+    notifyAll: (b) => broadcastNotify(b), osNotify,
+  }).items);
+
   attention.events.on('new', (items) => {
     for (const it of items) {
       const who = it.agent === 'claude' ? 'Claude' : it.agent === 'codex' ? 'Codex' : it.agent;

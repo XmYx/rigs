@@ -95,7 +95,7 @@ function ctx(extra = {}) {
       c.calls.push({ node, sub, body });
       if (sub === 'work/start') return { mode: 'openrig', rig: 'r', seat: `seat-${body.task.id}`, qitem: `q-${body.project.id}-${body.task.id}`, session: { kind: 'rig', id: `seat-${body.task.id}` } };
       if (sub === 'work/status') return c.status[body.qitem] || { state: 'in-progress' };
-      if (sub === 'work/nudge') return { ok: true };
+      if (sub === 'work/nudge' || sub === 'work/stop') return { ok: true };
       if (sub === 'merge') return { queue: c.merge ? [c.merge] : [] };
       if (sub === 'work/find') return { run: c.found?.[`${body.project.id}-${body.task.id}`] || null };
       throw new Error('unexpected ' + sub);
@@ -156,18 +156,33 @@ async function runningProject(c, extra = {}) {
   return P.dispatchReady(p.id, c);
 }
 
-test('a failed task is retried once with the failure in its brief, then the project escalates', async () => {
+test('a failed task is retried with escalation up to the attempt budget, then the loop ends with one report', async () => {
   const c = ctx();
   const p = await runningProject(c);
+  const starts = () => c.calls.filter((x) => x.sub === 'work/start' && x.body.project.id === p.id && x.body.task.id === 't1');
+  assert.deepEqual([starts()[0].body.task.assign.model, starts()[0].body.task.assign.effort], ['claude-sonnet-5-5', 'medium']);
   let q = await P.updateTask(p.id, 't1', { status: 'failed', summary: 'screenshot tool missing' }, c);
   assert.equal(q.tasks[0].status, 'running', 'retried at once');
   assert.equal(q.tasks[0].attempts, 1);
-  const retryBrief = c.calls.filter((x) => x.sub === 'work/start').at(-1).body.prompt;
+  assert.deepEqual([starts()[1].body.task.assign.model, starts()[1].body.task.assign.effort], ['claude-opus-5-5', 'high'], 'one rung up');
+  const retryBrief = starts()[1].body.prompt;
   assert.match(retryBrief, /Previous attempt 1 did not finish\nscreenshot tool missing/);
+  assert.match(retryBrief, /attempt 2, escalated to claude-opus-5-5 high/);
   q = await P.updateTask(p.id, 't1', { status: 'failed', summary: 'still missing' }, c);
-  assert.equal(q.tasks[0].status, 'failed');
+  assert.equal(q.tasks[0].status, 'running');
+  assert.deepEqual([starts()[2].body.task.assign.model, starts()[2].body.task.assign.effort], ['claude-opus-5-5', 'xhigh']);
+  assert.match(starts()[2].body.prompt, /Earlier: attempt 1 \(claude-sonnet-5-5 medium\): screenshot tool missing/);
+  q = await P.updateTask(p.id, 't1', { status: 'failed', summary: 'tool really missing' }, c);
+  assert.equal(q.tasks[0].status, 'failed', 'budget (3 attempts) spent');
+  assert.equal(starts().length, 3);
   assert.equal((await P.getProject(p.id)).status, 'blocked');
-  assert.ok(c.notes.some((n) => n.level === 'error' && /needs you/.test(n.text)), 'Sir hears it');
+  const reports = c.notes.filter((n) => /How did it work out, sir\?/.test(n.text));
+  assert.equal(reports.length, 1, 'Sir hears it once');
+  assert.match(reports[0].text, /stopped at 0%: the attempt budget is spent/);
+  assert.match(reports[0].text, /\*\*Retried\*\*\n- Audit mobile UI: attempt 1 claude claude-sonnet-5-5 medium — screenshot tool missing; attempt 2 claude claude-opus-5-5 high/);
+  assert.match(reports[0].text, /\*\*Still open\*\*[\s\S]*Audit mobile UI: failed — tool really missing/);
+  await P.tick(c);
+  assert.equal(c.notes.filter((n) => /How did it work out/.test(n.text)).length, 1, 'never twice for the same end');
 });
 
 test('watchdog: an idle agent is nudged, then escalated; a silent exit is retried', async () => {
@@ -182,7 +197,13 @@ test('watchdog: an idle agent is nudged, then escalated; a silent exit is retrie
   assert.match(nudges()[0].body.text, /project_task_update/);
   for (let i = 2; i <= P.MAX_NUDGES + 1; i++) await P.tick(c, t0 + i * (P.STALL_MS + 1000));
   assert.equal(nudges().length, P.MAX_NUDGES);
-  assert.equal((await P.getProject(p.id)).tasks[0].status, 'blocked');
+  // No progress after every nudge: the watchdog fails it, stops the old agent and the retry starts a stronger one.
+  const st = (await P.getProject(p.id)).tasks[0];
+  assert.equal(st.status, 'running');
+  assert.equal(st.attempts, 1);
+  assert.match(st.history[0].why, /^stalled: idle \d+ min without a report after 3 nudges/);
+  assert.equal(st.assign.model, 'claude-opus-5-5');
+  assert.equal(c.calls.filter((x) => x.sub === 'work/stop' && x.body.qitem === `q-${p.id}-t1`).length, 1);
 
   const c2 = ctx();
   const p2 = await runningProject(c2);
@@ -199,7 +220,8 @@ test('a finished project is reported with its evidence; a RIGS change is propose
   for (const id of ['t1', 't2', 't3']) await P.updateTask(p.id, id, { status: 'done', summary: `${id} verified` }, c);
   assert.equal((await P.getProject(p.id)).status, 'done');
   const report = c.notes.at(-1).text;
-  assert.match(report, /^life is done: 3 tasks finished\.\n---\n/);
+  assert.match(report, /^life reached 100%: 3 tasks done\. How did it work out, sir\?\n---\n/);
+  assert.equal(c.notes.filter((n) => /How did it work out/.test(n.text)).length, 1);
   assert.match(report, /t2 verified/);
 
   const proposed = [];
@@ -220,7 +242,8 @@ test('a finished project is reported with its evidence; a RIGS change is propose
   await P.tick(c2);
   pr = await P.getProject(s.id);
   assert.equal(pr.status, 'done');
-  assert.match(c2.notes.at(-1).text, /merged and rolled out to every machine[\s\S]*abc1234/);
+  assert.match(c2.notes.at(-1).text, /merged and rolled out\. How did it work out, sir\?[\s\S]*Merged as abc1234/);
+  assert.equal(c2.notes.filter((n) => /How did it work out/.test(n.text)).length, 1, 'one report, at the merge — not at the proposal');
 });
 
 test('planning that died with the daemon is restarted for projects Sir asked to run', async () => {
@@ -235,15 +258,34 @@ test('planning that died with the daemon is restarted for projects Sir asked to 
   assert.ok(after.log.some((l) => /planning never finished — planning again/.test(l.text)));
 });
 
-test('a running project that nothing can move any more is escalated by the tick', async () => {
+test('a task left blocked is re-queued by the tick instead of waiting for Sir', async () => {
   const c = ctx();
   const p = await runningProject(c);
   const pr = await P.getProject(p.id);
-  pr.tasks[0].status = 'blocked'; // reported before the watchdog existed: no settle ran
+  Object.assign(pr.tasks[0], { status: 'blocked', summary: 'needs Sir\'s go-ahead', run: null }); // reported before the loop existed
   await P.saveProject(pr);
   await P.tick(c);
-  assert.equal((await P.getProject(p.id)).status, 'blocked');
-  assert.ok(c.notes.some((n) => /needs you/.test(n.text)));
+  await P.tick(c);
+  const after = await P.getProject(p.id);
+  assert.equal(after.status, 'running');
+  assert.equal(after.tasks[0].status, 'running', 'started again');
+  assert.match(after.tasks[0].history[0].why, /was blocked: needs Sir's go-ahead/);
+  assert.ok(!c.notes.some((n) => /needs you/.test(n.text)));
+});
+
+test('with the loop switched off (autonomy.enabled=false) a project nothing can move is escalated to Sir', async () => {
+  const { config } = await import('../src/config.js');
+  config().autonomy.enabled = false;
+  try {
+    const c = ctx();
+    const p = await runningProject(c);
+    const pr = await P.getProject(p.id);
+    pr.tasks[0].status = 'blocked';
+    await P.saveProject(pr);
+    await P.tick(c);
+    assert.equal((await P.getProject(p.id)).status, 'blocked');
+    assert.ok(c.notes.some((n) => /needs you/.test(n.text)));
+  } finally { config().autonomy.enabled = true; }
 });
 
 test('concurrent reports and ticks never lose a write or cast a second agent', async () => {
