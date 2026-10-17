@@ -43,8 +43,10 @@ const NAMED = new Set('enter tab esc space backspace delete insert up down left 
 export function parseCombo(combo, platform = platformName()) {
   if (typeof combo !== 'string' || !combo || combo.length > 100) throw new ControlError('bad-args', 'combo must name a key or shortcut');
   if (combo === '+') return ['+'];
-  const parts = combo.toLowerCase().split('+').map((x) => x.trim()).map((x) => x === 'mod' ? ['mac', 'darwin'].includes(platform) ? 'super' : 'ctrl' : ALIASES[x] || x);
-  const key = parts.pop();
+  // A trailing '++' means the plus key itself, e.g. 'ctrl++' is ctrl and plus.
+  const plusKey = combo.endsWith('++');
+  const parts = (plusKey ? combo.slice(0, -2) : combo).toLowerCase().split('+').map((x) => x.trim()).map((x) => x === 'mod' ? ['mac', 'darwin'].includes(platform) ? 'super' : 'ctrl' : ALIASES[x] || x);
+  const key = plusKey ? '+' : parts.pop();
   if (!key || !(NAMED.has(key) || /^f([1-9]|1\d|2[0-4])$/.test(key) || [...key].length === 1) || parts.some((x) => !['ctrl', 'alt', 'shift', 'super'].includes(x)) || new Set(parts).size !== parts.length) throw new ControlError('bad-args', 'Unknown key or modifier in combo');
   return [...parts, key];
 }

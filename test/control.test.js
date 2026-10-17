@@ -67,6 +67,8 @@ test('combo aliases, portable mod and bad arguments', () => {
   assert.deepEqual(parseCombo('MOD+Shift+t', 'mac'), ['super', 'shift', 't']);
   assert.deepEqual(parseCombo('option+F24', 'linux'), ['alt', 'f24']);
   assert.deepEqual(parseCombo('mod+return', 'linux'), ['ctrl', 'enter']);
+  assert.deepEqual(parseCombo('ctrl++', 'linux'), ['ctrl', '+']);
+  assert.deepEqual(parseCombo('+', 'linux'), ['+']);
   for (const text of ['', 'ctrl++a', 'shift+shift+a', 'f25', 'nope', 'a+b']) assert.throws(() => parseCombo(text), { code: 'bad-args' });
 });
 

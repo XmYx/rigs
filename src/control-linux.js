@@ -64,7 +64,9 @@ export function createLinuxAdapter({ runner = run, spawn = spawnCmd, find = whic
     events: rpc,
     async inspect() {
       await refresh(); env = environment();
-      const session = env.XDG_SESSION_TYPE || (env.WAYLAND_DISPLAY ? 'wayland' : env.DISPLAY ? 'x11' : 'none');
+      // XDG_SESSION_TYPE is often 'tty' over SSH even when a display is set, so only trust wayland/x11 from it.
+      const xdgType = ['wayland', 'x11'].includes(env.XDG_SESSION_TYPE) ? env.XDG_SESSION_TYPE : null;
+      const session = xdgType || (env.WAYLAND_DISPLAY ? 'wayland' : env.DISPLAY ? 'x11' : 'none');
       const tools = Object.fromEntries(['python3', 'gst-launch-1.0', 'grim', 'wtype', 'wlrctl', 'swaymsg', 'hyprctl', 'xdotool', 'wmctrl', 'import', 'scrot'].map((x) => [x, !!find(x)]));
       let facts = {}, locked = null; displays = [];
       if (session !== 'none' && tools.python3) {
