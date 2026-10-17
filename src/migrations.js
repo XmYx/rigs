@@ -102,6 +102,17 @@ MIGRATIONS.push({
   },
 });
 
+// Usage ledger: estimated records for the project task runs and JARVIS chat turns from before it existed. Waits for
+// peer discovery first, since a task's transcript lives on the machine that ran it (`rigs usage backfill` re-runs it).
+MIGRATIONS.push({
+  id: '2026-10-17-usage-backfill',
+  run: async () => {
+    await new Promise((r) => setTimeout(r, 20000));
+    const usage = await import('./usage.js');
+    return usage.backfill();
+  },
+});
+
 const FILE = path.join(RIGS_HOME, 'migrations.json');
 
 export function status() {

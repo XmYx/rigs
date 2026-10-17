@@ -339,9 +339,19 @@ export async function startServer() {
   }
 
   /** One-shot question to the brain on any machine (used by the planner). */
-  async function askNode(nodeRef, text, { brain, model, effort, title } = {}) {
+  async function askNode(nodeRef, text, { brain, model, effort, title, usage: tag } = {}) {
     const c = await callNode(nodeRef, 'chats', { method: 'POST', body: { brain, model, effort, title } });
-    return callNode(nodeRef, `chats/${c.id}/send?wait=1`, { method: 'POST', body: { text, brain, model, effort }, timeout: 15 * 60 * 1000 });
+    return callNode(nodeRef, `chats/${c.id}/send?wait=1`, { method: 'POST', body: { text, brain, model, effort, usage: tag }, timeout: 15 * 60 * 1000 });
+  }
+
+  /** Mesh-wide usage ledger: every online node's records for the range, merged and aggregated (src/usage.js). */
+  async function meshUsage(searchParams) {
+    const qs = new URLSearchParams(searchParams);
+    if (!discovery.list().some((n) => n.self)) await discovery.tick(); // the first scan may still be running
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? localCall('usage?' + qs) : peerJson(n, 'usage?' + qs, { timeout: 15000 }))
+      .then((report) => ({ node: n, report })).catch((e) => ({ node: n, error: e.message }))));
+    try { return usage.aggregateUsage(results, Object.fromEntries(searchParams)); } catch (e) { throw new HttpError(400, e.message); }
   }
 
   const plannerCtx = {
@@ -562,6 +572,13 @@ export async function startServer() {
       saveConfig(cfg);
       return { pinnedProjects: rest };
     }
+    // usage ledger: what each chat turn, planning call and task run spent on this machine (src/usage.js)
+    if (sub === 'usage' && method === 'GET') {
+      try { return await usage.report(Object.fromEntries(q)); } catch (e) { throw new HttpError(400, e.message); }
+    }
+    if (sub === 'usage/slice' && method === 'POST') return usage.taskUsage(await body());
+    if (sub === 'usage/backfill' && method === 'POST') return usage.backfill();
+
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
     if ((mm = m(/^app-start\/([^/]+)$/)) && method === 'POST') {
       // Spin an app up on this machine (its launch recipe) and wait until it answers its health check.
@@ -823,6 +840,7 @@ export async function startServer() {
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
+    if (p === '/api/usage') return meshUsage(url.searchParams);
     if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
     if (p === '/api/mesh/update' && req.method === 'POST') return rolloutAll();
@@ -1071,6 +1089,10 @@ export async function startServer() {
   appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
   appstore.onJobEvent((job) => broadcast({ type: 'appstore', node: config().name, job }));
   appsReg.startHealthChecks({ intervalMs: 5000 });
+
+  // Usage ledger: a finished task run's tokens are read from its transcript on the machine it ran on.
+  usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
+  planner.onRunEnd((e) => usage.recordTaskRun(e));
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();

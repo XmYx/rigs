@@ -7,6 +7,7 @@ import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
 import { parseProjects, route as routeRequest } from './router.js';
+import { addTokens, claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn } from './usage.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
@@ -212,6 +213,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   if (chat.claudeSessionId) args.push('--resume', chat.claudeSessionId);
   let full = '';
   let error = null;
+  let usage = null;
   const res = await streamProcess(bin('claude'), args, {
     cwd: chat.cwd || HOME, signal,
     onLine: (line) => {
@@ -228,6 +230,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
       } else if (e.type === 'system' && e.subtype === 'api_retry') {
         emit({ type: 'status', text: `retrying (${e.error || e.error_status})…` });
       } else if (e.type === 'result') {
+        try { usage = claudeResultUsage(e); } catch {}
         if (e.is_error) error = e.result || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
@@ -235,7 +238,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   });
   if (res.code !== 0 && !full && !error) error = res.err.trim() || `claude exited with ${res.code}`;
   if (error && /authenticat|401|login/i.test(error)) error += ' — run `claude` once in a terminal on this machine and /login.';
-  return { text: full, error };
+  return { text: full, error, usage };
 }
 
 async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
@@ -248,12 +251,14 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
     : ['exec', '--json', '--skip-git-repo-check', '--sandbox', cfg.codexSandbox || 'workspace-write', ...(cfg.codexSandbox === 'workspace-write' ? ['--add-dir', workRoot()] : []), ...flags, prompt];
   let full = '';
   let error = null;
+  let usage = null;
   const res = await streamProcess(bin('codex'), args, {
     cwd: chat.cwd || HOME, signal,
     onLine: (line) => {
       let e;
       try { e = JSON.parse(line); } catch { return; }
       if (e.type === 'thread.started' && e.thread_id) chat.codexThreadId = e.thread_id;
+      else if (e.type === 'turn.completed') { try { usage = addTokens(usage, codexTurnUsage(e)); } catch {} }
       else if (e.type === 'item.completed' && e.item?.type === 'agent_message') {
         const t = (full ? '\n\n' : '') + (e.item.text || '');
         full += t; emit({ type: 'delta', text: t });
@@ -267,7 +272,7 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
     },
   });
   if (res.code !== 0 && !full && !error) error = res.err.trim().split('\n').slice(-3).join(' ') || `codex exited with ${res.code}`;
-  return { text: full, error };
+  return { text: full, error, usage };
 }
 
 async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
@@ -275,6 +280,7 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal, p
   const messages = [{ role: 'system', content: personaPrompt(meshSummary, projects) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
   for (const m of chat.messages) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
   let full = '';
+  let usage = null;
   try {
     const think = ollamaThink(effort);
     const req = (withThink) => fetch(url, { method: 'POST', body: JSON.stringify({ model, messages, stream: true, ...(withThink && think !== undefined ? { think } : {}) }), headers: { 'content-type': 'application/json' }, signal });
@@ -295,23 +301,24 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal, p
           const e = JSON.parse(line);
           if (e.message?.thinking && !full) emit({ type: 'thinking', text: e.message.thinking });
           if (e.message?.content) { full += e.message.content; emit({ type: 'delta', text: e.message.content }); }
-          if (e.error) return { text: full, error: e.error };
+          if (e.done) usage = ollamaUsage(e);
+          if (e.error) return { text: full, error: e.error, usage };
         } catch {}
       }
     }
   } catch (e) {
-    if (e.name !== 'AbortError') return { text: full, error: 'Ollama: ' + e.message };
+    if (e.name !== 'AbortError') return { text: full, error: 'Ollama: ' + e.message, usage };
   }
-  return { text: full, error: null };
+  return { text: full, error: null, usage };
 }
 
 /** Send a user message and stream the reply through `emit`. Persists everything. */
 /** JARVIS conversations answering right now (for the work dashboard): id → { id, title, brain, model, startedAt, text }. */
 export const activeTurns = new Map();
 
-export async function sendMessage(id, { text, brain, model, effort }, emit, opts = {}) {
+export async function sendMessage(id, { text, brain, model, effort, usage }, emit, opts = {}) {
   activeTurns.set(id, { id, title: '', brain: brain || '', model: model || '', startedAt: Date.now(), text: truncate(text, 120) });
-  try { return await sendMessageInner(id, { text, brain, model, effort }, emit, opts); } finally { activeTurns.delete(id); }
+  try { return await sendMessageInner(id, { text, brain, model, effort, usage }, emit, opts); } finally { activeTurns.delete(id); }
 }
 
 /** Threads a request may continue: ongoing work (implement/plan) touched in the last three days. */
@@ -363,7 +370,11 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   return sendMessage(chat.id, { text, brain, model, effort }, emit, { ...opts, hint });
 }
 
-async function sendMessageInner(id, { text, brain, model, effort }, emit, { meshSummary = '', projects = '', signal, hint = '' } = {}) {
+/**
+ * `usage` tags the turn in the usage ledger: { kind: 'plan', projectId, projectName } for a planning call (the
+ * planner asks through a chat); plain chat turns are "chat-turn" under the chat's own project.
+ */
+async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '' } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -378,7 +389,9 @@ async function sendMessageInner(id, { text, brain, model, effort }, emit, { mesh
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
   const sent = hint ? `${hint}\n${text}` : text;
+  const startedAt = Date.now();
   const out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects);
+  await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted });
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;
