@@ -74,7 +74,7 @@ export function openApp(a) {
   const existing = appWindows.get(k);
   if (existing) { existing.win.raise(); return existing; }
   const needsStart = statusOf(a) !== 'up' && a.launch;
-  const frame = h('iframe', { class: 'app-frame', src: needsStart ? 'about:blank' : appPath(a), allow: 'clipboard-read; clipboard-write; fullscreen; microphone; camera' });
+  const frame = h('iframe', { class: 'app-frame', src: needsStart ? 'about:blank' : appPath(a), allow: 'clipboard-read; clipboard-write; fullscreen; microphone; camera; geolocation' });
   const overlay = h('div', { class: 'app-overlay hidden' });
   const w = { app: a, frame, overlay, status: statusOf(a) };
   w.win = openWindow({

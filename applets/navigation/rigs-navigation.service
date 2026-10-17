@@ -1,0 +1,14 @@
+[Unit]
+Description=RIGS navigation applet (dark 3D green-vector map)
+After=network-online.target
+
+[Service]
+# %h = home; the applet imports ../../src/util.js, so it runs from the RIGS checkout.
+WorkingDirectory=%h/.rigs/app
+ExecStart=/usr/bin/node %h/.rigs/app/applets/navigation/server.js
+Environment=NAV_PORT=8731 NAV_HOST=127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

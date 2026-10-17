@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#010403">
+  <title>Navigation</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div id="map" aria-label="Map"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <form id="search" class="panel search" role="search" autocomplete="off">
+    <span class="search-glyph" aria-hidden="true">⌖</span>
+    <input id="q" type="search" placeholder="Search destination" aria-label="Search destination" enterkeyhint="go" spellcheck="false">
+    <button id="clear" type="button" class="icon-btn" title="Clear route" hidden>✕</button>
+    <ul id="suggest" role="listbox" hidden></ul>
+  </form>
+
+  <section id="turn" class="panel turn" hidden aria-live="polite">
+    <div id="turn-arrow" class="turn-arrow">↑</div>
+    <div class="turn-body">
+      <div id="turn-dist" class="turn-dist">—</div>
+      <div id="turn-text" class="turn-text"></div>
+      <div id="turn-then" class="turn-then"></div>
+    </div>
+  </section>
+
+  <section class="panel speed" aria-label="Speed">
+    <svg class="gauge" viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="gauge-track" cx="60" cy="60" r="50" pathLength="100" />
+      <circle id="gauge-arc" class="gauge-arc" cx="60" cy="60" r="50" pathLength="100" />
+    </svg>
+    <div class="speed-read">
+      <div id="speed" class="speed-digits">---</div>
+      <button id="unit" type="button" class="unit" title="Switch km/h · mph">KM/H</button>
+      <div id="speed-src" class="speed-src">NO FIX</div>
+    </div>
+  </section>
+
+  <button id="compass" type="button" class="panel compass" title="Heading">
+    <div id="ring" class="ring" aria-hidden="true">
+      <span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span>
+    </div>
+    <div class="needle" aria-hidden="true"></div>
+    <div id="hdg" class="hdg">— ---°</div>
+  </button>
+
+  <div class="controls">
+    <button id="follow" type="button" class="panel icon-btn on" title="Following you">◎</button>
+    <button id="pitch" type="button" class="panel icon-btn" title="Toggle 3D">3D</button>
+  </div>
+
+  <footer id="eta" class="panel eta" hidden>
+    <div><small>ARRIVE</small><b id="eta-time">--:--</b></div>
+    <div><small>LEFT</small><b id="eta-left">—</b></div>
+    <div><small>DIST</small><b id="eta-dist">—</b></div>
+    <button id="end-route" type="button" class="icon-btn" title="End route">✕</button>
+  </footer>
+
+  <div id="status" class="status" role="status" hidden></div>
+  <div class="demo-badge" aria-hidden="true">DEMO · SIMULATED DRIVE</div>
+
+  <div id="screen" class="screen" hidden>
+    <div class="screen-panel">
+      <div class="screen-mark" aria-hidden="true">◬</div>
+      <h1 id="screen-title"></h1>
+      <p id="screen-text"></p>
+      <div id="screen-actions" class="screen-actions"></div>
+    </div>
+  </div>
+</body>
+</html>
