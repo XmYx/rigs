@@ -286,8 +286,27 @@ async function mergeOne(req, ctx, repo) {
   if (c) await update(req.id, { event: c.removed ? `removed the worktree on ${req.node}` : `kept the worktree on ${req.node}: ${c.reason || 'unknown'}` });
 }
 
+/**
+ * What a failed check sends back: every failing test's TAP block ("not ok …" and its error, which the tail of a long
+ * run does not reach) and then the last lines with the counts. Pure.
+ */
+export function checkOutput(text, { tail = 40, max = 4000 } = {}) {
+  const lines = String(text || '').trim().split('\n');
+  const failed = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*not ok \d+/.test(lines[i])) continue;
+    const block = [lines[i]];
+    for (let k = i + 1; k < lines.length && block.length < 30 && !/^\s*(not )?ok \d+|^\s*# Subtest:/.test(lines[k]); k++) block.push(lines[k]);
+    failed.push(block.join('\n'));
+  }
+  const end = lines.slice(-tail).join('\n');
+  if (!failed.length) return truncate(end, max);
+  const head = truncate(failed.join('\n'), Math.floor(max * 0.6));
+  return truncate(`${head}\n…\n${end}`, max);
+}
+
 async function failChecks(req, ctx, stage, r) {
-  const out = truncate((r.stdout + '\n' + r.stderr).trim().split('\n').slice(-40).join('\n'), 4000);
+  const out = checkOutput(r.stdout + '\n' + r.stderr);
   await update(req.id, { status: 'checks-failed', failedStage: stage, output: out, event: `${stage} failed — sent back to ${req.node}` });
   ctx.notify?.(`${req.branch} from ${req.node} was not merged: ${stage} failed on the merged tree. Details in ⚙ → Changes.`, 'error');
   ctx.bounce?.(req, stage, out);

@@ -456,27 +456,57 @@ export function mainModel(models, fallback = '') {
   return Object.entries(models || {}).sort((a, b) => size(b[1]) - size(a[1]))[0]?.[0] || fallback || '';
 }
 
-/** Claude Code `-p --output-format stream-json` final {type:"result"} event → tokens, cost, per-model split. */
-export function claudeResultUsage(e) {
+/**
+ * Claude Code `-p --output-format stream-json` final {type:"result"} event → tokens, cost, per-model split.
+ * modelUsage and total_cost_usd are the whole session's so far — after `--resume` they include every earlier turn — so
+ * a resumed turn is the difference from `prev`, the totals the chat's previous turn saw (returned as `cumulative`).
+ * Resumed without them, `usage` (this turn's main-loop calls) is all that is known. `usage` is per turn.
+ */
+export function claudeResultUsage(e, { prev = null, resumed = false } = {}) {
   if (!e || e.type !== 'result') return null;
-  const models = {};
+  const cum = {};
   for (const [m, u] of Object.entries(e.modelUsage || {})) {
-    models[m] = { inputTokens: num(u.inputTokens), outputTokens: num(u.outputTokens), cacheReadTokens: num(u.cacheReadInputTokens), cacheWriteTokens: num(u.cacheCreationInputTokens), costUsd: u.costUSD ?? null };
+    cum[m] = { inputTokens: num(u.inputTokens), outputTokens: num(u.outputTokens), cacheReadTokens: num(u.cacheReadInputTokens), cacheWriteTokens: num(u.cacheCreationInputTokens) };
   }
+  const cumCost = e.total_cost_usd ?? e.cost_usd ?? null;
+  const sessionId = e.session_id || '';
+  const cumulative = { sessionId, models: cum, costUsd: cumCost };
   const u = e.usage || {};
   const fromUsage = { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens), cacheReadTokens: num(u.cache_read_input_tokens), cacheWriteTokens: num(u.cache_creation_input_tokens) };
+  let models = cum;
+  let costUsd = cumCost;
+  const before = prev && prev.sessionId === sessionId ? prev.models || {} : null;
+  // A session whose totals went down was not carried over (nothing to subtract): take it as this turn's.
+  const carried = before && Object.entries(before).every(([m, t]) => TOKEN_KEYS.every((k) => num(cum[m]?.[k]) >= num(t[k])));
+  if (carried) {
+    models = {};
+    for (const [m, t] of Object.entries(cum)) {
+      const d = Object.fromEntries(TOKEN_KEYS.map((k) => [k, num(t[k]) - num(before[m]?.[k])]));
+      if (TOKEN_KEYS.some((k) => d[k])) models[m] = d;
+    }
+    costUsd = cumCost != null && prev.costUsd != null ? Math.max(0, cumCost - prev.costUsd) : null;
+  } else if (resumed) {
+    models = { [mainModel(cum) || 'unknown']: fromUsage };
+    costUsd = null;
+  }
   // modelUsage covers every model the turn used (e.g. a Haiku side call); usage alone is the main model's.
   const sum = Object.values(models).reduce((a, t) => addTokens(a, t), emptyTokens());
-  const tokens = Object.keys(models).length ? sum : fromUsage;
-  return { ...tokens, costUsd: e.total_cost_usd ?? e.cost_usd ?? null, durationMs: num(e.duration_ms), model: mainModel(models), models, sessionId: e.session_id || '' };
+  const tokens = Object.keys(models).length || carried ? sum : fromUsage;
+  return { ...tokens, costUsd, durationMs: num(e.duration_ms), model: mainModel(models, mainModel(cum)), models, sessionId, cumulative };
 }
 
-/** Codex `exec --json` {type:"turn.completed", usage} → tokens (Codex counts cached input inside input_tokens). */
-export function codexTurnUsage(e) {
+/**
+ * Codex `exec --json` {type:"turn.completed", usage} → tokens (Codex counts cached input inside input_tokens). The
+ * usage is the thread's running total, also after `exec resume`: `prev` is the raw usage the previous turn reported.
+ */
+export function codexTurnUsage(e, prev = null) {
   if (!e || e.type !== 'turn.completed' || !e.usage) return null;
   const u = e.usage;
-  const cached = num(u.cached_input_tokens);
-  return { inputTokens: Math.max(0, num(u.input_tokens) - cached), outputTokens: num(u.output_tokens), cacheReadTokens: cached, cacheWriteTokens: 0 };
+  const keys = ['input_tokens', 'cached_input_tokens', 'output_tokens'];
+  const base = prev && keys.every((k) => num(u[k]) >= num(prev[k])) ? prev : null;
+  const d = (k) => num(u[k]) - num(base?.[k]);
+  const cached = d('cached_input_tokens');
+  return { inputTokens: Math.max(0, d('input_tokens') - cached), outputTokens: d('output_tokens'), cacheReadTokens: cached, cacheWriteTokens: 0 };
 }
 
 /** Ollama /api/chat final chunk {done:true, prompt_eval_count, eval_count, total_duration (ns)} → tokens + time. */
@@ -489,6 +519,8 @@ export function ollamaUsage(e) {
 
 const inWindow = (ts, since, until) => { const t = Date.parse(ts); return Number.isFinite(t) && t >= since && t <= until; };
 const userText = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b?.type === 'text' || b?.type === 'input_text').map((b) => b.text).join('\n') : '');
+// work.js hands agents the brief path with "/" separators, also on Windows where the run records it with "\".
+const hasBrief = (text, brief) => !!brief && (text.includes(brief) || text.includes(brief.replace(/\\/g, '/')));
 
 /**
  * Claude Code transcript records → the tokens spent in [since, until] (per model; each API message once) and whether
@@ -502,7 +534,7 @@ export function claudeSlice(records, { since = 0, until = Infinity, seat = '', b
   for (const rec of records) {
     if (!rec || typeof rec !== 'object') continue;
     if (seat && ((rec.type === 'agent-name' && rec.agentName === seat) || (rec.type === 'custom-title' && rec.customTitle === seat))) matched = true;
-    if (brief && rec.type === 'user' && userText(rec.message?.content).includes(brief)) matched = true;
+    if (rec.type === 'user' && hasBrief(userText(rec.message?.content), brief)) matched = true;
     if (rec.type !== 'assistant' || !rec.message?.usage || !inWindow(rec.timestamp, since, until)) continue;
     foldRecord(acc, rec);
     const t = Date.parse(rec.timestamp);
@@ -539,10 +571,10 @@ export function codexSlice(records, { since = 0, until = Infinity, seat = '', br
     const p = rec?.payload || {};
     if (rec?.type === 'session_meta') cwd = p.cwd || cwd;
     if (rec?.type === 'turn_context' && p.model) model = p.model;
-    if (rec?.type === 'event_msg' && p.type === 'user_message' && ((seat && String(p.message || '').includes(seat)) || (brief && String(p.message || '').includes(brief)))) matched = true;
+    if (rec?.type === 'event_msg' && p.type === 'user_message' && ((seat && String(p.message || '').includes(seat)) || hasBrief(String(p.message || ''), brief))) matched = true;
     if (rec?.type === 'response_item' && p.type === 'message' && p.role === 'user') {
       const t = userText(p.content);
-      if ((seat && t.includes(seat)) || (brief && t.includes(brief))) matched = true;
+      if ((seat && t.includes(seat)) || hasBrief(t, brief)) matched = true;
     }
     if (rec?.type !== 'event_msg' || p.type !== 'token_count' || !p.info?.total_token_usage) continue;
     const ts = Date.parse(rec.timestamp);
@@ -647,7 +679,8 @@ export async function recordChatTurn({ chat, tag, brain, model, effort, startedA
     return await appendRecord({
       tsStart: startedAt, tsEnd: Date.now(),
       kind: LEDGER_KINDS.includes(t.kind) ? t.kind : 'chat-turn',
-      provider: brain, model: model || u?.model || '', effort,
+      // The model the harness reports ("claude-haiku-5-5") over the alias asked for ("haiku"), so a model is one row.
+      provider: brain, model: u?.model || model || '', effort,
       projectId: t.projectId || chat?.project || '', projectName: t.projectName || '', taskId: t.taskId || '', taskTitle: t.taskTitle || (t.kind ? chat?.title : '') || '',
       chatId: chat?.id || '', sessionId: u?.sessionId || chat?.claudeSessionId || chat?.codexThreadId || '',
       ...(u ? { inputTokens: u.inputTokens, outputTokens: u.outputTokens, cacheReadTokens: u.cacheReadTokens, cacheWriteTokens: u.cacheWriteTokens, costUsd: u.costUsd ?? null, models: u.models } : {}),
@@ -764,7 +797,7 @@ export async function backfill({ slice = slicer, now = Date.now() } = {}) {
       const u = records.length ? (m.brain === 'codex' ? codexSlice : claudeSlice)(records, { since: start - 1000, until: m.ts + 1000 }) : null;
       const plan = /^Plan · /.test(c.title || '');
       const rec = await appendRecord({
-        id, tsStart: start, tsEnd: m.ts, kind: plan ? 'plan' : 'chat-turn', provider: m.brain, model: m.model || c.model || '', effort: m.effort || '',
+        id, tsStart: start, tsEnd: m.ts, kind: plan ? 'plan' : 'chat-turn', provider: m.brain, model: mainModel(u?.models, m.model || c.model || ''), effort: m.effort || '',
         projectId: c.project || '', projectName: plan ? c.title.replace(/^Plan · /, '') : '', taskTitle: plan ? c.title : '',
         chatId: c.id, sessionId: c.claudeSessionId || c.codexThreadId || '',
         ...(u && u.messages ? { inputTokens: u.inputTokens, outputTokens: u.outputTokens, cacheReadTokens: u.cacheReadTokens, cacheWriteTokens: u.cacheWriteTokens, models: u.models } : {}),

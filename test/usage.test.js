@@ -81,9 +81,27 @@ test('harness parsers: claude -p result, codex turn.completed, Ollama final chun
   assert.deepEqual([bare.inputTokens, bare.outputTokens, bare.cacheReadTokens, bare.cacheWriteTokens, bare.costUsd], [5, 6, 7, 8, null], 'usage alone when modelUsage is missing');
   assert.equal(U.claudeResultUsage({ type: 'assistant' }), null);
 
+  // After --resume, modelUsage / total_cost_usd are the session's running totals (captured from claude -p 2.x):
+  // the turn is the difference from the previous turn's totals, or its own `usage` when those are unknown.
+  const turn1 = U.claudeResultUsage({ type: 'result', session_id: 's-2', total_cost_usd: 0.00408247, usage: { input_tokens: 2, output_tokens: 59, cache_read_input_tokens: 11697, cache_creation_input_tokens: 19679 }, modelUsage: { 'claude-haiku-5-5': { inputTokens: 2, outputTokens: 59, cacheReadInputTokens: 11697, cacheCreationInputTokens: 19679 } } });
+  const r2 = { type: 'result', session_id: 's-2', total_cost_usd: 0.00441573, usage: { input_tokens: 2, output_tokens: 3, cache_read_input_tokens: 31376, cache_creation_input_tokens: 89 }, modelUsage: { 'claude-haiku-5-5': { inputTokens: 4, outputTokens: 62, cacheReadInputTokens: 43073, cacheCreationInputTokens: 19768 } } };
+  const turn2 = U.claudeResultUsage(r2, { prev: turn1.cumulative, resumed: true });
+  assert.deepEqual([turn2.inputTokens, turn2.outputTokens, turn2.cacheReadTokens, turn2.cacheWriteTokens], [2, 3, 31376, 89], 'only this turn');
+  assert.equal(turn2.model, 'claude-haiku-5-5');
+  assert.ok(Math.abs(turn2.costUsd - 0.00033326) < 1e-8);
+  const blind = U.claudeResultUsage(r2, { resumed: true });
+  assert.deepEqual([blind.inputTokens, blind.outputTokens, blind.cacheReadTokens, blind.cacheWriteTokens, blind.costUsd, blind.model], [2, 3, 31376, 89, null, 'claude-haiku-5-5'], 'resumed without totals: usage');
+  const other = U.claudeResultUsage(r2, { prev: { ...turn1.cumulative, sessionId: 's-old' } });
+  assert.equal(other.outputTokens, 62, "another session's totals are not subtracted");
+
   const codex = U.codexTurnUsage(JSON.parse('{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}'));
   assert.deepEqual(codex, { inputTokens: 315, outputTokens: 122, cacheReadTokens: 24448, cacheWriteTokens: 0 }, 'cached input is split out of input');
   assert.equal(U.codexTurnUsage({ type: 'turn.started' }), null);
+  // `codex exec resume` reports the thread's running total (captured from codex-cli 0.163): subtract the last turn's
+  const c1 = { input_tokens: 28908, cached_input_tokens: 7168, output_tokens: 5 };
+  const c2 = { type: 'turn.completed', usage: { input_tokens: 64280, cached_input_tokens: 35840, output_tokens: 10 } };
+  assert.deepEqual(U.codexTurnUsage(c2, c1), { inputTokens: 6700, outputTokens: 5, cacheReadTokens: 28672, cacheWriteTokens: 0 });
+  assert.equal(U.codexTurnUsage(c2, { ...c1, output_tokens: 99 }).outputTokens, 10, 'totals that went down are not a running total');
 
   const ollama = U.ollamaUsage(JSON.parse('{"model":"llama3.2","created_at":"2026-10-17T10:00:00Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","total_duration":2512000000,"load_duration":10000000,"prompt_eval_count":431,"prompt_eval_duration":300000000,"eval_count":57,"eval_duration":2100000000}'));
   assert.deepEqual(ollama, { inputTokens: 431, outputTokens: 57, cacheReadTokens: 0, cacheWriteTokens: 0, durationMs: 2512 });
@@ -108,6 +126,7 @@ test('claudeSlice: only the window, each API message once, matched by the seat n
   assert.equal(s.messages, 2);
   assert.equal(U.claudeSlice(recs, { seat: 'team-code-opus-2@rig-1' }).matched, false, 'a peer named in the text is not this seat');
   assert.equal(U.claudeSlice([{ type: 'user', message: { content: [{ type: 'text', text: 'Read /h/.rigs/briefs/p/p-t1.md and carry out the task' }] } }], { brief: '/h/.rigs/briefs/p/p-t1.md' }).matched, true, 'a direct run is matched by its brief');
+  assert.equal(U.claudeSlice([{ type: 'user', message: { content: 'Read C:/Users/me/.rigs/briefs/p/p-t1.md and carry out the task' } }], { brief: 'C:\\Users\\me\\.rigs\\briefs\\p\\p-t1.md' }).matched, true, 'Windows: the pointer has "/", the run "\\"');
 });
 
 test('codexSlice: tokens in the window are the running total at its end minus the total before it', () => {
@@ -249,6 +268,9 @@ test('task runs: the planner reports non-overlapping stretches; capture failures
   assert.equal(broken.tokensFrom, 'none');
   assert.match(broken.error, /machine offline/);
   assert.equal(broken.inputTokens, 0);
+  // a chat turn files the model the harness reports, not the alias it was asked for
+  const turn = await U.recordChatTurn({ chat: { id: 'c' }, brain: 'claude', model: 'haiku', startedAt: T0, out: { text: 'hi', usage: { inputTokens: 1, model: 'claude-haiku-5-5', models: {} } } });
+  assert.equal(turn.model, 'claude-haiku-5-5');
   // even an unwritable ledger only logs
   const realDir = U.ledgerDir();
   fs.rmSync(realDir, { recursive: true, force: true });
