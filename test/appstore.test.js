@@ -284,6 +284,31 @@ test('hf model with a pinned revision: resumes its own .part file and lands in t
   await S.uninstall('hfpin', w.deps); // leave the registry as the other tests expect it
 });
 
+test('hf whole-repo model with a pinned revision: files come from the tree API (paged) into dest, resumable', async () => {
+  const REV = 'b'.repeat(40);
+  const A = crypto.randomBytes(3000), B = crypto.randomBytes(5000);
+  const asked = [];
+  const fakeFetch = async (url, init = {}) => {
+    const u = String(url);
+    asked.push(u);
+    if (u.includes('/api/models/acme/repo/tree/')) {
+      if (!u.includes('cursor=2')) return new Response(JSON.stringify([{ type: 'directory', path: 'sub' }, { type: 'file', path: 'a.bin' }]), { headers: { link: `<${u}&cursor=2>; rel="next"` } });
+      return new Response(JSON.stringify([{ type: 'file', path: 'sub/b.bin' }]));
+    }
+    const data = u.endsWith('/a.bin') ? A : B;
+    return new Response(data, { status: 200 });
+  };
+  putManifest(studio({ id: 'hfrepo', port: 18213, models: [{ name: 'whole', kind: 'hf', repo: 'acme/repo', revision: REV, dest: 'models/whole', sizeGB: 0.00001 }], postInstall: [] }));
+  const w = world();
+  const job = await installAndWait('hfrepo', {}, { deps: { ...w.deps, fetch: fakeFetch } });
+  assert.equal(job.state, 'done', job.error + '\n' + job.log.join('\n'));
+  const dest = path.join(S.appsDir(), 'hfrepo', 'app', 'models', 'whole');
+  assert.ok(fs.readFileSync(path.join(dest, 'a.bin')).equals(A));
+  assert.ok(fs.readFileSync(path.join(dest, 'sub', 'b.bin')).equals(B));
+  assert.ok(!w.names().some((n) => n.startsWith('hf download')));
+  await S.uninstall('hfrepo', w.deps);
+});
+
 test('downloadFile: a sha256 mismatch fails and keeps the bad file aside (nothing deleted)', async () => {
   const dest = path.join(HOME, 'dl', 'bad.bin');
   await assert.rejects(S.downloadFile(`http://127.0.0.1:${PORT}/vae.bin`, dest, { sha256: '0'.repeat(64) }), /sha256 mismatch for bad.bin/);

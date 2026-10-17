@@ -1128,14 +1128,30 @@ async function downloadHfFiles(ctx, x, dest, onBytes) {
   }
 }
 
+/** Every file of a repo at a pinned revision, from the Hub tree API (follows its Link: rel="next" pages). */
+async function listHfFiles(ctx, x) {
+  const token = hfToken();
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  let url = `https://huggingface.co/api/${x.repoType}s/${x.repo}/tree/${x.revision}?recursive=true`;
+  const files = [];
+  while (url) {
+    const res = await ctx.d.fetch(url, { headers, signal: ctx.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} listing ${x.repo}@${x.revision.slice(0, 8)}${res.status === 401 || res.status === 403 ? ' — a gated or private repo needs an HF token (HF_TOKEN)' : ''}`);
+    for (const e of await res.json()) if (e.type === 'file') files.push(e.path);
+    url = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get('link') || '')?.[1] || '';
+  }
+  if (!files.length) throw new Error(`${x.repo}@${x.revision.slice(0, 8)} lists no files`);
+  return files;
+}
+
 async function downloadHfModel(ctx, x, onBytes) {
   const { d, inst } = ctx;
   const dest = x.dest ? resolveDest(ctx, x.dest) : '';
   const watch = dest || hfRepoCacheDir(x);
   const timer = setInterval(() => onBytes(dirSize(watch)), 1000);
   try {
-    if (x.files.length && !x.include.length && /^[0-9a-f]{40}$/.test(x.revision || '')) {
-      await downloadHfFiles(ctx, x, dest, onBytes);
+    if (!x.include.length && /^[0-9a-f]{40}$/.test(x.revision || '')) {
+      await downloadHfFiles(ctx, { ...x, files: x.files.length ? x.files : await listHfFiles(ctx, x) }, dest, onBytes);
       onBytes(x.sizeGB * GB);
       return;
     }
