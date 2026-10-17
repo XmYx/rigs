@@ -217,13 +217,13 @@ h4 { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-
 
 /* Notifications: a quiet column top-right, under the filters panel; they close themselves (docs/notes/notifications-audit.md). */
 #toasts { position: fixed; top: 56px; right: 12px; width: 320px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 6px; z-index: 9999; align-items: flex-end; pointer-events: none; }
-.toast { position: relative; display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 100%; padding: 6px 8px 6px 10px; border-radius: 8px; background: rgba(10, 16, 23, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(45, 212, 191, .35); color: #e6edf3; font-size: 12px; line-height: 1.4; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); pointer-events: auto; animation: toast-in .18s ease-out; transition: opacity .3s, transform .3s; }
+.toast { position: relative; display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 100%; padding: 6px 8px 6px 10px; border-radius: 8px; background: var(--panel); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(var(--accent-rgb), .35); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); pointer-events: auto; animation: toast-in .18s ease-out; transition: opacity .3s, transform .3s; }
 .toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .toast.ok { border-color: rgba(74, 222, 128, .35); }
 .toast.error { border-color: rgba(248, 113, 113, .45); color: rgba(254, 202, 202, .95); }
 .toast.out { opacity: 0; transform: translateX(8px); }
-.toast-x { flex-shrink: 0; border: 0; background: transparent; color: #9fb2bf; opacity: .7; font-size: 14px; line-height: 1; width: 20px; height: 20px; padding: 0; margin: -1px -2px 0 0; border-radius: 4px; cursor: pointer; }
-.toast-x:hover, .toast-x:focus-visible { opacity: 1; color: #e6edf3; background: rgba(255, 255, 255, .06); }
+.toast-x { flex-shrink: 0; border: 0; background: transparent; color: var(--muted); opacity: .7; font-size: 14px; line-height: 1; width: 20px; height: 20px; padding: 0; margin: -1px -2px 0 0; border-radius: 4px; cursor: pointer; }
+.toast-x:hover, .toast-x:focus-visible { opacity: 1; color: var(--text); background: rgba(255, 255, 255, .06); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 @media (max-width: 640px) { #toasts { top: 8px; right: 8px; left: 8px; width: auto; align-items: stretch; } .toast-x { width: 28px; height: 28px; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } .toast.out { transform: none; } }
