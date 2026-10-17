@@ -1098,17 +1098,52 @@ async function downloadUrlModel(ctx, x, onBytes) {
   ctx.log(`${x.name}: ${r.skipped ? 'already on disk' : `${r.resumed ? 'resumed and ' : ''}saved ${fmtGB(r.bytes)} to ${dest}`}`);
 }
 
+/**
+ * Download an exact, revision-pinned file list straight from the Hub with our own Range-resumable downloader
+ * (huggingface_hub >= 1 writes every attempt to a fresh process-unique .incomplete file, so its CLI restarts a
+ * 20 GB file from byte 0 after an interruption). Into `dest` as plain files, or into the standard hub cache layout
+ * (blobs/<etag> + snapshots/<commit>/<file> symlinks) so huggingface_hub finds them.
+ */
+async function downloadHfFiles(ctx, x, dest, onBytes) {
+  const prefix = x.repoType === 'model' ? '' : `${x.repoType}s/`;
+  const token = hfToken();
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  const sizes = new Array(x.files.length).fill(0);
+  const report = () => onBytes(sizes.reduce((a, b) => a + b, 0));
+  for (const [i, file] of x.files.entries()) {
+    const url = `https://huggingface.co/${prefix}${x.repo}/resolve/${x.revision}/${file.split('/').map(encodeURIComponent).join('/')}`;
+    const onFile = (b) => { sizes[i] = b; report(); };
+    if (dest) { await downloadFile(url, path.join(dest, file), { fetchImpl: ctx.d.fetch, signal: ctx.signal, headers, onBytes: onFile }); continue; }
+    const head = await ctx.d.fetch(url, { method: 'HEAD', headers, redirect: 'manual', signal: ctx.signal });
+    if (head.status >= 400) throw new Error(`HTTP ${head.status} for ${x.repo}/${file} — a gated or private repo needs an HF token (HF_TOKEN)`);
+    const etag = (head.headers.get('x-linked-etag') || head.headers.get('etag') || '').replace(/^W\//, '').replace(/"/g, '');
+    if (!/^[0-9a-f]{40,64}$/.test(etag)) throw new Error(`no usable etag for ${x.repo}/${file}`);
+    const repoDir = hfRepoCacheDir(x);
+    const blob = path.join(repoDir, 'blobs', etag);
+    await downloadFile(url, blob, { fetchImpl: ctx.d.fetch, signal: ctx.signal, headers, sha256: etag.length === 64 ? etag : '', onBytes: onFile });
+    const link = path.join(repoDir, 'snapshots', x.revision, file);
+    await fsp.mkdir(path.dirname(link), { recursive: true });
+    await fsp.rm(link, { force: true });
+    await fsp.symlink(path.relative(path.dirname(link), blob), link);
+  }
+}
+
 async function downloadHfModel(ctx, x, onBytes) {
   const { d, inst } = ctx;
   const dest = x.dest ? resolveDest(ctx, x.dest) : '';
   const watch = dest || hfRepoCacheDir(x);
   const timer = setInterval(() => onBytes(dirSize(watch)), 1000);
   try {
+    if (x.files.length && !x.include.length && /^[0-9a-f]{40}$/.test(x.revision || '')) {
+      await downloadHfFiles(ctx, x, dest, onBytes);
+      onBytes(x.sizeGB * GB);
+      return;
+    }
     const bin = venvBin(inst.venv);
     const local = ['hf', 'huggingface-cli'].map((n) => path.join(bin, isWin ? `${n}.exe` : n)).find(exists);
     const cli = local || d.which('hf') || d.which('huggingface-cli');
     if (cli) {
-      // Hugging Face skips files it already has and resumes partial ones (.incomplete) by itself.
+      // Whole-repo or unpinned downloads: the hub CLI skips files it already has (it cannot resume a partial one).
       const args = ['download', x.repo, ...x.files, ...(x.revision ? ['--revision', x.revision] : []), ...(x.repoType !== 'model' ? ['--repo-type', x.repoType] : []), ...x.include.flatMap((g) => ['--include', g]), ...(dest ? ['--local-dir', dest] : [])];
       await ctx.sh(cli, args, { env: { HF_HUB_DISABLE_TELEMETRY: '1' }, timeout: 0 });
     } else {

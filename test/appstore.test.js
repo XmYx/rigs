@@ -258,6 +258,32 @@ test('downloadFile: resumes a partial download with a Range request, then skips 
   assert.equal(served.length, 1, 'no second request for a file already on disk');
 });
 
+test('hf model with a pinned revision: resumes its own .part file and lands in the hub cache layout', async () => {
+  const REV = 'a'.repeat(40);
+  const BLOB = crypto.randomBytes(120000);
+  const ETAG = crypto.createHash('sha256').update(BLOB).digest('hex');
+  const gets = [];
+  const fakeFetch = async (url, init = {}) => {
+    assert.match(String(url), new RegExp(`^https://huggingface.co/acme/pin/resolve/${REV}/w/model.bin$`));
+    if (init.method === 'HEAD') return new Response(null, { status: 302, headers: { 'x-linked-etag': `"${ETAG}"` } });
+    gets.push(init.headers?.range);
+    const from = Number(/bytes=(\d+)-/.exec(init.headers?.range || '')?.[1] || 0);
+    return new Response(BLOB.subarray(from), { status: from ? 206 : 200 });
+  };
+  putManifest(studio({ id: 'hfpin', port: 18212, models: [{ name: 'pinned', kind: 'hf', repo: 'acme/pin', files: ['w/model.bin'], revision: REV, sizeGB: 0.0001 }], postInstall: [] }));
+  const blob = path.join(process.env.HF_HOME, 'hub', 'models--acme--pin', 'blobs', ETAG);
+  fs.mkdirSync(path.dirname(blob), { recursive: true });
+  fs.writeFileSync(`${blob}.part`, BLOB.subarray(0, 70000)); // an interrupted earlier attempt
+  const w = world();
+  const job = await installAndWait('hfpin', {}, { deps: { ...w.deps, fetch: fakeFetch } });
+  assert.equal(job.state, 'done', job.error + '\n' + job.log.join('\n'));
+  assert.deepEqual(gets, ['bytes=70000-'], 'continued from the partial file, not from byte 0');
+  assert.ok(!w.names().some((n) => n.startsWith('hf download')), 'the hub CLI is not used for a pinned file list');
+  const link = path.join(process.env.HF_HOME, 'hub', 'models--acme--pin', 'snapshots', REV, 'w', 'model.bin');
+  assert.ok(fs.readFileSync(link).equals(BLOB), 'the snapshot symlink resolves to the verified blob');
+  await S.uninstall('hfpin', w.deps); // leave the registry as the other tests expect it
+});
+
 test('downloadFile: a sha256 mismatch fails and keeps the bad file aside (nothing deleted)', async () => {
   const dest = path.join(HOME, 'dl', 'bad.bin');
   await assert.rejects(S.downloadFile(`http://127.0.0.1:${PORT}/vae.bin`, dest, { sha256: '0'.repeat(64) }), /sha256 mismatch for bad.bin/);
