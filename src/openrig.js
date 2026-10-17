@@ -22,7 +22,8 @@ export async function status(force = false) {
   // a busy daemon must not look dead, or live seats get revived and nudged for nothing.
   const read = (d) => `${d.stdout}\n${d.stderr}`;
   const isRunning = (t) => /running/i.test(t) && !/not running|stopped/i.test(t);
-  const isStopped = (t) => /not running|stopped|not started|no daemon|ECONNREFUSED/i.test(t);
+  // After a reboot OpenRig says "Daemon PID is absent (stale state)": that is down, not slow.
+  const isStopped = (t) => /not running|stopped|not started|no daemon|ECONNREFUSED|pid is absent|stale state/i.test(t);
   let daemon = first;
   if (!isRunning(read(daemon)) && !isStopped(read(daemon))) daemon = await run(r, ['daemon', 'status'], { timeout: 20000 });
   const running = isRunning(read(daemon));
