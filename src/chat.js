@@ -7,7 +7,7 @@ import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
 import { parseProjects, route as routeRequest } from './router.js';
-import { addTokens, claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn } from './usage.js';
+import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn } from './usage.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
@@ -210,7 +210,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   args.push('--add-dir', workRoot());
   args.push(...claudeFlags({ model, effort }));
-  if (chat.claudeSessionId) args.push('--resume', chat.claudeSessionId);
+  const resumed = !!chat.claudeSessionId;
+  if (resumed) args.push('--resume', chat.claudeSessionId);
   let full = '';
   let error = null;
   let usage = null;
@@ -230,7 +231,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
       } else if (e.type === 'system' && e.subtype === 'api_retry') {
         emit({ type: 'status', text: `retrying (${e.error || e.error_status})…` });
       } else if (e.type === 'result') {
-        try { usage = claudeResultUsage(e); } catch {}
+        // the session's running totals stay on the chat: the next (resumed) turn is counted as the difference
+        try { usage = claudeResultUsage(e, { prev: chat.claudeUsage, resumed }); chat.claudeUsage = usage.cumulative; delete usage.cumulative; } catch {}
         if (e.is_error) error = e.result || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
@@ -252,13 +254,19 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
   let full = '';
   let error = null;
   let usage = null;
+  // turn.completed reports the thread's running total: a resumed turn is the difference from the last one seen
+  // (kept on the chat); resumed without it, the turn's own share is unknown and it is filed without tokens.
+  const resumed = !!chat.codexThreadId;
+  const prev = chat.codexUsage?.threadId === chat.codexThreadId ? chat.codexUsage.usage : null;
   const res = await streamProcess(bin('codex'), args, {
     cwd: chat.cwd || HOME, signal,
     onLine: (line) => {
       let e;
       try { e = JSON.parse(line); } catch { return; }
       if (e.type === 'thread.started' && e.thread_id) chat.codexThreadId = e.thread_id;
-      else if (e.type === 'turn.completed') { try { usage = addTokens(usage, codexTurnUsage(e)); } catch {} }
+      else if (e.type === 'turn.completed' && e.usage) {
+        try { usage = resumed && !prev ? null : codexTurnUsage(e, prev); chat.codexUsage = { threadId: chat.codexThreadId, usage: e.usage }; } catch {}
+      }
       else if (e.type === 'item.completed' && e.item?.type === 'agent_message') {
         const t = (full ? '\n\n' : '') + (e.item.text || '');
         full += t; emit({ type: 'delta', text: t });
