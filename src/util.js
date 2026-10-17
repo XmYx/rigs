@@ -81,8 +81,9 @@ export function spawnCmd(cmd, args = [], opts = {}) {
 
 /** Run a command and collect output. Never throws; resolves {code, stdout, stderr}. */
 export function run(cmd, args = [], opts = {}) {
-  const { timeout = 15000, input, cwd, env, maxBuffer = 8 * 1024 * 1024 } = opts;
+  const { timeout = 15000, input, cwd, env, signal, maxBuffer = 8 * 1024 * 1024 } = opts;
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: -3, stdout: '', stderr: 'aborted' }); return; }
     let child;
     try {
       child = spawnCmd(cmd, args, { cwd, env: env || { ...process.env, PATH: augmentedPath() }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -93,17 +94,20 @@ export function run(cmd, args = [], opts = {}) {
     let stdout = '';
     let stderr = '';
     let done = false;
+    const abort = () => { try { child.kill('SIGKILL'); } catch {} finish(-3, '\n[aborted]'); };
     const timer = timeout ? setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(-2, '\n[timed out]'); }, timeout) : null;
     function finish(code, extra = '') {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       resolve({ code, stdout, stderr: stderr + extra });
     }
     child.stdout.on('data', (d) => { if (stdout.length < maxBuffer) stdout += d; });
     child.stderr.on('data', (d) => { if (stderr.length < maxBuffer) stderr += d; });
     child.on('error', (e) => finish(-1, String(e.message || e)));
     child.on('close', (code) => finish(code ?? -1));
+    signal?.addEventListener('abort', abort, { once: true });
     if (input != null) child.stdin.end(input); else child.stdin.end();
   });
 }

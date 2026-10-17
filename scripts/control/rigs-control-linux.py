@@ -24,6 +24,8 @@ import subprocess
 import sys
 import threading
 import time
+import signal
+import atexit
 
 try:
     import gi
@@ -201,9 +203,11 @@ def mutter_displays():
 
 # ------------------------------------------------------------------------- frames
 
-def gst_frame(node, out, fd=None, max_width=0, fmt='png', quality=80, crop=None, src_size=None):
+def gst_frame(node, out, fd=None, max_width=0, fmt='png', quality=80, crop=None, src_size=None, source_file=None):
     """One frame of a PipeWire stream → PNG/JPEG file, via gst-launch-1.0."""
     src = ['pipewiresrc', 'path=%d' % node, 'num-buffers=1', 'always-copy=true']
+    if source_file:
+        src = ['filesrc', 'location=%s' % source_file, '!', 'pngdec']
     if fd is not None:
         src.insert(1, 'fd=%d' % fd)
     chain = src + ['!', 'videoconvert']
@@ -212,8 +216,13 @@ def gst_frame(node, out, fd=None, max_width=0, fmt='png', quality=80, crop=None,
         sw, sh = src_size
         chain += ['!', 'videocrop', 'left=%d' % x, 'top=%d' % y,
                   'right=%d' % max(0, sw - x - w), 'bottom=%d' % max(0, sh - y - h)]
-    if max_width:
-        chain += ['!', 'videoscale', 'method=bilinear', '!', 'video/x-raw,width=%d,pixel-aspect-ratio=1/1' % max_width]
+    if max_width and src_size:
+        sw, sh = (crop[2], crop[3]) if crop else src_size
+        width = min(max_width, sw)
+        height = max(1, round(sh * width / sw))
+        # Fix both dimensions. A range for height can overflow GStreamer's ratio arithmetic.
+        chain += ['!', 'videoscale', 'method=bilinear', '!',
+                  'video/x-raw,width=%d,height=%d,pixel-aspect-ratio=1/1' % (width, height)]
     if fmt == 'jpeg':
         chain += ['!', 'videoconvert', '!', 'jpegenc', 'quality=%d' % quality]
     else:
@@ -318,6 +327,7 @@ class Mutter:
                 pass
         self.rd = self.sc = None
         self.started = False
+        self.streams = {}
 
     def _rd(self, method, sig, args):
         if not self.rd or not self.started:
@@ -339,6 +349,7 @@ class Mutter:
 
     def keysym(self, sym, down):
         self._rd('NotifyKeyboardKeysym', '(ub)', (sym, bool(down)))
+
 
 
 def primary_connector():
@@ -595,6 +606,29 @@ def locked():
             return bool(call(dest, path, iface, 'GetActive', None, '(b)', timeout=3000)[0])
         except Fail:
             continue
+    # Compositors without a ScreenSaver bus API (sway/Hyprland, many X11 sessions).
+    # logind's Display is the user's active graphical session, unlike this daemon's PID.
+    try:
+        system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        def prop(obj, iface, name):
+            return system.call_sync('org.freedesktop.login1', obj, 'org.freedesktop.DBus.Properties', 'Get',
+                                    GLib.Variant('(ss)', (iface, name)), GLib.VariantType('(v)'),
+                                    Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
+        uid_path = '/org/freedesktop/login1/user/_%d' % os.getuid()
+        session, obj = prop(uid_path, 'org.freedesktop.login1.User', 'Display')
+        if session and prop(obj, 'org.freedesktop.login1.Session', 'Active'):
+            # Lockers do not all update LockedHint. Treat a known running locker as locked too.
+            for item in os.listdir('/proc'):
+                if item.isdigit():
+                    try:
+                        with open('/proc/%s/comm' % item) as f:
+                            if f.read().strip() in ('swaylock', 'hyprlock', 'i3lock', 'xsecurelock'):
+                                return True
+                    except OSError:
+                        pass
+            return bool(prop(obj, 'org.freedesktop.login1.Session', 'LockedHint'))
+    except Exception:  # noqa: BLE001 - unknown is fail-closed in the daemon
+        pass
     return None
 
 
@@ -616,6 +650,7 @@ class Helper:
     def op_configure(self, a):
         self.capture, self.input, self.windows = a.get('capture'), a.get('input'), a.get('windows')
         self.restore_token = a.get('restoreToken') or self.restore_token
+        self.displays = a.get('displays') or []
         return {'capture': self.capture, 'input': self.input, 'windows': self.windows}
 
     def op_probe(self, a):
@@ -643,10 +678,13 @@ class Helper:
         if self.capture == 'portal' and self.portal and self.portal.streams:
             out = []
             for i, s in enumerate(self.portal.streams):
-                pos, size = s['props'].get('position', (0, 0)), s['props'].get('size', (0, 0))
+                pos = s['props'].get('position', (0, 0))
+                size = s.get('pixelSize') or s['props'].get('size', (0, 0))
                 out.append({'id': str(i), 'name': 'screen %d' % i, 'x': pos[0], 'y': pos[1], 'width': size[0],
                             'height': size[1], 'scale': 1, 'primary': i == 0})
             return out
+        if self.capture not in ('mutter', None) and self.displays:
+            return self.displays
         return mutter_displays()
 
     def _portal(self):
@@ -671,12 +709,32 @@ class Helper:
     def op_shot(self, a):
         out = a['file']
         r = a.get('region')
+        if a.get('window') is not None:
+            if self.capture != 'mutter' or self.windows != 'rigs-extension':
+                raise Fail('unsupported', 'window capture needs the RIGS Shell extension; use a display or region')
+            w = next((w for w in ext_windows() if w['id'] == str(a['window'])), None)
+            if not w or w['minimized']:
+                raise Fail('bad-args', 'no visible window with that id')
+            b = w['bounds']
+            ds = mutter_displays()
+            d = next((d for d in ds if b['x'] >= d['x'] and b['y'] >= d['y'] and
+                      b['x'] + b['width'] <= d['x'] + d['width'] / d['scale'] and
+                      b['y'] + b['height'] <= d['y'] + d['height'] / d['scale']), None)
+            if not d:
+                raise Fail('unsupported', 'window spans displays; capture a display or region')
+            a = {**a, 'display': d['id']}
+            r = {'x': round((b['x'] - d['x']) * d['scale']), 'y': round((b['y'] - d['y']) * d['scale']),
+                 'width': round(b['width'] * d['scale']), 'height': round(b['height'] * d['scale'])}
         crop = (r['x'], r['y'], r['width'], r['height']) if r else None
         fmt = a.get('format') or 'png'
         if self.capture == 'mutter':
             i, d = self._display(a)
             st = self.mutter.stream(d['id'])
-            size = st['size'] or (d['width'], d['height'])
+            # Stream Parameters.size is logical on fractional-scale GNOME, while PipeWire frames
+            # carry physical pixels. Public coordinates/crop/scale are always physical pixels.
+            size = (d['width'], d['height'])
+            if r and (r['x'] + r['width'] > size[0] or r['y'] + r['height'] > size[1]):
+                raise Fail('bad-args', 'region is outside the display')
             gst_frame(st['node'], out, max_width=a.get('maxWidth') or 0, fmt=fmt, quality=a.get('quality', 80),
                       crop=crop, src_size=size)
         elif self.capture == 'portal':
@@ -684,13 +742,24 @@ class Helper:
             p.ensure()
             i, d = self._display(a)
             s = p.stream(i)
-            size = tuple(s['props'].get('size', (d['width'], d['height'])))
-            gst_frame(s['node'], out, fd=p.fd, max_width=a.get('maxWidth') or 0, fmt=fmt,
-                      quality=a.get('quality', 80), crop=crop, src_size=size)
+            # Portal size can also be logical. Read the actual frame before crop/downscale.
+            raw = out + '.source.png'
+            try:
+                gst_frame(s['node'], raw, fd=p.fd)
+                size = image_size(raw)
+                s['pixelSize'] = size
+                if r and (r['x'] + r['width'] > size[0] or r['y'] + r['height'] > size[1]):
+                    raise Fail('bad-args', 'region is outside the display')
+                gst_frame(0, out, source_file=raw, max_width=a.get('maxWidth') or 0, fmt=fmt,
+                          quality=a.get('quality', 80), crop=crop, src_size=size)
+            finally:
+                if os.path.exists(raw):
+                    os.unlink(raw)
         else:
             raise Fail('unsupported', 'capture backend %s is not handled by the helper' % self.capture)
         w, h = image_size(out)
-        return {'file': out, 'width': w, 'height': h, 'display': d['id'], 'sourceWidth': size[0], 'sourceHeight': size[1]}
+        return {'file': out, 'width': w, 'height': h, 'display': d['id'], 'sourceWidth': size[0],
+                'sourceHeight': size[1], 'region': r}
 
     def _uinput(self):
         if not self.uinput:
@@ -716,9 +785,16 @@ class Helper:
         i, d = self._display(a)
         dev = self._dev()
         if self.input == 'mutter':
+            # NotifyPointerMotionAbsolute uses the physical stream coordinate space,
+            # despite Parameters.size being logical on fractional-scale GNOME.
             dev.move(d['id'], x, y)
         elif self.input == 'portal':
-            dev.move(i, x, y)
+            s = dev.stream(i)
+            logical = s['props'].get('logical_size') or s['props'].get('size')
+            pixels = s.get('pixelSize')
+            if not logical or not pixels:
+                raise Fail('unsupported', 'Capture this portal display first to establish physical-to-logical coordinates')
+            dev.move(i, x * logical[0] / pixels[0], y * logical[1] / pixels[1])
         else:
             dev.move(d['x'] + x, d['y'] + y)
         return {'x': x, 'y': y, 'display': d['id']}
@@ -760,6 +836,10 @@ class Helper:
 
     def op_type(self, a):
         text, delay = a['text'], max(0, a.get('delayMs', 0)) / 1000.0
+        if self.input in ('mutter', 'portal') and any(ord(ch) > 127 for ch in text):
+            # Mutter silently drops keysyms absent from its active layout. SetKeymap is unsafe on
+            # GNOME 50.1 (live test caused a Shell crash). Never report a partial Unicode string as typed.
+            raise Fail('unsupported', 'This backend guarantees ASCII only; Unicode needs wtype or a native macOS/Windows helper')
         if self.input == 'uinput':
             bad = sorted({c for c in text if c not in US})
             if bad:
@@ -814,8 +894,8 @@ class Helper:
     def op_focus(self, a):
         if self.windows != 'rigs-extension':
             raise Fail('unsupported', 'focusing windows on GNOME needs the RIGS Shell extension (rigs-control@rigs.dev)')
-        if not ext_focus(a['id']):
-            raise Fail('bad-args', 'no window %s' % a['id'])
+        if not ext_focus(a['windowId']):
+            raise Fail('bad-args', 'no window %s' % a['windowId'])
         return {}
 
     def op_locked(self, a):
@@ -831,6 +911,9 @@ class Helper:
 
 def main():
     h = Helper()
+    # SIGTERM is the daemon's out-of-band abort. Cleanup must run even during typing/a D-Bus call.
+    atexit.register(lambda: h.op_stop({}))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     lines = []
     cond = threading.Condition()
 
@@ -865,8 +948,10 @@ def main():
                 raise Fail('bad-args', 'unknown op %s' % req.get('op'))
             send({'id': rid, 'ok': True, 'result': fn(req)})
         except Fail as e:
+            h.op_release({})
             send({'id': rid, 'ok': False, 'error': {'code': e.code, 'message': str(e)}})
         except Exception as e:  # noqa: BLE001
+            h.op_release({})
             send({'id': rid, 'ok': False, 'error': {'code': 'error', 'message': '%s: %s' % (type(e).__name__, e)}})
     try:
         h.op_stop({})
