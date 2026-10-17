@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { PROVIDERS, coreBrain } from './models.js';
@@ -107,11 +108,15 @@ ${meshBrief(snapshot)}
 ROUTING POLICY (task kind → provider/model/effort; machines are chosen by RIGS afterwards): ${rules}${avoided().length ? `\nSWITCHED OFF FOR NOW (never suggest them): ${avoided().join(', ')}` : ''}
 
 Rules:
-- 2 to 12 tasks. Each must be doable by one agent in one session and have a verifiable outcome.
+- Use the FEWEST tasks that get the goal done well: every extra task costs a whole agent session (minutes and tokens).
+  1 to 12 tasks. Each must be doable by one agent in one session and have a verifiable outcome.
+- A small or well-scoped change (one feature, style, setting, fix or doc in a known area) is ONE task that implements,
+  tests and screenshots its own work; RIGS adds the final review. Split only when parts need different machines, tools
+  or skills, can truly run in parallel, or are too large for one session. Never a separate audit/test task for small work.
 - Every task has "acceptance": 1-5 concrete, checkable criteria (what must be true when it is done), and "verify": how the agent
   proves it (exact test/build commands, a run, or evidence such as a screenshot path). UI work verifies with screenshots,
   including a phone-sized viewport (e.g. 390x844) when layout or mobile use is involved.
-- Typical shape: measure/audit → change → test → review. The LAST task is always kind "review": an independent check of the
+- Larger work: measure/audit → change → test → review. The LAST task is always kind "review": an independent check of the
   whole result against the goal (deps: every other task), which re-runs the verification and reports what is open.${p.selfDev ? `
 - This is a change to RIGS itself. Every task works in the same dev worktree (${p.repo.path}, branch ${p.selfDev.branch}) and
   commits there; \`npm test\` (and \`npm run build\` when ui/ changed) must pass before a task reports done. Do NOT plan a task
@@ -187,6 +192,42 @@ export function ensureFinalReview(tasks, goal = '') {
   return tasks;
 }
 
+/**
+ * Playbooks (docs/playbooks/*.md): saved, proven methods for recurring RIGS changes. Front matter `match` (a regex
+ * on the goal), `title`, `size`. A RIGS change that matches one skips LLM planning: one agent follows the playbook,
+ * the final review checks it. Write one whenever a kind of request repeats.
+ */
+export const PLAYBOOK_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'playbooks');
+
+export function parsePlaybook(text, file = '') {
+  const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!m) return null;
+  const meta = Object.fromEntries(m[1].split(/\r?\n/).map((l) => l.match(/^(\w+):\s*(.*)$/)).filter(Boolean).map((x) => [x[1], x[2].trim()]));
+  if (!meta.match) return null;
+  let re;
+  try { re = new RegExp(meta.match, 'i'); } catch { return null; }
+  return { file, title: meta.title || path.basename(file, '.md'), size: ['S', 'M', 'L'].includes(meta.size) ? meta.size : 'M', re, body: m[2].trim() };
+}
+
+export async function findPlaybook(goal, dir = PLAYBOOK_DIR) {
+  let files = [];
+  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.md')).sort(); } catch { return null; }
+  for (const f of files) {
+    const pb = parsePlaybook(await fsp.readFile(path.join(dir, f), 'utf8').catch(() => ''), f);
+    if (pb && pb.re.test(goal)) return pb;
+  }
+  return null;
+}
+
+export function playbookTasks(p, pb) {
+  return ensureFinalReview(normalizeTasks({ tasks: [{
+    id: 't1', title: truncate(`${pb.title}: ${p.goal}`, 120), kind: 'code', size: pb.size,
+    description: `Sir asked: "${p.request || p.goal}". Do it end to end in one go by following the saved playbook (docs/playbooks/${pb.file}) below: implement, build, test, screenshot, commit. If the playbook is wrong or out of date, fix it in the same commit.\n\n${pb.body}`,
+    acceptance: ['the request is implemented as the playbook describes', '`npm run build` and `npm test` pass', 'a screenshot or run output proves it for anything visible'],
+    verify: 'npm run build && npm test, plus the playbook\'s own checks',
+  }] }), p.goal);
+}
+
 /** The project's AGENTS.md / CLAUDE.md (first ~9k chars), read from the machine the folder is on. */
 async function readGuide(p, ctx) {
   const g = p.workspace?.guides?.[0];
@@ -205,6 +246,15 @@ export async function planProject(id, ctx, { brain } = {}) {
   const b = brain?.provider ? brain : p.planner || coreBrain();
   p.planner = b;
   const snapshot = await ctx.snapshot();
+  const pb = p.selfDev && !brain?.provider ? await findPlaybook(`${p.goal} ${p.request || ''}`) : null;
+  if (pb) {
+    p.tasks = playbookTasks(p, pb);
+    p.summary = `Follows the ${pb.title} playbook`;
+    routeProject(p, snapshot);
+    p.status = 'planned';
+    event(p, `follows playbook ${pb.file}: ${p.tasks.length} tasks, no planning call`);
+    return saveProject(p);
+  }
   const guide = await readGuide(p, ctx);
   const prompt = planningPrompt(p, snapshot, guide);
   p.status = 'planning';

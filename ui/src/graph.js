@@ -2,6 +2,7 @@ import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { currentTheme, onTheme } from './themes.js';
 
 // Node types — the legend on the right, like the "brain galaxy" in the reference video.
 export const TYPES = {
@@ -137,7 +138,7 @@ export function createGraph(el, { onSelect, onBackground }) {
   const labelRenderer = new CSS2DRenderer();
   labelRenderer.domElement.style.pointerEvents = 'none';
   const Graph = new ForceGraph3D(el, { controlType: 'orbit', extraRenderers: [labelRenderer] })
-    .backgroundColor('#04060a')
+    .backgroundColor(currentTheme().graph.background)
     .showNavInfo(false)
     .nodeId('id')
     .nodeVal((n) => n.val)
@@ -177,7 +178,9 @@ export function createGraph(el, { onSelect, onBackground }) {
   const pts = new Float32Array(3000 * 3);
   for (let i = 0; i < pts.length; i++) pts[i] = (Math.random() - 0.5) * 6000;
   stars.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-  Graph.scene().add(new THREE.Points(stars, new THREE.PointsMaterial({ color: 0x334155, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.7 })));
+  const starMat = new THREE.PointsMaterial({ color: currentTheme().graph.stars, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.7 });
+  Graph.scene().add(new THREE.Points(stars, starMat));
+  onTheme((t) => { Graph.backgroundColor(t.graph.background); starMat.color.set(t.graph.stars); });
 
   function colorFor(n) {
     const base = TYPES[n.type]?.color || '#94a3b8';
