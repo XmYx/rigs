@@ -161,4 +161,7 @@ async function compute({ projects } = {}) {
   return current;
 }
 
-export function list() { return current; }
+const sources = []; // live items that are not polled (e.g. an active screen-control lease)
+export function addSource(fn) { sources.push(fn); }
+
+export function list() { return sources.length ? [...current, ...sources.flatMap((f) => f())] : current; }
