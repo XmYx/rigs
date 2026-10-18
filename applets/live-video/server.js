@@ -124,7 +124,8 @@ export function createLiveVideoServer({
     getModelOverrides: () => settings.models,
     getOverseer: () => (overseerApplies(settings, currentUrl()) ? overseerFor() : null),
     clips: readJsonSync(clipsFile, []) || [],
-    onClips: (clips) => { clipsWrite = clipsWrite.then(() => fsp.mkdir(dataDir, { recursive: true }).then(() => fsp.writeFile(clipsFile, JSON.stringify(clips)))).catch((e) => log('live-video: could not save clips:', e.message)); },
+    // Atomic (temp file + rename): a crash or a reader mid-write never sees a truncated clips.json.
+    onClips: (clips) => { clipsWrite = clipsWrite.then(() => fsp.mkdir(dataDir, { recursive: true }).then(() => fsp.writeFile(clipsFile + '.tmp', JSON.stringify(clips))).then(() => fsp.rename(clipsFile + '.tmp', clipsFile))).catch((e) => log('live-video: could not save clips:', e.message)); },
   });
 
   let overseer = null;

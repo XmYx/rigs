@@ -275,8 +275,9 @@ test('live: the next clip is queued while the current one generates; clips arriv
   assert.ok(prog.max === 4 && prog.value >= 1);
   await req(base, '/api/live/stop', { method: 'POST' });
   sse.close();
-  await until(() => fs.existsSync(path.join(dir, 'clips.json')), 2000, 'clips.json');
-  assert.ok(JSON.parse(fs.readFileSync(path.join(dir, 'clips.json'), 'utf8')).length >= 3, 'recent clips persisted');
+  // clips.json is rewritten after every clip (queued writes): wait for the write that holds all three.
+  const saved = () => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'clips.json'), 'utf8')).length; } catch { return 0; } };
+  await until(() => saved() >= 3, 3000, 'recent clips persisted');
 });
 
 test('live: it does not run away — at most ~3 clips are buffered ahead of playback', async () => {
