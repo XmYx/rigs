@@ -38,6 +38,7 @@ import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
 import * as ts from './tailscale.js';
+import * as toolbox from './toolbox.js';
 import * as tts from './tts.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
@@ -373,6 +374,28 @@ export async function startServer() {
     return out;
   }
 
+  /**
+   * Mesh-wide tool search: every online node's registered tools plus the App Cloud apps as kind "applet", ranked
+   * together by toolbox.searchCatalog (q, tag, kind, node, limit).
+   */
+  async function meshTools(searchParams) {
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const [results, apps] = await Promise.all([
+      Promise.all(nodes.map((n) => (n.self ? toolbox.listLocal() : peerJson(n, 'tools', { timeout: 7000 }))
+        .then((r) => ({ node: n, tools: r.tools })).catch((e) => ({ node: n, error: e.message })))),
+      meshApps().catch((e) => ({ apps: [], errors: [{ node: config().name, error: e.message }] })),
+    ]);
+    const { tools, errors } = toolbox.aggregateTools(results);
+    const want = (searchParams.get('node') || '').toLowerCase();
+    const entries = [...tools, ...apps.apps.map(toolbox.appletEntry)].filter((e) => !want || e.node.toLowerCase() === want);
+    const limit = searchParams.has('limit') ? Math.max(0, Number(searchParams.get('limit')) || 0) : 50;
+    return {
+      results: toolbox.searchCatalog(entries, { q: searchParams.get('q') || '', tag: searchParams.get('tag') || '', kind: searchParams.get('kind') || '', limit }),
+      errors: [...errors, ...apps.errors.map((e) => ({ ...e, error: `apps: ${e.error}` }))],
+    };
+  }
+
   /** Call any node's local API by id or name (direct function call for this node). */
   async function callNode(nodeRef, p, { method = 'GET', body, timeout = 30000 } = {}) {
     const node = discovery.get(nodeRef);
@@ -492,7 +515,15 @@ export async function startServer() {
 
     if (sub === 'info') return selfInfo();
     if (sub === 'stats') return stats();
-    if (sub === 'tools') return detectTools(q.get('force') === '1');
+    if (sub === 'bins') return detectTools(q.get('force') === '1');
+    // tool registry (src/toolbox.js): scripts filed by agents, listed, read, registered and run here
+    if (sub === 'tools' && method === 'GET') return toolbox.listLocal();
+    if (sub === 'tools/register' && method === 'POST') return toolbox.registerTool(await body());
+    if ((mm = m(/^tools\/([^/]+)$/)) && method === 'GET') return toolbox.getTool(decodeURIComponent(mm[1]));
+    if ((mm = m(/^tools\/([^/]+)\/run$/)) && method === 'POST') {
+      const b = await body();
+      return toolbox.runTool(decodeURIComponent(mm[1]), { args: b.args ?? {}, allowMutating: b.allowMutating === true, timeoutSec: b.timeoutSec, cwd: b.cwd });
+    }
     if (sub === 'config' && method === 'GET') return publicConfig();
     if (sub === 'config' && method === 'POST') { patchConfig(await body()); return publicConfig(); }
 
@@ -971,6 +1002,7 @@ export async function startServer() {
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
+    if (p === '/api/tools') return meshTools(url.searchParams);
     if (p === '/api/usage') return meshUsage(url.searchParams);
     if (p === '/api/traces') return meshTraces(url.searchParams);
     if ((mm = p.match(/^\/api\/traces\/([\w-]+)$/))) return meshTrace(mm[1], url.searchParams);
@@ -1081,7 +1113,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ToolError' ? { code: e.code } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }
