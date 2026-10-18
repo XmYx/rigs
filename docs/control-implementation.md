@@ -105,23 +105,25 @@ RIGS Control.app: `scripts/control/macos/RigsControl.swift` (+ `Info.plist`, `bu
 protocol above (`probe` also returns `grants` and `helper`; plus `hello`, `displays` and `grant {permission}`).
 Verified on macbookpro, macOS 26.3.1 (25D2128), Apple M1, one display 1680×1050 pt @2x (3360×2100 px), toolchain
 Xcode 13.3 (Swift 5.6, macOS 12.3 SDK). Dev daemon: `RIGS_HOME=<worktree>/.rigs-dev/mac`, port 4791,
-`RIGS_NO_MIGRATIONS=1 RIGS_NO_AUTOUPDATE=1 RIGS_NO_OPENRIG=1`; helper job `dev.rigs.control.6c5a13de`.
+`RIGS_NO_MIGRATIONS=1 RIGS_NO_AUTOUPDATE=1 RIGS_NO_OPENRIG=1`; helper job `dev.rigs.control.6c5a13de`. Since
+2026-10-18 that label is also the dev build's bundle id, and System Settings lists it as "RIGS Control (dev)"; the
+real home's helper stays `dev.rigs.control` / "RIGS Control".
 
 ### Grants needed (recorded live)
 
 | Grant | To | Needed for | Prompt / where |
 | --- | --- | --- | --- |
-| Screen Recording | RIGS Control | `screenshot` (and window titles) | `CGRequestScreenCaptureAccess()` adds the entry; System Settings > Privacy & Security > Screen Recording |
+| Screen Recording | RIGS Control | `screenshot`, `windows` (`CGWindowList` titles) | `CGRequestScreenCaptureAccess()` adds the entry; System Settings > Privacy & Security > Screen Recording |
 | "Bypass the system private window picker" | RIGS Control | `screencapture`-based capture on macOS 15+/26 | a system dialog on the first capture after the grant (Allow / Open System Settings). Capture already worked while it was still open; macOS may ask again periodically |
-| Accessibility | RIGS Control | `windows`, `focus`, `pointer`, `key`, `type` (AX + `CGEventPost`) | `AXIsProcessTrustedWithOptions(prompt)` adds the entry; System Settings > Privacy & Security > Accessibility |
+| Accessibility | RIGS Control | `focus`, `pointer`, `key`, `type` (AX + `CGEventPost`) | `AXIsProcessTrustedWithOptions(prompt)` adds the entry; System Settings > Privacy & Security > Accessibility |
 | Automation, Input Monitoring, Full Disk Access | — | not needed by the helper | |
 
-Screen Recording was switched on by Sir at the Mac and is verified live. Accessibility has not been switched on for
-RIGS Control yet (see "Live check status"), so its row lists what the code and macOS require, not a live observation.
-Nothing in RIGS clicks a TCC prompt or edits TCC.db; the only TCC call RIGS makes is `tccutil reset … dev.rigs.control`
-after a rebuild (its own stale entries).
+Screen Recording was switched on by Sir at the Mac and verified live for the 2026-10-17 build. Accessibility has not
+been switched on for any build yet (see "Live check status"), so its row lists what the code and macOS require, not a
+live observation. Nothing in RIGS clicks a TCC prompt or edits TCC.db; the only TCC call RIGS makes is
+`tccutil reset <service> <its own bundle id>` before a grant after a build, for a grant that build does not hold.
 
-### Live check status (2026-10-17, through `http://127.0.0.1:4791/api/local/control/*`)
+### Live check status, 2026-10-17 build (bundle id `dev.rigs.control`), through `http://127.0.0.1:4791/api/local/control/*`
 
 | Check | Result |
 | --- | --- |
@@ -131,6 +133,30 @@ after a rebuild (its own stale entries).
 | Accessibility missing → status | `ready {see: true, act: false}`; `input` and `accessibility` `ok: false` with `fix.kind: settings`, the `Privacy_Accessibility` pane URL, the app path and "switch on RIGS Control … not to node" |
 | Accessibility missing → actions | `GET windows` and `POST type` → 412 `needs-permission` with the same fix |
 | Window list, focus, pointer, typing into TextEdit | **not yet verified**: they need Accessibility, which no build of RIGS Control has held so far (the audit log has no successful `windows`, `focus`, `pointer`, `key` or `type`). Pending Sir switching it on |
+
+### Live check status, 2026-10-18 build (bundle id `dev.rigs.control.6c5a13de`, "RIGS Control (dev)")
+
+The review fixes below changed the Swift source and the bundle id, so this build (01:53Z) needs both grants anew.
+The Mac had been idle for 5.5 h with the screen locked, so only checks that need neither a person nor an unlocked
+screen were run:
+
+| Check | Result |
+| --- | --- |
+| `npm test` on macOS | 450 tests: 449 pass, 0 fail, 1 skipped (one earlier full run hit the known-flaky `mobile-a11y` small-target check on `#subtitle`; it passes alone and on the rerun) |
+| Build | `build.sh <app> dev.rigs.control.6c5a13de "RIGS Control (dev)"`: Info.plist and `codesign -dv` show the id, ad-hoc signature, stamp `<sha256> dev.rigs.control.6c5a13de`; `current: true` |
+| Socket protocol | pipelined `hello, locked, type, stop, key, probe, release` on one connection: answered in order; `type`/`key` → `needs-permission` (Accessibility); a bad token → `not-allowed`, connection closed |
+| SIGTERM | `rigs control helper stop` (bootout): the helper exited in 0.08 s and removed its socket; `install` restarted it without a rebuild |
+| Status with no grants | `ready {see: false, act: false}`; each permission `ok: false` with `fix.kind: settings`, its pane URL, the app path and "switch on RIGS Control (dev) … not to node"; right after the build also "(a new build: click Grant first …)" |
+| Actions while locked | `GET windows`, `POST type` → 423 `locked` (the lock check runs before the permission check) |
+| Grant flow | `POST control/grant` for `screenCapture` and `accessibility`: reset only `dev.rigs.control.6c5a13de` (no grant held), the helper's prompts and both panes opened; `regrant` cleared |
+| Screenshot, window list, focus, pointer, typing into TextEdit | **pending**: Sir switches on "RIGS Control (dev)" in Screen Recording and Accessibility (asked through JARVIS, 2026-10-18 01:58Z) |
+
+The pending checks are one command with the dev daemon running and the Mac unlocked:
+`node scripts/control/macos/live-check.js http://127.0.0.1:4791`. It checks the grants, takes
+`/tmp/rigs-mac-shot.png`, saves the window list to `/tmp/rigs-mac-windows.json`, opens the scratch document
+`/tmp/rigs-mac-textedit.txt` in TextEdit, focuses it, clicks into it, types a timestamped line, saves it with ⌘S,
+reads the file back, and takes `/tmp/rigs-mac-textedit.png`. To check that the grants survive a restart, run
+`rigs control helper stop`, then `install` (same `RIGS_HOME`), then run it again.
 
 ### Findings
 
@@ -148,6 +174,16 @@ after a rebuild (its own stale entries).
   installed daemon's path). It was stopped within minutes and its two files removed; the installed daemon never
   used it (no `~/.rigs/logs/control.jsonl`). The helper now declines quit requests, derives its home from its
   location, and exits when another instance already answers.
+- **Review fixes (2026-10-18).** (1) The kill hotkey and SIGTERM handlers took the input lock on the main thread,
+  and `type` held that lock for its whole text, so ⌃⌥⌘⎋ only took effect after typing finished (up to the 8 s
+  budget). A hotkey press during a request waiting for the main thread (window list, focus, the first key) deadlocked
+  the helper. Now a stop counter is bumped without the lock by `stop`, the hotkey, SIGTERM and the driving
+  connection's close. Each connection runs its requests on its own queue, so a `stop` is read while typing runs,
+  and typing ends at the next character with `off`. A status probe's connection closing no longer releases another
+  caller's held input. (2) Every home's build had the bundle id `dev.rigs.control`, and TCC keeps one entry per bundle id, so a
+  dev build shared (and its grant flow reset) the real helper's grants. A dev/scratch home now builds under its
+  label. (3) `windows` was gated on Accessibility although the list is `CGWindowList` (Screen Recording for titles).
+  (4) The stale-grant reset could take away a grant switched on by hand; it now skips grants the build holds.
 - **Fix hints.** Helper not running → every permission and action error is `needs-permission` (412) with
   `fix.kind: helper` ("click Grant or run `rigs control helper install`"). Grant missing → 412 with the System
   Settings pane URL, the app path and "switch on RIGS Control … not to node". `ready.see/act` now also require the
