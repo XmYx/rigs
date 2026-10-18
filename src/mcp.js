@@ -19,6 +19,9 @@ export function callerHeader(env = process.env, cwd = process.cwd()) {
   return JSON.stringify(c).replace(/[^\x20-\x7e]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 const CALLER = callerHeader();
+// The request trace this agent works for (src/trace.js): RIGS puts it in a JARVIS brain's env; it rides on every call.
+const TRACE = /^tr-\d{8}-[0-9a-f]{12}(:sp-[0-9a-f]{12})?$/.test(process.env.RIGS_TRACE || '') ? process.env.RIGS_TRACE : '';
+const traceOf = (a) => a.trace || TRACE || undefined;
 
 function failure(data, status) {
   const e = new Error((data && data.error) || `HTTP ${status}`);
@@ -29,7 +32,7 @@ function failure(data, status) {
 
 async function api(path, { method = 'GET', body, timeout = 60000 } = {}) {
   const r = await fetch(base() + path, {
-    method, headers: { 'content-type': 'application/json', 'x-rigs-token': config().meshToken, 'x-rigs-caller': CALLER },
+    method, headers: { 'content-type': 'application/json', 'x-rigs-token': config().meshToken, 'x-rigs-caller': CALLER, ...(TRACE ? { 'x-rigs-trace': TRACE } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout),
   });
   const text = await r.text();
@@ -216,9 +219,10 @@ const TOOLS = [
       newProject: { type: 'object', description: '{ name, goal, repoNode?, repoPath?, gitUrl? } to create a project for this', properties: { name: { type: 'string' }, goal: { type: 'string' }, repoNode: { type: 'string' }, repoPath: { type: 'string' }, gitUrl: { type: 'string' } } },
       kind: { type: 'string', description: 'code | research | docs | text | review | test | architecture | media | reverse-engineer' },
       size: { type: 'string', enum: ['S', 'M', 'L'], description: 'S/M simpler work, L elaborate (picks a stronger model)' },
+      trace: { type: 'string', description: 'request trace to file it under ("tr-…" or "tr-…:sp-…", from your brief); default: the one you run in' },
     }, required: ['title', 'instruction'] },
     run: async (a) => {
-      const r = await api('/api/nodes/self/projects/intake', { method: 'POST', body: a, timeout: 10 * 60 * 1000 });
+      const r = await api('/api/nodes/self/projects/intake', { method: 'POST', body: { ...a, trace: traceOf(a) }, timeout: 10 * 60 * 1000 });
       const t = r.task || {};
       return {
         project: `${r.project?.name} (${r.project?.id}, on ${r.project?.owner})`, task: `${t.id} ${t.title}`, started: !!r.started,
@@ -242,6 +246,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'trace_list', description: 'Request traces across the mesh: one per request Sir made (JARVIS intake), newest first, with its route, status, duration, models, tokens, tool calls and the projects/tasks it handed off. Filters: since (ms, ISO date or "24h" / "7d"; default 7d), route (answer | implement | plan | continue), status (running | ok | error | stopped), q (text in the request), node (one machine only).',
+    inputSchema: { type: 'object', properties: {
+      since: { type: 'string' }, until: { type: 'string' }, route: { type: 'string', enum: ['answer', 'implement', 'plan', 'continue'] },
+      status: { type: 'string', enum: ['running', 'ok', 'error', 'stopped'] }, q: { type: 'string' }, node: { type: 'string' }, limit: { type: 'number', description: 'default 30' },
+    } },
+    run: (a) => {
+      const qs = new URLSearchParams({ since: a.since || '7d', limit: String(a.limit ?? 30), ...Object.fromEntries(['until', 'route', 'status', 'q'].filter((k) => a[k]).map((k) => [k, a[k]])) });
+      return api(a.node ? `/api/nodes/${n(a.node)}/traces?${qs}` : `/api/traces?${qs}`, { timeout: 60000 });
+    },
+  },
+  {
+    name: 'trace_get', description: 'One request trace in full: its span tree (intake → router decision → brain turns → tool calls → handoffs, and later the tasks they started on any machine) with each span\'s input, output, timings, model, tokens and status. flat:true returns the spans as a list instead of a tree.',
+    inputSchema: { type: 'object', properties: { traceId: { type: 'string' }, flat: { type: 'boolean' } }, required: ['traceId'] },
+    run: async (a) => {
+      const t = await api(`/api/traces/${encodeURIComponent(a.traceId)}`, { timeout: 60000 });
+      return a.flat ? { traceId: t.traceId, summary: t.summary, spans: t.spans, errors: t.errors } : { traceId: t.traceId, summary: t.summary, tree: t.tree, errors: t.errors };
+    },
+  },
+  {
     name: 'project_list', description: 'List RIGS projects on every machine with their tasks, routing (machine/provider/model/effort) and status.',
     inputSchema: { type: 'object', properties: {} },
     run: () => api('/api/mesh/projects', { timeout: 30000 }),
@@ -253,9 +276,9 @@ const TOOLS = [
   },
   {
     name: 'project_create', description: 'Create a RIGS project from a goal on this machine. With plan=true the core brain breaks it into tasks and RIGS routes each to the best machine + provider + model + effort; with dispatch=true the ready tasks start right away (OpenRig seats or direct agents).',
-    inputSchema: { type: 'object', properties: { goal: { type: 'string' }, name: { type: 'string' }, repoNode: { type: 'string' }, repoPath: { type: 'string' }, gitUrl: { type: 'string' }, plan: { type: 'boolean' }, dispatch: { type: 'boolean' } }, required: ['goal'] },
+    inputSchema: { type: 'object', properties: { goal: { type: 'string' }, name: { type: 'string' }, repoNode: { type: 'string' }, repoPath: { type: 'string' }, gitUrl: { type: 'string' }, plan: { type: 'boolean' }, dispatch: { type: 'boolean' }, trace: { type: 'string', description: 'request trace ("tr-…[:sp-…]"); default: the one you run in' } }, required: ['goal'] },
     run: async (a) => {
-      let p = await api('/api/nodes/self/projects', { method: 'POST', body: a });
+      let p = await api('/api/nodes/self/projects', { method: 'POST', body: { ...a, trace: traceOf(a) } });
       if (a.plan !== false) p = await api(`/api/nodes/self/projects/${p.id}/plan`, { method: 'POST', body: {}, timeout: 16 * 60 * 1000 });
       if (a.dispatch) p = await api(`/api/nodes/self/projects/${p.id}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 });
       return { id: p.id, owner: p.owner, status: p.status, tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, deps: t.deps, assign: t.assign, reason: t.reason, status: t.status })) };
@@ -263,8 +286,8 @@ const TOOLS = [
   },
   {
     name: 'project_dispatch', description: 'Start every task of a planned project whose dependencies are done.',
-    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' } }, required: ['owner', 'project'] },
-    run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/dispatch`, { method: 'POST', body: {}, timeout: 20 * 60 * 1000 }),
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, trace: { type: 'string', description: 'request trace ("tr-…[:sp-…]"); default: the one you run in, else the project\'s' } }, required: ['owner', 'project'] },
+    run: (a) => api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/dispatch`, { method: 'POST', body: traceOf(a) ? { trace: traceOf(a) } : {}, timeout: 20 * 60 * 1000 }),
   },
   {
     name: 'project_stop', description: "Pause a project NOW because Sir said stop / pause / hold / \"consider it done\" / \"leave it for now\": its running agents are stopped (uncommitted edits stay in the tree) and nothing of it is dispatched, nudged or revived until project_resume. Sir's word overrides \"don't interrupt a working agent\" — never wait for a task to finish first.",

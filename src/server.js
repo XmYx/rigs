@@ -33,6 +33,7 @@ import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyAp
 import * as pty from './pty.js';
 import * as senses from './senses.js';
 import * as usage from './usage.js';
+import * as trace from './trace.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
@@ -281,15 +282,51 @@ export async function startServer() {
     return head && !/agents\.md|claude\.md|readme|guide/i.test(head) && head.length <= 40 ? head : ws.name;
   }
 
+  /** A handoff span's output: the project and where each of its tasks went. */
+  function handoffOutput(p) {
+    return { projectId: p.id, name: p.name, owner: p.owner, status: p.status, tasks: (p.tasks || []).map((t) => ({ id: t.id, title: t.title, status: t.status, node: t.assign?.node || '', model: t.assign?.model || '' })) };
+  }
+
+  /** The trace context a request carries: body.trace, then the x-rigs-trace header (the rigs MCP sets both). */
+  function traceOf(req, b) {
+    return trace.parseContext(b?.trace) || trace.parseContext(req?.headers?.['x-rigs-trace']);
+  }
+
+  /** Which agent harness made this API call (the rigs MCP's x-rigs-caller header): claude | codex | agent | ''. */
+  function callerAgent(req) {
+    try { return JSON.parse(req?.headers?.['x-rigs-caller'] || '{}').agent || ''; } catch { return ''; }
+  }
+
+  /** A request from Sir comes in: the root (intake) span of its new trace. */
+  function startIntake(req, text, name, b = {}) {
+    return trace.startSpan({ kind: 'intake', name, input: text, meta: { via: req?.rigsAuth?.via || '', who: req?.rigsAuth?.who || '', brain: b.brain || '', model: b.model || '', effort: b.effort || '' } });
+  }
+
+  /** Watches a turn's stream events and says how the intake span ends: its reply, or its error. */
+  function intakeWatcher() {
+    let done = null;
+    let error = '';
+    return {
+      see(e) { if (e.type === 'done') done = e; else if (e.type === 'error') error = e.message; },
+      result: (aborted) => ({
+        status: aborted ? 'stopped' : error && !done?.text ? 'error' : 'ok',
+        output: done ? { text: done.text, chatId: done.chatId, brain: done.brain, model: done.model, ...(error ? { error } : {}) } : { error: error || 'no reply' },
+      }),
+    };
+  }
+
   /**
    * The router bound parts of a request to workspaces: one project per part, bound to that folder on that
    * machine, planned by the core brain with the project's own agent guide, then dispatched (an OpenRig team
    * per project). Returns at once; planning and casting run in the background and report via notify.
    */
-  async function fileWork(items, { chatId = '' } = {}) {
+  async function fileWork(items, { chatId = '', trace: tctx = null } = {}) {
     const out = [];
     for (const it of items) {
       const ws = it.workspace;
+      // One handoff span per project filed, under the router's span; the project keeps its context so its planning
+      // call and task briefs attach to the same trace. It ends once planning and dispatch have run.
+      const hs = tctx ? trace.startSpan({ ...tctx, kind: 'handoff', name: 'file-work', input: { goal: it.goal, workspace: ws?.name || '', node: it.node || '', self: !!it.self, flow: it.flow?.name || '' } }) : null;
       const label = it.self ? 'JARVIS' : workspaceLabel(ws);
       const name = truncate(`${label} · ${it.flow ? it.flow.name : it.title || 'work'}`, 60);
       let p;
@@ -309,15 +346,18 @@ export async function startServer() {
       p.request = it.request || '';
       p.chatId = chatId;
       p.autoRun = true;
+      if (hs) p.trace = hs.ctx;
       if (it.note) p.note = it.note;
       p = await planner.saveProject(p);
       out.push({ id: p.id, name: p.name, owner: p.owner, node: p.repo.node, path: p.repo.path, workspace: label, self: !!it.self, flow: it.flow?.name || '', note: it.note || '' });
+      hs?.update({ meta: { projectId: p.id, owner: p.owner, name: p.name } });
       (async () => {
         if (p.flow) await planner.planFlow(p.id, plannerCtx);
         else await planner.planProject(p.id, plannerCtx);
         const d = await planner.dispatchReady(p.id, plannerCtx);
+        hs?.end({ output: handoffOutput(d), meta: { projectId: p.id, owner: p.owner, taskIds: d.tasks.map((t) => t.id) } });
         if (!d.tasks.some((t) => t.status === 'running')) plannerCtx.notify(`${p.name}: planned ${d.tasks.length} tasks, but none could start — open it on the Work dashboard.`, 'error');
-      })().catch((e) => { log('work:', e.message); plannerCtx.notify(`Couldn't start "${name}": ${e.message}`, 'error'); });
+      })().catch((e) => { hs?.end({ status: 'error', output: { error: e.message }, meta: { projectId: p.id, owner: p.owner } }); log('work:', e.message); plannerCtx.notify(`Couldn't start "${name}": ${e.message}`, 'error'); });
     }
     projCache.at = 0;
     return out;
@@ -343,9 +383,32 @@ export async function startServer() {
   }
 
   /** One-shot question to the brain on any machine (used by the planner). */
-  async function askNode(nodeRef, text, { brain, model, effort, title, usage: tag } = {}) {
+  async function askNode(nodeRef, text, { brain, model, effort, title, usage: tag, trace: tctx } = {}) {
     const c = await callNode(nodeRef, 'chats', { method: 'POST', body: { brain, model, effort, title } });
-    return callNode(nodeRef, `chats/${c.id}/send?wait=1`, { method: 'POST', body: { text, brain, model, effort, usage: tag }, timeout: 15 * 60 * 1000 });
+    return callNode(nodeRef, `chats/${c.id}/send?wait=1`, { method: 'POST', body: { text, brain, model, effort, usage: tag, ...(tctx ? { trace: tctx } : {}) }, timeout: 15 * 60 * 1000 });
+  }
+
+  /** Mesh-wide request traces (src/trace.js): every online node's summaries merged per traceId, like meshUsage. */
+  async function meshTraces(searchParams) {
+    const qs = new URLSearchParams(searchParams);
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? localCall('traces?' + qs) : peerJson(n, 'traces?' + qs, { timeout: 15000 }))
+      .then((report) => ({ node: n, report })).catch((e) => ({ node: n, error: e.message }))));
+    return { since: usage.parseTime(searchParams.get('since')) ?? null, ...trace.aggregateTraces(results, Object.fromEntries(searchParams)) };
+  }
+
+  /** One trace across the mesh: the spans every machine holds for it, in one tree. */
+  async function meshTrace(id, searchParams) {
+    if (!trace.isTraceId(id)) throw new HttpError(400, 'not a trace id');
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const qs = new URLSearchParams(searchParams);
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? localCall(`traces/${id}?${qs}`) : peerJson(n, `traces/${id}?${qs}`, { timeout: 15000 }))
+      .then((report) => ({ node: n, report })).catch((e) => (/not found/.test(e.message) ? { node: n, report: { spans: [] } } : { node: n, error: e.message }))));
+    const t = trace.mergeTrace(id, results);
+    if (!t.spans.length && !searchParams.get('after')) throw new HttpError(404, 'trace not found on any machine');
+    return t;
   }
 
   /** Mesh-wide usage ledger: every online node's records for the range, merged and aggregated (src/usage.js). */
@@ -498,29 +561,42 @@ export async function startServer() {
       res.on('close', () => { if (!res.writableEnded) ac.abort(); });
       res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
       const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
+      // Intake: the request gets its trace here (src/trace.js); router, brain turn, tools and handoffs hang off this span.
+      const intake = startIntake(req, String(b.text || ''), 'jarvis/send', b);
+      res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
+      const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx });
       } catch (e) {
+        seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
-      } finally { clearInterval(hb); res.end(); }
+      } finally { clearInterval(hb); intake.end(seen.result(ac.signal.aborted)); res.end(); }
       return undefined;
     }
     if ((mm = m(/^chats\/([\w-]+)\/send$/)) && method === 'POST') {
       const b = await body();
+      // A turn that belongs to a traced request (a project's planning call) attaches to it; Sir typing into a chat
+      // directly is a request of its own and gets its own trace. Other untagged calls (mesh_ask…) are not traced.
+      const parent = traceOf(req, b);
+      const intake = !parent && !b.usage && res && q.get('wait') !== '1' ? startIntake(req, String(b.text || ''), `chats/${mm[1]}/send`, b) : null;
+      const tctx = parent || intake?.ctx || null;
       if (!res || q.get('wait') === '1') {
         let final = null;
-        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary(), projects: await projectsSummary() });
+        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary(), projects: await projectsSummary(), trace: tctx });
         return final;
       }
       res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
       const ac = new AbortController();
       res.on('close', () => { if (!res.writableEnded) ac.abort(); });
       const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
+      if (intake) res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
+      const seen = intakeWatcher();
       try {
-        await chat.sendMessage(mm[1], b, (e) => res.write(JSON.stringify(e) + '\n'), { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal });
+        await chat.sendMessage(mm[1], b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, trace: tctx });
       } catch (e) {
+        seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
-      } finally { clearInterval(hb); res.end(); }
+      } finally { clearInterval(hb); intake?.end(seen.result(ac.signal.aborted)); res.end(); }
       return undefined;
     }
 
@@ -581,6 +657,16 @@ export async function startServer() {
       try { return await usage.report(Object.fromEntries(q)); } catch (e) { throw new HttpError(400, e.message); }
     }
     if (sub === 'usage/slice' && method === 'POST') return usage.taskUsage(await body());
+    // request traces kept on this machine (src/trace.js)
+    if (sub === 'traces' && method === 'GET') {
+      try { return await trace.list(Object.fromEntries(q), usage.parseTime); } catch (e) { throw new HttpError(400, e.message); }
+    }
+    if ((mm = m(/^traces\/([\w-]+)$/)) && method === 'GET') {
+      const t = await trace.get(mm[1], { after: q.get('after') || 0 });
+      if (!t) throw new HttpError(400, 'not a trace id');
+      if (!t.spans.length && !q.get('after')) throw new HttpError(404, 'trace not found on this machine');
+      return t;
+    }
     if (sub === 'usage/backfill' && method === 'POST') return usage.backfill();
 
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
@@ -636,13 +722,29 @@ export async function startServer() {
         plan: q.get('plan') === '1' ? await usage.planLimits({ force: q.get('force') === '1' }) : undefined,
       };
     }
-    if (sub === 'projects' && method === 'POST') return planner.createProject(await body());
+    if (sub === 'projects' && method === 'POST') {
+      const b = await body();
+      const tctx = traceOf(req, b) || chat.soleActiveTrace(callerAgent(req));
+      if (!tctx) return planner.createProject(b);
+      // project_create inside a traced request: the project keeps the handoff span's context for its plan and tasks.
+      const hs = trace.startSpan({ ...tctx, kind: 'handoff', name: 'project_create', input: { goal: b.goal, name: b.name || '', repoNode: b.repoNode || '', repoPath: b.repoPath || '' } });
+      try {
+        const p = await planner.createProject(b);
+        p.trace = hs.ctx;
+        await planner.saveProject(p);
+        hs.end({ output: handoffOutput(p), meta: { projectId: p.id, owner: p.owner, taskIds: [] } });
+        return p;
+      } catch (e) { hs.end({ status: 'error', output: { error: e.message } }); throw e; }
+    }
     if (sub === 'projects/intake' && method === 'POST') {
       // JARVIS files an instruction under a project and casts an agent for it. Matched before projects/<id>, which
       // would otherwise read "intake" as a project id ("project not found"). The project may live on another
       // machine: forward to its owner. The main "rigs" project is created here when no machine has it — or when
       // the machine that has it does not answer — so the default project never fails.
       const b = await body();
+      // The request trace this instruction belongs to: from the MCP call, or the one traced brain turn running here.
+      const tctx = traceOf(req, b) || chat.soleActiveTrace(callerAgent(req));
+      if (tctx) b.trace = tctx;
       const want = b.newProject ? null : (b.project || planner.MAIN_ID);
       if (want && !(await planner.getProject(want))) {
         const owner = (await meshSnapshot()).find((e) => !e.node.self && !e.offline && (e.projects || []).some((x) => x.id === want));
@@ -653,7 +755,11 @@ export async function startServer() {
       }
       // JARVIS's overseer seat hands the work out: it is the recorded source, and gets Sir's instruction to own.
       if (!b.source) b.source = (await jarvisCall('hubs/jarvis', 'GET').catch(() => null))?.overseer || undefined;
-      const r = await planner.intake(b, plannerCtx);
+      const hs = tctx ? trace.startSpan({ ...tctx, kind: 'handoff', name: 'jarvis_task', input: { title: b.title, instruction: b.instruction, project: b.project || '', newProject: b.newProject || null, kind: b.kind, size: b.size } }) : null;
+      if (hs) b.trace = hs.ctx;
+      let r;
+      try { r = await planner.intake(b, plannerCtx); } catch (e) { hs?.end({ status: 'error', output: { error: e.message } }); throw e; }
+      hs?.end({ status: r.task?.status === 'failed' ? 'error' : 'ok', output: { project: r.project, task: r.task ? { id: r.task.id, title: r.task.title, status: r.task.status, node: r.task.assign?.node || '', model: r.task.assign?.model || '' } : null, started: !!r.started, why: r.why || '' }, meta: { projectId: r.project?.id || '', owner: r.project?.owner || '', taskIds: r.task ? [r.task.id] : [] } });
       if (b.source && r.task) {
         jarvisCall('hubs/jarvis/intake', 'POST', { instruction: String(b.instruction || b.title), project: r.project, task: r.task, run: r.task.run })
           .catch((e) => log('intake → overseer:', e.message));
@@ -677,7 +783,20 @@ export async function startServer() {
       if (pr.status === 'draft' && pr.tasks.length) pr.status = 'planned';
       return planner.saveProject(pr);
     }
-    if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') return planner.dispatchReady(mm[1], plannerCtx);
+    if ((mm = m(/^projects\/([\w-]+)\/dispatch$/)) && method === 'POST') {
+      const b = await body().catch(() => ({}));
+      const pr = await planner.getProject(mm[1]);
+      const tctx = traceOf(req, b) || pr?.trace || null;
+      if (!tctx) return planner.dispatchReady(mm[1], plannerCtx);
+      const t0 = Date.now();
+      const hs = trace.startSpan({ ...tctx, kind: 'handoff', name: 'project_dispatch', input: { project: mm[1] }, start: t0 });
+      try {
+        const p = await planner.dispatchReady(mm[1], plannerCtx);
+        const started = p.tasks.filter((t) => t.run?.startedAt >= t0).map((t) => t.id);
+        hs.end({ output: handoffOutput(p), meta: { projectId: p.id, owner: p.owner, taskIds: started } });
+        return p;
+      } catch (e) { hs.end({ status: 'error', output: { error: e.message } }); throw e; }
+    }
     if ((mm = m(/^projects\/([\w-]+)\/(stop|pause)$/)) && method === 'POST') { const b = await body().catch(() => ({})); return planner.stopProject(mm[1], plannerCtx, { reason: b?.reason, by: b?.by }); }
     if ((mm = m(/^projects\/([\w-]+)\/resume$/)) && method === 'POST') return planner.resumeProject(mm[1], plannerCtx);
     // Sir's answer to "How did it work out?" (the completion loop's last question), kept on the project.
@@ -849,6 +968,8 @@ export async function startServer() {
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
     if (p === '/api/usage') return meshUsage(url.searchParams);
+    if (p === '/api/traces') return meshTraces(url.searchParams);
+    if ((mm = p.match(/^\/api\/traces\/([\w-]+)$/))) return meshTrace(mm[1], url.searchParams);
     if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
     if (p === '/api/mesh/update' && req.method === 'POST') return rolloutAll();
@@ -1122,6 +1243,11 @@ export async function startServer() {
 
   // Usage ledger: a finished task run's tokens are read from its transcript on the machine it ran on.
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
+  // Request traces: each span written here goes to the open UIs as it happens (live view); old day files are pruned.
+  trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
+  const pruneTraces = () => trace.prune().then((f) => f.length && log(`traces: pruned ${f.length} day file(s)`)).catch((e) => log('traces prune:', e.message));
+  pruneTraces();
+  setInterval(pruneTraces, 24 * 3600 * 1000).unref();
   planner.onRunEnd((e) => usage.recordTaskRun(e));
 
   // Project tracker: finished seats/sessions → start what became ready.

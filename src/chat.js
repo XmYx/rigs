@@ -7,6 +7,7 @@ import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
 import { parseProjects, route as routeRequest } from './router.js';
+import * as trace from './trace.js';
 import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn } from './usage.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
@@ -181,9 +182,9 @@ function cleanEnv() {
   return env;
 }
 
-function streamProcess(cmd, args, { cwd, onLine, onStderr, signal }) {
+function streamProcess(cmd, args, { cwd, onLine, onStderr, signal, env = {} }) {
   return new Promise((resolve) => {
-    const child = spawnCmd(cmd, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnCmd(cmd, args, { cwd, env: { ...cleanEnv(), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '';
     let err = '';
     const kill = () => { try { child.kill(); } catch {} };
@@ -203,7 +204,7 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
   const cfg = config().brain;
   const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', personaPrompt(meshSummary, projects), '--permission-mode', cfg.claudePermissionMode || 'auto'];
@@ -216,10 +217,11 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   let error = null;
   let usage = null;
   const res = await streamProcess(bin('claude'), args, {
-    cwd: chat.cwd || HOME, signal,
+    cwd: chat.cwd || HOME, signal, env,
     onLine: (line) => {
       let e;
       try { e = JSON.parse(line); } catch { return; }
+      tools?.feed('claude', e);
       if (e.session_id) chat.claudeSessionId = e.session_id;
       if (e.type === 'stream_event' && e.event?.type === 'content_block_delta' && e.event.delta?.type === 'text_delta') {
         full += e.event.delta.text;
@@ -243,7 +245,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   return { text: full, error, usage };
 }
 
-async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
+async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
   const cfg = config().brain;
   const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary, projects) + '\n\n') + unseenContext(chat, 'codex') + text;
   // `codex exec resume` takes its own option set (no --sandbox: that is fixed by the original session).
@@ -259,10 +261,11 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
   const resumed = !!chat.codexThreadId;
   const prev = chat.codexUsage?.threadId === chat.codexThreadId ? chat.codexUsage.usage : null;
   const res = await streamProcess(bin('codex'), args, {
-    cwd: chat.cwd || HOME, signal,
+    cwd: chat.cwd || HOME, signal, env,
     onLine: (line) => {
       let e;
       try { e = JSON.parse(line); } catch { return; }
+      tools?.feed('codex', e);
       if (e.type === 'thread.started' && e.thread_id) chat.codexThreadId = e.thread_id;
       else if (e.type === 'turn.completed' && e.usage) {
         try { usage = resumed && !prev ? null : codexTurnUsage(e, prev); chat.codexUsage = { threadId: chat.codexThreadId, usage: e.usage }; } catch {}
@@ -283,7 +286,7 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
   return { text: full, error, usage };
 }
 
-async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '') {
+async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools } = {}) {
   const url = config().brain.ollamaUrl.replace(/\/$/, '') + '/api/chat';
   const messages = [{ role: 'system', content: personaPrompt(meshSummary, projects) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
   for (const m of chat.messages) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
@@ -307,6 +310,7 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal, p
         if (!line) continue;
         try {
           const e = JSON.parse(line);
+          tools?.feed('ollama', e);
           if (e.message?.thinking && !full) emit({ type: 'thinking', text: e.message.thinking });
           if (e.message?.content) { full += e.message.content; emit({ type: 'delta', text: e.message.content }); }
           if (e.done) usage = ollamaUsage(e);
@@ -323,6 +327,16 @@ async function runOllama(chat, text, model, effort, emit, meshSummary, signal, p
 /** Send a user message and stream the reply through `emit`. Persists everything. */
 /** JARVIS conversations answering right now (for the work dashboard): id → { id, title, brain, model, startedAt, text }. */
 export const activeTurns = new Map();
+/** Traced brain turns running now: chatId → { provider, ctx } (trace.js), for handoffs that arrive without a context. */
+const tracedTurns = new Map();
+/**
+ * Codex may start its MCP servers with a cleared environment, so RIGS_TRACE can be lost on the way to the rigs MCP: a
+ * handoff from a Codex agent then attaches to the one traced Codex turn running here. Null when none or several run.
+ */
+export function soleActiveTrace(callerAgent = '') {
+  const turns = [...tracedTurns.values()];
+  return callerAgent === 'codex' && turns.length === 1 && turns[0].provider === 'codex' ? { ...turns[0].ctx } : null;
+}
 
 export async function sendMessage(id, { text, brain, model, effort, usage }, emit, opts = {}) {
   activeTurns.set(id, { id, title: '', brain: brain || '', model: model || '', startedAt: Date.now(), text: truncate(text, 120) });
@@ -347,7 +361,12 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   const threads = await ongoingThreads();
   const projects = parseProjects(opts.projects || '');
   const catalog = opts.workspaces ? await opts.workspaces().catch(() => []) : [];
-  const decision = await routeRequest(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name });
+  // The router's span hangs off the request's intake span (opts.trace); capture gets the router model's prompt + reply.
+  const capture = {};
+  const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) } }) : null;
+  let decision;
+  try { decision = await routeRequest(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name, capture }); }
+  catch (e) { rspan?.end({ status: 'error', output: { error: e.message, prompt: capture.prompt, reply: capture.reply } }); throw e; }
   // Work the router bound to real folders is filed by RIGS itself (one planned project + agent team each);
   // the brain only tells Sir what was set in motion. Parts it couldn't bind are left to the brain to ask about.
   const bound = (decision.work || []).filter((w) => !w.unresolved);
@@ -362,9 +381,15 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
         brain, model, effort, title: decision.title || truncate(text.replace(/\s+/g, ' '), 60),
         project: decision.projectId || '', ongoing: true,
       });
+  rspan?.end({
+    status: chat ? 'ok' : 'error',
+    input: { text, prompt: capture.prompt || null, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) },
+    output: { route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', title: decision.title || '', reason: decision.reason || '', reply: capture.reply ?? null, work: (decision.work || []).map((w) => ({ title: w.title, goal: w.goal, node: w.node || '', workspace: w.workspace?.name || '', unresolved: !!w.unresolved })) },
+    meta: { route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', chatId: chat?.id || '', via: decision.via || '', reason: decision.reason || '', model: decision.via === 'model' ? capture.model : '', ...(capture.error ? { modelError: capture.error } : {}) },
+  });
   if (!chat) throw new Error('thread not found');
   if (bound.length && opts.onWork) {
-    try { filed = await opts.onWork(bound, { chatId: chat.id }); } catch (e) { emit({ type: 'error', message: 'filing the work failed: ' + e.message }); }
+    try { filed = await opts.onWork(bound, { chatId: chat.id, trace: rspan?.ctx || null }); } catch (e) { emit({ type: 'error', message: 'filing the work failed: ' + e.message }); }
   }
   let hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
   if (filed.length) {
@@ -382,7 +407,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
  * `usage` tags the turn in the usage ledger: { kind: 'plan', projectId, projectName } for a planning call (the
  * planner asks through a chat); plain chat turns are "chat-turn" under the chat's own project.
  */
-async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '' } = {}) {
+async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -398,7 +423,38 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
   const sent = hint ? `${hint}\n${text}` : text;
   const startedAt = Date.now();
-  const out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects);
+  // A traced request: this turn is a span, each tool call in its stream a child span, and the harness gets RIGS_TRACE
+  // so handoffs it makes through the rigs MCP (jarvis_task, project_create…) attach under it.
+  const ctx = trace.parseContext(tctx);
+  const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
+    meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
+  const toolSpans = new Map();
+  const tools = span ? trace.toolCollector({
+    onStart: (key, c) => toolSpans.set(key, span.child({ kind: 'tool-call', name: c.name, input: c.input, meta: c.meta, start: c.start })),
+    onEnd: (key, r) => { toolSpans.get(key)?.end(r); toolSpans.delete(key); },
+  }) : null;
+  if (span) tracedTurns.set(chat.id, { provider: resolved.brain, ctx: span.ctx });
+  let out;
+  try {
+    out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects, { tools, env: span ? { RIGS_TRACE: trace.formatContext(span.ctx) } : {} });
+  } catch (e) {
+    tools?.close('error');
+    span?.end({ status: 'error', output: { error: e.message } });
+    throw e;
+  } finally { if (span) tracedTurns.delete(chat.id); }
+  if (span) {
+    tools.close('stopped');
+    const u = out.usage || null;
+    span.end({
+      status: signal?.aborted ? 'stopped' : out.error ? 'error' : 'ok',
+      output: out.error && !out.text ? { error: out.error } : out.text,
+      meta: {
+        model: u?.model || resolved.model, sessionId: u?.sessionId || chat.claudeSessionId || chat.codexThreadId || '', tokensFrom: u ? 'harness' : 'none',
+        ...(u ? { inputTokens: u.inputTokens || 0, outputTokens: u.outputTokens || 0, cacheReadTokens: u.cacheReadTokens || 0, cacheWriteTokens: u.cacheWriteTokens || 0, costUsd: u.costUsd ?? null } : {}),
+        ...(out.error ? { error: out.error } : {}),
+      },
+    });
+  }
   await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted });
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });

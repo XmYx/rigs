@@ -54,6 +54,9 @@ function defaults() {
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
     persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
+    // Request traces (src/trace.js): one span tree per request in traces/<day>.jsonl. days = retention; maxField = the cap
+    // (characters) on each span's input / output / meta before it is cut and marked; enabled: false records nothing.
+    traces: { enabled: true, days: 14, maxField: 8000 },
     // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
     capabilities: {},
     // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
@@ -175,7 +178,7 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces,
     control: { ...c.control },
   };
 }
