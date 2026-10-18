@@ -21,6 +21,7 @@ import { createUsage } from './usage-panel.js';
 import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
+import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -269,6 +270,7 @@ function connectEvents() {
     if (m.type === 'notify' && m.session) popups.handle(m);
     if (m.type === 'control') controlEvent(m);
     if (m.type === 'trace-span') onTraceSpan(m.span);
+    if (m.type?.startsWith('exhibit')) onExhibitEvent(m); // experimental Exhibit window (exhibits.js)
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
     if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
     else if (m.type === 'notify' && m.level === 'attention') {
@@ -1291,6 +1293,7 @@ api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholde
 await refresh();
 graph.fit();
 connectEvents();
+initExhibits();
 setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
@@ -1334,6 +1337,7 @@ function wireMenus() {
     self: () => machineById(selfId),
     machines,
     menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
+    exhibits: { enabled: exhibitsEnabled, toggle: () => setExhibitsEnabled(!exhibitsEnabled()), open: () => openExhibits() },
   });
   bar = initMenubar({
     menus: menuModel,

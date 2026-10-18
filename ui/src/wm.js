@@ -16,7 +16,7 @@ const backStack = []; // close() of phone windows that pushed a history entry, o
 let skipPop = 0;
 window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } backStack.pop()?.({ fromBack: true }); });
 
-export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [] }) {
+export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [], focus = true }) {
   const body = h('div', { class: 'win-body' });
   const titleEl = h('span', { class: 'win-title-text' }, title);
   const win = h('div', { class: `win ${className}`, 'data-win-id': String(nextId++) },
@@ -37,7 +37,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   document.body.append(win);
   requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove('win-enter'))); // fade/scale in
   windows.add(win);
-  const dlg = dialogify(win, { label: title, onClose: () => close() }); // role=dialog, focus in, Tab trap, Esc closes, focus returns on close
+  const dlg = dialogify(win, { label: title, onClose: () => close(), focus }); // role=dialog, focus in (focus:false for a window that opens by itself, so it never takes the cursor from a text field), Tab trap, Esc closes, focus returns on close
 
   tagCtx(win, 'window', win.dataset.winId, { get title() { return titleEl.textContent; } }); // right-click on the title bar: front, maximize, close…
   const raise = () => { win.style.zIndex = ++z; };
