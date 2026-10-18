@@ -238,7 +238,9 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 #brain-menu .actions { margin: 10px 4px 2px; }
 
 /* projects */
-.proj-split { grid-template-columns: minmax(260px, .55fr) 1.6fr; }
+/* One bounded row (not the implicit auto one, which grows to the content and gets clipped by .win) so the list and the detail each scroll inside the window. */
+.proj-split { grid-template-columns: minmax(260px, .55fr) 1.6fr; grid-template-rows: minmax(0, 1fr); }
+.proj-list { overflow-y: auto; min-width: 0; }
 .proj-detail { overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
 .proj-back { display: none; align-self: flex-start; margin-bottom: 4px; }
 .proj-head { border-bottom: 1px solid var(--line); }
