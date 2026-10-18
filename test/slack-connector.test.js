@@ -273,10 +273,12 @@ test('rigs serve: /api/local/connectors/slack/* answers through the normal /api/
   srv.stderr.on('data', (d) => { logs += d; });
   t.after(() => srv.kill());
   const base = `http://127.0.0.1:${PORT}/api/local/connectors/slack`;
-  for (let i = 0; i < 100; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${PORT}/api/local/info`)).ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 150));
+  let up = false; // a loaded machine can take well over 15 s to boot the server
+  for (let i = 0; i < 400 && !up; i++) {
+    try { up = (await fetch(`http://127.0.0.1:${PORT}/api/local/info`)).ok; } catch {}
+    if (!up) await new Promise((r) => setTimeout(r, 150));
   }
+  assert.ok(up, `server did not come up on ${PORT}:\n${logs.slice(-1500)}`);
   const status = await fetch(`${base}/status`).then((r) => r.json());
   assert.deepEqual(status, { configured: false, source: null, token: null, searchToken: null, checkedAt: null });
   const ch = await fetch(`${base}/channels`);
