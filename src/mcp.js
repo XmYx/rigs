@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { config } from './config.js';
 import { documentToMarkdown } from './exhibits.js';
+import { slackTools } from './connectors/slack-cli.js';
 
 /**
  * `rigs mcp` — a stdio MCP server that gives any coding agent (Claude Code, Codex, …) hands on the
@@ -524,6 +525,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' }, aloud: { type: 'boolean', description: 'Also speak through this machine\'s speakers' } }, required: ['text'] },
     run: (a) => api('/api/mesh/notify', { method: 'POST', body: { ...a, from: `${config().name} agent` } }),
   },
+  ...slackTools((p) => api(p)),
 ];
 
 export function startMcp() {
