@@ -158,8 +158,20 @@ const commands = {
       for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
       return;
     }
+    if (sub === 'smoke') {
+      // Run each tool's declared smoke call (a dry run) on this machine: `rigs tools smoke [id…]`, every tool without ids.
+      const T = await import('../src/toolbox.js');
+      const ids = pos.length ? pos : (await T.listLocal()).tools.map((t) => t.id);
+      let bad = 0;
+      for (const tid of ids) {
+        const r = await T.smokeTool(tid).catch((e) => ({ ok: false, problem: e.message }));
+        if (!r.ok && !r.skipped) bad++;
+        console.log(`${r.ok ? '✓' : r.skipped ? '·' : '✗'} ${String(tid).padEnd(24)} ${r.durationMs != null ? `${r.durationMs} ms` : ''} ${r.problem || ''}`.trimEnd());
+      }
+      process.exit(bad ? 1 : 0);
+    }
     const id = pos[0];
-    if (!id || !['show', 'run'].includes(sub)) fail('usage: rigs tools [list [query] [--tag t] [--kind tool|applet]]\n       rigs tools show <id> [--node n]\n       rigs tools run <id> [\'{"arg": 1}\'] [--node n] [--allow-mutating] [--timeout sec] [--cwd dir]');
+    if (!id || !['show', 'run'].includes(sub)) fail('usage: rigs tools [list [query] [--tag t] [--kind tool|applet]]\n       rigs tools show <id> [--node n]\n       rigs tools smoke [id…]   (run each tool\'s declared dry-run check on this machine)\n       rigs tools run <id> [\'{"arg": 1}\'] [--node n] [--allow-mutating] [--timeout sec] [--cwd dir]');
     if (sub === 'show') {
       const r = await daemonFetch(`/api/nodes/${node}/tools/${encodeURIComponent(id)}`).catch((e) => ({ error: e.message }));
       if (r.error || !r.manifest) fail(r.error || 'RIGS daemon is not running (rigs start).');

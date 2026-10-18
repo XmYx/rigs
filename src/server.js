@@ -402,7 +402,8 @@ export async function startServer() {
       meshApps().catch((e) => ({ apps: [], errors: [{ node: config().name, error: e.message }] })),
     ]);
     const { tools, errors } = toolbox.aggregateTools(results);
-    return { entries: [...tools, ...apps.apps.map(toolbox.appletEntry)], errors: [...errors, ...apps.errors.map((e) => ({ ...e, error: `apps: ${e.error}` }))] };
+    const meta = toolbox.appletMeta(); // descriptions and tags for applets that registered without their own
+    return { entries: [...tools, ...apps.apps.map((a) => toolbox.appletEntry(a, meta))], errors: [...errors, ...apps.errors.map((e) => ({ ...e, error: `apps: ${e.error}` }))] };
   }
 
   /**

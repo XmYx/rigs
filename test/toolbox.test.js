@@ -8,6 +8,7 @@ import { test } from 'node:test';
 
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-tools-'));
 process.env.RIGS_NAME = 'box';
+process.env.RIGS_SEED_TOOLS = ''; // the registry core, without the checkout's seed tools (test/toolbox-seeds.test.js covers those)
 const T = await import('../src/toolbox.js');
 
 const base = { id: 'echo-json', name: 'Echo JSON', description: 'Prints its arguments back as JSON, for tests.', language: 'node', entry: 'main.js', safety: 'read-only' };

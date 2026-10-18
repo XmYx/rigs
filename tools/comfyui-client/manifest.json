@@ -1,0 +1,28 @@
+{
+  "id": "comfyui-client",
+  "name": "ComfyUI read-only client and graph check",
+  "description": "Talk to the machine's ComfyUI without queueing anything: system stats and free VRAM, queue depth, a prompt's history and output files, model and combo choices (checkpoints, LoRAs, VAEs), and a pre-flight check that every node and model of an API-format workflow exists on that ComfyUI. Never POSTs /prompt, because a missing model can start an auto-download. URL and auth come from the RIGS comfyui settings.",
+  "tags": ["comfyui", "image", "video", "generation", "gpu", "models", "workflow", "object_info", "diffusion"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string", "enum": ["stats", "queue", "history", "choices", "models", "check"], "description": "default stats" },
+      "url": { "type": "string", "description": "ComfyUI base URL; default COMFYUI_URL, the saved RIGS setting, then http://127.0.0.1:8188" },
+      "promptId": { "type": "string", "description": "for history" },
+      "nodeType": { "type": "string", "description": "for choices, e.g. CheckpointLoaderSimple" },
+      "input": { "type": "string", "description": "for choices, e.g. ckpt_name" },
+      "workflow": { "type": "object", "description": "for check: API-format graph { id: { class_type, inputs } }" },
+      "dryRun": { "type": "boolean", "description": "show which endpoints would be read, without any request" }
+    }
+  },
+  "outputs": "stats: { version, devices[{ name, vramTotalMb, vramFreeMb }] }; queue: { running, pending }; history: { status, outputs[] }; choices/models: option lists; check: { ok, missingNodes[], badValues[{ node, input, value, choices }] }",
+  "safety": "read-only",
+  "version": "1.0.0",
+  "timeoutSec": 120,
+  "smoke": { "args": { "action": "check", "url": "http://127.0.0.1:1", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

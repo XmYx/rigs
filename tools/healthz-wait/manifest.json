@@ -1,0 +1,27 @@
+{
+  "id": "healthz-wait",
+  "name": "Wait for an app /healthz",
+  "description": "Poll a URL until it answers (any HTTP status below 500, like the App Cloud probe, or 2xx with strict) and report the status, attempts and the last error. Use after starting a server or publishing an app instead of a curl retry loop.",
+  "tags": ["healthz", "health", "wait", "http", "server", "app-cloud", "readiness"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "required": ["url"],
+    "properties": {
+      "url": { "type": "string", "description": "http(s):// URL to poll, e.g. http://127.0.0.1:8732/healthz" },
+      "timeoutSec": { "type": "number", "description": "give up after this long, default 30, at most 540" },
+      "intervalMs": { "type": "number", "description": "pause between attempts, default 500" },
+      "strict": { "type": "boolean", "description": "require a 2xx answer instead of anything below 500" },
+      "dryRun": { "type": "boolean" }
+    }
+  },
+  "outputs": "{ ok, status, attempts, elapsedMs } or { ok: false, lastError, error } when it never came up",
+  "safety": "read-only",
+  "version": "1.0.0",
+  "timeoutSec": 600,
+  "smoke": { "args": { "url": "http://127.0.0.1:1/healthz", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

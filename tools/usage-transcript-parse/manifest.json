@@ -1,0 +1,25 @@
+{
+  "id": "usage-transcript-parse",
+  "name": "Token usage and tool calls from transcripts and the usage ledger",
+  "description": "Stream a Claude Code transcript (.jsonl) or a RIGS usage ledger month file and report per-model token totals (input, output, cache read/write), context size, first/last timestamps, tool-call counts and todo status counts, or ledger totals grouped by model, project, task, node, day or provider. Returns numbers only, never message text, so pasted credentials in transcripts stay out of your context.",
+  "tags": ["usage", "tokens", "transcript", "claude", "codex", "ledger", "cost", "analytics", "jsonl"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "transcript .jsonl (~/.claude/projects/<dir>/<session>.jsonl) or ledger file (~/.rigs/usage/YYYY-MM.jsonl)" },
+      "format": { "type": "string", "enum": ["auto", "transcript", "ledger"], "description": "default auto: YYYY-MM.jsonl is a ledger" },
+      "groupBy": { "type": "string", "enum": ["model", "project", "task", "node", "day", "provider", "kind"], "description": "ledger grouping, default model" },
+      "dryRun": { "type": "boolean", "description": "parse a built-in three-record sample instead of a file" }
+    }
+  },
+  "outputs": "transcript: { sessionId, firstAt, lastAt, models{ messages, input, output, cacheRead, cacheWrite }, totals, contextTokens, toolCalls{}, todos{} }; ledger: { groupBy, groups{ key: { runs, tokens, durationMs, costUsd } } }",
+  "safety": "read-only",
+  "version": "1.0.0",
+  "timeoutSec": 300,
+  "smoke": { "args": { "dryRun": true }, "expect": { "ok": true, "sample": true, "totals": { "messages": 1, "input": 10, "output": 200, "cacheRead": 1000, "cacheWrite": 50 }, "toolCalls": { "Bash": 1, "TodoWrite": 1 }, "todos": { "completed": 1, "pending": 1 } } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { gitViolation } from './autonomy.js';
 import { config, RIGS_HOME } from './config.js';
 import { redact } from './trace.js';
-import { augmentedPath, isWin, run, truncate, which, writeJsonAtomic } from './util.js';
+import { APP_DIR, augmentedPath, isWin, run, truncate, which, writeJsonAtomic } from './util.js';
 
 /**
  * Tool registry: small scripts an agent wrote for one task, kept so later tasks run them instead of writing them
@@ -14,8 +15,14 @@ import { augmentedPath, isWin, run, truncate, which, writeJsonAtomic } from './u
  *   manifest.json  { id, name, description, tags: [], language: node|python|bash|sh|powershell, entry: "main.py",
  *                    inputs: <JSON schema of the arguments, type object>, outputs: "what it prints" | <JSON schema>,
  *                    platforms: [linux, darwin, windows], safety: "read-only" | "mutating", version: "1.0.0",
- *                    timeoutSec?: 60, origin: { project, task, session, node, trace }, created, updated, uses, lastUsed }
+ *                    timeoutSec?: 60, origin: { project, task, session, node, trace }, created, updated, uses, lastUsed,
+ *                    smoke?: { args: <a safe call, e.g. { dryRun: true }>, expect?: <subset the result must contain> } }
  *   <entry> and any other script files it needs (plain relative names, no "..").
+ *
+ * Seeds: tools/<id>/ in the RIGS checkout (APP_DIR/tools, same layout) ship with every update, so every machine has
+ * them. roots() lists RIGS_HOME/tools first (filed tools, and an override of a seed with the same id), then the seeds.
+ * A seed folder is never written to (the checkout must stay clean for the updater): its usage counts live in
+ * RIGS_HOME/tools/.usage.json. `smokeTool` runs a tool's `smoke` call; `rigs tools smoke` runs them all.
  *
  * Running: the entry runs with its interpreter in `cwd` (default the tool folder). The arguments are checked against
  * `inputs` and arrive as JSON on stdin and in RIGS_TOOL_ARGS; stdout is the result (parsed when it is JSON). Rules:
@@ -43,8 +50,14 @@ const MAX_FILES = 20;
 const SCHEMA_TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
 const DEFAULT_PLATFORMS = { node: PLATFORMS, python: PLATFORMS, bash: ['linux', 'darwin'], sh: ['linux', 'darwin'], powershell: ['windows'] };
 
-/** Where tools live on this machine; the first root wins when two hold the same id, and new tools go there. */
-export function roots() { return [path.join(RIGS_HOME, 'tools')]; }
+/**
+ * Where tools live on this machine; the first root wins when two hold the same id, and new tools go there. The seed
+ * root is the checkout's tools/ folder (RIGS_SEED_TOOLS overrides it; empty switches seeds off, as tests do).
+ */
+export function roots() {
+  const seeds = process.env.RIGS_SEED_TOOLS ?? path.join(APP_DIR, 'tools');
+  return [path.join(RIGS_HOME, 'tools'), ...(seeds ? [path.resolve(seeds)] : [])].filter((r, i, all) => all.indexOf(r) === i);
+}
 
 export class ToolError extends Error { constructor(status, code, msg) { super(msg); this.name = 'ToolError'; this.status = status; this.code = code; } }
 
@@ -122,6 +135,11 @@ export function validateManifest(raw, { now = Date.now() } = {}) {
     timeoutSec = Number(raw.timeoutSec);
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0 || timeoutSec > MAX_TIMEOUT_SEC) errors.push(`timeoutSec must be a number of seconds, 1-${MAX_TIMEOUT_SEC}`);
   }
+  let smoke;
+  if (raw.smoke !== undefined) {
+    if (!plainObject(raw.smoke) || !plainObject(raw.smoke.args) || (raw.smoke.expect !== undefined && !plainObject(raw.smoke.expect))) errors.push('smoke must be { args: {…}, expect?: {…} }: a safe call and what its result must contain');
+    else smoke = { args: raw.smoke.args, ...(raw.smoke.expect ? { expect: raw.smoke.expect } : {}) };
+  }
   const origin = {};
   if (raw.origin !== undefined) {
     if (!plainObject(raw.origin)) errors.push('origin must be an object { project, task, session, node, trace }');
@@ -131,7 +149,7 @@ export function validateManifest(raw, { now = Date.now() } = {}) {
   return {
     manifest: {
       id, name, description, tags, language, entry, inputs, outputs, platforms, safety, version,
-      ...(timeoutSec ? { timeoutSec } : {}), origin,
+      ...(timeoutSec ? { timeoutSec } : {}), ...(smoke ? { smoke } : {}), origin,
       created: time(raw.created) || now, updated: time(raw.updated) || now,
       uses: Math.max(0, Math.floor(Number(raw.uses) || 0)), lastUsed: time(raw.lastUsed),
     },
@@ -165,12 +183,32 @@ export function validateArgs(schema, args) {
 
 const words = (s) => String(s || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1);
 
-/** A mesh App Cloud app as a search entry next to the tools (kind "applet"). */
-export function appletEntry(app) {
+/**
+ * Search metadata for applets that registered without a description or tags: tools/applets.json in the checkout,
+ * { "<app id>": { description, tags } } (keys starting with "_" are comments). Bad entries are skipped. Never throws.
+ */
+export function appletMeta({ file = path.join(APP_DIR, 'tools', 'applets.json') } = {}) {
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; }
+  const out = {};
+  for (const [id, m] of Object.entries(plainObject(raw) ? raw : {})) {
+    if (id.startsWith('_') || !plainObject(m)) continue;
+    out[id] = {
+      description: typeof m.description === 'string' ? m.description.trim().slice(0, 500) : '',
+      tags: Array.isArray(m.tags) ? m.tags.filter((t) => typeof t === 'string' && /^[\w.+-]{1,32}$/.test(t)).map((t) => t.toLowerCase()) : [],
+    };
+  }
+  return out;
+}
+
+/** A mesh App Cloud app as a search entry next to the tools (kind "applet"). `meta` is appletMeta(): used where the app has none of its own. */
+export function appletEntry(app, meta = {}) {
+  const own = Array.isArray(app.tags) && app.tags.length ? app.tags : null;
+  const fallback = meta && !Array.isArray(meta) ? meta[app.id] : null;
   return {
     kind: 'applet', id: app.id, name: app.name || app.id, node: app.node, icon: app.icon,
-    description: app.description || `${app.name || app.id}: web applet in the App Cloud on ${app.node}`,
-    tags: ['applet', ...(Array.isArray(app.tags) ? app.tags : [])], status: app.health?.status || 'unknown',
+    description: app.description || fallback?.description || `${app.name || app.id}: web applet in the App Cloud on ${app.node}`,
+    tags: ['applet', ...(own || fallback?.tags || [])], status: app.health?.status || 'unknown',
     path: `/api/nodes/${encodeURIComponent(app.node)}/apps/${app.id}/`,
   };
 }
@@ -314,6 +352,7 @@ export function aggregateTools(results) {
 export const summary = (m) => ({
   id: m.id, name: m.name, description: m.description, tags: m.tags, language: m.language, platforms: m.platforms,
   safety: m.safety, version: m.version, inputs: m.inputs, outputs: m.outputs, uses: m.uses, lastUsed: m.lastUsed, updated: m.updated,
+  ...(m.seed ? { seed: true } : {}),
   ...(m.origin?.project || m.origin?.task ? { origin: { project: m.origin.project, task: m.origin.task } } : {}),
 });
 
@@ -326,16 +365,29 @@ async function readManifest(dir) {
   return manifest;
 }
 
+// Seed tools live in the checkout, which must stay clean: their usage counts are kept beside the filed tools.
+const usageFile = (root) => path.join(root, '.usage.json');
+async function readUsage(root) { try { return JSON.parse(await fsp.readFile(usageFile(root), 'utf8')); } catch { return {}; } }
+const seedView = (m, usage) => ({ ...m, seed: true, ...(usage[m.id] ? { uses: Number(usage[m.id].uses) || 0, lastUsed: usage[m.id].lastUsed || null } : {}) });
+async function bumpUsage(dir, manifest, home) {
+  if (path.dirname(dir) === home) return writeJsonAtomic(path.join(dir, 'manifest.json'), { ...manifest, uses: manifest.uses + 1, lastUsed: Date.now() });
+  const usage = await readUsage(home);
+  usage[manifest.id] = { uses: manifest.uses + 1, lastUsed: Date.now() };
+  await fsp.mkdir(home, { recursive: true });
+  return writeJsonAtomic(usageFile(home), usage);
+}
+
 /** Every tool on this machine: { node, tools: [summary], errors: [{ id, error }] } (a broken manifest is reported). */
 export async function listLocal({ dirs = roots() } = {}) {
   const seen = new Map();
   const errors = [];
+  const usage = dirs.length > 1 ? await readUsage(dirs[0]) : {};
   for (const root of dirs) {
     let entries = [];
     try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { continue; }
     for (const d of entries) {
       if (!d.isDirectory() || seen.has(d.name) || d.name.startsWith('.')) continue;
-      try { seen.set(d.name, await readManifest(path.join(root, d.name))); } catch (e) { errors.push({ id: d.name, error: e.code === 'ENOENT' ? 'no manifest.json' : e.message }); }
+      try { const m = await readManifest(path.join(root, d.name)); seen.set(d.name, root === dirs[0] ? m : seedView(m, usage)); } catch (e) { errors.push({ id: d.name, error: e.code === 'ENOENT' ? 'no manifest.json' : e.message }); }
     }
   }
   const tools = [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -348,7 +400,7 @@ async function find(id, dirs) {
   for (const root of dirs) {
     const dir = path.join(root, key);
     if (!fs.existsSync(path.join(dir, 'manifest.json'))) continue;
-    try { return { dir, manifest: await readManifest(dir) }; } catch (e) { throw new ToolError(500, 'bad-manifest', e.message); }
+    try { const m = await readManifest(dir); return { dir, manifest: root === dirs[0] ? m : seedView(m, await readUsage(dirs[0])) }; } catch (e) { throw new ToolError(500, 'bad-manifest', e.message); }
   }
   throw new ToolError(404, 'not-found', `no tool "${key}" on ${config().name}`);
 }
@@ -458,7 +510,7 @@ const parseOut = (s) => { const t = s.trim(); if (!t) return null; try { return 
  * { node, id, version, ok, code, timedOut, durationMs, result, stderr }. `deps` lets tests inject the runner,
  * the interpreter lookup and the dev-worktree check.
  */
-export async function runTool(id, { args = {}, allowMutating = false, timeoutSec, cwd, dirs = roots(), deps = {} } = {}) {
+export async function runTool(id, { args = {}, allowMutating = false, timeoutSec, cwd, dirs = roots(), deps = {}, count = true } = {}) {
   const { dir, manifest } = await find(id, dirs);
   const isDev = deps.isDevWorktree || (await import('./work.js')).isDevWorktree;
   const home = process.env.HOME || process.env.USERPROFILE || '';
@@ -474,16 +526,44 @@ export async function runTool(id, { args = {}, allowMutating = false, timeoutSec
   const start = Date.now();
   const r = await (deps.run || run)(cmd[0], [...cmd.slice(1), path.join(dir, ...manifest.entry.split('/'))], {
     cwd: workDir, input, timeout: limit * 1000,
-    env: { ...process.env, PATH: augmentedPath(), RIGS_TOOL: manifest.id, RIGS_TOOL_DIR: dir, RIGS_TOOL_ARGS: input },
+    env: { ...process.env, PATH: augmentedPath(), RIGS_TOOL: manifest.id, RIGS_TOOL_DIR: dir, RIGS_TOOL_ARGS: input, RIGS_APP_DIR: APP_DIR },
   });
   const durationMs = Date.now() - start;
   const timedOut = r.code === -2;
   // The usage count is best effort: it never fails a run.
-  await writeJsonAtomic(path.join(dir, 'manifest.json'), { ...manifest, uses: manifest.uses + 1, lastUsed: Date.now() }).catch(() => {});
+  if (count) await bumpUsage(dir, manifest, dirs[0]).catch(() => {});
   return {
     node: config().name, id: manifest.id, version: manifest.version, ok: r.code === 0, code: r.code, timedOut, durationMs,
     ...(timedOut ? { error: `timed out after ${limit}s` } : {}),
     result: parseOut(truncate(redact(r.stdout || ''), 200000)),
     stderr: truncate(redact(r.stderr || ''), 50000),
   };
+}
+
+/** Does `actual` contain everything in `expected`? Objects are compared key by key (extra keys are fine), the rest strictly. Pure. */
+export function containsSubset(actual, expected) {
+  if (plainObject(expected)) return plainObject(actual) && Object.entries(expected).every(([k, v]) => containsSubset(actual[k], v));
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+/**
+ * Run a tool's declared `smoke` call (a dry run or other safe call) in a scratch cwd and check the result against
+ * its `expect`. Does not count as a use. Returns { id, ok, durationMs, problem? }; a tool without `smoke` is
+ * { ok: false, skipped: true }.
+ */
+export async function smokeTool(id, { dirs = roots(), deps = {} } = {}) {
+  const { manifest } = await find(id, dirs);
+  if (!manifest.smoke) return { id: manifest.id, ok: false, skipped: true, problem: 'no smoke check declared in the manifest' };
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-smoke-'));
+  try {
+    // The smoke call is declared safe by the tool's author, so a mutating tool may run it.
+    const r = await runTool(manifest.id, { args: manifest.smoke.args, allowMutating: true, cwd, dirs, deps, count: false });
+    const problem = !r.ok ? `exit ${r.code}${r.timedOut ? ' (timed out)' : ''}: ${String(r.stderr || (typeof r.result === 'string' ? r.result : r.result?.error) || '').slice(0, 300)}`
+      : manifest.smoke.expect && !containsSubset(r.result, manifest.smoke.expect) ? `result does not contain ${JSON.stringify(manifest.smoke.expect)}: got ${JSON.stringify(r.result).slice(0, 300)}` : '';
+    return { id: manifest.id, ok: !problem, durationMs: r.durationMs, ...(problem ? { problem } : {}) };
+  } catch (e) {
+    return { id: manifest.id, ok: false, problem: e.message };
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
 }

@@ -1,0 +1,28 @@
+{
+  "id": "unity-compile-check",
+  "name": "Compile Unity C# outside the editor",
+  "description": "Compile a Unity checkout's C# without opening the editor, using the main project's compiled response files, defines, references and analyzers, so a git worktree used by a parallel agent can be checked for compiler errors in seconds. Returns errors only. Needs the main project opened in the Unity editor once (Library/Bee/artifacts). Example for the Mad Max game: ownedPrefixes [\"Assets/MadMax/\"].",
+  "tags": ["unity", "csharp", "compile", "build", "roslyn", "worktree", "gamedev", "errors"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "root": { "type": "string", "description": "checkout to compile, default the cwd" },
+      "mainProject": { "type": "string", "description": "the Unity project the editor compiled (has Library/Bee); default env UNITY_MAIN_PROJECT, then root" },
+      "unityVersion": { "type": "string", "description": "editor version, default read from mainProject/ProjectSettings/ProjectVersion.txt" },
+      "unityEditorData": { "type": "string", "description": "the editor's .../Editor/Data folder when it is not under the Unity Hub (or env UNITY_EDITOR_DATA)" },
+      "ownedPrefixes": { "type": "array", "items": { "type": "string" }, "description": "Assets/ prefixes the checkout owns: a file missing there is not borrowed from the main project" },
+      "maxErrors": { "type": "number", "description": "errors to return, default 50" },
+      "dryRun": { "type": "boolean", "description": "resolve the editor, compiler and response files and report any problem, without compiling" }
+    }
+  },
+  "outputs": "{ ok, errorCount, errors[\"File.cs(12,5): error CS0103: ...\"], more?, unityVersion }",
+  "safety": "read-only",
+  "version": "1.0.0",
+  "timeoutSec": 600,
+  "smoke": { "args": { "root": ".", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}
