@@ -2,19 +2,25 @@ import { bannerVisible, prefs } from './toasts.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
-import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
+import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
+import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, resetPanel, toggleCollapse } from './layout-actions.js';
+import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
+import { initMenubar } from './menubar.js';
+import { copyText, installContextMenu } from './contextmenu.js';
+import { createProviders, galaxyTarget, registerJarvisProviders } from './ctx-providers.js';
+import { tagCtx } from './ctx-tag.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
-import { initMobile, revealInspector, isPhone } from './mobile.js';
+import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
-import { createDesktops } from './desktops.js';
+import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
-import { createTraces, onTraceSpan } from './trace-panel.js';
+import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -29,7 +35,7 @@ import { openSessions } from './sessions.js';
 import { createPopups } from './popups.js';
 import { openTerminal } from './terminal-lazy.js';
 import { createVoice } from './voice.js';
-import { openWindow } from './wm.js';
+import { closeAll as closeAllWindows, closeOthers, isMaximized, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
 
 applyTheme();
@@ -106,6 +112,10 @@ function setOrb(s) {
 }
 
 const machines = () => snap.filter((e) => e.node.online && e.node.rigs).map((e) => e.node);
+/** Apps on the mesh (with node name/id), removed ones included; `open` = it has a window here. */
+const meshApps = () => snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id }))).map((a) => ({ ...a, open: isAppOpen(a) }));
+/** The snapshot without removed apps (Window › Removed items): what the galaxy shows. */
+const visibleSnap = () => snap.map((e) => (e.apps?.length ? { ...e, apps: e.apps.filter((a) => !isAppRemoved({ ...a, nodeId: e.node.id })) } : e));
 const machineById = (id) => snap.find((e) => e.node.id === id)?.node;
 
 // ------------------------------------------------------------------ "an agent needs you"
@@ -232,7 +242,7 @@ async function refresh() {
     snap = await api('/api/mesh/snapshot');
     const self = snap.find((e) => e.node.self);
     if (self) selfId = self.node.id;
-    graph.setData(buildGraph(snap));
+    graph.setData(buildGraph(visibleSnap()));
     graph.setAttention(attentionGraphIds());
     renderCounts();
     agentsPanel?.update();
@@ -288,12 +298,12 @@ function renderCounts() {
 
 /** Left panel: every app on the mesh, one click to open (and spin up) it. */
 function renderAppList() {
-  const apps = snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id })));
+  const apps = meshApps().filter((a) => !isAppRemoved(a));
   const fresh = freshIds('apps', apps.map((a) => a.id));
   $('#app-list').replaceChildren(...(apps.length ? apps.map((a) => {
     const st = a.health?.status || 'unknown';
-    return h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${launchOf(a) ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
-      h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node));
+    return tagCtx(h('div', { class: `hub app-row ${st}${fresh.has(a.id) ? ' materialise' : ''}`, title: `${a.name} on ${a.node} — ${st}${launchOf(a) ? '' : ' (no launch recipe)'}`, onclick: () => openApp(a) },
+      h('i', { style: { background: st === 'up' ? '#4ade80' : st === 'down' ? '#f87171' : TYPES.offline.color } }), h('span', {}, `${a.icon || '▦'} ${a.name}`), h('em', {}, a.node)), 'app', appKey(a), { app: a });
   }) : [h('div', { class: 'muted small' }, 'No apps yet.')]), h('div', { class: 'hub app-row store-row', title: 'App Store — install new apps', onclick: () => openAppStore() }, h('i', { style: { background: 'var(--accent)' } }), h('span', {}, '🛍 App Store'), h('em', {}, 'install')));
 }
 
@@ -1194,6 +1204,7 @@ function wire() {
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
+  wireMenus();
   $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#btn-agents').onclick = () => togglePanel('agents');
@@ -1285,6 +1296,129 @@ setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
 refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
+
+// ------------------------------------------------------------------ top menu bar, commands, layout adapter
+/** The machine the menus act on: the one focused in the galaxy, else this one. */
+function focusedMachine() {
+  const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null;
+  return n || machineById(selfId) || null;
+}
+
+function wireMenus() {
+  initLayout({
+    apps: {
+      list: meshApps,
+      open: (a) => openApp(a),
+      close: (a) => closeApp(a),
+      changed: () => { graph.setData(buildGraph(visibleSnap())); renderAppList(); renderFilters(); rerenderApps(); },
+    },
+  });
+  let bar = null;
+  const reveal = (sel) => {
+    if (isPhone()) openDrawer({ focus: false }); else showPanel('left');
+    setTimeout(() => { const el = $(sel); el?.scrollIntoView?.({ block: 'center' }); el?.focus({ preventScroll: true }); }, 60);
+  };
+  registerJarvisCommands({
+    projects: () => projectsWindow(),
+    openApps: () => openApps(),
+    openAppStore: () => openAppStore(),
+    files: (m) => filesOn(m),
+    sessions: () => sessionsWindow(),
+    mesh: () => meshWindow(),
+    find: () => reveal('#search'),
+    display: () => reveal('#d-theme'),
+    brainMenu: () => { showPanel('orb'); setTimeout(() => toggleBrainMenu(), 0); },
+    terminal: (m) => openTerminal({ nodeId: m.id, nodeName: m.name }),
+    control: (m) => openControl({ machine: m }),
+    machine: focusedMachine,
+    self: () => machineById(selfId),
+    machines,
+    menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
+  });
+  bar = initMenubar({
+    menus: menuModel,
+    status: () => { const me = machineById(selfId); return me ? `${me.name} · ${me.version || ''}` : ''; },
+  });
+  wireContextMenus();
+}
+
+// ------------------------------------------------------------------ context menus
+/** Hide every node of a galaxy type (the Filters panel's switch, from a node's menu). */
+function hideType(type) {
+  hiddenTypes.add(type);
+  store.set('hidden', [...hiddenTypes]);
+  graph.setHidden([...hiddenTypes]);
+  renderFilters();
+}
+
+async function projectAct(p, op) {
+  const said = { stop: 'Paused — nothing of it runs until you resume', resume: 'Resumed', dispatch: 'Dispatched every ready task' };
+  try { await api(`${node(p.ownerId)}/projects/${p.id}/${op}`, { method: 'POST', body: {} }); toast(said[op] || 'Done', 'ok'); refresh(); }
+  catch (e) { toast(e.message, 'error', 10000); }
+}
+
+async function taskMark(p, t, status) {
+  try { await api(`${node(p.ownerId)}/projects/${p.id}/tasks/${t.id}`, { method: 'POST', body: { status, summary: status === 'done' ? 'marked done by hand' : '' } }); refresh(); }
+  catch (e) { toast(e.message, 'error', 10000); }
+}
+
+async function taskSession(p, t) {
+  const m = snap.find((e) => e.node.name === t.assign?.node)?.node;
+  const s = t.run?.session;
+  if (!m || !s) { toast(`${t.assign?.node || 'The machine'} is offline`, 'error'); return; }
+  try {
+    const r = s.kind === 'pty' ? { ptyId: s.id } : await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id } });
+    popups.mark(m.id, s.kind, s.id);
+    openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: `${t.id} · ${t.title}`.slice(0, 60) });
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/** One delegated right-click / long-press listener; what each surface offers lives in ctx-providers.js. */
+function wireContextMenus() {
+  const providers = createProviders();
+  registerJarvisProviders(providers, {
+    copy: copyText,
+    layout: { toggleCollapse, isCollapsed, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
+    window: { toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
+    app: {
+      key: appKey, isOpen: isAppOpen, status: (a) => a.health?.status, url: (a) => `${location.origin}${appPath(a)}`,
+      open: openApp, openTab: (a) => window.open(appPath(a), '_blank', 'noopener'), reload: reloadApp,
+    },
+    session: {
+      transcript: (n, s) => sessionsWindow('', { node: n, s }),
+      attach: (n, s) => (s.kind === 'chat' ? continueChat(n, s) : attachSession(n, s)),
+      chat: (n, s) => attachChat(n, s),
+      galaxy: (n, s) => { select(`s:${n.id}:${s.kind}:${s.id}`); revealInspector(); },
+    },
+    project: { open: (p) => projectsWindow({ owner: p.ownerId, id: p.id }), act: projectAct, galaxy: (p) => { select(`pj:${p.id}`); revealInspector(); } },
+    task: { openSession: taskSession, mark: taskMark },
+    node: {
+      get: (n) => machineById(n.id) || n,
+      status: (m) => { select(`m:${m.id}`); revealInspector(); },
+      terminal: (m) => openTerminal({ nodeId: m.id, nodeName: m.name }),
+      files: (m) => filesOn(m),
+      screen: (m) => openLargeView({ id: m.id, name: m.name }),
+      sessions: (m) => sessionsWindow(m.name),
+      control: (m) => openControl({ machine: m }),
+      ssh: sshTo,
+      sshCommand: (m) => `ssh ${m.sshAlias || m.name}`,
+    },
+    trace: { open: (id, summary) => openTrace(id, summary) },
+    galaxy: {
+      select: (id) => { select(id); revealInspector(); },
+      fit: () => graph.fit(),
+      hideType,
+      typeLabel: (t) => TYPES[t]?.label,
+      talkToModel: (n) => { const m = machineById(n.machine); if (m) setBrain({ nodeId: m.id, nodeName: m.name, brain: 'ollama', model: n.model }); },
+      useAsBrain: (n) => { const m = machineById(n.machine); if (m) setBrain({ nodeId: m.id, nodeName: m.name, brain: n.agent, model: '' }); },
+    },
+  });
+  // The galaxy is a canvas: ask the graph which node is under the pointer.
+  const galaxyEl = $('#graph');
+  tagCtx(galaxyEl, 'galaxy', null, null);
+  galaxyEl._ctxAt = (x, y) => galaxyTarget(graph.nodeAt(x, y), { machineById });
+  installContextMenu({ providers });
+}
 
 function greeting() {
   const hr = new Date().getHours();

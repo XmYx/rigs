@@ -1,5 +1,6 @@
 import { h } from './api.js';
 import { isPhone } from './mobile.js';
+import { tagCtx } from './ctx-tag.js';
 
 // Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
 // bottom toolbar) can be dragged by its ⠿ grip, collapsed with ▾ to its header (elements marked .keep or
@@ -8,6 +9,8 @@ import { isPhone } from './mobile.js';
 
 const KEY = 'rigs.panels';
 const panels = new Map(); // id → { el, title }
+let topZ = 12; // focusPanel raises a panel above the others, still under windows (z 100+)
+const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of ☰
 let state = load();
 let menu = null;
 
@@ -123,6 +126,7 @@ export function makeFloating(el, { id, title, into = el, keep = [], onToggle, cl
   panels.set(id, { el, title, collapseBtn, onToggle });
   into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
+  tagCtx(el, 'panel', id, { id, title }); // right-click / long-press: Collapse, Reset, Hide, Remove (contextmenu.js)
   addResizeHandles(el, id);
 
   grip.addEventListener('pointerdown', (e) => {
@@ -181,12 +185,44 @@ export function inheritPanel(id, fromId) {
 }
 export function showPanel(id) { setClosed(id, false); if (state[id]?.collapsed) setCollapsed(id, false); }
 export function togglePanel(id) { if (state[id]?.closed) showPanel(id); else setClosed(id, true); }
+export function toggleCollapsed(id) { setCollapsed(id, !state[id]?.collapsed); }
+export function resetPanel(id) { reset(id); }
 export function panelState(id) { return { closed: !!state[id]?.closed, collapsed: !!state[id]?.collapsed }; }
 export function isClosed(id) { return !!state[id]?.closed; }
 
+/** Every registered panel: { id, title, closed, collapsed, removed }. */
+export function listPanels() {
+  return [...panels].map(([id, p]) => ({ id, el: p.el, title: p.title, closed: !!state[id]?.closed, collapsed: !!state[id]?.collapsed, removed: removedIds.has(id) }));
+}
+export const hasPanel = (id) => panels.has(id);
+
+/** Show a panel, raise it above the others and move focus into it (with a short highlight). */
+export function focusPanel(id) {
+  const p = panels.get(id);
+  if (!p) return;
+  showPanel(id);
+  p.el.style.zIndex = String(topZ = Math.min(topZ + 1, 90));
+  p.el.classList.remove('panel-flash');
+  void p.el.offsetWidth; // restart the animation
+  p.el.classList.add('panel-flash');
+  setTimeout(() => p.el.classList.remove('panel-flash'), 900);
+  const target = p.el.querySelector('input:not([type=hidden]), button:not(.pclose), [tabindex="0"], a[href]') || p.el;
+  if (target === p.el && !p.el.hasAttribute('tabindex')) p.el.setAttribute('tabindex', '-1');
+  requestAnimationFrame(() => target.focus?.({ preventScroll: true }));
+}
+/** Removed panels stay closed and leave the ☰ list until restored. */
+export function setRemoved(id, removed) {
+  if (removed) { removedIds.add(id); if (panels.has(id) && !state[id]?.closed) setClosed(id, true); }
+  else removedIds.delete(id);
+  renderMenu();
+}
+
+/** Every panel back to its default place and open (removed ones stay removed). */
+export function resetLayout() { for (const id of panels.keys()) if (!removedIds.has(id)) reset(id); }
+
 function renderMenu() {
   if (!menu) return;
-  menu.list.replaceChildren(...[...panels].map(([id, p]) => h('label', { class: 'check' },
+  menu.list.replaceChildren(...[...panels].filter(([id]) => !removedIds.has(id)).map(([id, p]) => h('label', { class: 'check' },
     h('input', { type: 'checkbox', checked: !p.el.classList.contains('panel-closed'), onchange: (e) => setClosed(id, !e.target.checked) }), ' ', p.title)));
 }
 
@@ -195,7 +231,7 @@ export function panelMenu() {
   const btn = h('button', { id: 'panels-btn', class: 'round', title: 'Panels — show, hide, reset layout', 'aria-label': 'Panels', 'aria-haspopup': 'dialog' }, '☰');
   const list = h('div', {});
   const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), list,
-    h('button', { class: 'ibtn', onclick: () => { for (const id of panels.keys()) reset(id); } }, '↺ Reset layout'));
+    h('button', { class: 'ibtn', onclick: () => resetLayout() }, '↺ Reset layout'));
   menu = { box, list };
   btn.onclick = () => { renderMenu(); box.classList.toggle('hidden'); };
   document.addEventListener('pointerdown', (e) => { if (!box.contains(e.target) && e.target !== btn) box.classList.add('hidden'); });

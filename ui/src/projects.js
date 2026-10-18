@@ -1,6 +1,7 @@
 import { ago, api, h, node, toast } from './api.js';
 import { openTerminal } from './terminal-lazy.js';
 import { openWindow } from './wm.js';
+import { tagCtx } from './ctx-tag.js';
 
 const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
 const STATUS_CLASS = { todo: '', starting: 'warn', running: 'run', review: 'warn', done: 'ok', blocked: 'bad', failed: 'bad' };
@@ -40,7 +41,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
           h('div', { class: 'sm' }, h('div', { class: 'st' }, p.name), h('div', { class: 'ss' }, `${p.owner} · ${p.status} · ${done}/${p.tasks.length} done · ${ago(p.updatedAt)}`)),
           p.status === 'running' ? h('span', { class: 'live-dot' }) : null);
         el.onclick = () => open(p.ownerId, p.id);
-        return el;
+        return tagCtx(el, 'project', p.id, { id: p.id, name: p.name, status: p.status, ownerId: p.ownerId, refresh: loadList, open: () => open(p.ownerId, p.id) });
       }),
       ...(list.length ? [] : [h('div', { class: 'muted pad' }, 'No projects yet. Describe a goal and the core brain will break it down and route every task to the right model and machine.')]));
   }
@@ -143,7 +144,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
     kindSel.onchange = () => act(`tasks/${t.id}`, { kind: kindSel.value });
     sizeSel.onchange = () => act(`tasks/${t.id}`, { size: sizeSel.value });
     const sessBtn = t.run?.session ? h('button', { class: 'tb', title: 'Open the agent session', onclick: () => openSession(t) }, '⌨') : null;
-    return h('div', { class: 'task-row' },
+    return tagCtx(h('div', { class: 'task-row' },
       h('div', { class: 'tr-main' },
         h('span', { class: 'tid' }, t.id),
         h('div', { class: 'tr-title' }, h('b', {}, t.title), t.deps.length ? h('span', { class: 'muted small' }, ` ← ${t.deps.join(', ')}`) : null, t.needs?.tool ? h('span', { class: 'chip' }, t.needs.tool) : null),
@@ -155,7 +156,8 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }
         editable ? h('button', { class: 'tb', title: 'Delete task', onclick: async () => { try { current.project = await api(`${base()}/tasks/${t.id}`, { method: 'DELETE' }); renderDetail(); } catch (e) { toast(e.message, 'error'); } } }, '✕') : null),
       h('div', { class: 'tr-reason muted small' }, t.reason || ''),
       t.description ? h('details', { class: 'tr-desc' }, h('summary', {}, 'brief'), h('div', {}, t.description)) : null,
-      t.summary ? h('div', { class: 'tr-summary small' }, '↳ ' + t.summary) : null);
+      t.summary ? h('div', { class: 'tr-summary small' }, '↳ ' + t.summary) : null),
+    'task', `${current.project.id}/${t.id}`, { task: t, project: { id: current.project.id, name: current.project.name, status: current.project.status, ownerId: current.owner }, refresh: refreshCurrent, openProject: () => w.raise() });
   }
 
   async function openSession(t) {

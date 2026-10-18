@@ -1,5 +1,6 @@
 import { api, h, toast } from './api.js';
 import { announce } from './a11y.js';
+import { tagCtx } from './ctx-tag.js';
 
 // Two floating panels. "Active projects" (createWork): the running projects with their progress, and the
 // plan limits (5-hour session, week, per-model week, Codex); polls /api/mesh/work while it is visible.
@@ -64,11 +65,11 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
         if (seenStatus.has(key) && seenStatus.get(key) !== line) announce(`Project ${pj.name}: ${line}`);
         seenStatus.set(key, line);
         const asks = waiting.filter((q) => q.project?.id === pj.id);
-        rows.push(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : '') + (asks.length ? ' asks' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
+        rows.push(tagCtx(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : '') + (asks.length ? ' asks' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
           h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), pj.name,
             asks.length ? h('button', { class: 'wk-ask', title: 'An agent on this project is asking you — open the Questions panel', 'aria-label': `${pj.name}: ${asks.length} question${asks.length > 1 ? 's' : ''} waiting — open Questions`, onclick: (e) => { e.stopPropagation(); onOpenQuestions?.(asks[0]); } }, `? ${asks.length > 1 ? asks.length + ' questions' : 'question'}`) : null,
             h('b', {}, `${pj.pct}%`)),
-          progress(pj.pct)));
+          progress(pj.pct)), 'project', pj.id, { id: pj.id, name: pj.name, ownerId: n.nodeId, blocked: pj.blocked, running: pj.running }));
       }
     }
     if (!rows.length) rows.push(h('div', { class: 'muted small pad' }, 'No projects running.'));
@@ -125,11 +126,12 @@ export function createQuestions(el, { onOpenQuestion } = {}) {
           onkeydown: (e) => { if (e.key === 'Enter' && input.value.trim()) answer(g, it, { text: input.value.trim() }, 'send'); } }) : null;
         // Clicking the question (anything but its buttons and reply box) goes straight to the agent's session.
         const open = (e) => { if (!e.target.closest('button, input')) onOpenQuestion?.(g, it); };
-        cards.push(h('div', { class: 'wk-q', title: 'Open the session', onclick: open },
+        const card = h('div', { class: 'wk-q', title: 'Open the session', onclick: open },
           h('div', { class: 'wk-qhead' }, h('b', {}, `${who} · ${g.node}`), ' ', h('span', {}, it.title || '')),
           h('div', { class: 'wk-qtext' }, it.question || it.reason || 'Waiting for you'),
           it.options?.length ? h('div', { class: 'wk-qopts' }, ...it.options.map((o) => h('button', { class: 'btn', title: o.label, onclick: () => answer(g, it, { choice: o.n }, 'answer') }, `${o.n}. ${o.label}`))) : null,
-          h('div', { class: 'wk-qfoot' }, input, h('button', { class: 'tb', title: 'Open the session', 'aria-label': 'Open the session', onclick: () => onOpenQuestion?.(g, it) }, '↗'))));
+          h('div', { class: 'wk-qfoot' }, input, h('button', { class: 'tb', title: 'Open the session', 'aria-label': 'Open the session', onclick: () => onOpenQuestion?.(g, it) }, '↗')));
+        cards.push(it.session ? tagCtx(card, 'session', it.session.id, { node: { id: g.nodeId, name: g.node }, s: it.session }) : card);
       }
     }
     list.replaceChildren(...(cards.length ? cards : [h('div', { class: 'muted small pad' }, 'No agent is waiting for you.')]));
