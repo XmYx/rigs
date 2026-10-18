@@ -12,6 +12,7 @@ import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
+import { createDesktops } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan } from './trace-panel.js';
 import { openFiles } from './files.js';
@@ -1177,6 +1178,9 @@ function wire() {
   const usagePanel = createUsage($('#usage'), { routerNode: () => currentBrain()?.nodeId });
   makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => usagePanel.setActive(!closed && !collapsed) });
   { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.collapsed); }
+  const desktopsPanel = createDesktops($('#desktops'), { machines: () => machines().map((m) => ({ id: m.id, name: m.name })) });
+  makeFloating($('#desktops'), { id: 'desktops', title: 'Desktops', into: $('#desktops .wk-head'), keep: [$('#desktops .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => desktopsPanel.setActive(!closed && !collapsed) });
+  { const st = panelState('desktops'); desktopsPanel.setActive(!st.closed && !st.collapsed); }
   const tracesPanel = createTraces($('#traces'));
   makeFloating($('#traces'), { id: 'traces', title: 'Request traces', into: $('#traces .wk-head'), keep: [$('#traces .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => tracesPanel.setActive(!closed && !collapsed) });
   { const st = panelState('traces'); tracesPanel.setActive(!st.closed && !st.collapsed); }
@@ -1194,6 +1198,7 @@ function wire() {
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#btn-agents').onclick = () => togglePanel('agents');
   $('#btn-usage').onclick = () => togglePanel('usage');
+  $('#btn-desktops').onclick = () => togglePanel('desktops');
   $('#btn-traces').onclick = () => togglePanel('traces');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
