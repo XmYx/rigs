@@ -757,6 +757,8 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
   .small, .brand .sub, .brand .back, .ins-type, .hub em, .flt em, .ss, .term-status, .file-row .fs, .file-row .fm, .msg .mr, .msg.r-tool .mt, .badge, .chip, .wk-sub, .wk-rmeta, .wk-rnow, .wk-lrow b, .wk-rtitle b, .wk-title, .wk-meta, .vz-cap, .vz-col small, .vz-fallback, .vz-day, .vz-tile, .vz-dot, .bm-node, .bm-title, .stage-title, .rule-row.head span, .tr-desc summary, .mr-name .muted, .tid, #brain-badge, #orb-state, h4, .sec-h, .scene-tooltip .tip span, .nlabel.t-mesh, .nlabel.attn-tag { font-size: var(--fs-xs); }
   h4, .sec-h, .vz-cap, .wk-title, .bm-title, .stage-title { letter-spacing: .1em; }
   #subtitle { font-size: 15px; line-height: 1.5; }
+  /* the subtitle opens the conversation on tap: finger-sized from the first frame of its open transition, and for a one-line reply */
+  #chat-dock #subtitle.show, #chat-dock.floating #subtitle.show { min-height: 44px; }
   #ask, .path-input, .search { font-size: var(--fs-lg); }
   /* consistent rhythm: 8/12/16 */
   #left section { margin-top: var(--sp-4); }
