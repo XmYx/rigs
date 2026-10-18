@@ -88,6 +88,17 @@ test('the lease follows the agent session, not the transport it arrived on', asy
   assert.notEqual(holderKey({ from: 'm', agent: 'codex', seat: 'team.x' }), holderKey({ from: 'm', agent: 'codex', seat: 'team.y' }));
   assert.notEqual(holderKey({ from: 'm', human: true }), holderKey({ from: 'mac', human: true }));
   assert.notEqual(holderKey({ from: 'm', human: true }), holderKey({ from: 'm', agent: 'claude', session: 's' }));
+  // An agent call whose x-rigs-caller names no agent is still an agent, never the person at the UI.
+  assert.notEqual(holderKey({ from: 'm', human: false }), holderKey({ from: 'm', human: true }));
+});
+
+test('check reports a spent rate budget like the real call, and never spends it', async () => {
+  const f = fixture();
+  for (let i = 0; i < 3; i++) assert.equal((await f.c.check('screenshot', agentA)).ok, true);
+  await f.c.screenshot({}, agentA);
+  await f.c.screenshot({}, agentA); // maxShotsPerMin is 2: the checks above used none of it
+  await assert.rejects(f.c.check('screenshot', agentA), { code: 'rate' });
+  assert.equal((await f.c.check('pointer', agentA)).ok, true, 'the actions budget is separate');
 });
 
 test('check runs the real gate read-only: no lease, no input, same refusals', async () => {

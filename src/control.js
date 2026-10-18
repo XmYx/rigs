@@ -71,7 +71,7 @@ const callerInfo = (c = {}) => Object.fromEntries(['via', 'who', 'from', 'agent'
  * Never the transport identity (`who` is `local`, `peer` or the tailnet login depending on the path), so one caller
  * cannot lock itself out by reaching the machine another way. Pure.
  */
-export const holderKey = (c = {}) => JSON.stringify([c.from || '', c.agent && c.human !== true ? c.agent : 'human', c.session || c.seat || '']);
+export const holderKey = (c = {}) => JSON.stringify([c.from || '', c.human === true ? 'human' : c.agent || 'agent', c.session || c.seat || '']);
 
 const GRANT_NAMES = {
   mac: { screenCapture: 'Screen Recording', accessibility: 'Accessibility', input: 'Accessibility' },
@@ -226,12 +226,12 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           if (!chosen) throw new ControlError('unsupported', `No ${backendKey} backend is available for this desktop`, { kind: 'backend', text: `Install/configure a supported ${backendKey} backend; see docs/full-access.md` });
           if (permission?.ok === false) throw new ControlError('needs-permission', permissionMessage(op, key, permission, { platform, node: getConfig().name }), permission.fix);
           backend = chosen;
-          if (dryRun) return { ok: true, op, dryRun: true, backend, permission: { [key]: permission?.ok ?? null }, lease: lease ? callerInfo(lease.holder) : null };
-          // A refused call must not use up the budget either.
+          // A refused call must not use up the budget either; a dry run reports a full budget but never spends it.
           const bucket = rates[op === 'screenshot' ? 'shots' : 'actions'];
           while (bucket.length && now() - bucket[0] >= 60000) bucket.shift();
           const max = op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120;
           if (bucket.length >= max) throw new ControlError('rate', 'Control rate limit reached; try again in a minute');
+          if (dryRun) return { ok: true, op, dryRun: true, backend, permission: { [key]: permission?.ok ?? null }, lease: lease ? callerInfo(lease.holder) : null };
           bucket.push(now());
           // Only now, about to touch the desktop, does the call take (or renew) the lease.
           touchLease(caller); touched = true;

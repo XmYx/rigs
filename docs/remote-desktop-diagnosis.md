@@ -176,3 +176,81 @@ Re-run with all leases clear (all three cells per source observed with the final
 magix → macbookpro   412 / 412      magix → mac   412 / 412      magix → magix-system   200 (windows) / 200 PNG 72 978 B
 mac → macbookpro     412 / 412      mac → mac     412 / 412      mac → magix-system     200 (windows) / 200 PNG 76 159 B
 ```
+
+## Review (t3, independent, 2026-10-18 14:03–14:20Z)
+
+Reviewer: OpenRig seat `team.review-opus` (Claude Opus 5.5) on macbookpro. Read the diff `07f01e5..137ef8d` (src/control.js,
+control-api.js, access.js, mcp.js, the new test file, docs), re-ran the tests and re-observed the live targets.
+
+### Re-run matrix
+
+Observed 14:03Z through the rigs MCP from macbookpro (`mesh_access`, `mesh_windows`; the live daemons are all still `07f01e5`).
+A worktree server (`:4799`, scratch `RIGS_HOME`, `RIGS_NO_MIGRATIONS/AUTOUPDATE/OPENRIG=1`) came up and saw all three peers, but in
+this session the auto-mode safety classifier refused raw HTTP calls to `/control/*` and every remote `mesh_screen`. I did not work around
+that, so **the screenshot cells and the `mac` / `magix-system` source rows were not re-run by me**. The proxy is unchanged in this branch
+(`src/proxy.js` untouched) and the byte-for-byte relay test passes, so each source row takes the target's result. The screenshot cells
+rest on the t1/t2 evidence above.
+
+| target | mesh_access (re-run) | mesh_windows (re-run) | mesh_screen | cell, every source (macbookpro, mac, magix-system) |
+| --- | --- | --- | --- | --- |
+| **magix-system** | enabled, input on, `ready.see/act=true`, mutter / mutter / rigs-extension, python helper running | **200**, 6 windows | not re-run (classifier); 200 at 13:56Z (t2) | **working**. The 409s seen in t1 came from a refused or overlapping call holding the lease. That fix is in the target's code and is **fixed-pending-rollout** |
+| **mac** | enabled, `ready.see/act=false`, helper pid 51832 running, screenCapture / input / accessibility all `ok:false` | **423 "The screen is locked"** (new since t1) | not re-run (classifier) | **blocked on Sir**: unlock the screen, then grant Screen Recording and Accessibility to RIGS Control (below). The precise 412 text and `needs` are **fixed-pending-rollout** |
+| **macbookpro** | enabled, `ready.see/act=false`, helper pid 26592 running, all three `ok:false` | **412** "Permission required for windows" (old text, live main) | **412** "Permission required for screenshot" | **blocked on Sir**: Screen Recording and Accessibility (below). The precise 412 text, `needs` and `check` are **fixed-pending-rollout** |
+
+### OS grants Sir must still give
+
+| machine | grant | app |
+| --- | --- | --- |
+| macbookpro | Screen Recording | RIGS Control: `/Users/mix/.rigs/bin/RIGS Control.app` (`dev.rigs.control`). Click Grant first, because it is a new build |
+| macbookpro | Accessibility (input, focus, window list) | same app |
+| mac | Screen Recording | RIGS Control: `/Users/miklosnagy/.rigs/bin/RIGS Control.app` (`dev.rigs.control`). Click Grant first |
+| mac | Accessibility | same app |
+| mac | not a grant: the screen is locked, so every call answers 423 before the grant check | unlock at the machine |
+
+magix-system needs nothing.
+
+### Checks
+
+- `npm test` on 137ef8d: 548 pass, 0 fail, 2 skipped. After the review fixes: 549 pass, 0 fail, 2 skipped. ui/ unchanged, so no build.
+- Tests cover the fixed paths. The new test file run against `git archive 07f01e5 src` fails 10 of 11 (each fix's test), and only the
+  relay test passes, as it should.
+- Policy:
+  - `check` goes through `perform` → `gate` (enabled, kill, input switch, allowFrom, lease, lock, backend, permission) and the audit.
+    It takes no lease, sends no input and cannot switch anything on.
+  - `mesh_control action:"check"` maps only to `GET control/check`. No new route skips the gate, the audit or the kill switch, and
+    `config.control` stays in `patchConfig`'s blocked set.
+  - No shell capture fallback (`screencapture`, `grim`, `xwd`) was added.
+  - The mesh token appears neither in the branch diff nor in the scratch server's log. A `check` is audited as `{op}` only, and typing
+    secrets is unchanged.
+
+### Fixed in review (small)
+
+1. `check` returned ok when the rate budget was spent, so it said yes to a call that would then get 429. A dry run now runs the
+   rate check too, but still never spends the budget. New test: "check reports a spent rate budget like the real call, and never
+   spends it".
+2. `holderKey` treated an agent call whose `x-rigs-caller` names no agent as `human`, so it shared a lease with the person at the
+   UI on the same entry node. Now only `human: true` is the person and any other caller is `agent`. Added an assertion.
+3. AGENTS.md "Control safety rules" still gave the old gate order (rate before backend). It now matches the code.
+
+### Open items (not fixed here)
+
+- **Rollout.** The lease fix, `check`, `needs` and the precise 412 text reach mac and magix-system only after merge. After the
+  rollout and Sir's grants, re-run `mesh_access` (expect `needs: []`), `mesh_windows` and `mesh_screen` from each of the three
+  machines. That also covers the screenshot cells and source rows this review could not run.
+- **Lock hides grants.** On a locked Mac, the lock check runs before the permission check, so the refusal names the lock and not
+  the missing grants. After the rollout, `mesh_access.needs` shows them anyway. Policy order, left as is.
+- **`check` not throttled.** `check` has no rate limit of its own and opens the helper connection on every call (one `locked`
+  request, then `stop`, which only releases held input; the helper keeps running). Every check is audited. Low risk.
+- **Read-only calls lease the screen.** Screenshot and windows still take the exclusive lease, so a second observer gets 409 for
+  60 s. Whether observers may share it is a policy question for Sir (from t2).
+- **Login in 409 text.** The 409 text names the holder's `agent`, or its `who`, which is the tailnet login for a person. The t1
+  appendix above quotes one such login. It is not a secret, but it is personal data in the repo.
+- **Untested paths.** No test covers `mesh_control action:"check"` in `src/mcp.js` (only the API route is tested), or the macOS
+  "RIGS Control is not running on <node>" refusal.
+
+### Verdict
+
+Approve for merge. The code fixes are correct, gated and tested. No pair is blocked by code anymore:
+- magix-system as target works from every source.
+- Both Macs as target are blocked only on Sir's Screen Recording and Accessibility grants for RIGS Control. `mac` also needs
+  unlocking.

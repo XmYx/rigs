@@ -74,7 +74,7 @@ treat `main` as production.
   audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
   or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
 - Control safety rules (all of them, in every control change): every call goes through the gate, which checks
-  enabled → allowFrom → lease → lock → rate limit → backend. Every action, refusal and switch is written to
+  enabled → allowFrom → lease → lock → backend + OS permission → rate limit, and only then takes the lease. Every action, refusal and switch is written to
   `logs/control.jsonl` (the audit log); the audit must be writable before a call touches the desktop. The kill
   switch (`rigs control off`, `POST /api/local/control/kill`, the ⌃⌥⌘⎋ hotkey on macOS) stops the backends at
   once and persists across restarts. Typing never uses Unicode `SetKeymap`: Wayland types keysyms and answers
