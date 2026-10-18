@@ -72,6 +72,9 @@ function defaults() {
     // Request traces (src/trace.js): one span tree per request in traces/<day>.jsonl. days = retention; maxField = the cap
     // (characters) on each span's input / output / meta before it is cut and marked; enabled: false records nothing.
     traces: { enabled: true, days: 14, maxField: 8000 },
+    // Exhibits (src/exhibits.js, experimental): illustrated documents of each request / project, built from the traces.
+    // images: 'auto' (SVG, ComfyUI pictures when this machine's ComfyUI answers) | 'svg' | 'comfyui' | 'off'.
+    exhibits: { enabled: false, images: 'auto', maxPerDoc: 60 },
     // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
     capabilities: {},
     // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
