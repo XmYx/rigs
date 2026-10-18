@@ -21,6 +21,8 @@ const trace = await import('../src/trace.js');
 const S = await import('../src/preroute-stats.js');
 
 const setPreroute = (on) => { const c = config(); c.router = { ...c.router, preroute: on }; saveConfig(c); };
+// These tests measure the full-brain path; the quick-task fast path (test/quick.test.js) would take "answer" requests.
+{ const c = config(); c.quick = { ...c.quick, enabled: false }; saveConfig(c); }
 
 // ---------------------------------------------------------------- settings
 
