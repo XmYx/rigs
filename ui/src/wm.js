@@ -8,6 +8,7 @@ import { dialogify } from './a11y.js';
 let z = 100;
 let cascade = 0;
 const windows = new Set();
+let nextId = 1;
 // Phones: windows open full-screen (styles.css, MOBILE LAYOUT) and each owns a history entry, so the
 // browser/OS back gesture closes the top one instead of leaving JARVIS.
 const backStack = []; // close() of phone windows that pushed a history entry, oldest first
@@ -17,7 +18,7 @@ window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } 
 export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [] }) {
   const body = h('div', { class: 'win-body' });
   const titleEl = h('span', { class: 'win-title-text' }, title);
-  const win = h('div', { class: `win ${className}` },
+  const win = h('div', { class: `win ${className}`, 'data-win-id': String(nextId++) },
     h('div', { class: 'win-bar' },
       h('span', { class: 'win-icon' }, icon),
       titleEl,
@@ -38,6 +39,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const dlg = dialogify(win, { label: title, onClose: () => close() }); // role=dialog, focus in, Tab trap, Esc closes, focus returns on close
 
   const raise = () => { win.style.zIndex = ++z; };
+  win._wm = { title: () => titleEl.textContent, icon, raise, close: () => close() };
   win.addEventListener('pointerdown', raise);
 
   const bar = win.querySelector('.win-bar');
@@ -77,6 +79,21 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   }
   if (isPhone()) { history.pushState({ rigsWin: true }, ''); backStack.push(close); }
   return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
+}
+
+/** Open windows, topmost first: { id, title, icon, raise(), close(), el }. */
+export function listWindows() {
+  return [...windows].filter((w) => w._wm).sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))
+    .map((w) => ({ id: w.dataset.winId, title: w._wm.title(), icon: w._wm.icon, raise: w._wm.raise, close: w._wm.close, el: w }));
+}
+
+/** Raise a window and put focus in it. */
+export function focusWindow(id) {
+  const w = listWindows().find((x) => x.id === String(id));
+  if (!w) return false;
+  w.raise();
+  (w.el.querySelector('.win-body input, .win-body textarea, .win-body button, .win-body [tabindex="0"]') || w.el.querySelector('.win-btn'))?.focus({ preventScroll: true });
+  return true;
 }
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }

@@ -1,6 +1,7 @@
 import { api, h, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { openAppStore } from './appstore.js';
+import { isAppRemoved } from './layout-actions.js';
 
 // App Cloud: web apps hosted anywhere on the mesh, opened in floating windows through the daemon's
 // proxy (/api/nodes/<node>/apps/<id>/). The catalog refreshes on its own: on 'apps'/'mesh' events
@@ -19,6 +20,10 @@ export const appPath = (a) => `/api/nodes/${encodeURIComponent(a.node)}/apps/${e
 const statusOf = (a) => a.health?.status || 'unknown';
 
 export function appsCatalog() { return catalog; }
+export const isAppOpen = (a) => appWindows.has(key(a));
+export function closeApp(a) { appWindows.get(key(a))?.win.close(); }
+/** Re-render the launcher (an app was removed or restored). */
+export function rerenderApps() { renderLauncher(); }
 
 /** Fetch the mesh-wide catalog and push it into the launcher and every open app window. */
 export function refreshApps() {
@@ -65,7 +70,8 @@ function renderLauncher() {
   if (!launcher) return;
   const store = h('button', { class: 'app-tile store-tile', title: 'App Store — install new apps on any machine', onclick: () => openAppStore() },
     h('span', { class: 'app-icon' }, '🛍'), h('span', { class: 'app-name' }, 'App Store'), h('span', { class: 'app-node' }, 'install apps'));
-  launcher.grid.replaceChildren(store, ...(catalog.length ? catalog.map((a) => h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
+  const shown = catalog.filter((a) => !isAppRemoved(a)); // removed apps are hidden, never deleted (Window › Removed items)
+  launcher.grid.replaceChildren(store, ...(shown.length ? shown.map((a) => h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
     h('span', { class: 'app-icon' }, a.icon || '▦'),
     h('span', { class: 'app-name' }, a.name),
     h('span', { class: 'app-node' }, h('i', { class: 'app-dot' }), a.node)))

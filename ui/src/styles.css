@@ -1138,3 +1138,75 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .bm-hint.warn { color: var(--warn); border-color: rgba(251, 191, 36, .4); background: rgba(251, 191, 36, .08); }
 .bm-hint.ok { color: var(--accent); }
 .bm-row[hidden], .bm-row select[hidden], .bm-row input[hidden], .bm-hint[hidden] { display: none; }
+
+/* ===================================================================== TOP MENU BAR (menubar.js)
+   A slim bar across the top: File · Edit · Window · Tools · Help, themed by the variables above. --mb-h is its
+   height while shown (0 when hidden or on a phone); the panels anchored to the top move down by it. Hidden, it
+   slides up and a 6px hot zone at the top edge peeks it back (body.mb-peek). Menus are fixed, animated popups. */
+:root { --mb-h: 0px; }
+#left { top: calc(12px + var(--mb-h)); }
+#legend { top: calc(12px + var(--mb-h)); }
+#topbar { top: calc(14px + var(--mb-h)); }
+.win.max { top: calc(8px + var(--mb-h)) !important; }
+#menubar { position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 95; display: flex; align-items: center; gap: 2px; padding: 0 8px 0 10px;
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), .07), transparent 140%), var(--panel); border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); font: 12.5px/1 var(--sans); user-select: none;
+  transition: translate .22s cubic-bezier(.2, .8, .2, 1), opacity .22s ease, box-shadow .22s ease; }
+#menubar .mb-brand { color: var(--accent); font: 600 11px/1 var(--mono); letter-spacing: .14em; padding-right: 10px; margin-right: 4px; border-right: 1px solid var(--line); text-shadow: 0 0 12px rgba(var(--accent-rgb), .45); }
+#menubar .mb-tops { display: flex; gap: 1px; height: 100%; align-items: center; }
+.mb-top { height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); opacity: .86; transition: background .12s, opacity .12s, color .12s; }
+.mb-top:hover, .mb-top.active, .mb-top:focus-visible { background: rgba(var(--accent-rgb), .14); opacity: 1; color: var(--accent-2); }
+.mb-top:focus-visible { outline-offset: -2px; }
+#menubar .mb-spacer { flex: 1; }
+#menubar .mb-status { color: var(--muted); font: 11px var(--mono); padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30vw; }
+.mb-hide { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; transition: background .12s, color .12s; }
+.mb-hide:hover, .mb-hide:focus-visible { color: var(--text); background: rgba(255, 255, 255, .06); }
+body.mb-hidden #menubar { translate: 0 -110%; opacity: 0; pointer-events: none; }
+body.mb-hidden.mb-peek #menubar { translate: 0 0; opacity: 1; pointer-events: auto; box-shadow: 0 8px 30px rgba(0, 0, 0, .45); }
+#mb-zone { position: fixed; top: 0; left: 0; right: 0; height: 6px; z-index: 96; display: none; }
+body.mb-hidden:not(.mb-peek) #mb-zone { display: block; }
+
+.mb-menu { position: fixed; z-index: 10000; min-width: 220px; max-width: min(360px, calc(100vw - 16px)); overflow-y: auto; padding: 5px; border-radius: 9px;
+  background: var(--panel-solid); border: 1px solid var(--line-strong); box-shadow: 0 18px 50px rgba(0, 0, 0, .6), 0 0 0 1px rgba(0, 0, 0, .4), 0 0 24px rgba(var(--accent-rgb), .06);
+  font: 12.5px/1.2 var(--sans); outline: none; scrollbar-width: thin; transform-origin: top left; transition: opacity .14s ease, translate .14s cubic-bezier(.2, .8, .2, 1), scale .14s cubic-bezier(.2, .8, .2, 1); }
+.mb-menu.mb-enter { opacity: 0; translate: 0 -4px; scale: .98; }
+.mb-menu.mb-sub.mb-enter { translate: -4px 0; }
+.mb-item { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px 4px 6px; border-radius: 6px; cursor: default; color: var(--text); white-space: nowrap; outline: none; }
+.mb-item:focus, .mb-item.sub-open { background: rgba(var(--accent-rgb), .16); color: #fff; }
+.mb-item:focus-visible { box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .55); }
+.mb-item.disabled { color: var(--muted); opacity: .6; }
+.mb-item.disabled:focus { background: rgba(255, 255, 255, .04); color: var(--muted); }
+.mb-ico { width: 18px; flex: none; text-align: center; font-size: 12px; opacity: .9; }
+.mb-item[aria-checked="true"] .mb-ico { color: var(--accent); }
+.mb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.mb-sc { margin-left: 18px; color: var(--muted); font: 11px var(--mono); }
+.mb-arrow { margin-left: 10px; color: var(--muted); font-size: 10px; }
+.mb-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.mb-header { padding: 6px 10px 3px 30px; color: var(--muted); font: 600 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.mb-back { color: var(--accent-2); }
+#mb-phone { display: none; }
+.kbd-table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; }
+.kbd-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.kbd-table td:first-child { width: 40%; white-space: nowrap; }
+kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line-strong); background: rgba(0, 0, 0, .35); }
+.about { padding: 14px 18px; }
+.about h3 { margin: 0 0 4px; color: var(--accent); }
+.about-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 14px 0; }
+.about-dl dt { color: var(--muted); }
+.about-dl dd { margin: 0; font-family: var(--mono); }
+.tool-list { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; overflow-y: auto; }
+.tool-row { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(0, 0, 0, .2); }
+.floating.panel-flash { animation: panel-flash .9s ease; }
+@keyframes panel-flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .7), 0 0 30px rgba(var(--accent-rgb), .35); } }
+:root[data-theme="atari"] #menubar { background: var(--panel-solid); border-bottom: 2px solid var(--line-strong); }
+:root[data-theme="atari"] #menubar .mb-brand { font-family: var(--pixel); font-size: 9px; letter-spacing: 0; text-shadow: 2px 2px 0 #000; }
+:root[data-theme="atari"] .mb-menu { border-width: 2px; box-shadow: 4px 4px 0 #000; }
+@media (prefers-reduced-motion: reduce) { #menubar, .mb-menu, .mb-top { transition: none; } .floating.panel-flash { animation: none; } }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  #menubar, #mb-zone { display: none !important; }
+  #mb-phone { display: grid; place-items: center; font-size: 20px; }
+  #brain-badge { max-width: calc(100vw - 300px - var(--sal) - var(--sar)); }
+  .mb-menu.mb-phone-menu { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); top: var(--hdr) !important; width: auto; max-width: none; max-height: var(--room) !important; }
+  .mb-phone-menu .mb-item { min-height: 44px; font-size: 15px; }
+  .mb-phone-menu .mb-sc { display: none; }
+}

@@ -2,11 +2,14 @@ import { bannerVisible, prefs } from './toasts.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
-import { findApp, onAppsEvent, openApp, openApps, refreshApps } from './apps.js';
+import { closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, rerenderApps } from './apps.js';
+import { initLayout, isAppRemoved } from './layout-actions.js';
+import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
+import { initMenubar } from './menubar.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
-import { initMobile, revealInspector, isPhone } from './mobile.js';
+import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
@@ -106,6 +109,10 @@ function setOrb(s) {
 }
 
 const machines = () => snap.filter((e) => e.node.online && e.node.rigs).map((e) => e.node);
+/** Apps on the mesh (with node name/id), removed ones included; `open` = it has a window here. */
+const meshApps = () => snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id }))).map((a) => ({ ...a, open: isAppOpen(a) }));
+/** The snapshot without removed apps (Window › Removed items): what the galaxy shows. */
+const visibleSnap = () => snap.map((e) => (e.apps?.length ? { ...e, apps: e.apps.filter((a) => !isAppRemoved({ ...a, nodeId: e.node.id })) } : e));
 const machineById = (id) => snap.find((e) => e.node.id === id)?.node;
 
 // ------------------------------------------------------------------ "an agent needs you"
@@ -232,7 +239,7 @@ async function refresh() {
     snap = await api('/api/mesh/snapshot');
     const self = snap.find((e) => e.node.self);
     if (self) selfId = self.node.id;
-    graph.setData(buildGraph(snap));
+    graph.setData(buildGraph(visibleSnap()));
     graph.setAttention(attentionGraphIds());
     renderCounts();
     agentsPanel?.update();
@@ -288,7 +295,7 @@ function renderCounts() {
 
 /** Left panel: every app on the mesh, one click to open (and spin up) it. */
 function renderAppList() {
-  const apps = snap.flatMap((e) => (e.apps || []).map((a) => ({ ...a, node: e.node.name, nodeId: e.node.id })));
+  const apps = meshApps().filter((a) => !isAppRemoved(a));
   const fresh = freshIds('apps', apps.map((a) => a.id));
   $('#app-list').replaceChildren(...(apps.length ? apps.map((a) => {
     const st = a.health?.status || 'unknown';
@@ -1194,6 +1201,7 @@ function wire() {
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
+  wireMenus();
   $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#btn-agents').onclick = () => togglePanel('agents');
@@ -1285,6 +1293,50 @@ setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
 refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
+
+// ------------------------------------------------------------------ top menu bar, commands, layout adapter
+/** The machine the menus act on: the one focused in the galaxy, else this one. */
+function focusedMachine() {
+  const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null;
+  return n || machineById(selfId) || null;
+}
+
+function wireMenus() {
+  initLayout({
+    apps: {
+      list: meshApps,
+      open: (a) => openApp(a),
+      close: (a) => closeApp(a),
+      changed: () => { graph.setData(buildGraph(visibleSnap())); renderAppList(); renderFilters(); rerenderApps(); },
+    },
+  });
+  let bar = null;
+  const reveal = (sel) => {
+    if (isPhone()) openDrawer({ focus: false }); else showPanel('left');
+    setTimeout(() => { const el = $(sel); el?.scrollIntoView?.({ block: 'center' }); el?.focus({ preventScroll: true }); }, 60);
+  };
+  registerJarvisCommands({
+    projects: () => projectsWindow(),
+    openApps: () => openApps(),
+    openAppStore: () => openAppStore(),
+    files: (m) => filesOn(m),
+    sessions: () => sessionsWindow(),
+    mesh: () => meshWindow(),
+    find: () => reveal('#search'),
+    display: () => reveal('#d-theme'),
+    brainMenu: () => { showPanel('orb'); setTimeout(() => toggleBrainMenu(), 0); },
+    terminal: (m) => openTerminal({ nodeId: m.id, nodeName: m.name }),
+    control: (m) => openControl({ machine: m }),
+    machine: focusedMachine,
+    self: () => machineById(selfId),
+    machines,
+    menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
+  });
+  bar = initMenubar({
+    menus: menuModel,
+    status: () => { const me = machineById(selfId); return me ? `${me.name} · ${me.version || ''}` : ''; },
+  });
+}
 
 function greeting() {
   const hr = new Date().getHours();
