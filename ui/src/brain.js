@@ -1,4 +1,4 @@
-import { api, h, toast } from './api.js';
+import { api, h, node, toast } from './api.js';
 
 /**
  * Brain settings popover: which machine thinks, which provider, the exact model and the reasoning
@@ -36,12 +36,53 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
   machineSel.onchange = () => { sel.brain = ''; fillProviders(); };
   providerSel.onchange = () => { sel.brain = ''; fillModels(); };
 
+  // Pre-routing (config.router.preroute on the machine that takes the requests): on = RIGS classifies a request and files
+  // work itself before the brain sees it; off = the brain gets it as it is and files work itself. Saved as soon as it flips.
+  const preBox = h('input', { type: 'checkbox', 'aria-label': 'Pre-routing', disabled: true });
+  const preNote = h('div', { class: 'muted small bm-pre-note' }, 'Loading…');
+  let preFor = '';
+  const preText = (r) => (r.preroute === false
+    ? 'Off — the brain gets every request as it is and files work itself.'
+    : `On — each request is classified first (${{ jev: r.jevUrl ? 'LocalJev' : 'Jev, not reachable: falls back', claude: 'Haiku', rules: 'keyword rules' }[r.engine] || r.engine}) and work is filed for you.`);
+  async function loadPre() {
+    const id = (preFor = machineSel.value);
+    preBox.disabled = true;
+    preNote.textContent = 'Loading…';
+    try {
+      const r = await api(`${node(id)}/router`);
+      if (preFor !== id) return;
+      preBox.checked = r.preroute !== false;
+      preNote.textContent = preText(r);
+      preBox.disabled = false;
+    } catch (err) { if (preFor === id) preNote.textContent = `Could not read pre-routing: ${err.message}`; }
+  }
+  preBox.onchange = async () => {
+    const id = machineSel.value;
+    const want = preBox.checked;
+    preBox.disabled = true;
+    try {
+      const r = await api(`${node(id)}/router`, { method: 'POST', body: { preroute: want } });
+      preBox.checked = r.preroute !== false;
+      preNote.textContent = preText(r);
+      toast(`Pre-routing ${preBox.checked ? 'on' : 'off'} · ${entry().node.name}`);
+      window.dispatchEvent(new CustomEvent('rigs:router', { detail: r }));
+    } catch (err) {
+      preBox.checked = !want;
+      toast('Could not change pre-routing: ' + err.message, 'error');
+    }
+    preBox.disabled = false;
+  };
+  const machineChanged = machineSel.onchange;
+  machineSel.onchange = () => { machineChanged(); loadPre(); };
+  loadPre();
+
   host.append(
     h('div', { class: 'bm-title' }, 'Brain'),
     h('label', { class: 'bm-row' }, h('span', {}, 'Machine'), machineSel),
     h('label', { class: 'bm-row' }, h('span', {}, 'Provider'), providerSel),
     h('label', { class: 'bm-row' }, h('span', {}, 'Model'), modelIn, modelList),
     h('label', { class: 'bm-row' }, h('span', {}, 'Effort'), effortSel),
+    h('label', { class: 'bm-pre' }, h('div', {}, h('b', {}, 'Pre-routing'), preNote), h('span', { class: 'ctl-switch' }, preBox, h('span', { class: 'ctl-knob' }))),
     h('label', { class: 'check bm-core' }, core, ` Core brain — default for JARVIS and project planning on ${gatewayName}`),
     h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
       const e = entry();

@@ -84,7 +84,7 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 @keyframes blink { 50% { opacity: .3; } }
 #brain-badge { font-size: 11px; max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #brain-badge small { color: var(--muted); }
-#brain-menu { position: absolute; top: 100%; right: 0; width: 260px; max-height: 50vh; max-height: 50dvh; overflow-y: auto; margin-top: 6px; padding: 6px; display: none; background: var(--panel-solid); }
+#brain-menu { position: absolute; bottom: 100%; right: 0; width: 260px; max-height: 50vh; max-height: 50dvh; overflow-y: auto; margin-bottom: 6px; /* opens upward: the badge sits at the bottom right */ padding: 6px; display: none; background: var(--panel-solid); }
 #brain-menu.open { display: block; }
 .bm-node { font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 6px 6px 2px; }
 .bm-item { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; }
@@ -608,7 +608,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #orb { width: 44px; height: 44px; order: 2; }
   #orb-state { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* still announced; the orb's colour shows the state */
   #brain-badge { min-height: 44px; max-width: calc(100vw - 250px - var(--sal) - var(--sar)); }
-  #brain-menu { position: fixed; top: var(--hdr); right: calc(var(--sar) + var(--gap)); left: auto; margin-top: 0; width: min(320px, calc(100vw - 16px - var(--sal) - var(--sar))); max-height: var(--room); z-index: 40; }
+  #brain-menu { position: fixed; top: var(--hdr); bottom: auto; right: calc(var(--sar) + var(--gap)); left: auto; margin: 0; width: min(320px, calc(100vw - 16px - var(--sal) - var(--sar))); max-height: var(--room); z-index: 40; }
 
   /* Side panel → slide-over drawer with a backdrop */
   #left { top: 0 !important; bottom: 0 !important; left: 0 !important; right: auto !important; width: min(340px, 86vw) !important; height: auto !important; max-height: none; transform: translateX(-105%) !important;
@@ -962,6 +962,22 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .us-row { cursor: default; }
 .us-st { margin-right: 4px; }
 .us-st.done { color: #4ade80; } .us-st.failed { color: #f87171; } .us-st.blocked, .us-st.stopped { color: #fbbf24; }
+/* Pre-routing section: headline, mode, and per class a diverging bar (centre line = no change; left = slower, right = faster) */
+.us-pr-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; }
+.us-pr-head.good { border-color: rgba(74, 222, 128, .45); } .us-pr-head.bad { border-color: rgba(248, 113, 113, .55); background: rgba(248, 113, 113, .06); }
+.us-pr-head b { font: 600 13px var(--mono); overflow-wrap: anywhere; }
+.us-pr-mode { margin: 6px 2px 4px; font-size: 11.5px; color: #9fb2bf; overflow-wrap: anywhere; }
+.us-sv.good { color: #4ade80; } .us-sv.bad { color: #f87171; } .us-sv.flat, .us-sv.none { color: var(--muted); }
+.us-est { margin-left: 6px; }
+.us-div { position: relative; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .15); margin-top: 4px; }
+.us-div::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(148, 163, 184, .5); }
+.us-div i { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.us-div i.good { background: #4ade80; } .us-div i.bad { background: #f87171; } .us-div i.flat, .us-div i.none { background: var(--muted); }
+/* the Pre-routing switch in the brain popover */
+.bm-pre { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 4px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; cursor: pointer; }
+.bm-pre b { font-size: 12px; }
+.bm-pre-note { margin-top: 2px; line-height: 1.35; }
+.bm-pre:has(input:disabled) { cursor: default; opacity: .7; }
 
 /* Request traces: list panel + explorer window (trace-panel.js) */
 #traces { position: fixed; left: 294px; top: 120px; width: 320px; max-height: max(220px, calc(100dvh - 300px)); padding: 10px 12px; overflow-y: auto; z-index: 10; scrollbar-width: thin; overscroll-behavior: contain; }

@@ -12,6 +12,7 @@ import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
+import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan } from './trace-panel.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -943,7 +944,8 @@ async function ask(text, { spoken = false } = {}) {
       if (e.type === 'route') {
         chatRef = { nodeId: b.nodeId, chatId: e.chatId };
         store.set('chat', chatRef);
-        activity(`route ${e.route}`, `${e.continued ? 'continuing' : 'new'} · ${e.title || ''}`).done(true);
+        const rc = routeChip(e); // "route answer · pre-routed …" or "route direct · pre-routing off …"
+        activity(rc.name, rc.detail).done(true);
       } else if (e.type === 'delta') {
         if (!reply) setOrb('speaking');
         reply += e.text;
@@ -1172,7 +1174,7 @@ function wire() {
   const questions = createQuestions($('#questions'), { onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }) });
   makeFloating($('#questions'), { id: 'questions', title: 'Questions', into: $('#questions .wk-head'), keep: [$('#questions .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => questions.setActive(!closed && !collapsed) });
   { const st = panelState('questions'); questions.setActive(!st.closed && !st.collapsed); }
-  const usagePanel = createUsage($('#usage'));
+  const usagePanel = createUsage($('#usage'), { routerNode: () => currentBrain()?.nodeId });
   makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => usagePanel.setActive(!closed && !collapsed) });
   { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.collapsed); }
   const tracesPanel = createTraces($('#traces'));
