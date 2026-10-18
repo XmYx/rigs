@@ -388,8 +388,9 @@ a.link { color: var(--accent); cursor: pointer; }
 .win { transition: opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
 .win.win-enter, .win.win-leave { opacity: 0; scale: .96; translate: 0 8px; }
 .win.win-leave { pointer-events: none; }
-#panels-menu { transition: opacity .16s ease, scale .16s ease, translate .16s ease; transform-origin: bottom right; }
-#panels-menu.hidden { display: flex !important; opacity: 0; scale: .95; translate: 0 6px; pointer-events: none; }
+#panels-menu { transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s; transform-origin: bottom right; }
+/* visibility (switched after the fade) keeps the closed menu's switches and buttons out of the Tab order */
+#panels-menu.hidden { display: flex !important; opacity: 0; scale: .95; translate: 0 6px; pointer-events: none; visibility: hidden; transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s .16s; }
 #brain-menu.open { animation: panel-reveal .18s ease both; }
 .app-tile { transition: border-color .15s, background .15s, translate .15s; }
 .app-tile:hover { translate: 0 -2px; }
@@ -1141,6 +1142,113 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .bm-hint.ok { color: var(--accent); }
 .bm-row[hidden], .bm-row select[hidden], .bm-row input[hidden], .bm-hint[hidden] { display: none; }
 
+/* === DOCKING (docking.js) === whole-title-bar drag, docked panels, tab strips, splitters, drop zones. */
+.pdrag { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.pdrag :is(button, a, input, select, textarea, [role="button"], [role="tab"]) { cursor: pointer; }
+.pdrag :is(input, textarea) { cursor: text; }
+body.dock-dragging, body.dock-dragging * { cursor: grabbing !important; user-select: none !important; }
+body.dock-dragging iframe, body.dock-resizing iframe { pointer-events: none; } /* an app window must not swallow the drag */
+.dragging.dock-lifted { opacity: .9; box-shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 0 1px rgba(var(--accent-rgb), .55), 0 0 30px rgba(var(--accent-rgb), .18); scale: 1.01; }
+
+/* Docked: the engine gives the rect; panels lose their floating size limits and sit under floating ones. */
+.docked { z-index: 4 !important; max-width: none !important; max-height: none !important; min-width: 0 !important; min-height: 0 !important; margin: 0 !important; box-sizing: border-box; overflow: auto; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: left .22s cubic-bezier(.2, .8, .2, 1), top .22s cubic-bezier(.2, .8, .2, 1), width .22s cubic-bezier(.2, .8, .2, 1), height .22s cubic-bezier(.2, .8, .2, 1), opacity .19s ease, scale .19s ease !important; }
+.docked.panel-collapsed { height: auto !important; }
+.docked .presize { display: none; }
+.dock-tab-hidden { display: none !important; }
+.win.docked { resize: none; box-shadow: none; animation: none; background: var(--panel-solid); }
+.win.docked::after { display: none; }
+body.dock-resizing .docked { transition: none !important; }
+#topbar.docked, #bar.docked { align-items: center; flex-wrap: wrap; align-content: flex-start; padding: 6px; }
+
+#dock-layer { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#dock-layer[hidden] { display: none; }
+.dock-stage { position: absolute; border: 1px dashed rgba(var(--accent-rgb), .35); border-radius: 10px; opacity: 0; transition: opacity .2s ease; }
+body.dock-dragging .dock-stage { opacity: 1; }
+
+.dock-tabs { position: absolute; display: flex; align-items: flex-end; gap: 2px; padding: 0 4px; box-sizing: border-box; pointer-events: auto; overflow-x: auto; scrollbar-width: none;
+  background: var(--panel-solid); border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0;
+  transition: left .22s cubic-bezier(.2, .8, .2, 1), top .22s cubic-bezier(.2, .8, .2, 1), width .22s cubic-bezier(.2, .8, .2, 1); }
+.dock-tab { position: relative; flex: 0 1 auto; min-width: 48px; height: 25px; max-width: 200px; padding: 0 12px; border: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted);
+  font: 600 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; touch-action: none; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }
+.dock-tab:hover { background: rgba(255, 255, 255, .05); color: var(--text); }
+.dock-tab[aria-selected="true"] { background: rgba(var(--accent-rgb), .14); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.dock-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dock-tab.dragging { opacity: .55; }
+.dock-tab-mark { position: absolute; top: 5px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--accent); box-shadow: 0 0 8px var(--accent); pointer-events: none; }
+
+.dock-split { position: absolute; pointer-events: auto; touch-action: none; z-index: 1; }
+.dock-split.row { cursor: col-resize; }
+.dock-split.column { cursor: row-resize; }
+.dock-split::after { content: ''; position: absolute; inset: 3px; border-radius: 2px; background: rgba(var(--accent-rgb), 0); transition: background .15s ease, box-shadow .15s ease; }
+.dock-split:hover::after, .dock-split.active::after, .dock-split:focus-visible::after { background: rgba(var(--accent-rgb), .65); box-shadow: 0 0 10px rgba(var(--accent-rgb), .5); }
+.dock-split:focus-visible { outline: none; }
+
+.dock-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 1001; }
+.dock-preview { position: absolute; box-sizing: border-box; border-radius: 10px; background: rgba(var(--accent-rgb), .14); border: 2px solid rgba(var(--accent-rgb), .75);
+  box-shadow: inset 0 0 28px rgba(var(--accent-rgb), .3), 0 0 22px rgba(var(--accent-rgb), .2); opacity: 0; scale: .97;
+  transition: left .14s ease, top .14s ease, width .14s ease, height .14s ease, opacity .14s ease, scale .14s ease; }
+.dock-preview.show { opacity: 1; scale: 1; }
+.dock-label { position: absolute; translate: -50% -50%; padding: 4px 10px; border-radius: 999px; background: var(--panel-solid); border: 1px solid rgba(var(--accent-rgb), .6); color: var(--text);
+  font: 600 11px var(--mono); white-space: nowrap; opacity: 0; transition: opacity .14s ease, left .14s ease, top .14s ease; }
+.dock-label.show { opacity: 1; }
+.dock-compass { position: absolute; width: 112px; height: 112px; translate: -50% -50%; opacity: 0; scale: .85; transition: opacity .16s ease, scale .16s cubic-bezier(.2, .9, .2, 1.2), left .14s ease, top .14s ease; }
+.dock-compass.show { opacity: 1; scale: 1; }
+.dock-pad { position: absolute; width: 34px; height: 34px; box-sizing: border-box; border-radius: 8px; background: var(--panel-solid); border: 1px solid rgba(var(--accent-rgb), .55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45); transition: background .12s ease, scale .12s ease, border-color .12s ease; }
+.dock-pad[data-zone="top"] { left: 39px; top: 0; } .dock-pad[data-zone="bottom"] { left: 39px; top: 78px; }
+.dock-pad[data-zone="left"] { left: 0; top: 39px; } .dock-pad[data-zone="right"] { left: 78px; top: 39px; }
+.dock-pad[data-zone="center"] { left: 39px; top: 39px; }
+.dock-compass.no-center .dock-pad[data-zone="center"] { display: none; }
+.dock-pad i { position: absolute; inset: 8px; border: 1.5px solid rgba(var(--accent-rgb), .9); border-radius: 2px; overflow: hidden; }
+.dock-pad i::after { content: ''; position: absolute; background: rgba(var(--accent-rgb), .7); }
+.dock-pad[data-zone="left"] i::after { left: 0; top: 0; bottom: 0; width: 45%; }
+.dock-pad[data-zone="right"] i::after { right: 0; top: 0; bottom: 0; width: 45%; }
+.dock-pad[data-zone="top"] i::after { left: 0; right: 0; top: 0; height: 45%; }
+.dock-pad[data-zone="bottom"] i::after { left: 0; right: 0; bottom: 0; height: 45%; }
+.dock-pad[data-zone="center"] i::after { left: 0; right: 0; top: 0; height: 28%; } /* a tab strip */
+.dock-pad.on { background: rgba(var(--accent-rgb), .4); border-color: var(--accent); scale: 1.14; }
+
+#panels-menu .pm-dock { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
+#panels-menu .pm-where { margin-left: auto; padding: 0 6px; border-radius: 999px; font: 10px var(--mono); color: var(--accent); border: 1px solid rgba(var(--accent-rgb), .4); }
+#panels-menu .pm-sub { margin: 4px 0 0; font: 600 10px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+#panels-menu .pm-sub[hidden], #panels-menu .pm-dock[hidden] { display: none; }
+#panels-menu .pm-restore { text-align: left; }
+
+@media (prefers-reduced-motion: reduce) {
+  .docked, .dock-tabs, .dock-tab, .dock-split::after, .dock-preview, .dock-label, .dock-compass, .dock-pad, .dock-stage { transition: none !important; }
+  .dragging.dock-lifted { scale: none; }
+}
+/* Phones keep full-screen windows and the drawer layout: no docking, no bar drags. */
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .pdrag { cursor: auto; touch-action: auto; user-select: auto; -webkit-user-select: auto; }
+  #dock-layer, .dock-overlay { display: none !important; }
+}
+/* === END DOCKING === */
+
+/* === SMART SCALING (docking.js, scaling.js) === panels and windows glide to fit when the window resizes. ===
+   html.smart-scaling = the mode is on. html.fit-moving = a fit just moved something (eased, spring-like, ~260 ms);
+   it is on for a moment only, so dragging a panel or the corner of a window never lags. html.fit-live = the window
+   edge is being dragged: no transitions, panels follow it exactly. Reduced motion: nothing glides. */
+:root { --fit-ease: cubic-bezier(.22, 1.1, .36, 1); --fit-time: .26s; }
+#fit-probe { position: fixed; inset: 0; pointer-events: none; visibility: hidden; }
+html.smart-scaling.fit-moving .floating {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease),
+    opacity .19s ease, translate .19s cubic-bezier(.2, .8, .2, 1), filter .19s ease; }
+html.smart-scaling.fit-moving .win {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease),
+    opacity .18s ease, translate .18s cubic-bezier(.2, .8, .2, 1); }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .docked {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease), opacity .19s ease !important; }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .dock-tabs { transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease); }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .dock-split { transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease); }
+html.smart-scaling.fit-moving .floating.dragging, html.smart-scaling.fit-moving .floating.resizing, .win.dragging, .win.resizing { transition: none !important; }
+html.fit-live .docked, html.fit-live .dock-tabs, html.fit-live .dock-split { transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  html.smart-scaling .floating, html.smart-scaling .win, html.smart-scaling .docked, html.smart-scaling .dock-tabs, html.smart-scaling .dock-split { transition: none !important; }
+}
+/* === END SMART SCALING === */
 /* ===================================================================== TOP MENU BAR (menubar.js)
    A slim bar across the top: File · Edit · Window · Tools · Help, themed by the variables above. --mb-h is its
    height while shown (0 when hidden or on a phone); the panels anchored to the top move down by it. Hidden, it

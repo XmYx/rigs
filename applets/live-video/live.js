@@ -108,7 +108,7 @@ export function createLive({
     if (problems.length) throw new LiveError(problems.map((c) => describeMissing(c.template, c)).join(' · '), 409, problems);
 
     const client = getClient();
-    s = { ...p, id: crypto.randomBytes(4).toString('hex'), client, overrides, next: 0, done: 0, failures: 0, pending: new Map(), completing: new Set(), lastFrame: null, playEnd: 0, ticks: 0, lease: null, leaseAt: 0, ws: null, timer: null };
+    s = { ...p, id: crypto.randomBytes(4).toString('hex'), client, overrides, next: 0, done: 0, failures: 0, pending: new Map(), completing: new Set(), submitting: new Set(), ended: false, lastFrame: null, playEnd: 0, ticks: 0, lease: null, leaseAt: 0, ws: null, timer: null };
     status = 'starting';
     error = null;
     setNotice(p.notice, 'warn');
@@ -147,7 +147,7 @@ export function createLive({
   }
 
   function canSubmit(session) {
-    if (status !== 'running' || s !== session) return false;
+    if (status !== 'running' || s !== session || session.ended) return false;
     if (session.pending.size >= (session.mode === 'chain' ? 1 : 2)) return false;
     return aheadSeconds(session) < maxAheadClips * session.duration;
   }
@@ -171,17 +171,24 @@ export function createLive({
     const text = promptFor(session, index);
     const seed = (session.seed + index) % 2 ** 32;
     const wf = buildWorkflow(tmpl, { prompt: text, negative: session.negative, seed, width: session.width, height: session.height, frames: session.frames, fps: session.fps, image, prefix: `live-video/${session.id}-${String(index).padStart(4, '0')}` }, session.overrides);
-    try {
+    // Tracked so fail() can wait for a submit still in flight (and its take-back) before it cleans the queue.
+    const job = (async () => {
       const r = await session.client.queuePrompt(wf);
-      if (s !== session) { // stopped while we were submitting: take it back out
-        session.client.deleteQueued([r.prompt_id]).catch(() => {});
+      if (s !== session || session.ended) { // stopped or failed while we were submitting: take it back out
+        await session.client.deleteQueued([r.prompt_id]).catch(() => {});
         return;
       }
       session.pending.set(r.prompt_id, { promptId: r.prompt_id, index, prompt: text, seed, tmpl, submittedAt: now(), startedAt: null, progress: { value: 0, max: 0 } });
       emit('queued', { promptId: r.prompt_id, index, prompt: text });
       emitState();
+    })();
+    session.submitting.add(job);
+    try {
+      await job;
     } catch (e) {
       clipFailed(session, null, `could not queue clip ${index + 1}: ${e.message}`);
+    } finally {
+      session.submitting.delete(job);
     }
   }
 
@@ -337,8 +344,10 @@ export function createLive({
   }
 
   async function fail(session, message) {
-    if (s !== session) return;
+    if (s !== session || session.ended) return;
+    session.ended = true; // no new submits; one in flight takes itself back out
     log('live-video:', message);
+    await Promise.allSettled([...session.submitting]);
     const ids = [...session.pending.keys()];
     if (ids.length) await session.client.deleteQueued(ids).catch(() => {});
     session.pending.clear();
