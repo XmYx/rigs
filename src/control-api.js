@@ -110,6 +110,7 @@ const who = (h = {}) => [h.agent || h.who || 'someone', h.from ? `on ${h.from}` 
  */
 export function wireControlEvents({ events, nodeName, settings, broadcast, notifyAll, osNotify, log = () => {} }) {
   let active = null; // { holder, since, actions, last, acted }
+  const streams = new Map(); // live screen streams by settings: { since, by }
   const safe = (p) => Promise.resolve(p).catch((e) => log('control announce:', e.message));
   const quiet = () => settings().announce === 'off';
 
@@ -134,8 +135,15 @@ export function wireControlEvents({ events, nodeName, settings, broadcast, notif
     broadcast({ type: 'control', node: nodeName(), op: a.op, ok: a.ok, summary: `${a.op} ${short(a.args)}${a.ok ? '' : ` — refused: ${a.error?.code}`}`, by: who(a.caller), at: a.ts });
     if (settings().announce === 'every' && a.ok && OPS_SEEN.has(a.op)) safe(osNotify('JARVIS is controlling this screen', `${a.op} ${short(a.args, 100)}`));
   });
+  // A live stream (src/screen-stream.js) is shown while it runs; starts and ends are in the audit log.
+  events.on('stream', (st) => {
+    const key = JSON.stringify([st.caller?.from || '', st.fps, st.quality, st.scale, st.maxWidth ?? null, st.display ?? null]);
+    if (st.phase === 'start') streams.set(key, { since: Date.now(), by: who(st.caller) });
+    else streams.delete(key);
+    broadcast({ type: 'control', node: nodeName(), op: 'stream', ok: true, summary: `screen stream ${st.phase}${st.phase === 'start' ? ` ${st.fps} fps` : ` after ${st.frames ?? 0} frames${st.reason ? ` — ${st.reason}` : ''}`}`, by: who(st.caller) });
+  });
   events.on('kill', (k) => {
-    active = null;
+    active = null; streams.clear();
     safe(notifyAll({ text: `Screen control on ${nodeName()} was stopped${k.by?.agent || k.by?.who ? ` by ${who(k.by)}` : ''}.`, level: 'attention', speak: true, from: nodeName() }));
     safe(osNotify('Screen control stopped', `Control of this machine's screen is off${k.reason ? `: ${k.reason}` : ''}.`));
   });
@@ -145,10 +153,14 @@ export function wireControlEvents({ events, nodeName, settings, broadcast, notif
   });
 
   return {
-    items: () => (active ? [{
+    items: () => [...(active ? [{
       key: `control:${nodeName()}`, kind: 'control', agent: active.holder?.agent || 'agent',
       title: active.acted ? 'JARVIS is controlling this screen' : 'JARVIS is watching this screen', reason: active.last,
       since: active.since, actions: active.actions, session: null, stop: { method: 'POST', path: 'control/kill' },
-    }] : []),
+    }] : []), ...(streams.size ? [{
+      key: `control-stream:${nodeName()}`, kind: 'control', agent: 'jarvis',
+      title: 'This screen is being streamed', reason: `${streams.size} live stream${streams.size > 1 ? 's' : ''} · ${[...new Set([...streams.values()].map((x) => x.by))].join(', ')}`,
+      since: Math.min(...[...streams.values()].map((x) => x.since)), actions: 0, session: null, stop: { method: 'POST', path: 'control/kill' },
+    }] : [])],
   };
 }

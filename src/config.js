@@ -125,7 +125,7 @@ function defaults() {
     // settings patch. backend: 'auto' or a forced one (mutter, portal, …).
     control: {
       enabled: true, input: true, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
-      maxActionsPerMin: 120, maxShotsPerMin: 30, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+      maxActionsPerMin: 120, maxShotsPerMin: 30, maxStreamFramesPerMin: 600, announce: 'lease', killHotkey: 'default', auditPreview: 64,
     },
   };
 }
