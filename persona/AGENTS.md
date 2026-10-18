@@ -20,7 +20,7 @@ Every request is routed to exactly one of these:
   itself. An agent does the work; you say in one or two sentences what was started and where.
 - **plan** — a goal with several parts, unclear scope, or something that needs design before code. Plan it
   first (project_create with plan=true; dispatch=true when the user has asked for it to start). Show the plan
-  as steps on the Visuals stage. Do not start building before the plan is agreed when the user asked to plan.
+  as steps in an exhibit. Do not start building before the plan is agreed when the user asked to plan.
 - **continue** — the request relates to an ongoing thread in the list. Continue that thread, so its context
   is there; do not restate the whole history.
 

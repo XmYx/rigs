@@ -508,12 +508,6 @@ a.link { color: var(--accent); cursor: pointer; }
 @keyframes hub-materialise { 0% { opacity: 0; transform: translateX(-14px); background: rgba(var(--accent-rgb),.22); } 100% { opacity: 1; transform: none; background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .win, .win::after, .hub.materialise, .act-chip { animation: none !important; transition: none !important; } }
 
-/* Visuals stage (stage.js): JARVIS's animated cards in one window */
-.stage-feed { display: flex; flex-direction: column; gap: 6px; padding: 10px; overflow: auto; }
-.stage-card { border-top: 1px solid var(--line); padding-top: 8px; }
-.stage-card:first-child { border-top: 0; }
-.stage-title { font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
-
 /* Every floating panel resizes in all directions (panels.js addResizeHandles). Handles sit inside the edges,
    so panels that scroll (overflow) don't clip them. */
 .floating .presize { position: absolute; z-index: 5; touch-action: none; }
@@ -757,7 +751,7 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
   html, body { font-size: var(--fs-md); line-height: var(--lh); }
   /* nothing below 12px: the small mono captions and metadata were 10-11px */
   .small, .brand .sub, .brand .back, .ins-type, .hub em, .flt em, .ss, .term-status, .file-row .fs, .file-row .fm, .msg .mr, .msg.r-tool .mt, .badge, .chip, .wk-sub, .wk-rmeta, .wk-rnow, .wk-lrow b, .wk-rtitle b, .wk-title, .wk-meta, .vz-cap, .vz-col small, .vz-fallback, .vz-day, .vz-tile, .vz-dot, .bm-node, .bm-title, .stage-title, .rule-row.head span, .tr-desc summary, .mr-name .muted, .tid, #brain-badge, #orb-state, h4, .sec-h, .scene-tooltip .tip span, .nlabel.t-mesh, .nlabel.attn-tag { font-size: var(--fs-xs); }
-  h4, .sec-h, .vz-cap, .wk-title, .bm-title, .stage-title { letter-spacing: .1em; }
+  h4, .sec-h, .vz-cap, .wk-title, .bm-title { letter-spacing: .1em; }
   #subtitle { font-size: 15px; line-height: 1.5; }
   /* the subtitle opens the conversation on tap: finger-sized from the first frame of its open transition, and for a one-line reply */
   #chat-dock #subtitle.show, #chat-dock.floating #subtitle.show { min-height: 44px; }
