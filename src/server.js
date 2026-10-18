@@ -702,6 +702,7 @@ export async function startServer() {
     if (sub === 'brain/chat' && method === 'POST') {
       const b = await body();
       patchConfig({ brain: { chat: { provider: b.provider || 'claude', model: b.model || '', effort: b.effort || '' } } });
+      if (b.provider === models.CLAUDE_OLLAMA && b.model) patchConfig({ brain: { claudeOllama: { model: b.model } } });
       return models.chatBrain();
     }
     if (sub === 'emotion' && method === 'POST') { const b = await body(); return senses.emotion(b.text); }
@@ -718,6 +719,8 @@ export async function startServer() {
       const cfg = config();
       cfg.brain.core = { provider: b.provider || 'auto', model: b.model || '', effort: b.effort || '', node: b.node || '' };
       patchConfig({ brain: { core: cfg.brain.core } });
+      // the local-model brain remembers its model (it is the default when a chat doesn't name one)
+      if (cfg.brain.core.provider === models.CLAUDE_OLLAMA && cfg.brain.core.model) patchConfig({ brain: { claudeOllama: { model: cfg.brain.core.model } } });
       return models.coreBrain();
     }
     if (sub.startsWith('comfyui/')) return comfyRoute(comfy, { method, sub: sub.slice('comfyui/'.length), q, req, res, body });

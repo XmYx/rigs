@@ -28,6 +28,13 @@ export const PROVIDERS = {
     // Ollama's `think` option: off, on, or a level for models that support levels (gpt-oss).
     efforts: ['off', 'on', 'low', 'medium', 'high'],
   },
+  // The Claude Code harness (`claude -p`) pointed at Ollama's Anthropic-compatible endpoint: Claude's tools and
+  // stream, a local model. No effort levels (Claude's `--effort` is Anthropic-side), no cost.
+  'claude-ollama': {
+    label: 'Claude via Ollama', runtime: 'claude-code',
+    models: [],
+    efforts: [],
+  },
 };
 
 export function claudeFlags({ model, effort, permissionMode } = {}) {
@@ -36,6 +43,56 @@ export function claudeFlags({ model, effort, permissionMode } = {}) {
   if (effort && PROVIDERS.claude.efforts.includes(effort)) a.push('--effort', effort);
   if (permissionMode) a.push('--permission-mode', permissionMode);
   return a;
+}
+
+/** The local-model brain id (PROVIDERS key, `brain` in chats, `provider` in traces and the usage ledger). */
+export const CLAUDE_OLLAMA = 'claude-ollama';
+const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
+
+/** Where Claude Code is sent: `brain.claudeOllama.url`, else the Ollama URL of the ollama brain. No trailing slash. */
+export function claudeOllamaUrl(brain = config().brain) {
+  return String(brain?.claudeOllama?.url || brain?.ollamaUrl || OLLAMA_DEFAULT_URL).replace(/\/+$/, '');
+}
+
+/**
+ * Environment overrides for the `claude` child process only (merged over the cleaned process env; never written to
+ * Claude's settings). Ollama ignores the token, so it is a fixed dummy — and every real credential Claude would
+ * otherwise pick up from the environment is blanked, so nothing real is sent to the local endpoint. The model is also
+ * the alias of every Claude tier, so side calls (titles, summaries) go to the local model instead of "haiku".
+ */
+export function claudeOllamaEnv({ url, model } = {}) {
+  const env = {
+    ANTHROPIC_BASE_URL: String(url || claudeOllamaUrl()).replace(/\/+$/, ''),
+    ANTHROPIC_AUTH_TOKEN: 'ollama',
+    ANTHROPIC_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  };
+  if (model) {
+    for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) env[k] = model;
+  }
+  return env;
+}
+
+/** `claude` flags for the local brain: the model only (no `--effort`; permission mode is added by the caller). */
+export function claudeOllamaFlags({ model } = {}) {
+  return model ? ['--model', model] : [];
+}
+
+/** Default local model: a tool-capable one (Claude Code is all tool calls), else the first that can chat. */
+export function pickClaudeOllamaModel(models = []) {
+  const chat = models.filter((m) => !(m.capabilities?.length && !m.capabilities.includes('completion')));
+  return (chat.find((m) => m.capabilities?.includes('tools')) || chat[0] || models[0] || {}).name || '';
+}
+
+/** Why the local brain can or can't run right now, for the settings hint and the turn's error. Pure. */
+export function claudeOllamaStatus({ claude, ollama, url, models = [], model = '' }) {
+  const names = models.map((m) => m.name);
+  if (!claude) return { available: false, reason: 'The claude CLI is not installed on this machine.' };
+  if (!ollama) return { available: false, reason: `Ollama is not reachable at ${url}. Start it with \`ollama serve\`.` };
+  if (!names.length) return { available: false, reason: 'Ollama is running but has no models — `ollama pull qwen3-coder`.' };
+  if (model && !names.includes(model)) return { available: true, reason: '', warning: `${model} is not installed in Ollama (installed: ${names.slice(0, 5).join(', ')}).` };
+  return { available: true, reason: '' };
 }
 
 export function codexFlags({ model, effort, sandbox, approval, network } = {}) {
@@ -72,6 +129,17 @@ export async function catalog() {
   if (bin('codex')) out.push({ id: 'codex', ...PROVIDERS.codex, models: uniq([...(extra.codex || []), ...PROVIDERS.codex.models]), signedIn: codexSignedIn() });
   const o = await ollamaModels();
   if (o.running) out.push({ id: 'ollama', ...PROVIDERS.ollama, models: o.models.map((m) => m.name), details: o.models });
+  if (bin('claude')) {
+    const url = claudeOllamaUrl();
+    const st = claudeOllamaStatus({ claude: true, ollama: o.running, url, models: o.models });
+    const saved = config().brain.claudeOllama?.model;
+    const tools = o.models.filter((m) => m.capabilities?.includes('tools')).map((m) => m.name);
+    out.push({
+      id: CLAUDE_OLLAMA, ...PROVIDERS[CLAUDE_OLLAMA], models: o.models.map((m) => m.name), details: o.models, toolModels: tools, url,
+      default: o.models.some((m) => m.name === saved) ? saved : pickClaudeOllamaModel(o.models),
+      available: st.available, ...(st.reason ? { reason: st.reason } : {}),
+    });
+  }
   return out;
 }
 

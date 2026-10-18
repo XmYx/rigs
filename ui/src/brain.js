@@ -13,7 +13,13 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
   const providerSel = h('select', { class: 'mini' });
   const modelIn = h('input', { class: 'path-input', list: 'brain-models', placeholder: 'model (empty = provider default)', spellcheck: 'false' });
   const modelList = h('datalist', { id: 'brain-models' });
+  // Claude via Ollama can only run what Ollama has installed: a real dropdown of those models instead of free text.
+  const modelSel = h('select', { class: 'mini', 'aria-label': 'Ollama model' });
+  const hint = h('div', { class: 'bm-hint small', role: 'status' });
+  const modelRow = h('label', { class: 'bm-row' }, h('span', {}, 'Model'), modelIn, modelSel, modelList);
+  const useBtn = h('button', { class: 'btn primary' }, 'Use this brain');
   const effortSel = h('select', { class: 'mini' });
+  const effortRow = h('label', { class: 'bm-row' }, h('span', {}, 'Effort'), effortSel);
   const core = h('input', { type: 'checkbox', checked: true });
 
   function entry() { return machines.find((e) => e.node.id === machineSel.value) || machines[0]; }
@@ -25,11 +31,25 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
   }
   function fillModels() {
     const b = provider();
+    const local = b.id === 'claude-ollama';
     modelList.replaceChildren(...b.models.map((m) => h('option', { value: m })));
     if (b.id !== sel.brain) { modelIn.value = b.default || (b.id === 'ollama' ? b.models[0] || '' : ''); }
+    modelIn.hidden = local; modelSel.hidden = !local; effortRow.hidden = local || !(b.efforts || []).length;
+    if (local) {
+      const tools = new Set(b.toolModels || []);
+      modelSel.replaceChildren(...b.models.map((m) => h('option', { value: m }, tools.has(m) ? `${m} · tools` : m)));
+      const want = b.id === sel.brain ? sel.model : '';
+      modelSel.value = b.models.includes(want) ? want : b.default && b.models.includes(b.default) ? b.default : b.models[0] || '';
+      hint.className = `bm-hint small ${b.available === false ? 'warn' : 'ok'}`;
+      hint.textContent = b.available === false ? b.reason
+        : `Ollama reachable at ${b.url} · claude CLI present · ${b.models.length} model${b.models.length === 1 ? '' : 's'}${tools.size ? ` (${tools.size} with tool support)` : ' — none advertise tool support'}`;
+    } else { hint.className = 'bm-hint small'; hint.textContent = ''; }
+    hint.hidden = !local;
+    useBtn.disabled = local && b.available === false;
     effortSel.replaceChildren(h('option', { value: '' }, 'default'), ...(b.efforts || []).map((x) => h('option', { value: x }, x)));
     effortSel.value = b.id === sel.brain ? sel.effort || '' : b.defaultEffort || '';
   }
+  const chosenModel = () => (provider().id === 'claude-ollama' ? modelSel.value : modelIn.value.trim());
   machineSel.value = machines.some((e) => e.node.id === sel.nodeId) ? sel.nodeId : machines[0].node.id;
   modelIn.value = sel.model || '';
   fillProviders();
@@ -80,20 +100,21 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
     h('div', { class: 'bm-title' }, 'Brain'),
     h('label', { class: 'bm-row' }, h('span', {}, 'Machine'), machineSel),
     h('label', { class: 'bm-row' }, h('span', {}, 'Provider'), providerSel),
-    h('label', { class: 'bm-row' }, h('span', {}, 'Model'), modelIn, modelList),
-    h('label', { class: 'bm-row' }, h('span', {}, 'Effort'), effortSel),
+    modelRow,
+    hint,
+    effortRow,
     h('label', { class: 'bm-pre' }, h('div', {}, h('b', {}, 'Pre-routing'), preNote), h('span', { class: 'ctl-switch' }, preBox, h('span', { class: 'ctl-knob' }))),
     h('label', { class: 'check bm-core' }, core, ` Core brain — default for JARVIS and project planning on ${gatewayName}`),
-    h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
+    h('div', { class: 'actions' }, Object.assign(useBtn, { onclick: async () => {
       const e = entry();
       const b = provider();
-      const out = { nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: modelIn.value.trim(), effort: effortSel.value };
+      const out = { nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: chosenModel(), effort: b.id === 'claude-ollama' ? '' : effortSel.value };
       if (core.checked) {
         try { await api('/api/local/brain/core', { method: 'POST', body: { provider: out.brain, model: out.model, effort: out.effort, node: e.node.self ? '' : e.node.name } }); }
         catch (err) { toast('Could not save core brain: ' + err.message, 'error'); }
       }
       onSave(out);
       host.classList.remove('open');
-    } }, 'Use this brain'), h('button', { class: 'btn', onclick: () => host.classList.remove('open') }, 'Cancel')));
+    } }), h('button', { class: 'btn', onclick: () => host.classList.remove('open') }, 'Cancel')));
   host.classList.add('open');
 }

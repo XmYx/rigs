@@ -99,7 +99,7 @@ function tracePlan(p, via, input) {
 function meshBrief(snapshot) {
   return snapshot.filter((e) => e.node.online && e.node.rigs).map((e) => {
     const n = e.node;
-    const providers = (e.brains || []).map((b) => (b.id === 'ollama' ? `ollama[${b.models.slice(0, 6).join(', ')}]` : b.id)).join(', ') || 'none';
+    const providers = (e.brains || []).filter((b) => b.available !== false).map((b) => (b.id === 'ollama' ? `ollama[${b.models.slice(0, 6).join(', ')}]` : b.id)).join(', ') || 'none';
     const mem = n.stats ? Math.round((n.stats.memUsed / n.stats.memTotal) * 100) : '?';
     const tools = Object.values(n.capabilities || {}).map((c) => `${c.id} (${c.kinds.join('/')})`).join(', ') || 'none';
     return `- ${n.name}: ${n.platform} ${n.arch || ''}; GPU: ${(n.gpus || []).join(', ') || 'n/a'}; RAM ${n.stats ? Math.round(n.stats.memTotal / 2 ** 30) + 'GB' : '?'}; load cpu ${n.stats?.cpu ?? '?'}% mem ${mem}%; providers: ${providers}; tools: ${tools}; OpenRig: ${e.openrig?.daemon === 'running' ? 'yes' : 'no'}`;

@@ -74,7 +74,7 @@ export async function ollamaModels() {
     const j = await r.json();
     return {
       running: true,
-      models: (j.models || []).map((m) => ({ name: m.name, size: m.size, family: m.details?.family || '', params: m.details?.parameter_size || '' })),
+      models: (j.models || []).map((m) => ({ name: m.name, size: m.size, family: m.details?.family || '', params: m.details?.parameter_size || '', capabilities: Array.isArray(m.capabilities) ? m.capabilities : [] })),
     };
   } catch {
     return { running: false, models: [] };
