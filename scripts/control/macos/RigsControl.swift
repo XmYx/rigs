@@ -442,8 +442,10 @@ final class Input {
 
   func type(_ text: String, delayMs: Double) throws -> [String: Any] {
     try requireAccess()
+    let started = stops.current
     var n = 0
     for ch in text {
+      if stops.current != started { throw Fail("off", "stopped after \(n) characters") }
       if ch == "\n" || ch == "\r\n" || ch == "\t" {
         let code: CGKeyCode = ch == "\t" ? 48 : 36
         for down in [true, false] {
@@ -492,6 +494,19 @@ final class Input {
 
 let input = Input()
 let inputLock = NSLock()
+
+/**
+ * Bumped by stop, the kill hotkey, SIGTERM and a driving client's disconnect, without waiting for inputLock:
+ * typing in progress sees it and ends at the next character, instead of finishing its text first.
+ */
+final class Stops {
+  private var n = 0
+  private let lock = NSLock()
+  func bump() { lock.lock(); n += 1; lock.unlock() }
+  var current: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+let stops = Stops()
+let INPUT_OPS: Set<String> = ["move", "button", "scroll", "key", "type"]
 
 // ------------------------------------------------------------------------- requests
 
@@ -554,6 +569,10 @@ final class Client {
   let fd: Int32
   let writeLock = NSLock()
   var authenticated = false
+  /** Requests run in order off the reading thread, so a stop is seen while typing is still in progress. */
+  let work = DispatchQueue(label: "dev.rigs.control.client")
+  /** Sent input (reading thread only): only its disconnect ends typing and releases input, not a status probe's. */
+  var drove = false
   init(fd: Int32) { self.fd = fd }
 
   func send(_ obj: [String: Any]) {
@@ -593,26 +612,36 @@ final class Client {
         }
         authenticated = true
         let op = (req["op"] as? String) ?? ""
-        inputLock.lock()
-        do {
-          let result = try handle(op, req)
-          inputLock.unlock()
-          send(["id": id, "ok": true, "result": result])
-        } catch let f as Fail {
-          input.release()
-          inputLock.unlock()
-          send(["id": id, "ok": false, "error": ["code": f.code, "message": f.message]])
-        } catch {
-          input.release()
-          inputLock.unlock()
-          send(["id": id, "ok": false, "error": ["code": "error", "message": "\(error)"]])
-        }
+        if INPUT_OPS.contains(op) { drove = true }
+        if op == "stop" || op == "release" { stops.bump() }
+        work.async { self.perform(id, op, req) }
       }
     }
-    // The daemon went away (crash, stop): never leave a key or button pressed.
-    inputLock.lock(); input.release(); inputLock.unlock()
-    clients.remove(self)
-    close(fd)
+    // The daemon went away (crash, stop): end its typing and never leave a key or button pressed.
+    let drove = self.drove
+    if drove { stops.bump() }
+    work.async {
+      if drove { inputLock.lock(); input.release(); inputLock.unlock() }
+      clients.remove(self)
+      close(self.fd)
+    }
+  }
+
+  func perform(_ id: Any, _ op: String, _ req: [String: Any]) {
+    inputLock.lock()
+    do {
+      let result = try handle(op, req)
+      inputLock.unlock()
+      send(["id": id, "ok": true, "result": result])
+    } catch let f as Fail {
+      input.release()
+      inputLock.unlock()
+      send(["id": id, "ok": false, "error": ["code": f.code, "message": f.message]])
+    } catch {
+      input.release()
+      inputLock.unlock()
+      send(["id": id, "ok": false, "error": ["code": "error", "message": "\(error)"]])
+    }
   }
 }
 
@@ -675,8 +704,12 @@ func registerHotkey() {
   var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
   InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
     log("kill hotkey pressed")
-    inputLock.lock(); input.release(); inputLock.unlock()
-    clients.broadcast(["event": "hotkey", "reason": "⌃⌥⌘⎋ pressed on the Mac"])
+    stops.bump()
+    // Never wait for inputLock on the main thread: its holder may be waiting for the main thread (onMain).
+    DispatchQueue.global().async {
+      clients.broadcast(["event": "hotkey", "reason": "⌃⌥⌘⎋ pressed on the Mac"])
+      inputLock.lock(); input.release(); inputLock.unlock()
+    }
     return noErr
   }, 1, &spec, nil, nil)
   // RegisterEventHotKey needs no Input Monitoring grant.
@@ -691,7 +724,12 @@ signal(SIGPIPE, SIG_IGN)
 signal(SIGTERM, SIG_IGN)
 let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
 term.setEventHandler {
-  inputLock.lock(); input.release(); inputLock.unlock()
+  stops.bump()
+  // Typing ends at the next character. A holder still busy after 2 s is a capture or a request waiting for this
+  // (main) thread, neither of which touches input, so release anyway rather than hang until launchd's SIGKILL.
+  let locked = inputLock.lock(before: Date().addingTimeInterval(2))
+  input.release()
+  if locked { inputLock.unlock() }
   unlink(sockPath)
   exit(0)
 }
