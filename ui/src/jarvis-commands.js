@@ -94,6 +94,13 @@ export function registerJarvisCommands(deps) {
     { id: 'tools.control', label: () => `Screen control on ${machine()?.name || 'this machine'}…`, icon: '🛡', enabled: () => !!machine(), run: () => deps.control(machine()) },
     { id: 'tools.desktops', label: 'Desktops (live screens)', icon: '🖼', run: () => focusPanel('desktops') },
 
+    // ------------------------------------------------------------ Experimental
+    {
+      id: 'experimental.exhibits', label: 'Exhibits — a live illustrated story of the work', icon: '🎞', when: () => !!deps.exhibits,
+      checked: () => !!deps.exhibits?.enabled(), run: () => deps.exhibits.toggle(),
+    },
+    { id: 'experimental.exhibitWindow', label: 'Open the Exhibit window', icon: '🎞', when: () => !!deps.exhibits, run: () => deps.exhibits.open() },
+
     // ------------------------------------------------------------ Help
     { id: 'help.shortcuts', label: 'Keyboard shortcuts', icon: '⌨', shortcut: '?', run: (ctx) => openShortcuts(ctx) },
     { id: 'help.docs', label: 'Documentation (AGENTS.md)', icon: '📖', run: () => window.open(DOCS_URL, '_blank', 'noopener') },
@@ -144,6 +151,7 @@ export function menuModel() {
       { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
       { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' },
     ] },
+    { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }] },
     { id: 'help', label: 'Help', items: () => [
       { cmd: 'help.shortcuts' }, { cmd: 'help.docs' }, { sep: true }, { cmd: 'help.about' }, { cmd: 'help.issue' },
     ] },
