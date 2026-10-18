@@ -210,6 +210,8 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .mr-actions { display: flex; gap: 4px; }
 .chip { font: 10px var(--mono); padding: 1px 6px; border-radius: 999px; background: rgba(var(--accent-rgb), .14); color: var(--accent); }
 .chip.warn { background: rgba(251, 191, 36, .14); color: var(--warn); }
+.slack-card { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 8px 10px; margin-bottom: 12px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 8px; }
+.slack-card .muted { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .upd-row { display: flex; gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, .04); }
 .settings { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 .settings label { display: flex; flex-direction: column; gap: 4px; color: #9fb2bf; font-size: 12px; }

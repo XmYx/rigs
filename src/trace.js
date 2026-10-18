@@ -87,6 +87,7 @@ const SECRET_PATTERNS = [
   [/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA***'],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, 'AIza***'],
   [/\bhf_[A-Za-z0-9]{8,}/g, 'hf_***'],
+  [/\blin_(?:api|oauth)_[A-Za-z0-9]{8,}/g, 'lin_***'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted jwt]'],
   [/(bearer\s+)[^\s"']+/gi, '$1***'],
   [/(\b(?:x-rigs-token|authorization|cookie)\s*[:=]\s*)[^\s"',}]+/gi, '$1***'],

@@ -5,16 +5,19 @@ size: S
 ---
 # Playbook: add or change an Exhibit p5.js sketch
 
-One agent does this end to end. Typical cost: 1 function in `ui/src/p5-anim.js`, one line in `KIND_SKETCH`, one test run.
+One agent does this end to end. Typical cost: 1 function in `ui/src/p5-anim.js`, one line in `KIND_SKETCH`, one test run. (Open the window in the scratch daemon: Experimental › "Open the Exhibit window"; entries need an `image` from `svgImage` or no sketch mounts.)
 
 ## Where it lives
 - `ui/src/p5-anim.js` — the internal p5.js animation library. A sketch is `function name(p, ctx)` that sets `p.draw`
   (and `ctx.reset` to re-seed its state). `SKETCHES` registers it, `KIND_SKETCH` says which exhibit entry kind it illustrates.
   Read the header comment first: instance mode, p5 as a lazy chunk, own tick `ctx.t`, theme palette, pixel themes, pause off-screen.
 - `ui/src/exhibits.js` — `mountFor` puts the sketch over a card's built-in SVG picture; it never covers a ComfyUI picture.
-- `test/p5-anim.test.js` — runs every registered sketch against a fake `p` (bounds, finite numbers, determinism).
+- `test/p5-anim.test.js` — runs every registered sketch against a fake `p`, with and without `ctx.info` (bounds, finite numbers, determinism, context drawn as text).
 
 ## Rules for a sketch
+- A sketch must say something about ITS card: read `ctx.info` (`contextFrom(entry, doc)`: `words`, `nums`, `steps`, `tone`, `seq`/`total`/`pos`,
+  `counts` by kind; every field has a default, `ctx.info` may be undefined in tests) and draw it as data — labels via `tag(...)`, counts, a ✓/✗ by `tone` —
+  not just decoration. `mountFor` in `exhibits.js` builds the info and seeds from document title + entry id, so two tasks never look alike.
 - Colors only from `ctx.pal` (`bg`, `a`, `b`, `text`, `warn`): never spell a color, so every theme just works.
 - Time only from `ctx.t` (not `frameCount`): `ctx.t` is fast-forwarded for the still frame under reduced motion and Document view,
   so the composition must look finished after ~120 ticks. Use `EASE.*` for entrances.

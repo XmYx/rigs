@@ -21,6 +21,29 @@ async function daemonFetch(p, opts = {}) {
   try { return JSON.parse(t); } catch { return t; }
 }
 
+/** A secret from stdin: piped in, or typed at a prompt without echo. Never from argv (shell history, ps). */
+async function readSecret(prompt) {
+  const { stdin, stderr } = process;
+  if (!stdin.isTTY) { let s = ''; for await (const c of stdin) s += c; return s.trim(); }
+  stderr.write(prompt);
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdin.setEncoding('utf8');
+  return new Promise((resolve) => {
+    let s = '';
+    const done = (v) => { stdin.setRawMode(false); stdin.pause(); stdin.off('data', on); stderr.write('\n'); resolve(v); };
+    const on = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') return done(s.trim());
+        if (ch === '\u0003') { done(''); process.exit(130); }
+        if (ch === '\u007f' || ch === '\b') s = s.slice(0, -1);
+        else if (ch >= ' ') s += ch;
+      }
+    };
+    stdin.on('data', on);
+  });
+}
+
 /**
  * Supervisor: keeps `rigs serve` alive. Exit code 75 = planned restart (after an update).
  * If a freshly updated version crash-loops, roll back to the previous commit.
@@ -137,6 +160,17 @@ const commands = {
     if (r.error || r.preroute === undefined) fail(r.error);
     console.log(`pre-routing ${r.preroute ? 'on' : 'off'} · engine ${r.engine} (fallback ${r.fallback})${r.engine === 'jev' ? ` · Jev API ${r.jevUrl || 'not found'}` : ''}`);
   },
+  /** rigs connectors slack status|channels|history|search|post — the Slack connector through the local daemon */
+  async connectors() {
+    const [name, ...rest] = argv;
+    const { parseSlackArgs, SLACK_USAGE } = await import('../src/connectors/slack-cli.js');
+    if (name !== 'slack') { console.error(`usage: rigs connectors slack …\n${SLACK_USAGE}`); process.exit(1); }
+    const req = parseSlackArgs(rest);
+    if (req.error) { console.error(req.error); process.exit(1); }
+    const r = await daemonFetch(req.path, { method: req.method, body: req.body ? JSON.stringify(req.body) : undefined }).catch((e) => ({ error: e.message }));
+    if (typeof r === 'string' || r?.error) { console.error(typeof r === 'string' ? r : `${r.error}${r.code ? ` (${r.code})` : ''}`); process.exit(1); }
+    console.log(JSON.stringify(r, null, 2));
+  },
   /** rigs quick [on|off|status] — the quick-task fast path (answers on Haiku / Sonnet instead of the full brain) */
   async quick() {
     const [sub = 'status'] = argv;
@@ -146,6 +180,31 @@ const commands = {
     if (r.error || r.enabled === undefined) { console.error(r.error || 'RIGS daemon is not running (rigs start).'); process.exit(1); }
     const t = (x) => `${x.provider} ${x.model}${x.effort ? ` (${x.effort})` : ''}`;
     console.log(`quick fast path ${r.enabled ? 'on' : 'off'} · simple ${t(r.simple)} · standard ${t(r.standard)} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s`);
+  },
+  /** rigs linear [status] · rigs linear key [--clear] — the Linear connector (the key is read from stdin, never argv) */
+  async linear() {
+    const [sub = 'status'] = argv;
+    const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    if (sub === 'key') {
+      let body;
+      if (argv.includes('--clear')) body = { clearKey: true };
+      else {
+        if (argv.length > 1) fail('usage: rigs linear key   (paste the key when asked, or pipe it in; never as an argument)');
+        const key = await readSecret('Linear API key (lin_api_…): ');
+        if (!key) fail('no key given — nothing changed');
+        body = { apiKey: key };
+      }
+      const r = await daemonFetch('/api/local/linear/config', { method: 'POST', body: JSON.stringify(body) }).catch((e) => ({ error: e.message }));
+      if (r.error || !r.apiKey) fail(r.error);
+      console.log(r.apiKey.set ? `Linear key saved (${r.apiKey.source === 'env' ? 'from LINEAR_API_KEY' : 'in ~/.rigs/config.json'}).` : 'Linear key removed.');
+    } else if (sub !== 'status') fail('usage: rigs linear [status] | rigs linear key [--clear]');
+    const s = await daemonFetch('/api/local/linear/status', { timeout: 30000 }).catch((e) => ({ error: e.message }));
+    if (s.error && s.configured === undefined) fail(s.error);
+    if (!s.configured) { console.log(`Linear: not configured — ${s.message}`); process.exit(sub === 'status' ? 1 : 0); }
+    const from = s.source === 'env' ? 'LINEAR_API_KEY' : 'config';
+    if (!s.reachable) { console.log(`Linear: key set (${from}) but not reachable — ${s.error}`); process.exit(1); }
+    console.log(`Linear: connected as ${s.user?.name || '?'}${s.user?.email ? ` <${s.user.email}>` : ''} · ${s.organization?.name || '?'} · key from ${from} · ${s.latencyMs} ms`);
+    if (s.teams?.length) console.log(`  teams: ${s.teams.map((t) => `${t.key} (${t.name})`).join(', ')}`);
   },
   /** rigs usage [--since 7d] [--group model|project|task|node|day] · rigs usage backfill */
   async usage() {
@@ -312,7 +371,10 @@ const commands = {
                        macOS: build/start RIGS Control.app (holds Screen Recording + Accessibility)
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
+  rigs linear [status]  is the Linear connector configured and reachable (never prints the key)
+  rigs linear key [--clear]  set the Linear API key (asked for, or piped in on stdin) or remove it
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
+  rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh
