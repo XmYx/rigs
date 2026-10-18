@@ -192,8 +192,9 @@ export function saveConfig(cfg = current) {
 /** Shallow-safe patch used by the settings API; never lets the UI change identity or secrets. */
 export function patchConfig(patch) {
   const cfg = config();
-  // comfyui holds a secret and has its own validated endpoint (/api/local/comfyui/config).
-  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui', 'control']);
+  // comfyui and connectors hold secrets and have their own validated endpoints (/api/local/comfyui/config,
+  // /api/local/connectors/google-drive/config).
+  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui', 'connectors', 'control']);
   for (const k of Object.keys(patch || {})) if (blocked.has(k)) delete patch[k];
   // publicConfig masks the LocalJev key; a settings form saving that mask back must not overwrite the real one.
   if (patch?.router?.jev?.apiKey === '••••') delete patch.router.jev.apiKey;

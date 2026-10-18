@@ -18,6 +18,7 @@ import * as appsReg from './apps.js';
 import * as appstore from './appstore.js';
 import * as chat from './chat.js';
 import { comfyRoute, createComfyService } from './comfyui.js';
+import { createGoogleDrive, googleDriveRoute } from './connectors/google-drive.js';
 import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
@@ -118,6 +119,8 @@ export async function startServer() {
   const discovery = new Discovery(selfInfo);
   // ComfyUI connector (/api/local/comfyui/*): the user's URL wins; the detected ComfyUI is the fallback.
   const comfy = createComfyService({ suggest: async () => { const c = (await caps.capabilities()).comfyui; return c?.url ? { url: c.url, running: c.running !== false } : null; } });
+  // Google Drive connector (/api/local/connectors/google-drive/*): OAuth via this daemon's loopback callback, read-only Drive.
+  const drive = createGoogleDrive();
   // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
   const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
@@ -736,6 +739,7 @@ export async function startServer() {
       if (cfg.brain.core.provider === models.CLAUDE_OLLAMA && cfg.brain.core.model) patchConfig({ brain: { claudeOllama: { model: cfg.brain.core.model } } });
       return models.coreBrain();
     }
+    if (sub === 'connectors/google-drive' || sub.startsWith('connectors/google-drive/')) return googleDriveRoute(drive, { method, sub: sub.slice('connectors/google-drive/'.length), q, req, res, body });
     if (sub.startsWith('comfyui/')) return comfyRoute(comfy, { method, sub: sub.slice('comfyui/'.length), q, req, res, body });
     if (sub === 'capabilities' && method === 'GET') return { tools: await caps.capabilities(q.get('force') === '1'), known: caps.knownTools() };
     if (sub === 'capabilities' && method === 'POST') {
