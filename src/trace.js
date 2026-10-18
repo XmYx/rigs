@@ -25,12 +25,12 @@ import { log } from './util.js';
  *   name      what ran: "jarvis/send", "route", "claude claude-haiku-5-5", the tool name, "jarvis_task"…
  *   node      the machine that wrote the span (config().name)
  *   start     ms epoch; end: ms epoch, or null while running
- *   status    running | ok | error | stopped
+ *   status    running | ok | error | stopped | skipped (a stage switched off: the router with config.router.preroute false)
  *   input     what the stage got (request text, prompt, tool args) — redacted and capped (see clean)
  *   output    what it produced (reply, tool result, decision) — redacted and capped
  *   meta      stage facts. brain-turn: { provider, model, effort, chatId, sessionId, inputTokens, outputTokens,
  *             cacheReadTokens, cacheWriteTokens, costUsd } (the same harness numbers the usage ledger files);
- *             router: { route, projectId, threadId, chatId, via, reason, work }; tool-call: { durationMs, toolUseId };
+ *             router: { preroute, route, projectId, threadId, chatId, via (jev | model | rules), reason, routerMs, tried }; tool-call: { durationMs, toolUseId };
  *             handoff: { projectId, taskIds, owner }; plan: { provider, model, effort, node, via, routing: [{ task, node,
  *             provider, model, effort, why }] }; dispatch: { projectId, taskId, attempt, target (the machine) }; task:
  *             { projectId, taskId, attempt, provider, model, effort, mode, seat, session, gitGuard, reported, tokens… };
@@ -55,7 +55,7 @@ import { log } from './util.js';
  */
 
 export const KINDS = ['intake', 'router', 'brain-turn', 'tool-call', 'handoff', 'plan', 'dispatch', 'task', 'assistant', 'event', 'gap'];
-export const STATUSES = ['running', 'ok', 'error', 'stopped'];
+export const STATUSES = ['running', 'ok', 'error', 'stopped', 'skipped'];
 export const events = new EventEmitter();
 events.setMaxListeners(50);
 
@@ -465,6 +465,8 @@ const traceDay = (id) => `${id.slice(3, 7)}-${id.slice(7, 9)}-${id.slice(9, 11)}
 
 /** Spans from the day files in [since, until] (ms) — or of one trace — last line per spanId, oldest first. */
 export async function readSpans({ since = 0, until = Infinity, traceId = '' } = {}) {
+  // Spans this process has queued (an intake ended just before its response closed) are on disk before we read.
+  await flush();
   const files = (await fsp.readdir(dir()).catch(() => [])).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort();
   // A trace's spans start on or after the day in its id (a long project keeps adding spans for days).
   const from = traceId ? traceDay(traceId) : since ? dayOf(since) : '';

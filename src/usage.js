@@ -240,7 +240,10 @@ export function projectProgress(projects) {
 // own transcript, limited to the run's time window, since OpenRig seats are long-lived and carry many tasks.
 // Capture is best-effort: nothing here may fail a chat or a task.
 
-export const LEDGER_KINDS = ['chat-turn', 'task', 'plan', 'review', 'merge'];
+export const LEDGER_KINDS = ['chat-turn', 'task', 'plan', 'review', 'merge', 'request'];
+// "request": one per request from Sir (chat.jarvisSend) with its timing in `request` — pre-routing on/off, route,
+// routerMs, timeToFiledMs, timeToReplyMs (src/preroute-stats.js). It spends no tokens of its own and overlaps the turns
+// it contains, so the usage report leaves it out unless asked for (kind=request).
 export const LEDGER_STATUSES = ['done', 'failed', 'blocked', 'stopped'];
 export const GROUP_BYS = ['model', 'project', 'task', 'node', 'day', 'provider', 'kind'];
 const TOKEN_KEYS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'];
@@ -283,8 +286,20 @@ export function makeRecord(x = {}) {
   if (x.estimated) rec.estimated = true;
   if (x.attempt) rec.attempt = num(x.attempt);
   if (x.error) rec.error = truncate(x.error, 300);
+  if (x.request) rec.request = requestTiming(x.request);
   if (x.models && Object.keys(x.models).length > 1) rec.models = Object.fromEntries(Object.entries(x.models).map(([m, t]) => [m, addTokens(t, null)]));
   return rec;
+}
+
+const msOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Math.max(0, Math.round(Number(v))));
+
+/** The timing block of a "request" record, coerced. Pure. */
+export function requestTiming(t = {}) {
+  return {
+    preroute: t.preroute !== false, route: String(t.route || '').slice(0, 20), via: String(t.via || '').slice(0, 20),
+    routerMs: msOrNull(t.routerMs) ?? 0, timeToFiledMs: msOrNull(t.timeToFiledMs), timeToReplyMs: msOrNull(t.timeToReplyMs),
+    filedBy: String(t.filedBy || '').slice(0, 20), ...(t.traceId ? { traceId: String(t.traceId).slice(0, 40) } : {}),
+  };
 }
 
 let appending = Promise.resolve();
@@ -403,7 +418,7 @@ export async function report(q = {}) {
   const since = parseTime(q.since);
   const until = parseTime(q.until);
   let recs = await readRecords({ since: since || 0, until: until ?? Infinity });
-  if (q.kind) recs = recs.filter((r) => r.kind === q.kind);
+  recs = q.kind ? recs.filter((r) => r.kind === q.kind) : recs.filter((r) => r.kind !== 'request');
   if (q.project) recs = recs.filter((r) => r.projectId === q.project);
   return summarize(recs, { groupBy: q.groupBy, limit: q.limit != null && q.limit !== '' ? Number(q.limit) : 500, node: config().name, since, until });
 }
@@ -700,6 +715,18 @@ export async function recordChatTurn({ chat, tag, brain, model, effort, startedA
       outcome: out?.error && !out?.text ? out.error : firstLine(out?.text),
     });
   } catch (e) { log('usage ledger: chat turn: ' + e.message); return null; }
+}
+
+/** One request from Sir (chat.jarvisSend) → one "request" ledger record with its timing. Never throws. */
+export async function recordRequest(x = {}) {
+  try {
+    const t = requestTiming(x);
+    return await appendRecord({
+      tsStart: x.tsStart, tsEnd: x.tsEnd, kind: 'request', provider: t.via === 'jev' ? 'jev' : t.via === 'model' ? 'claude' : '', model: x.model || '',
+      chatId: x.chatId || '', status: x.status, tokensFrom: 'none', request: { ...t, traceId: x.traceId },
+      outcome: t.preroute ? `pre-routed: ${t.route || '?'} (${t.via || '?'}, ${t.routerMs} ms)${t.filedBy ? `, filed by ${t.filedBy}` : ''}` : `pre-routing off${t.filedBy ? ', filed by the brain' : ''}`,
+    });
+  } catch (e) { log('usage ledger: request: ' + e.message); return null; }
 }
 
 /** Ledger kind for a project task. */
