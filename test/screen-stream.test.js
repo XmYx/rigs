@@ -9,7 +9,7 @@ import { test, after } from 'node:test';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-stream-test-'));
 process.env.RIGS_HOME = path.join(root, 'default');
 const { createControl, accessCheck } = await import('../src/control.js');
-const { streamOptions, streamKey, targetWidth, frameDelay, retryDelay, decideOnError, refusal, createStreamHub, DEFAULTS } = await import('../src/screen-stream.js');
+const { streamOptions, streamKey, targetWidth, frameDelay, retryDelay, decideOnError, refusal, createStreamHub, streamReadiness, DEFAULTS } = await import('../src/screen-stream.js');
 const { forwardWs, relayCloseCode } = await import('../src/proxy.js');
 const { config } = await import('../src/config.js');
 const { WebSocket, WebSocketServer } = await import('ws');
@@ -162,6 +162,11 @@ test('with screen access off the stream refuses at once and never captures', asy
     await sleep(50);
     assert.equal(f.calls.length, 0);
     assert.equal(hub.status().capturing, false);
+    // The refused viewer is in the audit log as a refusal.
+    const [line] = f.control.auditTail({ limit: 50 }).filter((l) => l.op === 'stream');
+    assert.equal(line.ok, false);
+    assert.equal(line.args.phase, 'join');
+    assert.equal(line.error.code, overrides.enabled ? 'not-allowed' : 'off');
   }
 });
 
@@ -299,4 +304,36 @@ test('a live stream is announced: broadcast on start/end and an attention item w
   events.emit('stream', { phase: 'end', fps: 3, quality: 60, scale: 0.5, frames: 12, reason: 'control-off', caller });
   assert.deepEqual(wired.items(), []);
   assert.deepEqual(sent.map((m) => m.summary), ['screen stream start 3 fps', 'screen stream end after 12 frames — control-off']);
+});
+
+test('the attention item ends with the stream: the end note of the hub matches its start', async () => {
+  const { wireControlEvents } = await import('../src/control-api.js');
+  const events = new EventEmitter();
+  const control = {
+    events, accessFor: () => null,
+    frame: async () => ({ width: 10, height: 10, scale: 1, data: Buffer.from('x') }),
+    noteStream: (phase, args, caller) => events.emit('stream', { phase, ...args, caller }),
+  };
+  const wired = wireControlEvents({ events, nodeName: () => 'peer', settings: () => ({}), broadcast: () => {}, notifyAll: async () => {}, osNotify: async () => {} });
+  const hub = createStreamHub({ control, nodeName: () => 'peer' });
+  const viewer = { send() {}, message() {}, close() {} };
+  const a = hub.join(viewer, { fps: 2, maxWidth: 480 }, { from: 'macbookpro' });
+  const b = hub.join(viewer, { fps: 5 }, { from: 'mac' });
+  assert.equal(wired.items()[0].reason.startsWith('2 live streams'), true);
+  a.leave();
+  assert.equal(wired.items()[0].reason.startsWith('1 live stream '), true);
+  b.leave();
+  assert.deepEqual(wired.items(), []);
+});
+
+test('streamReadiness: a stream bound to be refused is reported before one is opened', () => {
+  const ok = { platform: 'linux', session: 'wayland', backend: { capture: 'mutter' }, permissions: { screenCapture: { ok: true } } };
+  assert.equal(streamReadiness(ok), null);
+  assert.equal(streamReadiness({ ...ok, session: 'none' }).status, 'no-session');
+  assert.equal(streamReadiness({ ...ok, backend: { capture: null } }).status, 'unsupported');
+  const fix = { kind: 'grant', text: 'Grant Screen Recording to RIGS Control' };
+  assert.deepEqual(streamReadiness({ ...ok, platform: 'mac', session: 'quartz', permissions: { screenCapture: { ok: false, fix } } }), { status: 'needs-permission', message: 'Screen capture permission is required', fix });
+  assert.equal(streamReadiness({ ...ok, platform: 'mac', backend: { capture: null }, permissions: { screenCapture: { ok: false, fix } } }).status, 'needs-permission');
+  // An unreadable status is not decisive: the stream itself decides.
+  assert.equal(streamReadiness({ ...ok, backend: { capture: null }, error: { code: 'timeout' } }), null);
 });

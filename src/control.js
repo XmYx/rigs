@@ -276,10 +276,10 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
   const frame = (options = {}, caller) => capture('frame', { format: 'jpeg', ...options }, caller, false, { lease: false, auditOk: false, bucket: 'frames', max: settings().maxStreamFramesPerMin ?? 600 });
   /** Cheap synchronous access check for a running stream: null while allowed, else { code, message }. */
   const accessFor = (caller = {}) => accessCheck(settings(), state.killed, callerInfo(caller));
-  /** Audit and announce a live stream starting or ending (phase 'start' | 'end'). */
-  function noteStream(phase, args = {}, caller = {}) {
-    audit('stream', { phase, ...args }, callerInfo(caller), true, now());
-    events.emit('stream', { phase, ...args, caller: callerInfo(caller) });
+  /** Audit and announce a live stream starting or ending (phase 'start' | 'end'); with `refused` ({ code, message }) only audit the refusal. */
+  function noteStream(phase, args = {}, caller = {}, refused = null) {
+    audit('stream', { phase, ...args }, callerInfo(caller), !refused, now(), refused);
+    if (!refused) events.emit('stream', { phase, ...args, caller: callerInfo(caller) });
   }
   const listWindows = (caller) => perform('windows', {}, caller, false, 'windows', (_, request) => request('windows'));
   const focusWindow = (id, caller) => perform('focus', { windowId: id }, caller, true, 'windows', async (_, request) => {

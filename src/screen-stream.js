@@ -68,6 +68,22 @@ const ENDINGS = {
 export const refusal = (r) => ({ end: true, ...(ENDINGS[r.code] || ENDINGS.off), code: r.code, message: r.message });
 
 /**
+ * Whether a stream could start, from control.status() (which never launches a helper or prompts): null when it
+ * can, else the refusal a stream would end with, in the same order as control's perform(). A status that could not
+ * be read (status.error) is not decisive: the stream itself decides. Lets a dashboard show "not granted" without
+ * opening (and auditing) a stream that is bound to be refused.
+ */
+export function streamReadiness(st = {}, platform = st.platform) {
+  if (st.error) return null;
+  if (st.session === 'none') return { status: 'no-session', message: 'No graphical session is reachable' };
+  const permission = st.permissions?.screenCapture;
+  if (!st.backend?.capture && platform === 'mac' && permission?.fix) return { status: 'needs-permission', message: 'RIGS Control is not running, so the screen cannot be streamed', fix: permission.fix };
+  if (!st.backend?.capture) return { status: 'unsupported', message: 'No capture backend is available for this desktop' };
+  if (permission?.ok === false) return { status: 'needs-permission', message: 'Screen capture permission is required', ...(permission.fix ? { fix: permission.fix } : {}) };
+  return null;
+}
+
+/**
  * What a failed frame means for the stream. `refusedNow` is control.accessFor() right after the failure: when access
  * is off, the stream ends as control-off whatever the frame said. An 'off' error while access is still on is the
  * helper restarting or a lease ending, not a switch: retry. Missing permission / backend / session ends it.
@@ -91,7 +107,8 @@ export function createStreamHub({ control, nodeName = () => '', now = Date.now, 
     s.active = false;
     clearTimeout(s.timer);
     streams.delete(s.key);
-    control.noteStream('end', { frames: s.frames, ms: now() - s.startedAt, viewers: s.viewers.size, ...(ending ? { reason: ending.status } : {}) }, s.caller);
+    // The settings go along so the announcement (wireControlEvents) can match this end to its start.
+    control.noteStream('end', { ...s.opts, frames: s.frames,ms: now() - s.startedAt, viewers: s.viewers.size, ...(ending ? { reason: ending.status } : {}) }, s.caller);
     for (const v of s.viewers) {
       if (ending) {
         v.message({ type: 'error', status: ending.status, code: ending.code, message: ending.message, ...(ending.fix ? { fix: ending.fix } : {}) });
@@ -157,6 +174,8 @@ export function createStreamHub({ control, nodeName = () => '', now = Date.now, 
     const opts = streamOptions(requested);
     const refused = control.accessFor(caller);
     if (refused) {
+      // Every refusal is in the audit log, a viewer turned away before its stream started too.
+      control.noteStream('join', { ...opts }, caller, refused);
       const r = refusal(refused);
       viewer.message({ type: 'error', status: r.status, code: r.code, message: r.message });
       viewer.close(r.close, r.status);

@@ -9,7 +9,7 @@ import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
 import * as control from './control.js';
 import { createControlApi, wireControlEvents, controlCaller } from './control-api.js';
-import { createStreamHub } from './screen-stream.js';
+import { createStreamHub, streamReadiness } from './screen-stream.js';
 import { ensureControlSetup } from './control-setup.js';
 import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
@@ -1028,7 +1028,9 @@ export async function startServer() {
     // Live desktop stream: the WebSocket upgrade is in onUpgrade; a plain GET reports viewers and whether access is on.
     if (sub === 'screen/stream' && method === 'GET') {
       const refused = control.accessFor(controlCaller(req, config().name));
-      return { ...streamHub.status(), access: refused ? { ok: false, status: refused.code === 'off' ? 'control-off' : refused.code, message: refused.message } : { ok: true } };
+      if (refused) return { ...streamHub.status(), access: { ok: false, status: refused.code === 'off' ? 'control-off' : refused.code, message: refused.message } };
+      const notReady = streamReadiness(await control.status());
+      return { ...streamHub.status(), access: notReady ? { ok: false, ...notReady } : { ok: true } };
     }
 
     // ssh
