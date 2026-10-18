@@ -1,6 +1,6 @@
 // The internal p5.js animation library. The Exhibit window (exhibits.js) draws one small looping sketch per card
 // instead of a static picture; this file is the whole kit, so other surfaces can reuse it:
-//   mountSketch(host, { id, seed, info, reducedMotion, onReady, onError }) → { destroy, refresh() }
+//   mountSketch(host, { id, seed, info, reducedMotion, onReady, onError }) → { destroy, refresh(), setInfo(info) }
 //   contextFrom(entry, doc)     what a card is ABOUT (keywords, numbers, steps, tone, position in the document, kind mix):
 //                               every sketch draws that as data (words riding the rings, one node per plan step, a progress
 //                               track, a ✓ or ✗ by outcome, the document's kind mix), so no two cards look or read alike
@@ -81,7 +81,9 @@ const strokeC = (p, c, a = 255) => p.stroke(c[0], c[1], c[2], a);
 
 // ------------------------------------------------------------------ context: what a card is about
 
-const STOP = new Set('the and for with from that this into over after before while then than are was were has have had not but its our your will can should could would been being you all any out use used using add added adds new more get got set per via also just only each one two'.split(' '));
+const STOP = new Set('the and for with from that this into over after before while then than are was were has have had not but its our your will can should could would been being you all any out use used using add added adds new more get got set per via also just only each one two'.split(' ')
+  // and the words every card's template says ("Request received", "Sir asked", "t1 started", "began … on"), so a card's own words lead
+  .concat('sir asked request received started began waiting yet task tasks'.split(' ')));
 const BAD = /\b(fail(?:s|ed|ure)?|error|errors|blocked|broke|broken|crash(?:ed)?|abort(?:ed)?|reject(?:ed)?|timeout|stuck|cannot|denied)\b/i;
 const GOOD = /\b(done|pass(?:ed|es)?|complete[d]?|merged|shipped|success(?:ful)?|fixed|ready|rolled out|green)\b/i;
 const SPLIT_STEPS = /;|\n|\s+(?:->|→|then|and then)\s+|,\s+(?=\p{L})/u;
@@ -90,6 +92,7 @@ const clip = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 /**
  * What an exhibit card is about, as plain data for the sketches. `entry` = { id, kind, seq, title, caption };
  * `doc` = { title, total (entries so far), counts ({ kind: n }) }. Pure; every field has a harmless default.
+ * `tone` comes from the entry's status visual (`items[0].state` ok/err) when it has one, else from words in the text.
  *   words  keywords of the title then the caption (≤ 12, each ≤ 14 chars)   nums   numbers found in the text (≤ 6)
  *   steps  parts of the caption/title that read as a list of steps          tone   'bad' | 'good' | 'neutral'
  *   seq/total/pos  where the card sits in its document (pos 0..1)           counts how many cards of each kind
@@ -104,9 +107,10 @@ export function contextFrom(entry = {}, doc = {}) {
     seen.add(k); words.push(clip(w, 14));
     if (words.length >= 12) break;
   }
-  const nums = (text.match(/\d+(?:[.,]\d+)?%?/g) || []).slice(0, 6);
+  const nums = (text.match(/(?<![\p{L}\p{N}_.])\d+(?:[.,]\d+)?%?(?![\p{L}\p{N}_])/gu) || []).slice(0, 6); // not the digits of "t1" or a hash
   const steps = (caption || title).split(SPLIT_STEPS).map((x) => x.trim()).filter((x) => x.length > 2);
-  const tone = BAD.test(text) ? 'bad' : GOOD.test(text) ? 'good' : 'neutral';
+  const state = entry.visual?.kind === 'status' ? entry.visual.items?.[0]?.state : ''; // the card's own status beats guessing from words
+  const tone = state === 'err' ? 'bad' : state === 'ok' ? 'good' : BAD.test(text) ? 'bad' : GOOD.test(text) ? 'good' : 'neutral';
   const seq = Number(entry.seq) > 0 ? Number(entry.seq) : 0;
   const total = Math.max(Number(doc.total) || 0, seq);
   return { kind: entry.kind || '', words, nums, steps, tone, seq, total, pos: seq && total ? clamp01(seq / total) : 0.5, counts: doc.counts || {}, docTitle: String(doc.title ?? '') };
@@ -327,11 +331,12 @@ function bloom(p, ctx) {
 }
 
 /** milestone — three tilted orbits around a core carrying one body per card of the document; the first n are lit (this
- *  milestone is the n-th), and a pennant rises to the document's progress. */
+ *  milestone is the n-th), and a pennant rises to the document's progress (half-mast, warning orbits, when the task failed or is blocked). */
 function orbit(p, ctx) {
   p.draw = () => {
-    const { bg, a, b } = ctx.pal;
+    const { bg, a, b, warn } = ctx.pal;
     const I = inf(ctx);
+    const bad = I.tone === 'bad'; // a failed or blocked task: warning-coloured orbits, the flag at half-mast
     const T = Math.max(3, Math.min(12, I.total || 6));
     const lit = I.seq ? Math.min(T, Math.max(1, Math.round(I.pos * T))) : T;
     const w = p.width; const h = p.height; const s = Math.min(w, h);
@@ -344,7 +349,7 @@ function orbit(p, ctx) {
     p.noFill(); p.strokeWeight(Math.max(1, s * 0.006));
     [0, 1, 2].forEach((i) => {
       p.push(); p.rotate((i * Math.PI) / 3 + 0.4);
-      strokeC(p, a, 110); p.ellipse(0, 0, s * 0.86, s * 0.3);
+      strokeC(p, bad ? warn : a, 110); p.ellipse(0, 0, s * 0.86, s * 0.3);
       for (let j = i; j < T; j += 3) { // the cards of the document: lit when reached, a hollow ring when still ahead
         const ang = ctx.t * (0.02 + i * 0.008) + i * 2 + (j / 3) * (TAU / Math.ceil(T / 3));
         const x = Math.cos(ang) * s * 0.43; const y = Math.sin(ang) * s * 0.15;
@@ -357,8 +362,9 @@ function orbit(p, ctx) {
     const k = EASE.outBack((ctx.t - 10) / 50) * (0.45 + 0.55 * I.pos); // the pennant
     const top = -s * 0.2 * k;
     strokeC(p, ctx.pal.text); p.strokeWeight(Math.max(1, s * 0.008)); p.line(0, 0, 0, top);
-    p.noStroke(); fillC(p, ctx.pal.warn);
-    p.triangle(0, top, s * 0.1 * k, top + s * 0.035 * k, 0, top + s * 0.07 * k);
+    const fy = bad ? top * 0.45 : top;
+    p.noStroke(); fillC(p, warn);
+    p.triangle(0, fy, s * 0.1 * k, fy + s * 0.035 * k, 0, fy + s * 0.07 * k);
     p.pop();
     if (I.seq) tag(p, ctx, `${I.seq} / ${I.total}`, w / 2, h * 0.9, Math.max(9, s * 0.05), ctx.pal.text, 230, true);
   };
@@ -462,6 +468,11 @@ export function mountSketch(host, { id, seed = 1, info = null, reducedMotion = (
       const { w, h } = size();
       if (w !== inst.width || h !== inst.height) inst.resizeCanvas(w, h, true);
       restart();
+    },
+    /** The document grew (new total, kind mix): draw from the new info without starting over; repaint a still frame. */
+    setInfo(next) {
+      ctx.info = next;
+      if (inst && ready && !dead && !wantRun()) inst.redraw();
     },
   };
   live.add(handle);

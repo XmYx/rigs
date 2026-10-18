@@ -172,17 +172,29 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     const host = h('div', { class: 'ex-p5', 'aria-hidden': 'true' });
     fig.prepend(host);
     const rec = cur();
-    const entries = rec?.doc.entries || [];
-    const counts = {};
-    for (const e of entries) counts[e.kind] = (counts[e.kind] || 0) + 1;
     const handle = mountSketch(host, {
       id: sketchFor(entry.kind), seed: `${rec?.doc.title || ''}|${entry.id}`, // the document's title too: the same step in two tasks looks different
-      info: contextFrom(entry, { title: rec?.doc.title, total: entries.length, counts }), // what the card is about, drawn as data
+      info: contextFrom(entry, docInfo()), // what the card is about, drawn as data
       reducedMotion: () => prefersReducedMotion() || st.view === 'document',
       onReady: () => host.classList.add('in'),
       onError: () => { sketches.delete(entry.id); host.remove(); },
     });
-    sketches.set(entry.id, { handle, host });
+    sketches.set(entry.id, { handle, host, entry });
+  }
+
+  /** The current document as the sketches see it: title, entries so far, how many of each kind. */
+  function docInfo() {
+    const rec = cur();
+    const entries = rec?.doc.entries || [];
+    const counts = {};
+    for (const e of entries) counts[e.kind] = (counts[e.kind] || 0) + 1;
+    return { title: rec?.doc.title, total: entries.length, counts };
+  }
+
+  /** A live document grew: earlier cards re-read their place in it ("3 / 5", not the "3 / 3" they were mounted with). */
+  function refreshInfo() {
+    const d = docInfo();
+    for (const { handle, entry } of sketches.values()) handle.setInfo(contextFrom(entry, d));
   }
 
   function figure(entry, rec, next = false) {
@@ -226,6 +238,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     if (old) { old.replaceWith(el); el.classList.add('ex-updated'); } else place(el, entry.seq ?? 0);
     cards.set(entry.id, el);
     mountFor(entry, el); // after the card is in the list: the sketch sizes itself from its host
+    if (isNew) refreshInfo();
     if (isNew && stick) toBottom();
   }
 

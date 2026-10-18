@@ -95,6 +95,10 @@ test('contextFrom pulls keywords, numbers, steps, tone and position out of a car
   assert.equal(A.contextFrom({ title: 'Merged and shipped' }).tone, 'good');
   assert.equal(INFO.pos, 3 / 5);
   assert.equal(INFO.docTitle, 'Migration');
+  const done = A.contextFrom({ kind: 'result', title: 't1 done: Fix the login timeout', caption: 'Fixed the crash; committed as bd41728; 660/660 pass', visual: { kind: 'status', items: [{ name: 't1', value: 'done', state: 'ok' }] } });
+  assert.deepEqual(done.nums, ['660', '660'], 'no digits out of a task id or a commit hash');
+  assert.equal(done.tone, 'good', 'a done task stays a check even when its summary says "timeout" or "crash"');
+  assert.equal(A.contextFrom({ kind: 'milestone', title: 't2 blocked: Ship it', visual: { kind: 'status', items: [{ name: 't2', value: 'blocked', state: 'err' }] } }).tone, 'bad');
   const none = A.contextFrom();
   assert.deepEqual([none.words, none.nums, none.seq, none.pos], [[], [], 0, 0.5], 'an empty card is harmless');
 });
@@ -110,6 +114,8 @@ test('a sketch shows what the card is about: its words are drawn as text, and th
   assert.notEqual(JSON.stringify(texts('ripple', INFO)), JSON.stringify(texts('ripple', BAD_INFO)));
   const bloomCalls = (info) => { const p = fakeP(); const ctx = { t: 0, seed: 5, pal: PAL, info, reset: null }; A.SKETCHES.bloom(p, ctx); for (let i = 0; i < 100; i++) { ctx.t++; p.draw(); } return JSON.stringify(p.calls); };
   assert.notEqual(bloomCalls(INFO), bloomCalls(BAD_INFO), 'a failed result draws a cross, not a check');
+  const orbitTris = (info) => { const p = fakeP(); const ctx = { t: 0, seed: 5, pal: PAL, info, reset: null }; A.SKETCHES.orbit(p, ctx); for (let i = 0; i < 100; i++) { ctx.t++; p.draw(); } return JSON.stringify(p.calls.filter((c) => c[0] === 'triangle').at(-1)); };
+  assert.notEqual(orbitTris({ ...INFO, tone: 'neutral' }), orbitTris({ ...INFO, tone: 'bad' }), 'a blocked milestone flies its flag at half-mast');
 });
 
 for (const [id, sketch] of Object.entries(A.SKETCHES)) {
