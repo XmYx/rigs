@@ -465,6 +465,8 @@ const traceDay = (id) => `${id.slice(3, 7)}-${id.slice(7, 9)}-${id.slice(9, 11)}
 
 /** Spans from the day files in [since, until] (ms) — or of one trace — last line per spanId, oldest first. */
 export async function readSpans({ since = 0, until = Infinity, traceId = '' } = {}) {
+  // Spans this process has queued (an intake ended just before its response closed) are on disk before we read.
+  await flush();
   const files = (await fsp.readdir(dir()).catch(() => [])).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort();
   // A trace's spans start on or after the day in its id (a long project keeps adding spans for days).
   const from = traceId ? traceDay(traceId) : since ? dayOf(since) : '';
