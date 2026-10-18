@@ -30,6 +30,9 @@ function defaults() {
       // JARVIS's conversational brain (casual chat, replies to the user); substantial work is delegated.
       chat: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
       ollamaUrl: 'http://127.0.0.1:11434',
+      // "Claude via Ollama" brain: the Claude Code harness on a local Ollama model. model '' = pick a tool-capable one;
+      // url '' = ollamaUrl. Applies to the claude child process only, never to Claude's own settings.
+      claudeOllama: { model: '', url: '' },
       // JARVIS works in your home: brains run with cwd = workRoot and may read/write there
       // (Claude: auto mode + edit/bash tools; Codex: workspace-write sandbox rooted at workRoot).
       // Interactive terminal sessions keep their own prompts.

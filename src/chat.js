@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
-import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
+import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as trace from './trace.js';
@@ -101,7 +101,8 @@ export async function availableBrains() {
   const core = coreBrain();
   return (await catalog()).map((p) => ({
     id: p.id, label: p.label, models: p.models, efforts: p.efforts, ...(p.signedIn === false ? { signedIn: false } : {}),
-    default: core.provider === p.id ? core.model : (p.id === 'ollama' ? p.models[0] || '' : ''),
+    ...(p.id === CLAUDE_OLLAMA ? { available: p.available, reason: p.reason || '', url: p.url, toolModels: p.toolModels } : {}),
+    default: core.provider === p.id ? core.model : (p.default ?? (p.id === 'ollama' ? p.models[0] || '' : '')),
     defaultEffort: core.provider === p.id ? core.effort : '',
   }));
 }
@@ -112,10 +113,14 @@ async function resolveBrain(brain, model, effort) {
   const core = coreBrain();
   let b = brain && brain !== 'auto' ? list.find((x) => x.id === brain) : null;
   if (!b && core.provider !== 'auto') b = list.find((x) => x.id === core.provider);
-  if (!b) b = list[0];
+  if (!b) b = list.find((x) => x.available !== false);
   if (!b) throw new Error('No brain available on this machine — install Claude Code, Codex or Ollama.');
+  // Claude via Ollama is listed whenever the claude CLI is installed, so Settings can say why it can't run.
+  if (b.id === CLAUDE_OLLAMA && b.available === false) throw new Error(`Claude via Ollama is not available: ${b.reason}`);
   const m = model || b.default || (b.id === 'ollama' ? b.models[0] : '');
   if (b.id === 'ollama' && !m) throw new Error('Ollama is running but has no models — `ollama pull llama3.2`.');
+  if (b.id === CLAUDE_OLLAMA && !m) throw new Error('Claude via Ollama: Ollama has no model to run — `ollama pull qwen3-coder`.');
+  if (b.id === CLAUDE_OLLAMA && !b.models.includes(m)) throw new Error(`Claude via Ollama: ${m} is not installed in Ollama at ${b.url} (installed: ${b.models.join(', ')}).`);
   const e = effort && b.efforts.includes(effort) ? effort : (b.defaultEffort || '');
   return { brain: b.id, model: m, effort: e };
 }
@@ -204,15 +209,21 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal, env = {} }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false } = {}) {
   const cfg = config().brain;
-  const args = ['-p', unseenContext(chat, 'claude') + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+  // The local-model variant is the same harness, stream and tools on another endpoint; it keeps its own Claude session
+  // and usage totals (a session started against Anthropic's API is not resumed against Ollama, or the other way round).
+  const key = viaOllama ? CLAUDE_OLLAMA : 'claude';
+  const sessionKey = viaOllama ? 'claudeOllamaSessionId' : 'claudeSessionId';
+  const usageKey = viaOllama ? 'claudeOllamaUsage' : 'claudeUsage';
+  const args = ['-p', unseenContext(chat, key) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', personaPrompt(meshSummary, projects), '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   args.push('--add-dir', workRoot());
-  args.push(...claudeFlags({ model, effort }));
-  const resumed = !!chat.claudeSessionId;
-  if (resumed) args.push('--resume', chat.claudeSessionId);
+  args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort })));
+  const resumed = !!chat[sessionKey];
+  if (resumed) args.push('--resume', chat[sessionKey]);
+  if (viaOllama) env = { ...env, ...claudeOllamaEnv({ url: claudeOllamaUrl(cfg), model }) };
   let full = '';
   let error = null;
   let usage = null;
@@ -222,7 +233,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
       let e;
       try { e = JSON.parse(line); } catch { return; }
       tools?.feed('claude', e);
-      if (e.session_id) chat.claudeSessionId = e.session_id;
+      if (e.session_id) chat[sessionKey] = e.session_id;
       if (e.type === 'stream_event' && e.event?.type === 'content_block_delta' && e.event.delta?.type === 'text_delta') {
         full += e.event.delta.text;
         emit({ type: 'delta', text: e.event.delta.text });
@@ -234,16 +245,25 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
         emit({ type: 'status', text: `retrying (${e.error || e.error_status})…` });
       } else if (e.type === 'result') {
         // the session's running totals stay on the chat: the next (resumed) turn is counted as the difference
-        try { usage = claudeResultUsage(e, { prev: chat.claudeUsage, resumed }); chat.claudeUsage = usage.cumulative; delete usage.cumulative; } catch {}
+        try {
+          usage = claudeResultUsage(e, { prev: chat[usageKey], resumed });
+          chat[usageKey] = usage.cumulative; delete usage.cumulative;
+          if (viaOllama) usage.costUsd = 0; // local model: nothing is billed (Claude Code would price it as a Claude model)
+        } catch {}
         if (e.is_error) error = e.result || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
     },
   });
   if (res.code !== 0 && !full && !error) error = res.err.trim() || `claude exited with ${res.code}`;
-  if (error && /authenticat|401|login/i.test(error)) error += ' — run `claude` once in a terminal on this machine and /login.';
+  if (viaOllama) {
+    if (error) error = `Claude via Ollama (${model} at ${claudeOllamaUrl(cfg)}): ${error}`;
+    if (error && /ECONNREFUSED|fetch failed|unable to connect|connection (refused|error)/i.test(error)) error += ' — is Ollama running?';
+  } else if (error && /authenticat|401|login/i.test(error)) error += ' — run `claude` once in a terminal on this machine and /login.';
   return { text: full, error, usage };
 }
+
+const runClaudeOllama = (chat, text, model, effort, emit, meshSummary, signal, projects, opts) => runClaude(chat, text, model, effort, emit, meshSummary, signal, projects, { ...opts, viaOllama: true });
 
 async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
   const cfg = config().brain;
@@ -468,14 +488,14 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort });
   const turn = activeTurns.get(id);
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
-  const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === 'codex' ? runCodex : runOllama;
+  const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === CLAUDE_OLLAMA ? runClaudeOllama : resolved.brain === 'codex' ? runCodex : runOllama;
   const sent = hint ? `${hint}\n${text}` : text;
   const startedAt = Date.now();
   // A traced request: this turn is a span, each tool call in its stream a child span, and the harness gets RIGS_TRACE
   // so handoffs it makes through the rigs MCP (jarvis_task, project_create…) attach under it.
   const ctx = trace.parseContext(tctx);
   const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
-    meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
+    meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...(resolved.brain === CLAUDE_OLLAMA ? { endpoint: claudeOllamaUrl() } : {}), ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
   const toolSpans = new Map();
   const toolNames = new Map();
   // onTool (jarvisSend's measurement) hears every finished tool call, traced or not.
@@ -499,7 +519,7 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
       status: signal?.aborted ? 'stopped' : out.error ? 'error' : 'ok',
       output: out.error && !out.text ? { error: out.error } : out.text,
       meta: {
-        model: u?.model || resolved.model, sessionId: u?.sessionId || chat.claudeSessionId || chat.codexThreadId || '', tokensFrom: u ? 'harness' : 'none',
+        model: u?.model || resolved.model, sessionId: u?.sessionId || (resolved.brain === CLAUDE_OLLAMA ? chat.claudeOllamaSessionId : chat.claudeSessionId) || chat.codexThreadId || '', tokensFrom: u ? 'harness' : 'none',
         ...(u ? { inputTokens: u.inputTokens || 0, outputTokens: u.outputTokens || 0, cacheReadTokens: u.cacheReadTokens || 0, cacheWriteTokens: u.cacheWriteTokens || 0, costUsd: u.costUsd ?? null } : {}),
         ...(out.error ? { error: out.error } : {}),
       },

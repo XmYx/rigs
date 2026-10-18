@@ -1132,3 +1132,9 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .dk-stage { flex: 1; min-height: 0; background: #05080c; display: flex; align-items: center; justify-content: center; }
 .dk-big-img { max-width: 100%; max-height: 100%; object-fit: contain; }
 @media (max-width: 640px) { .dk-grid { grid-template-columns: 1fr; } .dk-bar .btn, .dk-bar select { min-height: 44px; } .dk-tile-btn { min-height: 44px; } }
+
+/* the Claude via Ollama availability hint in the brain popover */
+.bm-hint { margin: 2px 4px 4px; padding: 6px 8px; border-radius: 6px; line-height: 1.35; overflow-wrap: anywhere; border: 1px solid var(--line); color: var(--muted); }
+.bm-hint.warn { color: var(--warn); border-color: rgba(251, 191, 36, .4); background: rgba(251, 191, 36, .08); }
+.bm-hint.ok { color: var(--accent); }
+.bm-row[hidden], .bm-row select[hidden], .bm-row input[hidden], .bm-hint[hidden] { display: none; }
