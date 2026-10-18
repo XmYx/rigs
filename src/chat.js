@@ -6,6 +6,7 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
+import { escalationGate, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as trace from './trace.js';
 import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn, recordRequest } from './usage.js';
@@ -181,6 +182,13 @@ function unseenContext(chat, brainKey) {
   return 'Earlier in this conversation (handled by other brains):\n' + slice.map((m) => `${m.role === 'user' ? 'User' : `${m.brain || 'assistant'}`}: ${truncate(m.text, 2000)}`).join('\n') + '\n\nNow the user says:\n';
 }
 
+/** The last few messages before the current one, for a fast-path turn (a fresh session that resumes nothing). */
+function recentContext(chat, { messages = 6, chars = 800 } = {}) {
+  const slice = chat.messages.slice(0, -1).slice(-messages);
+  if (!slice.length) return '';
+  return 'Recently in this conversation:\n' + slice.map((m) => `${m.role === 'user' ? 'User' : 'JARVIS'}: ${truncate(m.text, chars)}`).join('\n') + '\n\nNow the user says:\n';
+}
+
 function cleanEnv() {
   const env = { ...process.env, PATH: augmentedPath() };
   for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
@@ -209,19 +217,22 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal, env = {} }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false } = {}) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false, quick = null } = {}) {
   const cfg = config().brain;
   // The local-model variant is the same harness, stream and tools on another endpoint; it keeps its own Claude session
   // and usage totals (a session started against Anthropic's API is not resumed against Ollama, or the other way round).
+  // A fast-path turn (quick = { maxTurns }, src/quick.js) is a fresh session every time with the last few messages as
+  // context: it never resumes or replaces the JARVIS thread's own Claude session.
   const key = viaOllama ? CLAUDE_OLLAMA : 'claude';
-  const sessionKey = viaOllama ? 'claudeOllamaSessionId' : 'claudeSessionId';
-  const usageKey = viaOllama ? 'claudeOllamaUsage' : 'claudeUsage';
-  const args = ['-p', unseenContext(chat, key) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--append-system-prompt', personaPrompt(meshSummary, projects), '--permission-mode', cfg.claudePermissionMode || 'auto'];
+  const sessionKey = viaOllama ? 'claudeOllamaSessionId' : quick ? 'quickSessionId' : 'claudeSessionId';
+  const usageKey = viaOllama ? 'claudeOllamaUsage' : quick ? 'quickUsage' : 'claudeUsage';
+  const system = personaPrompt(meshSummary, projects) + (quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
+  const args = ['-p', (quick ? recentContext(chat) : unseenContext(chat, key)) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    '--append-system-prompt', system, '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   args.push('--add-dir', workRoot());
-  args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort })));
-  const resumed = !!chat[sessionKey];
+  args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort, ...(quick ? { maxTurns: quick.maxTurns } : {}) })));
+  const resumed = !quick && !!chat[sessionKey];
   if (resumed) args.push('--resume', chat[sessionKey]);
   if (viaOllama) env = { ...env, ...claudeOllamaEnv({ url: claudeOllamaUrl(cfg), model }) };
   let full = '';
@@ -250,7 +261,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
           chat[usageKey] = usage.cumulative; delete usage.cumulative;
           if (viaOllama) usage.costUsd = 0; // local model: nothing is billed (Claude Code would price it as a Claude model)
         } catch {}
-        if (e.is_error) error = e.result || 'Claude Code returned an error';
+        // --max-turns (the fast path) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
+        if (e.is_error) error = e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
     },
@@ -387,17 +399,40 @@ const HANDOFF_TOOL = /(?:^|[_.])(?:jarvis_task|project_create)$/;
  * brain's handoff tool), time to the brain's reply — emitted as { type: 'timing' } and written to the usage ledger as
  * one "request" record (src/preroute-stats.js turns those into time saved). opts.router / opts.send replace the
  * router and the brain turn (tests).
+ *
+ * The quick-task fast path (src/quick.js, config.quick, opts.quick per request): a request routed "answer" runs as one
+ * bounded turn on Haiku (simple) or Sonnet (search, multi-tool, report) — quickTurn — instead of the full brain. When
+ * that turn hands it back (the fast brain asks for the full brain, hits its limit, fails or times out) the request
+ * re-runs on the normal JARVIS thread, told what the fast turn already ran; the fast turn and the full turn never run
+ * at the same time. The measurement carries lane 'quick', the tier and the escalation reason. opts.sendQuick
+ * replaces the fast turn (tests).
  */
 export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts = {}) {
   const t0 = opts.startedAt || Date.now();
-  const m = { preroute: prerouteOn(opts.preroute), route: '', via: '', routerMs: 0, filedAt: 0, filedBy: '', chatId: '', model: '' };
+  const m = { preroute: prerouteOn(opts.preroute), route: '', via: '', routerMs: 0, filedAt: 0, filedBy: '', chatId: '', model: '', lane: '', tier: '', escalated: '' };
   const send = opts.send || sendMessage;
   let out;
   let failed = false;
   try {
-    const { chatId, hint } = m.preroute ? await preroutedTurn(text, { brain, model, effort }, emit, opts, m) : await directTurn(text, emit, opts);
+    const { chatId, hint, decision } = m.preroute ? await preroutedTurn(text, { brain, model, effort }, emit, opts, m) : await directTurn(text, emit, opts);
     m.chatId = chatId;
     const onTool = (name, r) => { if (!m.filedAt && r.status === 'ok' && HANDOFF_TOOL.test(name || '')) Object.assign(m, { filedAt: r.end || Date.now(), filedBy: 'brain' }); };
+    // A request that names no brain goes to the thread's own: a thread set to Codex / Ollama / Claude via Ollama is left alone too.
+    const threadBrain = !brain && m.route === 'answer' ? (await getChat(chatId))?.brain || '' : '';
+    const q = resolveQuick({ text, route: m.preroute ? m.route : '', override: opts.quick, brain: brain || threadBrain, routeInfo: decision || {}, settings: config().quick });
+    if (q.on) {
+      Object.assign(m, { lane: 'quick', tier: q.tier });
+      const r = await (opts.sendQuick || quickTurn)(chatId, text, q, emit, { ...opts, hint, onTool });
+      if (r?.escalate == null || opts.signal?.aborted) return (out = r);
+      m.escalated = r.escalate;
+      if (opts.trace) trace.recordSpan({ traceId: opts.trace.traceId, parentId: opts.trace.parentId || '', kind: 'event', name: 'escalate', start: Date.now(),
+        input: { reason: r.escalate, ran: r.tools || [] }, output: 'handed to the full JARVIS brain', meta: { lane: 'quick', tier: q.tier, model: q.model, effort: q.effort, to: 'full' } });
+      // reset: what the fast turn already streamed (text before a tool call, a cut-off reply) is not part of the answer.
+      emit({ type: 'status', text: 'handing this to the full brain…', reset: true });
+      const ran = r.tools?.length ? ` It already ran: ${r.tools.slice(0, 8).join('; ')} — don't repeat what is done.` : '';
+      out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint: `${hint}\n[The fast path (${q.model}) handed this request to you: ${r.escalate}.${ran}]`.trim(), onTool });
+      return out;
+    }
     out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint, onTool });
     return out;
   } catch (e) { failed = true; throw e; } finally {
@@ -406,6 +441,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
       preroute: m.preroute, route: m.route, via: m.via, routerMs: m.routerMs,
       timeToFiledMs: m.filedAt ? Math.max(0, m.filedAt - t0) : null, filedBy: m.filedBy,
       timeToReplyMs: !failed && !opts.signal?.aborted && out && !out.error ? end - t0 : null,
+      ...(m.lane ? { lane: m.lane, tier: m.tier, ...(m.escalated ? { escalated: m.escalated } : {}) } : {}),
     };
     emit({ type: 'timing', ...timing });
     await recordRequest({ tsStart: t0, tsEnd: end, chatId: m.chatId, model: m.model, traceId: opts.trace?.traceId || '', status: opts.signal?.aborted ? 'stopped' : failed || out?.error ? 'failed' : 'done', ...timing });
@@ -468,7 +504,104 @@ async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
   }
   emit({ type: 'route', route: decision.route, reason: decision.reason, via: decision.via, preroute: true, chatId: chat.id, title: chat.title, projectId: decision.projectId || '', continued: !!isContinue,
     work: filed, unclear: unclear.map((u) => ({ goal: u.goal, candidates: u.candidates })) });
-  return { chatId: chat.id, hint };
+  return { chatId: chat.id, hint, decision };
+}
+
+/**
+ * One brain turn with its bookkeeping: a traced request makes the turn a brain-turn span (each tool call in its stream
+ * a child span) and hands the harness RIGS_TRACE, so handoffs it makes through the rigs MCP attach under it; onTool
+ * hears every finished tool call, traced or not; the turn is filed in the usage ledger. `meta` adds facts to the span
+ * (the fast path's lane, tier…), `lane` tags the ledger record, `runOpts` go to the runner.
+ */
+async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, onToolStart, usage, sessionKey, meta = {}, lane = '', runOpts = {} }) {
+  const startedAt = Date.now();
+  const ctx = trace.parseContext(tctx);
+  const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
+    meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...meta, ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
+  const toolSpans = new Map();
+  const toolNames = new Map();
+  const tools = span || onTool || onToolStart ? trace.toolCollector({
+    onStart: (key, c) => { toolNames.set(key, c.name); try { onToolStart?.(c); } catch {} if (span) toolSpans.set(key, span.child({ kind: 'tool-call', name: c.name, input: c.input, meta: c.meta, start: c.start })); },
+    onEnd: (key, r) => { toolSpans.get(key)?.end(r); toolSpans.delete(key); try { onTool?.(toolNames.get(key), r); } catch {} toolNames.delete(key); },
+  }) : null;
+  if (span) tracedTurns.set(chat.id, { provider: resolved.brain, ctx: span.ctx });
+  let out;
+  try {
+    out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects, { ...runOpts, tools, env: span ? { RIGS_TRACE: trace.formatContext(span.ctx) } : {} });
+  } catch (e) {
+    tools?.close('error');
+    span?.end({ status: 'error', output: { error: e.message } });
+    throw e;
+  } finally { if (span) tracedTurns.delete(chat.id); }
+  tools?.close('stopped');
+  if (span) {
+    const u = out.usage || null;
+    span.end({
+      status: signal?.aborted ? 'stopped' : out.error ? 'error' : 'ok',
+      output: out.error && !out.text ? { error: out.error } : out.text,
+      meta: {
+        model: u?.model || resolved.model, sessionId: u?.sessionId || chat[sessionKey] || chat.codexThreadId || '', tokensFrom: u ? 'harness' : 'none',
+        ...(u ? { inputTokens: u.inputTokens || 0, outputTokens: u.outputTokens || 0, cacheReadTokens: u.cacheReadTokens || 0, cacheWriteTokens: u.cacheWriteTokens || 0, costUsd: u.costUsd ?? null } : {}),
+        ...(out.error ? { error: out.error } : {}),
+      },
+    });
+  }
+  await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted, lane });
+  return out;
+}
+
+/**
+ * The quick-task fast path (src/quick.js): one bounded turn on the tier's model (`q` from resolveQuick) in the given
+ * thread, in a fresh Claude session — the thread's own brain, model, effort and session are left as they were. Same
+ * persona and tools as the full brain. Resolves to the turn's output, or to { escalate: reason, ran } when the full
+ * brain should answer instead: the fast brain said so (ESCALATE_MARKER), it hit its turn limit or another error, timed
+ * out (q.timeoutMs), or the tier's provider isn't available here. Then nothing of the turn stays in the thread. A turn
+ * that already filed work (jarvis_task / project_create) is never re-run: that work was handed off as usual.
+ */
+export async function quickTurn(id, text, q, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
+  const chat = await getChat(id);
+  if (!chat) throw new Error('chat not found');
+  const resolved = quickBrain(q, await availableBrains());
+  if (!resolved) return { escalate: `${q.provider} is not available on this machine`, ran: false, tools: [] };
+  chat.messages.push({ role: 'user', text, ts: Date.now() });
+  emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', tier: q.tier });
+  // Shown on the work dashboard as JARVIS answering, like a full turn (sendMessage); cleared before an escalation re-runs.
+  activeTurns.set(id, { id, title: chat.title, brain: resolved.brain, model: resolved.model, startedAt: Date.now(), text: truncate(text, 120), lane: 'quick' });
+  // Bounded: its own abort (the timeout) on top of Sir's stop.
+  const ac = new AbortController();
+  let timedOut = false;
+  const stop = () => ac.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  const timer = setTimeout(() => { timedOut = true; ac.abort(); }, q.timeoutMs);
+  const gate = escalationGate(emit);
+  const ran = [];
+  let filed = false;
+  const sent = hint ? `${hint}\n${text}` : text;
+  let out;
+  try {
+    out = await tracedRun({ chat, runner: runClaude, resolved, sent, emit: gate.emit, meshSummary, projects, signal: ac.signal, tctx, usage: null, sessionKey: 'quickSessionId', lane: 'quick',
+      meta: { lane: 'quick', tier: q.tier, why: q.why, maxTurns: q.maxTurns, timeoutMs: q.timeoutMs },
+      onToolStart: (c) => ran.push(`${c.name}${c.input ? ' ' + truncate(typeof c.input === 'string' ? c.input : JSON.stringify(c.input), 120) : ''}`),
+      onTool: (name, r) => { if (r.status === 'ok' && HANDOFF_TOOL.test(name || '')) filed = true; onTool?.(name, r); },
+      runOpts: { quick: { maxTurns: q.maxTurns } } });
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); activeTurns.delete(id); }
+  const userStopped = !!signal?.aborted;
+  const asked = parseEscalation(out.text);
+  const escalate = userStopped || filed ? null
+    : timedOut ? `the fast path timed out after ${Math.round(q.timeoutMs / 1000)} s`
+      : asked ? asked.reason
+        : out.error ? `the fast path failed: ${truncate(out.error, 160)}` : null;
+  if (escalate) {
+    chat.messages.pop(); // the full brain's turn records the request itself
+    await saveChat(chat);
+    return { escalate, ran: true, tools: ran, usage: out.usage };
+  }
+  gate.flush();
+  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', ts: Date.now() });
+  await saveChat(chat);
+  if (out.error) emit({ type: 'error', message: out.error });
+  emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'quick', tier: q.tier });
+  return out;
 }
 
 /**
@@ -490,42 +623,8 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === CLAUDE_OLLAMA ? runClaudeOllama : resolved.brain === 'codex' ? runCodex : runOllama;
   const sent = hint ? `${hint}\n${text}` : text;
-  const startedAt = Date.now();
-  // A traced request: this turn is a span, each tool call in its stream a child span, and the harness gets RIGS_TRACE
-  // so handoffs it makes through the rigs MCP (jarvis_task, project_create…) attach under it.
-  const ctx = trace.parseContext(tctx);
-  const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
-    meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...(resolved.brain === CLAUDE_OLLAMA ? { endpoint: claudeOllamaUrl() } : {}), ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
-  const toolSpans = new Map();
-  const toolNames = new Map();
-  // onTool (jarvisSend's measurement) hears every finished tool call, traced or not.
-  const tools = span || onTool ? trace.toolCollector({
-    onStart: (key, c) => { toolNames.set(key, c.name); if (span) toolSpans.set(key, span.child({ kind: 'tool-call', name: c.name, input: c.input, meta: c.meta, start: c.start })); },
-    onEnd: (key, r) => { toolSpans.get(key)?.end(r); toolSpans.delete(key); try { onTool?.(toolNames.get(key), r); } catch {} toolNames.delete(key); },
-  }) : null;
-  if (span) tracedTurns.set(chat.id, { provider: resolved.brain, ctx: span.ctx });
-  let out;
-  try {
-    out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects, { tools, env: span ? { RIGS_TRACE: trace.formatContext(span.ctx) } : {} });
-  } catch (e) {
-    tools?.close('error');
-    span?.end({ status: 'error', output: { error: e.message } });
-    throw e;
-  } finally { if (span) tracedTurns.delete(chat.id); }
-  tools?.close('stopped');
-  if (span) {
-    const u = out.usage || null;
-    span.end({
-      status: signal?.aborted ? 'stopped' : out.error ? 'error' : 'ok',
-      output: out.error && !out.text ? { error: out.error } : out.text,
-      meta: {
-        model: u?.model || resolved.model, sessionId: u?.sessionId || (resolved.brain === CLAUDE_OLLAMA ? chat.claudeOllamaSessionId : chat.claudeSessionId) || chat.codexThreadId || '', tokensFrom: u ? 'harness' : 'none',
-        ...(u ? { inputTokens: u.inputTokens || 0, outputTokens: u.outputTokens || 0, cacheReadTokens: u.cacheReadTokens || 0, cacheWriteTokens: u.cacheWriteTokens || 0, costUsd: u.costUsd ?? null } : {}),
-        ...(out.error ? { error: out.error } : {}),
-      },
-    });
-  }
-  await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted });
+  const out = await tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, usage,
+    sessionKey: resolved.brain === CLAUDE_OLLAMA ? 'claudeOllamaSessionId' : 'claudeSessionId', meta: resolved.brain === CLAUDE_OLLAMA ? { endpoint: claudeOllamaUrl() } : {} });
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;

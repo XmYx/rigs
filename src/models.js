@@ -37,11 +37,13 @@ export const PROVIDERS = {
   },
 };
 
-export function claudeFlags({ model, effort, permissionMode } = {}) {
+export function claudeFlags({ model, effort, permissionMode, maxTurns } = {}) {
   const a = [];
   if (model) a.push('--model', model);
   if (effort && PROVIDERS.claude.efforts.includes(effort)) a.push('--effort', effort);
   if (permissionMode) a.push('--permission-mode', permissionMode);
+  // A bounded turn (the quick-task fast path, src/quick.js): print mode stops after this many agentic turns.
+  if (Number.isInteger(maxTurns) && maxTurns > 0) a.push('--max-turns', String(maxTurns));
   return a;
 }
 

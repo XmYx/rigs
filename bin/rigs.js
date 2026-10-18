@@ -137,6 +137,16 @@ const commands = {
     if (r.error || r.preroute === undefined) fail(r.error);
     console.log(`pre-routing ${r.preroute ? 'on' : 'off'} · engine ${r.engine} (fallback ${r.fallback})${r.engine === 'jev' ? ` · Jev API ${r.jevUrl || 'not found'}` : ''}`);
   },
+  /** rigs quick [on|off|status] — the quick-task fast path (answers on Haiku / Sonnet instead of the full brain) */
+  async quick() {
+    const [sub = 'status'] = argv;
+    const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : null;
+    if (!patch && sub !== 'status') { console.error('usage: rigs quick [on|off|status]'); process.exit(1); }
+    const r = await daemonFetch('/api/local/quick', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
+    if (r.error || r.enabled === undefined) { console.error(r.error || 'RIGS daemon is not running (rigs start).'); process.exit(1); }
+    const t = (x) => `${x.provider} ${x.model}${x.effort ? ` (${x.effort})` : ''}`;
+    console.log(`quick fast path ${r.enabled ? 'on' : 'off'} · simple ${t(r.simple)} · standard ${t(r.standard)} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s`);
+  },
   /** rigs usage [--since 7d] [--group model|project|task|node|day] · rigs usage backfill */
   async usage() {
     if (argv[0] === 'backfill') {
@@ -302,6 +312,7 @@ const commands = {
                        macOS: build/start RIGS Control.app (holds Screen Recording + Accessibility)
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
+  rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh

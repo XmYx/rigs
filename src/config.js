@@ -69,6 +69,16 @@ function defaults() {
       jev: { url: '', appId: 'localjev', model: 'jev-latest', apiKey: '', timeoutMs: 8000, minProb: 0.55 },
       baselineMs: { answer: 0, work: 0 },
     },
+    // Quick-task fast path (src/quick.js): a request routed "answer" (a question, a web search, a quick tool use, a summary,
+    // a short report) runs as one bounded turn on a cheaper model instead of the full brain — simple asks on `simple`,
+    // web research / multi-step tool use / reports on `standard` — with at most maxTurns tool turns, handed to the full
+    // brain when it asks for it, fails or runs past timeoutMs. enabled: false (or jarvis/send quick: false) = as before.
+    quick: {
+      enabled: true,
+      simple: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
+      standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+      maxTurns: 8, timeoutMs: 90000,
+    },
     // Request traces (src/trace.js): one span tree per request in traces/<day>.jsonl. days = retention; maxField = the cap
     // (characters) on each span's input / output / meta before it is cut and marked; enabled: false records nothing.
     traces: { enabled: true, days: 14, maxField: 8000 },
@@ -198,7 +208,7 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },
   };

@@ -971,6 +971,7 @@ async function ask(text, { spoken = false } = {}) {
         chips.push(activity(e.name, e.input));
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
       } else if (e.type === 'status') {
+        if (e.reset) { reply = ''; fed = 0; felt = false; } // the fast path handed over: the full brain's reply starts afresh
         showSubtitle(`${reply}\n… ${e.text}`, 'jarvis');
       } else if (e.type === 'error') {
         toast(e.message, 'error', 10000);

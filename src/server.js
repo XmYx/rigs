@@ -37,6 +37,7 @@ import * as usage from './usage.js';
 import * as trace from './trace.js';
 import * as exhibits from './exhibits.js';
 import * as prerouteStats from './preroute-stats.js';
+import { applyQuickPatch, quickSettings } from './quick.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
@@ -337,7 +338,7 @@ export async function startServer() {
       result: (aborted) => ({
         status: aborted ? 'stopped' : error && !done?.text ? 'error' : 'ok',
         // jarvisSend's measurement (pre-routing on/off, routerMs, timeToFiledMs, timeToReplyMs) on the root span too.
-        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy } } } : {}),
+        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy, ...(timing.lane ? { lane: timing.lane, tier: timing.tier, ...(timing.escalated ? { escalated: timing.escalated } : {}) } : {}) } } } : {}),
         output: done ? { text: done.text, chatId: done.chatId, brain: done.brain, model: done.model, ...(error ? { error } : {}) } : { error: error || 'no reply' },
       }),
     };
@@ -673,7 +674,7 @@ export async function startServer() {
       res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -863,6 +864,16 @@ export async function startServer() {
       return routerView();
     }
     if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
+    // Quick-task fast path (src/quick.js): on/off and the model per tier.
+    if (sub === 'quick' && method === 'GET') return quickSettings(config().quick);
+    if (sub === 'quick' && method === 'POST') {
+      let next;
+      try { next = applyQuickPatch(config().quick, await body()); } catch (e) { throw new HttpError(400, e.message); }
+      const cfg = config();
+      cfg.quick = next;
+      saveConfig(cfg);
+      return next;
+    }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();

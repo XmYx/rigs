@@ -287,6 +287,7 @@ export function makeRecord(x = {}) {
   if (x.attempt) rec.attempt = num(x.attempt);
   if (x.error) rec.error = truncate(x.error, 300);
   if (x.request) rec.request = requestTiming(x.request);
+  if (x.lane) rec.lane = String(x.lane).slice(0, 20);
   if (x.models && Object.keys(x.models).length > 1) rec.models = Object.fromEntries(Object.entries(x.models).map(([m, t]) => [m, addTokens(t, null)]));
   return rec;
 }
@@ -299,6 +300,8 @@ export function requestTiming(t = {}) {
     preroute: t.preroute !== false, route: String(t.route || '').slice(0, 20), via: String(t.via || '').slice(0, 20),
     routerMs: msOrNull(t.routerMs) ?? 0, timeToFiledMs: msOrNull(t.timeToFiledMs), timeToReplyMs: msOrNull(t.timeToReplyMs),
     filedBy: String(t.filedBy || '').slice(0, 20), ...(t.traceId ? { traceId: String(t.traceId).slice(0, 40) } : {}),
+    // The quick-task fast path (src/quick.js): lane 'quick', its tier, and why it went to the full brain if it did.
+    ...(t.lane ? { lane: String(t.lane).slice(0, 20), tier: String(t.tier || '').slice(0, 20), ...(t.escalated ? { escalated: String(t.escalated).slice(0, 200) } : {}) } : {}),
   };
 }
 
@@ -788,7 +791,7 @@ export function setSlicer(fn) { slicer = fn; }
 
 
 /** A JARVIS chat turn (or a planning call, kind "plan") → one ledger record. Never throws. */
-export async function recordChatTurn({ chat, tag, brain, model, effort, startedAt, out, aborted }) {
+export async function recordChatTurn({ chat, tag, brain, model, effort, startedAt, out, aborted, lane = '' }) {
   try {
     const u = out?.usage || null;
     const t = tag || {};
@@ -803,6 +806,7 @@ export async function recordChatTurn({ chat, tag, brain, model, effort, startedA
       tokensFrom: u ? 'harness' : 'none',
       status: aborted ? 'stopped' : out?.error ? 'failed' : 'done',
       outcome: out?.error && !out?.text ? out.error : firstLine(out?.text),
+      ...(lane ? { lane } : {}),
     });
   } catch (e) { log('usage ledger: chat turn: ' + e.message); return null; }
 }
@@ -813,8 +817,9 @@ export async function recordRequest(x = {}) {
     const t = requestTiming(x);
     return await appendRecord({
       tsStart: x.tsStart, tsEnd: x.tsEnd, kind: 'request', provider: t.via === 'jev' ? 'jev' : t.via === 'model' ? 'claude' : '', model: x.model || '',
-      chatId: x.chatId || '', status: x.status, tokensFrom: 'none', request: { ...t, traceId: x.traceId },
-      outcome: t.preroute ? `pre-routed: ${t.route || '?'} (${t.via || '?'}, ${t.routerMs} ms)${t.filedBy ? `, filed by ${t.filedBy}` : ''}` : `pre-routing off${t.filedBy ? ', filed by the brain' : ''}`,
+      chatId: x.chatId || '', status: x.status, tokensFrom: 'none', request: { ...t, traceId: x.traceId }, ...(t.lane ? { lane: t.lane } : {}),
+      outcome: (t.preroute ? `pre-routed: ${t.route || '?'} (${t.via || '?'}, ${t.routerMs} ms)${t.filedBy ? `, filed by ${t.filedBy}` : ''}` : `pre-routing off${t.filedBy ? ', filed by the brain' : ''}`)
+        + (t.lane === 'quick' ? `, fast path ${t.tier}${t.escalated ? ` → full brain (${t.escalated})` : ''}` : ''),
     });
   } catch (e) { log('usage ledger: request: ' + e.message); return null; }
 }
