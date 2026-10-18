@@ -431,28 +431,29 @@ const TOOLS = [
     run: (a) => api(`/api/nodes/${n(a.node)}/control/windows`),
   },
   {
-    name: 'mesh_control', description: 'Drive a machine\'s screen: move/click/double/right/scroll/drag the pointer, type text, press a key combo, or focus a window. Needs input control switched on for that machine by Sir; this tool can never switch it on. One agent holds the screen at a time. Coordinates are in the pixels of the screenshot you took (pass its `shot`). Ask Sir before using it unless the task says you may. Pass secret:true for anything credential-like.',
-    inputSchema: { type: 'object', properties: { node: { type: 'string' }, action: { type: 'string', enum: ['move', 'click', 'double', 'right', 'scroll', 'drag', 'type', 'key', 'focus'] }, x: { type: 'number' }, y: { type: 'number' }, shot: { type: 'string', description: 'the shot id from mesh_screen' }, display: { type: 'string' }, dx: { type: 'number' }, dy: { type: 'number' }, to: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, text: { type: 'string' }, secret: { type: 'boolean' }, combo: { type: 'string', description: 'e.g. ctrl+shift+t, mod+c, enter' }, id: { type: 'string', description: 'window id (focus)' } }, required: ['node', 'action'] },
+    name: 'mesh_control', description: 'Drive a machine\'s screen: move/click/double/right/scroll/drag the pointer, type text, press a key combo, or focus a window. Needs input control switched on for that machine by Sir; this tool can never switch it on. One agent holds the screen at a time. Coordinates are in the pixels of the screenshot you took (pass its `shot`). Ask Sir before using it unless the task says you may. Pass secret:true for anything credential-like. action:"check" (op: pointer|type|key|focus|screenshot|windows, default pointer) is read-only: it runs every check the real call would (switches, allowFrom, lease, lock, backend, OS permission) and answers ok or the exact refusal, without taking the screen or sending input.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string' }, action: { type: 'string', enum: ['move', 'click', 'double', 'right', 'scroll', 'drag', 'type', 'key', 'focus', 'check'] }, op: { type: 'string', enum: ['pointer', 'type', 'key', 'focus', 'screenshot', 'windows'], description: 'check: which call to check' }, x: { type: 'number' }, y: { type: 'number' }, shot: { type: 'string', description: 'the shot id from mesh_screen' }, display: { type: 'string' }, dx: { type: 'number' }, dy: { type: 'number' }, to: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, text: { type: 'string' }, secret: { type: 'boolean' }, combo: { type: 'string', description: 'e.g. ctrl+shift+t, mod+c, enter' }, id: { type: 'string', description: 'window id (focus)' } }, required: ['node', 'action'] },
     run: (a) => {
       const { node, action, ...rest } = a;
       const base_ = `/api/nodes/${n(node)}/control`;
       if (action === 'type') return api(`${base_}/type`, { method: 'POST', body: { text: rest.text, secret: rest.secret } });
       if (action === 'key') return api(`${base_}/key`, { method: 'POST', body: { combo: rest.combo } });
       if (action === 'focus') return api(`${base_}/focus`, { method: 'POST', body: { id: rest.id } });
+      if (action === 'check') return api(`${base_}/check?op=${encodeURIComponent(rest.op || 'pointer')}`);
       const kind = { move: { action: 'move' }, click: { action: 'click' }, double: { action: 'click', count: 2 }, right: { action: 'click', button: 'right' }, scroll: { action: 'scroll' }, drag: { action: 'drag' } }[action];
       if (!kind) throw new Error(`unknown action ${action}`);
-      const { text, secret, combo, id, ...point } = rest;
+      const { text, secret, combo, id, op, ...point } = rest;
       if (/^\d+$/.test(point.display ?? '')) point.display = Number(point.display);
       return api(`${base_}/pointer`, { method: 'POST', body: { ...point, ...kind } });
     },
   },
   {
-    name: 'mesh_access', description: 'What this agent may do on a machine\'s desktop: screen access/control switches, killed state, and the permissions behind them (screen capture, input, accessibility) with a fix hint for each missing one. grant:"<permission>" (input, screenCapture, accessibility, automation, fullDiskAccess) starts that grant step on the machine (opens the macOS Settings pane, or queues the Linux uinput root step); a person still has to confirm it there. It cannot turn screen access or control on.',
+    name: 'mesh_access', description: 'What this agent may do on a machine\'s desktop: screen access/control switches, killed state, and the permissions behind them (screen capture, input, accessibility) with a fix hint for each missing one. `needs` lists each OS grant a person still has to give: which grant, for which app or binary, how, and the grant step. grant:"<permission>" (input, screenCapture, accessibility, automation, fullDiskAccess) starts that grant step on the machine (opens the macOS Settings pane, or queues the Linux uinput root step); a person still has to confirm it there. It cannot turn screen access or control on.',
     inputSchema: { type: 'object', properties: { node: { type: 'string' }, grant: { type: 'string' } }, required: ['node'] },
     run: async (a) => {
       const granted = a.grant ? await api(`/api/nodes/${n(a.node)}/control/grant`, { method: 'POST', body: { permission: a.grant } }) : undefined;
       const s = await api(`/api/nodes/${n(a.node)}/control?force=${a.grant ? 1 : 0}`);
-      return { enabled: s.enabled, input: s.input, killed: s.killed, ready: s.ready, session: s.session, backend: s.backend, permissions: s.permissions, ...(granted ? { grant: granted } : {}) };
+      return { enabled: s.enabled, input: s.input, killed: s.killed, ready: s.ready, needs: s.needs, session: s.session, backend: s.backend, permissions: s.permissions, ...(granted ? { grant: granted } : {}) };
     },
   },
   {

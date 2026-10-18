@@ -1,0 +1,7 @@
+# 2026-10-18T13:56:50Z worktree control code (src/control.js) against the running RIGS Control helper on macbookpro, read-only, scratch audit home
+{"node":"macbookpro","enabled":true,"input":true,"ready":{"see":false,"act":false},"needs":["Screen Recording for /Users/mix/.rigs/bin/RIGS Control.app","Accessibility for /Users/mix/.rigs/bin/RIGS Control.app"]}
+check screenshot 412 needs-permission - screenshot needs Screen Recording for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro
+check pointer 412 needs-permission - pointer needs Accessibility for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro
+screenshot 412 needs-permission - screenshot needs Screen Recording for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro
+windows 412 needs-permission - windows needs Screen Recording for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro
+lease after refused calls: null

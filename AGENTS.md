@@ -34,7 +34,7 @@ treat `main` as production.
 | `src/mcp.js` | `rigs mcp` — the stdio MCP server that gives agents the `mesh_*` tools (incl. `mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`; no tool can enable control) |
 | `src/openrig.js` | OpenRig (`rig`) status + health, seats, and peer registration as OpenRig hosts. Run `rig` only through `rigRun` (it puts the daemon's own Node first on PATH) |
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
-| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), lease, rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`. Design: `docs/full-access.md` |
+| `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease free → lock → backend + OS permission → rate limit → take the lease → act: a refused call never holds the lease or uses up the rate budget), lease (pure `holderKey`: agent session/seat or the person, per entry node, never the transport `who`), rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`, pure `permissionMessage` (the 412 text: which grant, for which app, on which machine). `check(op)` (`GET control/check?op=`, MCP `mesh_control action:"check"`) runs the same gate read-only: no lease, no input, audited as `check`. `status().needs` (pure `access.missingGrants`, shown by `mesh_access`) lists each OS grant a person still has to give. Design: `docs/full-access.md` |
 | `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
 | `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, macOS helper install, Linux uinput root step, GNOME extension) |
 | `src/control-mac-helper.js` | macOS RIGS Control.app: build when the source hash changes, its own LaunchAgent (`dev.rigs.control`; a scratch `RIGS_HOME` gets `dev.rigs.control.<hash8>`, also as its bundle id so TCC keeps its grants apart), one-shot socket requests, stale-grant reset. CLI `rigs control helper`. Tests inject the runner: never load a real LaunchAgent from a test |
@@ -74,7 +74,7 @@ treat `main` as production.
   audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
   or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
 - Control safety rules (all of them, in every control change): every call goes through the gate, which checks
-  enabled → allowFrom → lease → lock → rate limit → backend. Every action, refusal and switch is written to
+  enabled → allowFrom → lease → lock → backend + OS permission → rate limit, and only then takes the lease. Every action, refusal and switch is written to
   `logs/control.jsonl` (the audit log); the audit must be writable before a call touches the desktop. The kill
   switch (`rigs control off`, `POST /api/local/control/kill`, the ⌃⌥⌘⎋ hotkey on macOS) stops the backends at
   once and persists across restarts. Typing never uses Unicode `SetKeymap`: Wayland types keysyms and answers
