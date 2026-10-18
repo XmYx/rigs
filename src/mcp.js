@@ -87,7 +87,39 @@ const toolOrigin = (a) => {
   return { session: c.seat || c.session || undefined, trace: traceOf(a), ...(a.origin || {}) };
 };
 
-const TOOLS = [
+// ---- Google Drive connector (src/connectors/google-drive.js): read-only search and read through this machine's daemon.
+const NOT_CONNECTED = 'Google Drive is not connected. Sir connects it in JARVIS (Connectors > Google Drive); nothing can be searched or read until then.';
+/** A disconnected / unconfigured connector is an answer for the agent, not an error stack. */
+export async function driveCall(call) {
+  try { return await call(); } catch (e) {
+    if (/not connected|not configured/i.test(e.message || '')) return { connected: false, message: /configured/i.test(e.message) ? `${e.message}. ${NOT_CONNECTED}` : NOT_CONNECTED };
+    throw e;
+  }
+}
+export const driveSearch = async (a, call = api) => {
+  const q = String(a.query ?? '').trim();
+  if (!q) throw new Error('drive_search needs a query');
+  const qs = new URLSearchParams({ q, ...(a.mode ? { mode: a.mode } : {}), ...(a.pageSize ? { pageSize: String(a.pageSize) } : {}), ...(a.pageToken ? { pageToken: a.pageToken } : {}) });
+  return driveCall(() => call(`/api/local/connectors/google-drive/search?${qs}`, { timeout: 60000 }));
+};
+export const driveRead = async (a, call = api) => {
+  const id = String(a.fileId ?? '').trim();
+  if (!id) throw new Error('drive_read needs a fileId');
+  const qs = new URLSearchParams(a.maxBytes ? { maxBytes: String(a.maxBytes) } : {});
+  return driveCall(() => call(`/api/local/connectors/google-drive/file/${encodeURIComponent(id)}${qs.size ? `?${qs}` : ''}`, { timeout: 120000 }));
+};
+
+export const TOOLS = [
+  {
+    name: 'drive_search', description: "Search Sir's Google Drive (read-only). Returns matching files (id, name, mimeType, modified time, link) and a nextPageToken; read one with drive_read. mode: \"name\" (file names), \"fulltext\" (contents) or \"any\" (default). Says so plainly when Google Drive is not connected.",
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'words to look for' }, mode: { type: 'string', enum: ['name', 'fulltext', 'any'] }, pageSize: { type: 'number' }, pageToken: { type: 'string', description: 'nextPageToken from a previous search' } }, required: ['query'] },
+    run: (a) => driveSearch(a),
+  },
+  {
+    name: 'drive_read', description: 'Read one Google Drive file by id (from drive_search), read-only. Docs and Slides come back as text, Sheets as CSV (first sheet), text files as is; binaries return metadata only. Content is capped (maxBytes, default 1 MiB) and flagged truncated. Says so plainly when Google Drive is not connected.',
+    inputSchema: { type: 'object', properties: { fileId: { type: 'string' }, maxBytes: { type: 'number', description: 'content cap in bytes (default 1 MiB, max 10 MiB)' } }, required: ['fileId'] },
+    run: (a) => driveRead(a),
+  },
   {
     name: 'mesh_status', description: 'List every machine in the RIGS mesh (Tailscale network): OS, online state, installed agents (Claude Code, Codex, Ollama, OpenRig, REA), CPU/memory.',
     inputSchema: { type: 'object', properties: {} },

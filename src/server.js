@@ -19,6 +19,7 @@ import * as appstore from './appstore.js';
 import * as chat from './chat.js';
 import { comfyRoute, createComfyService } from './comfyui.js';
 import { createSlack, slackRoute } from './connectors/slack.js';
+import { createGoogleDrive, googleDriveRoute } from './connectors/google-drive.js';
 import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import { createLinearService, linearRoute } from './linear.js';
 import * as desktop from './desktop.js';
@@ -124,6 +125,8 @@ export async function startServer() {
   const linear = createLinearService();
   // Slack connector (/api/local/connectors/slack/*): reads, plus a post that needs confirm: true (src/connectors/slack.js).
   const slack = createSlack();
+  // Google Drive connector (/api/local/connectors/google-drive/*): OAuth via this daemon's loopback callback, read-only Drive.
+  const drive = createGoogleDrive();
   // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
   const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
@@ -742,6 +745,7 @@ export async function startServer() {
       if (cfg.brain.core.provider === models.CLAUDE_OLLAMA && cfg.brain.core.model) patchConfig({ brain: { claudeOllama: { model: cfg.brain.core.model } } });
       return models.coreBrain();
     }
+    if (sub === 'connectors/google-drive' || sub.startsWith('connectors/google-drive/')) return googleDriveRoute(drive, { method, sub: sub.slice('connectors/google-drive/'.length), q, req, res, body });
     if (sub.startsWith('comfyui/')) return comfyRoute(comfy, { method, sub: sub.slice('comfyui/'.length), q, req, res, body });
     if (sub.startsWith('linear/')) return linearRoute(linear, { method, sub: sub.slice('linear/'.length), q, body });
     if (sub.startsWith('connectors/slack/')) return slackRoute(slack, { method, sub: sub.slice('connectors/slack/'.length), q, body });

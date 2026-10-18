@@ -307,3 +307,27 @@ test('App Cloud registration accepts and persists per-OS launch recipes (POST /a
   } finally { mcp.kill(); }
   for (const id of ['dual', 'mcpdual']) await post('/api/local/apps', { id, remove: true });
 });
+
+test('Google Drive connector routes answer on the real daemon without exposing the client secret', async () => {
+  const D = '/api/local/connectors/google-drive';
+  let s = await get(`${D}/status`);
+  assert.deepEqual([s.configured, s.connected], [false, false]);
+  assert.equal(s.redirectUri, `http://127.0.0.1:${PORT}${D}/auth/callback`);
+  assert.equal((await fetch(BASE + `${D}/auth/start`)).status, 409, 'no client configured yet');
+  const secret = 'GOCSPX-smoke-secret-123';
+  const c = await post(`${D}/config`, { clientId: 'smoke.apps.googleusercontent.com', clientSecret: secret });
+  assert.equal(c.clientSecretSet, true);
+  const start = await get(`${D}/auth/start`);
+  const u = new URL(start.url);
+  assert.equal(u.searchParams.get('scope'), 'https://www.googleapis.com/auth/drive.readonly');
+  assert.ok(u.searchParams.get('state') && u.searchParams.get('code_challenge'));
+  const cb = await fetch(BASE + `${D}/auth/callback?state=forged&code=x`);
+  assert.equal(cb.status, 400);
+  assert.match(await cb.text(), /does not match/);
+  await post('/api/local/config', { connectors: { googleDrive: { clientSecret: 'overwritten' } } });
+  const pub = JSON.stringify(await get('/api/local/config')) + JSON.stringify(await get(`${D}/status`)) + JSON.stringify(await get(`${D}/config`));
+  assert.ok(!pub.includes(secret) && !pub.includes('overwritten'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(HOME, 'config.json'), 'utf8')).connectors.googleDrive.clientSecret, secret);
+  s = await post(`${D}/disconnect`, {});
+  assert.deepEqual([s.ok, s.removed, s.connected], [true, false, false]);
+});
