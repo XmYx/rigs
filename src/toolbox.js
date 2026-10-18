@@ -219,6 +219,81 @@ export function searchCatalog(entries, { q = '', tag = '', kind = '', limit = 50
   return limit ? out.slice(0, limit) : out;
 }
 
+// ---------------------------------------------------------------- reuse hints for briefs and the planner (pure)
+
+// Words that say nothing about WHICH tool a task needs. Matching is on stems, so these are stems too.
+const STOP = new Set(('the and for with from that this these those then than into onto over under about after before when while where which what who how why '
+  + 'are was were been being have has had can could should would will shall may might must not all any each every some more most other such only own same '
+  + 'also its our your their there here get got use used using make made need needs needed new old one two task tool agent code file write read run add '
+  + 'check create build work project step item list set sir rig mesh node machine').split(' '));
+
+/** A cheap stem: lower case, plural / -ing / -ed / -es removed ("screenshots" → "screenshot", "publishing" → "publish"). */
+export function stem(w) {
+  let s = String(w || '').toLowerCase();
+  if (s.length > 4 && s.endsWith('ies')) return `${s.slice(0, -3)}y`;
+  if (/(?:sh|ch|x|ss|z)es$/.test(s) && s.length > 5) return s.slice(0, -2);
+  if ((s.length > 5 && s.endsWith('ing')) || (s.length > 4 && s.endsWith('ed'))) {
+    s = s.slice(0, s.endsWith('ing') ? -3 : -2);
+    return s.length > 3 && s.at(-1) === s.at(-2) ? s.slice(0, -1) : s; // "running" → "run"
+  }
+  return s.length > 3 && s.endsWith('s') && !s.endsWith('ss') ? s.slice(0, -1) : s;
+}
+
+/** The distinct stems of the words of a task or goal that can tell tools apart. Pure. */
+export function keywords(text) {
+  return [...new Set(words(text).map(stem).filter((w) => w.length > 2 && !STOP.has(w)))];
+}
+
+/**
+ * Which tools and applets could save this task a helper script. Keyword match, no model: each keyword scores 3 when
+ * it is a word of an entry's id or name, 2 as a tag, 1 in its description (stemmed whole words); an entry needs 3
+ * points to count (one id/name word, or a tag plus a description word, or three description words). Best first, ties
+ * to the most used; at most `limit`. Pure.
+ */
+export function matchTools(entries, text, { limit = 3, min = 3 } = {}) {
+  const ks = keywords(text);
+  if (!ks.length) return [];
+  const out = [];
+  for (const e of entries || []) {
+    const own = new Set([...words(e.id), ...words(e.name)].map(stem));
+    const tags = new Set((e.tags || []).flatMap((t) => [String(t).toLowerCase(), ...words(t)].map(stem)));
+    const desc = new Set(words(e.description).map(stem));
+    let score = 0;
+    for (const k of ks) score += own.has(k) ? 3 : tags.has(k) ? 2 : desc.has(k) ? 1 : 0;
+    if (score >= min) out.push({ ...e, kind: e.kind || 'tool', score });
+  }
+  out.sort((a, b) => b.score - a.score || (b.uses || 0) - (a.uses || 0) || String(a.id).localeCompare(String(b.id)));
+  return out.slice(0, limit);
+}
+
+/** One line per match for a prompt: "- `id` (tool on node): what it does". */
+export function hintLines(matches, { width = 90 } = {}) {
+  return (matches || []).map((m) => {
+    const d = String(m.description || '').replace(/\s+/g, ' ').trim();
+    return `- \`${m.id}\` (${m.kind === 'applet' ? 'applet' : 'tool'}${m.node ? ` on ${m.node}` : ''}): ${d.length > width ? `${d.slice(0, width - 1)}…` : d}`;
+  });
+}
+
+// What agents are told. Each stays a few hundred characters: it is paid for in every brief and every setup.
+
+/** The paragraph of a task brief's tool section. */
+export const BRIEF_NOTE = 'Before writing a helper script, call the rigs MCP tool `tool_list` with what you need (filed tools and published applets are ranked together); run a hit with `tool_run`, open an applet instead of building another. When you write a script another task could reuse (a check, converter, publisher, parser), file it with `tool_register`: arguments as JSON on stdin, result on stdout, no secrets.';
+
+/** The task brief's "Reusable tools" section: the paragraph plus this task's likely matches. */
+export function briefSection(matches) {
+  const lines = hintLines(matches);
+  return `## Reusable tools\n${BRIEF_NOTE}\n${lines.length ? `Likely matches for this task (read with \`tool_get\` first):\n${lines.join('\n')}\n` : ''}\n`;
+}
+
+/** The planning prompt's tool rule with the filed tools that fit the goal. */
+export function planNote(matches) {
+  const lines = hintLines(matches, { width: 70 });
+  return `- Agents reuse filed tools: before writing a helper they call \`tool_list\`, and they file reusable scripts with \`tool_register\`. Where a filed tool fits, name it in the task description so the agent runs it with \`tool_run\` instead of writing it again.${lines.length ? `\n  Filed tools that fit this goal:\n${lines.map((l) => `  ${l}`).join('\n')}` : ''}`;
+}
+
+/** The agent instructions bullet written by `rigs setup`. */
+export const AGENT_NOTE = '**Reusable tools**: before writing a helper script, search the registry with `tool_list` (tools other agents filed plus App Cloud applets) and run a hit with `tool_run`. When you write a script another task could reuse, file it with `tool_register` (JSON arguments on stdin, result on stdout, no secrets).';
+
 /**
  * Merge per-node results like aggregateApps: [{ node: {id,name}, tools?: [...], error? }] → { tools, errors }.
  * A node whose answer has no `tools` list runs an older RIGS (its /api/local/tools was the CLI-binary report).
