@@ -92,7 +92,7 @@ let activeDialog = null;
 const NATIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'OPTION', 'LABEL']);
 const nativeInteractive = (el) => NATIVE.has(el.tagName) && !(el.tagName === 'A' && !el.hasAttribute('href'));
 const hasText = (el) => /[\p{L}\p{N}]/u.test(el.textContent || '');
-const SCROLLERS = '.file-list,.sess-list,.stage-feed,.win-body,.wk-list,#search-results,#subtitle,.files-split > div,.sess-split > div';
+const SCROLLERS = '.file-list,.sess-list,.win-body,.wk-list,#search-results,#subtitle,.files-split > div,.sess-split > div';
 
 function labelFor(el) {
   return el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.labels?.length || el.closest('label');

@@ -15,7 +15,6 @@ import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed,
 import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
-import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
 import { createDesktops, openLargeView } from './desktops.js';
@@ -857,7 +856,7 @@ async function intent(text) {
   }
   if (/^(?:show|list|open)(?: me)?(?: the| all| my)?(?: live| running)? (?:active )?agents(?: panel)?$|^(?:active|live|running) agents$/i.test(t)) { showPanel('agents'); agentsPanel?.update(); say('The active agents, on every machine.'); return true; }
   if (/^(?:show |list |open )?(?:all |my )?(?:sessions|chats|conversations|coding sessions)\b/i.test(t)) { sessionsWindow(); say('Every session on every machine.'); return true; }
-  if (/^(?:mesh |system )?status( report)?$|^how are (?:the |my )?(?:rigs|machines|systems)/i.test(t)) { say(meshStatusLine()); showOnStage(meshVisualText(snap), { title: 'Status' }); return true; }
+  if (/^(?:mesh |system )?status( report)?$|^how are (?:the |my )?(?:rigs|machines|systems)/i.test(t)) { say(meshStatusLine()); return true; }
   if (/^(?:update|upgrade|deploy|roll ?out)(?: the)?(?: mesh| all| everything| every machine)?$/i.test(t)) { meshWindow(); say(`Opening mesh control. Confirm the rollout there, ${persona.address}.`); return true; }
   if ((m = t.match(/^(?:start|launch|spawn|new)\s+(claude|codex|ollama|openrig|rig)(?: code)?(?: agent| session)?(?: on (\S+))?(?: in (\S+))?(?: to (.+))?$/i))) {
     const n = m[2] ? findMachine(m[2]) : machineById(selfId);
@@ -979,7 +978,6 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     for (const c of chips) c.done(true);
-    showOnStage(reply);
     const say = spokenText(reply, true);
     if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));

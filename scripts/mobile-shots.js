@@ -135,7 +135,6 @@ const VIEWS = [
   { name: 'sessions', run: async (p) => { await tap(p, '#btn-sess'); await sleep(2000); } },
   { name: 'apps-launcher', run: async (p) => { await tap(p, '#btn-apps'); await sleep(1500); } },
   { name: 'mesh-settings', run: async (p) => { await tap(p, '#btn-mesh'); await sleep(1500); } },
-  { name: 'stage-visual-cards', run: async (p) => { await reach(p, '#ask'); await p.locator('#ask').fill('status'); await p.keyboard.press('Enter'); await sleep(2500); } },
   { name: 'voice-controls', run: async (p) => { await tap(p, '#btn-hands'); await sleep(600); await tap(p, '#btn-mic'); await sleep(800); } },
 ];
 
