@@ -92,7 +92,7 @@ export function openControl({ machine }) {
     const macMissing = st.platform === 'mac' ? [['screenCapture', 'Screen Recording'], ['accessibility', 'Accessibility']].filter(([k]) => ac?.[k]?.ok !== true) : [];
     const macGuide = macMissing.length ? h('div', { class: 'ctl-guide' },
       h('b', {}, `Finish setup on ${machine.name}`),
-      h('div', { class: 'small' }, 'Control is on, but macOS needs you to allow it once. Click each button: System Settings opens on the right page and the RIGS program is shown in Finder. Switch it on in the list (drag it in if it is missing), then restart RIGS.'),
+      h('div', { class: 'small' }, 'Control is on, but macOS needs you to allow it once. Click each button: System Settings opens on the right page and RIGS Control is shown in Finder. Switch on RIGS Control in the list (drag it in if it is missing); it applies at once. Never grant these to node or a terminal: every agent could then bypass this gate.'),
       h('div', { class: 'ctl-stopbar' }, ...macMissing.map(([k, label]) => h('button', { class: 'btn', onclick: () => run('Grant', () => api(`${node(id)}/control/grant`, { method: 'POST', body: { permission: k } })) }, `Open ${label}`)))) : null;
 
     const img = h('img', { class: 'ctl-shot', alt: 'screen preview', style: shotUrl ? {} : { display: 'none' }, src: shotUrl || '' });
@@ -114,6 +114,7 @@ export function openControl({ machine }) {
       h('div', { class: 'muted small' }, `${st.platform || ''} · ${st.session || 'no session'}${st.desktop ? ' · ' + st.desktop : ''}${st.locked ? ' · screen locked' : ''}`),
       ...rows,
       st.backend?.missing?.length ? h('div', { class: 'warnbox small' }, `No backend yet for: ${st.backend.missing.join(', ')}.`) : null,
+      ac?.nodeGrants ? h('div', { class: 'warnbox small' }, ac.nodeGrants.text) : null,
       h('div', { class: 'ctl-prev' }, prevBtn, img),
       h('div', { class: 'pv-title ctl-h' }, 'Recent actions'),
       ...(logRows.length ? logRows : [h('div', { class: 'muted small' }, 'Nothing yet.')]),

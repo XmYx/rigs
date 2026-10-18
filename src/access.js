@@ -3,6 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { guiEnv, refreshSessionEnv } from './desktop.js';
 import * as rootsteps from './rootsteps.js';
+import { RIGS_HOME } from './config.js';
+import { APP_NAME, helperPaths, installMacHelper, readHelperState, requestHelper, resetStaleGrants } from './control-mac-helper.js';
 import { HOME, isLinux, isMac, isWin, run, which } from './util.js';
 
 /**
@@ -140,6 +142,55 @@ export function decideMac({ probe, fullDiskAccess }) {
   };
 }
 
+const helperFix = (permission, { app, name, regrant }) => ({
+  kind: 'settings', permission, url: MAC_PANES[permission], app,
+  text: `Open System Settings > Privacy & Security > ${MAC_LABEL[permission]} and switch on ${name}${regrant ? ' (a new build: click Grant first, so an entry left by an older build is cleared, then switch it on)' : ''}. Grant it to ${name}, not to node: the helper holds these rights so agents cannot bypass the control gate.`,
+});
+
+/**
+ * macOS: what the RIGS Control helper itself may do (its own TCC grants, docs/full-access.md §8). Pure.
+ * Not running → every control permission is missing with the fix to start it. A grant the helper did not report
+ * (an older helper) is unknown (null), never assumed.
+ */
+export function decideMacHelper({ running = false, grants, app = '', name = 'RIGS Control', regrant = false, error } = {}) {
+  if (!running) {
+    const fix = { kind: 'helper', app, text: `RIGS Control (the macOS helper that holds the screen and input rights) is not running${error ? ` (${error})` : ''}. Click Grant (JARVIS → Access & control) or run \`rigs control helper install\` on this Mac.` };
+    return {
+      screenCapture: { ok: false, via: 'RIGS Control', fix },
+      input: { ok: false, via: 'RIGS Control', requires: 'accessibility', fix },
+      accessibility: { ok: false, via: 'RIGS Control', fix },
+    };
+  }
+  const g = grants || {};
+  const flag = (v) => (typeof v === 'boolean' ? v : null);
+  const one = (key, ok, via) => ({ ok, via: `RIGS Control · ${via}`, ...(ok === true ? {} : { fix: helperFix(key, { app, name, regrant }) }) });
+  const ax = flag(g.ax), post = flag(g.post);
+  const input = ax === false || post === false ? false : ax === null || post === null ? null : true;
+  return {
+    screenCapture: one('screenCapture', flag(g.screen), 'CGPreflightScreenCaptureAccess'),
+    input: { ...one('accessibility', input, 'CGEventPost'), requires: 'accessibility' },
+    accessibility: one('accessibility', ax, 'AXIsProcessTrusted'),
+  };
+}
+
+/** The daemon's own node must not hold screen/input rights: every agent it starts would inherit them. Pure. */
+export function nodeGrantWarning(probe) {
+  const held = [probe?.screen === true && 'Screen Recording', probe?.ax === true && 'Accessibility'].filter(Boolean);
+  if (!held.length) return null;
+  return { held, text: `${path.basename(process.execPath)} (the RIGS daemon) has ${held.join(' and ')}: every agent it starts can bypass the control gate. Remove it from ${held.join(' and ')} in System Settings > Privacy & Security; RIGS Control holds these rights.` };
+}
+
+async function probeMacHelper() {
+  const p = helperPaths(RIGS_HOME);
+  const regrant = !!readHelperState(RIGS_HOME).regrant;
+  try {
+    const r = await requestHelper(RIGS_HOME, 'probe', {}, { timeout: 8000 });
+    return { running: true, grants: r.grants, app: r.helper?.path || p.app, name: p.name, regrant };
+  } catch (e) {
+    return { running: false, app: p.app, name: p.name, regrant, error: fs.existsSync(p.app) ? e.message : 'not installed' };
+  }
+}
+
 /** Linux: facts about the session → the permissions. Pure. */
 export function decideLinux(f) {
   if (!f.session) {
@@ -241,8 +292,17 @@ async function probeLinux() {
 async function controlPermissions(fullDiskAccess) {
   try {
     if (isMac) {
-      const { fullDiskAccessPermission, ...rest } = decideMac({ probe: await probeMac(), fullDiskAccess });
-      return { ...rest, fullDiskAccessFix: fullDiskAccessPermission.fix };
+      // Screen and input belong to the RIGS Control helper; node is probed only for FDA, Automation and the bypass warning.
+      const [helper, node] = await Promise.all([probeMacHelper(), probeMac().catch(() => null)]);
+      const own = decideMac({ probe: node || parseMacProbe(''), fullDiskAccess });
+      const warning = nodeGrantWarning(node);
+      return {
+        ...decideMacHelper(helper),
+        automation: own.automation,
+        fullDiskAccessFix: own.fullDiskAccessPermission.fix,
+        helper: { running: helper.running, app: helper.app, ...(helper.regrant ? { regrant: true } : {}) },
+        ...(warning ? { nodeGrants: warning } : {}),
+      };
     }
     if (isLinux) return decideLinux(await probeLinux());
   } catch (e) {
@@ -262,9 +322,22 @@ export async function grant(permission) {
     const key = permission === 'input' ? 'accessibility' : permission;
     if (key === 'fullDiskAccess') return grantFullDiskAccess();
     if (!MAC_PANES[key]) return { ok: false, message: `Unknown permission "${permission}"` };
+    if (key === 'automation') {
+      await run('open', [MAC_PANES[key]], { timeout: 10000 });
+      return { ok: true, pane: MAC_PANES[key], message: 'Automation is only used by the opt-in mac-jxa fallback; RIGS Control does not need it.' };
+    }
+    // Screen Recording and Accessibility go to RIGS Control: make sure it runs, then let it ask (adds it to the list).
+    const installed = await installMacHelper();
+    const before = await requestHelper(RIGS_HOME, 'probe', {}, { timeout: 8000 }).catch(() => null);
+    const reset = await resetStaleGrants({ grants: before?.grants });
+    let asked = null;
+    try { asked = await requestHelper(RIGS_HOME, 'grant', { permission: key }, { timeout: 15000 }); } catch {}
     await run('open', [MAC_PANES[key]], { timeout: 10000 });
-    await run('open', ['-R', process.execPath], { timeout: 10000 });
-    return { ok: true, pane: MAC_PANES[key], binary: process.execPath, message: `In ${MAC_LABEL[key]}, switch on ${process.execPath} (shown in Finder; drag it into the list if missing), then restart RIGS.` };
+    await run('open', ['-R', installed.app], { timeout: 10000 });
+    return {
+      ok: true, pane: MAC_PANES[key], app: installed.app, granted: asked?.granted ?? null, reset: reset.reset,
+      message: `In ${MAC_LABEL[key]}, switch on ${helperPaths(RIGS_HOME).name} (${APP_NAME} is shown in Finder; drag it into the list if missing). It applies at once; no restart needed.`,
+    };
   }
   if (isLinux && (permission === 'input' || permission === 'uinput')) {
     const r = await rootsteps.ensureUinput();

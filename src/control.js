@@ -38,6 +38,15 @@ export function selectBackend({ platform, session, desktop = '', available: a = 
   return { capture, input, windows, missing: Object.entries({ capture, input, windows }).filter(([, v]) => !v).map(([k]) => k) };
 }
 
+/**
+ * The permission an operation needs. Pure. macOS lists windows with CGWindowList, whose titles need Screen Recording;
+ * focusing a window goes through AX and needs Accessibility. Elsewhere the window backend needs accessibility.
+ */
+export function permissionFor(op, backendKey, platform) {
+  if (backendKey === 'capture' || (op === 'windows' && ['mac', 'darwin'].includes(platform))) return 'screenCapture';
+  return backendKey === 'windows' ? 'accessibility' : 'input';
+}
+
 const ALIASES = { control: 'ctrl', option: 'alt', cmd: 'super', command: 'super', win: 'super', meta: 'super', return: 'enter', escape: 'esc' };
 const NAMED = new Set('enter tab esc space backspace delete insert up down left right home end pageup pagedown capslock printscreen menu'.split(' '));
 export function parseCombo(combo, platform = platformName()) {
@@ -145,7 +154,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     try { info = await inspect(force); }
     catch (e) { info = { session: platform === 'mac' ? 'quartz' : platform === 'windows' ? 'windows' : 'none', desktop: '', displays: [], locked: null, backend: { capture: null, input: null, windows: null, missing: ['capture', 'input', 'windows'] }, permissions: {}, error: { code: e.code || 'error', message: e.message } }; }
     const s = settings(), enabled = !!s.enabled && !state.killed, input = enabled && !!s.input;
-    return { node: getConfig().name, platform, session: info.session, desktop: info.desktop, enabled, input, killed: state.killed || null, backend: { ...info.backend, helper: info.helper || null }, permissions: info.permissions, ready: { see: enabled && !!info.backend.capture && info.locked === false, act: input && !!info.backend.input && info.locked === false }, displays: info.displays || [], locked: info.locked, lease: lease ? structuredClone(lease) : null, ...(info.error ? { error: info.error } : {}) };
+    return { node: getConfig().name, platform, session: info.session, desktop: info.desktop, enabled, input, killed: state.killed || null, backend: { ...info.backend, helper: info.helper || null }, permissions: info.permissions, ready: { see: enabled && !!info.backend.capture && info.locked === false && info.permissions?.screenCapture?.ok !== false, act: input && !!info.backend.input && info.locked === false && info.permissions?.input?.ok !== false }, displays: info.displays || [], locked: info.locked, lease: lease ? structuredClone(lease) : null, ...(info.error ? { error: info.error } : {}) };
   }
   async function gate(caller, act) {
     const s = settings();
@@ -191,9 +200,11 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           const max = op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120;
           if (bucket.length >= max) throw new ControlError('rate', 'Control rate limit reached; try again in a minute');
           bucket.push(now());
+          const permission = info.permissions[permissionFor(op, backendKey, platform)];
           backend = info.backend[backendKey];
+          // macOS has one backend, the RIGS Control helper: when it is not running, say how to start it.
+          if (!backend && platform === 'mac' && permission?.fix) throw new ControlError('needs-permission', `RIGS Control is not running, so ${op} is not possible`, permission.fix);
           if (!backend) throw new ControlError('unsupported', `No ${backendKey} backend is available for this desktop`, { kind: 'backend', text: `Install/configure a supported ${backendKey} backend; see docs/full-access.md` });
-          const permission = info.permissions[backendKey === 'capture' ? 'screenCapture' : backendKey === 'windows' ? 'accessibility' : 'input'];
           if (permission?.ok === false) throw new ControlError('needs-permission', `Permission required for ${op}`, permission.fix);
           const result = await fn(info, request);
           if (submitted !== generation) throw new ControlError('off', 'Control was stopped during this action');
@@ -311,7 +322,10 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
       revoke('Control settings changed');
       persistConfig({ ...getConfig(), control: next });
       if (grants) { delete state.killed; saveState(); }
-      await endLease('settings changed'); await adapter.stop(); cached = null;
+      await endLease('settings changed');
+      // Switched off: also stop the helper process where it is a separate service (macOS LaunchAgent).
+      if (!next.enabled && adapter.shutdown) await adapter.shutdown().catch(() => {}); else await adapter.stop();
+      cached = null;
       audit('enable', { enabled: next.enabled, input: next.input }, caller, true, started);
       events.emit('change', { enabled: next.enabled, input: next.input, caller: callerInfo(caller) });
       return status({ force: true });
@@ -326,7 +340,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     let error;
     try { persistConfig({ ...getConfig(), control: { ...settings(), enabled: false, input: false } }); } catch (e) { error = e; }
     await endLease('kill');
-    try { await adapter.stop(); } catch (e) { error ||= e; }
+    try { await (adapter.shutdown || adapter.stop).call(adapter); } catch (e) { error ||= e; }
     audit('kill', { reason: state.killed.reason }, caller, !error, started, error);
     events.emit('kill', { ...state.killed, wasEnabled });
     if (error) throw error;

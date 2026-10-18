@@ -31,9 +31,10 @@ treat `main` as production.
 | `src/desktop.js` | Remote desktop: Sunshine/Moonlight (auto-pairing), macOS Screen Sharing, RDP, VNC |
 | `src/control.js` | OS control (screen access + input), **on by default; kill switch and per-machine off**: the public API (`createControl`), the gate (enabled → allowFrom → lease → lock → rate limit → backend ready), lease, rate limits, audit (`logs/control.jsonl`), announcements, persistent kill (`control-state.json`), pure `selectBackend`. Design: `docs/full-access.md` |
 | `src/control-api.js` | `/api/local/control/*` routes (status, screenshot, windows, focus, pointer, type, key, enable, kill, grant, audit) and the announcements/attention item; `POST /api/mesh/control/kill` lives in `server.js` |
-| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, Linux uinput root step, GNOME extension) |
+| `src/control-setup.js` | The default-on migration's decision and the first-run setup at boot (helper start, macOS helper install, Linux uinput root step, GNOME extension) |
+| `src/control-mac-helper.js` | macOS RIGS Control.app: build when the source hash changes, its own LaunchAgent (`dev.rigs.control`; a scratch `RIGS_HOME` gets `dev.rigs.control.<hash8>`, also as its bundle id so TCC keeps its grants apart), one-shot socket requests, stale-grant reset. CLI `rigs control helper`. Tests inject the runner: never load a real LaunchAgent from a test |
 | `src/control-{linux,mac,win}.js`, `src/control-rpc.js`, `src/control-error.js` | Platform adapters that start and talk to the helper, the JSON-lines helper transport and the error type |
-| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`) and `rigs-control.ps1`. The macOS helper (`macos/RigsControl.swift`) is not written yet; until it is, macOS reports no backend and fails closed |
+| `scripts/control/` | Helper sources: `rigs-control-linux.py` (+ `gnome-extension/`), `rigs-control.ps1`, and `macos/` (`RigsControl.swift`, `Info.plist`, `build.sh`): the macOS helper that holds Screen Recording + Accessibility itself, so `node` never needs them; `macos/live-check.js` runs the live screenshot/windows/TextEdit check against a dev daemon; `linux/live-check.js` the Wayland service-mode check (session env, locked 423s, screenshot, typing into its own scratch window) |
 | `src/access.js` | Permission status per OS (files, screen capture, input, accessibility) with fix hints and the guided grant |
 | `src/ssh.js` | Mesh SSH key, authorized_keys + `~/.ssh/config` aliases for verified peers |
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
@@ -66,6 +67,14 @@ treat `main` as production.
   not add a route or MCP tool that bypasses the gate, the lease, the audit log or the kill switch. Every refusal is
   audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
   or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
+- Control safety rules (all of them, in every control change): every call goes through the gate, which checks
+  enabled → allowFrom → lease → lock → rate limit → backend. Every action, refusal and switch is written to
+  `logs/control.jsonl` (the audit log); the audit must be writable before a call touches the desktop. The kill
+  switch (`rigs control off`, `POST /api/local/control/kill`, the ⌃⌥⌘⎋ hotkey on macOS) stops the backends at
+  once and persists across restarts. Typing never uses Unicode `SetKeymap`: Wayland types keysyms and answers
+  `unsupported` (501) for characters it cannot type.
+- Agent-facing control tools (`mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`) must ask Sir before
+  use unless the task brief allows it for that machine. Nothing a tool or agent does may turn control back on.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test

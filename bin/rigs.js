@@ -173,7 +173,25 @@ const commands = {
   },
   async control() {
     const [sub, ...rest] = argv;
-    if (sub !== 'off') { console.log('usage: rigs control off [reason]   — local kill switch: stop OS control (screen + input) on this machine and keep it off until a person re-enables it in JARVIS'); process.exit(sub ? 1 : 0); }
+    if (sub === 'helper' && process.platform === 'darwin') {
+      // macOS: RIGS Control.app, the helper that holds Screen Recording + Accessibility (docs/full-access.md §4).
+      const H = await import('../src/control-mac-helper.js');
+      const { default: fs } = await import('node:fs');
+      const what = rest[0] || 'status';
+      try {
+        if (what === 'install') console.log(JSON.stringify(await H.installMacHelper(), null, 2));
+        else if (what === 'stop') console.log(JSON.stringify(await H.stopMacHelper(), null, 2));
+        else if (what === 'remove') console.log(JSON.stringify(await H.uninstallMacHelper(), null, 2));
+        else if (what === 'status') {
+          const p = H.helperPaths();
+          let probe = null;
+          try { probe = await H.requestHelper(undefined, 'probe'); } catch (e) { probe = { error: e.message }; }
+          console.log(JSON.stringify({ label: p.label, name: p.name, app: p.app, built: fs.existsSync(p.hashFile), current: H.builtHash(p) === H.wantedHash(p), ...probe }, null, 2));
+        } else { console.log('usage: rigs control helper [status|install|stop|remove]'); process.exit(1); }
+      } catch (e) { console.error(`${e.message}${e.fix?.text ? `\n${e.fix.text}` : ''}`); process.exit(1); }
+      return;
+    }
+    if (sub !== 'off') { console.log('usage: rigs control off [reason]   — local kill switch: stop OS control (screen + input) on this machine and keep it off until a person re-enables it in JARVIS\n       rigs control helper [status|install|stop|remove]   — macOS: the RIGS Control helper app and its LaunchAgent'); process.exit(sub ? 1 : 0); }
     const reason = rest.join(' ') || 'rigs control off';
     const caller = { via: 'cli', who: 'cli' };
     let r;
@@ -204,6 +222,8 @@ const commands = {
   rigs propose [--title T]  hand the committed branch (cwd) to the merge steward
   rigs merge           merge steward + queue status
   rigs control off [reason]  kill switch: stop OS control (screen + input) on this machine, stays off
+  rigs control helper [status|install|stop|remove]
+                       macOS: build/start RIGS Control.app (holds Screen Recording + Accessibility)
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs service [uninstall]  (re)install or remove the autostart service`);

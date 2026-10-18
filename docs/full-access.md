@@ -90,7 +90,7 @@ Legend: ✅ works with no prompt · 🔑 needs a one-time grant/consent at the m
 | Capability / requirement | macOS | Wayland · GNOME | Wayland · wlroots / KDE | X11 | Windows |
 | --- | --- | --- | --- | --- | --- |
 | **Screenshot** | 🔑 Screen Recording → ScreenCaptureKit `SCScreenshotManager` (14+) or `screencapture -x` | ✅ Mutter ScreenCast → PipeWire frame (**verified**); 🔑 portal ScreenCast (restore token) / Screenshot; ❌ `org.gnome.Shell.Screenshot` (allow-listed) | wlr: ✅ `grim` (wlr-screencopy). KDE: 🔑 portal ScreenCast/Screenshot, or `spectacle -b -n` | ✅ `XGetImage` / `import` / `xwd` | ✅ GDI `BitBlt` / `CopyFromScreen` (per-monitor DPI aware) |
-| **Window list** | 🔑 `CGWindowListCopyWindowInfo` (titles need Screen Recording) + AX | ❌ `Shell.Introspect` (AccessDenied); 🔑 RIGS Shell extension (one re-login); ⚠️ AT-SPI (misses Firefox, Unity) | wlr: ✅ `swaymsg -t get_tree` / `hyprctl clients -j`. KDE: ✅ KWin scripting over D-Bus | ✅ EWMH `_NET_CLIENT_LIST` (`wmctrl -lG`) | ✅ `EnumWindows` + `GetWindowText` |
+| **Window list** | 🔑 Screen Recording: `CGWindowListCopyWindowInfo` (on-screen windows; titles need Screen Recording, so RIGS gates the list on it, not on Accessibility) | ❌ `Shell.Introspect` (AccessDenied); 🔑 RIGS Shell extension (one re-login); ⚠️ AT-SPI (misses Firefox, Unity) | wlr: ✅ `swaymsg -t get_tree` / `hyprctl clients -j`. KDE: ✅ KWin scripting over D-Bus | ✅ EWMH `_NET_CLIENT_LIST` (`wmctrl -lG`) | ✅ `EnumWindows` + `GetWindowText` |
 | **Focus window** | 🔑 Accessibility: `AXRaise` + `NSRunningApplication.activate` | 🔑 RIGS Shell extension (`Meta.Window.activate`) | wlr: ✅ `swaymsg '[con_id=N] focus'` / `hyprctl dispatch focuswindow`. KDE: ✅ KWin script `workspace.activeWindow = w` | ✅ `_NET_ACTIVE_WINDOW` (`xdotool windowactivate`) | ⚠️ `SetForegroundWindow` (foreground-lock rules; AttachThreadInput / Alt workaround) |
 | **Pointer move/click/scroll** | 🔑 Accessibility (PostEvent): `CGEventPost(kCGHIDEventTap)` | ✅ Mutter RemoteDesktop (**verified**); 🔑 portal RemoteDesktop v2 (restore token); 🔑 uinput | wlr: ✅ `wlrctl` (virtual-pointer). KDE: 🔑 portal RemoteDesktop. Both: 🔑 uinput | ✅ XTEST (`xdotool`) | ✅ `SendInput` (not into elevated windows: UIPI) |
 | **Keys / combos** | 🔑 Accessibility: `CGEventCreateKeyboardEvent` | ✅ Mutter `NotifyKeyboardKeysym` / keycode | wlr: ✅ `wtype`. KDE: 🔑 portal. Both: 🔑 uinput | ✅ XTEST | ✅ `SendInput` |
@@ -159,10 +159,10 @@ XTEST, `XGetImage` and EWMH, called through `ctypes` (`libX11`, `libXtst`) in th
 
 | Need | 1st (default) | Fallback (opt-in) |
 | --- | --- | --- |
-| Capture | **RIGS Control.app** helper: ScreenCaptureKit `SCScreenshotManager.captureImage` (macOS 14+), else `screencapture -x -t png [-D n] [-l windowid] [-R x,y,w,h]` spawned by the helper | `config.control.backend = "mac-jxa"`: `screencapture` spawned by the daemon (grant on `node`) |
+| Capture | **RIGS Control.app** helper: `screencapture -x -t png -D n` (or `-o -l windowid`) spawned **by the helper**, so the grant is the helper's; region crop, downscale and JPEG in the helper (ImageIO). Built: macbookpro's toolchain is Xcode 13.3 / macOS 12.3 SDK, which has no `SCScreenshotManager` (macOS 14 SDK); moving to ScreenCaptureKit is later work | `config.control.backend = "mac-jxa"`: `screencapture` spawned by the daemon (grant on `node`) |
 | Input | helper: `CGEventCreateMouseEvent` / `CGEventCreateKeyboardEvent`, `CGEventKeyboardSetUnicodeString`, `CGEventPost(kCGHIDEventTap)`; points = pixels ÷ backing scale | JXA via `osascript -l JavaScript` (CGEvent through the ObjC bridge) on node's grants |
 | Windows | helper: `CGWindowListCopyWindowInfo` (id, owner, pid, bounds, title) + AX (`AXUIElementCreateApplication` → `kAXWindowsAttribute` → `AXRaise`, `kAXMainAttribute`) + `NSRunningApplication.activate` | System Events via JXA (needs Automation **and** Accessibility) |
-| Helper | `scripts/control/macos/RigsControl.swift` compiled with `swiftc` into `~/.rigs/bin/RIGS Control.app` (bundle id `dev.rigs.control`, ad-hoc signed), run as its **own LaunchAgent** `dev.rigs.control` (`ProcessType Interactive`, `LimitLoadToSessionType Aqua`), socket `~/.rigs/run/control.sock` (0600) + per-start token `~/.rigs/run/control.token` (0600) | |
+| Helper | `scripts/control/macos/RigsControl.swift` compiled by `scripts/control/macos/build.sh` (`swiftc`) into `~/.rigs/bin/RIGS Control.app` (bundle id `dev.rigs.control`, `LSUIElement`, ad-hoc signed), run as its **own LaunchAgent** `dev.rigs.control` (`ProcessType Interactive`, `LimitLoadToSessionType Aqua`, `KeepAlive` on crash only), socket `~/.rigs/run/control.sock` (0600, same-uid peers only) + per-start token `~/.rigs/run/control.token` (0600). Installer: `src/control-mac-helper.js`, CLI `rigs control helper [status\|install\|stop\|remove]`. A non-default `RIGS_HOME` (dev/scratch) gets its own label `dev.rigs.control.<hash8>`, which is also its bundle id and code-signing identifier, and is listed as "RIGS Control (dev)": TCC keeps one entry per bundle id, so a dev build never replaces the real helper, its grants, or its reset | |
 
 Why a separate helper app. TCC attributes a request to the **responsible process**. For a launchd job that is
 the job's own executable, and fork/exec children inherit it. So without a helper, every grant would land on
@@ -178,10 +178,12 @@ Sunshine already follows this model on the Mac (`dev.rigs.sunshine` holds its ow
 inheritance rule on macbookpro.
 
 Signing caveat: with no Developer ID, the helper is ad-hoc signed, so TCC pins its grant to the **cdhash**.
-RIGS rebuilds it **only when the Swift source hash changes**, and records the hash in
-`~/.rigs/control-state.json`. When the hash changes, status says "helper updated — re-grant", and the grant
-flow runs `tccutil reset ScreenCapture dev.rigs.control` and `tccutil reset Accessibility dev.rigs.control`
-first; that only resets RIGS's own entries. A self-signed local code-signing identity or a Developer-ID-signed
+RIGS rebuilds it **only when the source hash changes** (sha256 of `RigsControl.swift`, `Info.plist` and `build.sh`;
+the build stores it with the bundle id in the bundle at `Contents/Resources/source.sha256`). Every build records
+`regrant: true` in `~/.rigs/control-helper.json` (not `control-state.json`, which `control.js` rewrites whole), because
+any entry already under its bundle id belongs to an older build; status then says "a new build", and the grant flow
+runs `tccutil reset ScreenCapture <bundle id>` and `tccutil reset Accessibility <bundle id>` first, only for a grant
+the new build does not already hold. That only resets this home's own entries. A self-signed local code-signing identity or a Developer-ID-signed
 CI build would make grants survive rebuilds; that is optional later work. With no `swiftc` (no Command Line
 Tools), status gives the fix "run `xcode-select --install`", and the user may opt into `mac-jxa` knowing the
 grant then covers all of `node`.
@@ -448,7 +450,7 @@ It **persists across restarts**, and only `enable()` from a human surface undoes
 | Any JARVIS UI | **Stop control now** and **Stop on every machine** in the Access & control panel (also on its "in control" banner). *Designed, not built yet:* a Stop button on the attention item (it carries `stop: {POST control/kill}`), **✋ Hands off** in Mesh control, voice "hands off" / "stop control" |
 | API / agents | `POST control/kill`, `POST /api/mesh/control/kill` |
 | The machine itself | `rigs control off [reason]`: asks the daemon to kill; with the daemon down it writes the kill marker and config directly (no pidfile needed: the Linux and Windows helpers stop themselves when the daemon's pipe closes) |
-| Hotkey on the machine | *Designed, not built yet:* | GNOME/KDE: a custom shortcut **Super+Shift+Esc** → `rigs control off`, added via `gsettings` custom keybinding when control is enabled and removed when disabled. macOS: **⌃⌥⌘⎋** registered by the helper with Carbon `RegisterEventHotKey` (no Input Monitoring needed). Windows: `RegisterHotKey` in the helper. `control.killHotkey` overrides |
+| Hotkey on the machine | macOS (built): **⌃⌥⌘⎋**, registered by RIGS Control with Carbon `RegisterEventHotKey` (no Input Monitoring needed); the helper ends typing in progress at the next character, releases held input and sends `hotkey`, which kills (a `stop` request, SIGTERM and the driving connection closing end typing the same way). The adapter keeps a second listening connection so a press between leases still arrives. *Designed, not built yet:* GNOME/KDE: a custom shortcut **Super+Shift+Esc** → `rigs control off`, added via `gsettings` custom keybinding when control is enabled and removed when disabled. Windows: `RegisterHotKey` in the helper. `control.killHotkey` overrides |
 | GNOME indicator | **Stop** on the top-bar sharing indicator closes the Mutter session; the helper's `closed` event is treated as a kill. A helper that merely exits (crash, logout) is not a kill: it ends the lease (`exit` event) |
 
 ### Agent rules (t8 writes them into `setup.js` instructions and AGENTS.md)
@@ -492,7 +494,7 @@ t6 re-checks every anchor on macOS 26; the Ventura+ form
 
 | Permission (TCC service) | Needed for | System Settings pane URL | How RIGS detects it | How RIGS requests it |
 | --- | --- | --- | --- | --- |
-| **Screen Recording** (`kTCCServiceScreenCapture`) | screenshots; window titles | `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture` | helper: `CGPreflightScreenCaptureAccess()`. JXA fallback: `CGWindowListCopyWindowInfo` shows `kCGWindowName` for other apps' windows only when granted (verified: 0 of 38 without it) | helper calls `CGRequestScreenCaptureAccess()` (system prompt, once), then `open <url>` + `open -R "~/.rigs/bin/RIGS Control.app"`; after the switch is on, `launchctl kickstart -k gui/<uid>/dev.rigs.control` (capture rights apply to new processes) |
+| **Screen Recording** (`kTCCServiceScreenCapture`) | screenshots; window titles | `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture` | helper: `CGPreflightScreenCaptureAccess()`. JXA fallback: `CGWindowListCopyWindowInfo` shows `kCGWindowName` for other apps' windows only when granted (verified: 0 of 38 without it) | helper calls `CGRequestScreenCaptureAccess()` (system prompt, once), then `open <url>` + `open -R "~/.rigs/bin/RIGS Control.app"`. No restart: a running process keeps its launch-time answer, so when that was "no" the helper asks a fresh child (`rigs-control --preflight`), and capture itself is a child (`screencapture`), so a new grant applies at once. System Settings then offers "Quit & Reopen": the helper declines the quit (otherwise launchd, which restarts it only after a crash, would leave it stopped), and a copy started by LaunchServices takes its home from its own location (`<home>/bin/RIGS Control.app`) and exits when the socket already answers |
 | **Accessibility** (`kTCCServiceAccessibility`, includes PostEvent) | pointer, keys, typing (`CGEventPost`); AX window list, raise, focus | `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` | helper: `AXIsProcessTrusted()` and `CGPreflightPostEventAccess()`. JXA: `AXIsProcessTrusted()` (verified bridged) | helper: `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})` (prompt + adds the entry), then `open <url>` |
 | **Full Disk Access** (`kTCCServiceSystemPolicyAllFiles`) | full *file* access (Mail, Safari, Messages data). Not needed for control | `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles` | existing `access.js`: `readdir ~/Library/Safari` or `~/Library/Mail` | cannot be requested in code: existing `grantFullDiskAccess()` opens the pane and reveals `process.execPath` (FDA belongs on the daemon's `node`, because agents need the files) |
 | **Automation → System Events** (`kTCCServiceAppleEvents`) | only the `mac-jxa` fallback's window list/focus. Not needed by the helper | `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation` | helper: `AEDeterminePermissionToAutomateTarget(com.apple.systemevents, typeWildCard, typeWildCard, askUserIfNeeded: false)` → `noErr` / `errAEEventNotPermitted (-1743)` / `errAEEventWouldRequireUserConsent (-1744)` | the first Apple Event prompts; there is no way to pre-add the entry, so it is only triggered from an explicit Grant click |
@@ -503,9 +505,10 @@ Notes for the macOS flow:
 - **A human must be at the Mac.** TCC prompts and switches ignore synthetic input, so the panel shows
   "Waiting for you on macbookpro: switch on *RIGS Control* in Screen Recording and Accessibility" until the
   preflight turns true. Status polls every 3 s while the panel is open.
-- **Build step**: `swiftc -O RigsControl.swift -o "RIGS Control.app/Contents/MacOS/rigs-control"` with
-  `-framework ScreenCaptureKit -framework ApplicationServices`, an `Info.plist` with `CFBundleIdentifier`
-  `dev.rigs.control` and `LSUIElement` true, then `codesign --force --sign - --identifier dev.rigs.control`.
+- **Build step**: `scripts/control/macos/build.sh "<RIGS_HOME>/bin/RIGS Control.app"` runs `swiftc -O` on
+  `RigsControl.swift` (AppKit, ApplicationServices, Carbon, CoreGraphics, ImageIO; kept Swift 5.6 / macOS 12.3 SDK
+  compatible), copies `Info.plist` (`dev.rigs.control`, `LSUIElement` true), stores the source hash, then
+  `codesign --force --sign - --identifier dev.rigs.control` and `codesign --verify --strict`.
   `swiftc` is present on macbookpro; elsewhere the fix is `xcode-select --install`.
 - **macOS 15+** may periodically ask to re-confirm screen capture for apps that capture outside the system
   picker. That needs a human, and status reports it as `screenCapture.ok = false` with the same fix.
@@ -535,6 +538,14 @@ below says to turn on **Screen access** or **Full control**, that applies only t
    `~/.local/share/gnome-shell/extensions/` and runs `gnome-extensions enable rigs-control@rigs.dev`. No root.
 4. Log out once (the **relogin** step), so GNOME Shell loads the extension.
 5. Turn on **Full control** if you want input. Input uses Mutter RemoteDesktop. `uinput` is only a fallback.
+6. Check it live (service mode, from a checkout on the machine, with a dev daemon on a scratch `RIGS_HOME`, control on
+   in that scratch config only): `node scripts/control/linux/live-check.js http://127.0.0.1:<port>`. It checks the session
+   env, that a locked screen answers 423, a screenshot, the window list, and typing into its own scratch window
+   (read back from the window). Unicode text must answer 501 `unsupported`.
+   GNOME uses Mutter, which shows no dialog and issues no restore token, so there is no second prompt by design.
+   On the portal path (KDE, wlroots with a portal) the first session needs one approval at the machine; the restore
+   token in `~/.rigs/control-state.json` is handed back after a restart, so the prompt does not come back.
+   If `/dev/uinput` is used as the fallback, its rule is `TAG+="uaccess"` (see wlroots below), never the `input` group.
 
 ### Linux · KDE Plasma on Wayland
 
@@ -558,24 +569,33 @@ below says to turn on **Screen access** or **Full control**, that applies only t
 3. Session type is read from `XDG_SESSION_TYPE` only when it is `wayland` or `x11`. Any other value, such as `tty`
    over SSH, falls back to `WAYLAND_DISPLAY` or `DISPLAY` (fixed in 38cd719).
 
-### macOS (macbookpro, not verified end to end)
+### macOS (macbookpro)
 
-The macOS helper is **not built yet**. Until it is, `control.status()` reports every backend as null with
-`ready: false`. Screenshot, key and type fail closed with `needs-permission: RIGS Control helper is not installed
-or running`, and kill still works. Verified on macbookpro (arm64, node 26.12.0): `npm test` passes, with 1 expected skip.
+Built and verified on macbookpro (macOS 26.3.1, Xcode 13.3 toolchain) in project 8eb2687046; evidence and the
+grants record are in docs/control-implementation.md ("macOS helper").
 
-Once the helper exists, the steps are:
-
-1. Build `RIGS Control.app` from `scripts/control/macos/RigsControl.swift` (`swiftc -O`, with ScreenCaptureKit
-   and ApplicationServices). Give it the bundle id `dev.rigs.control` and `LSUIElement` true, then ad-hoc sign it.
-   Install the LaunchAgent `dev.rigs.control`. Its socket and token live under `~/.rigs/run`.
+1. At boot, whenever control is on, first-run setup (`ensureControlSetup`) runs `installMacHelper()`: it builds
+   `RIGS Control.app` with `scripts/control/macos/build.sh` when the source hash changed (`swiftc -O`, AppKit,
+   ApplicationServices, Carbon; `Info.plist` with `dev.rigs.control` and `LSUIElement`; ad-hoc `codesign`), writes
+   `~/Library/LaunchAgents/dev.rigs.control.plist` and bootstraps it in `gui/<uid>`. By hand: `rigs control helper install`.
+   No `swiftc`: setup reports the fix "run `xcode-select --install`".
 2. A human at the Mac grants **Screen Recording** and **Accessibility** to **RIGS Control**. Synthetic input cannot
-   click those prompts. The panel shows "Waiting for you on macbookpro" until the preflight is true.
-3. Restart the helper with `launchctl kickstart -k gui/<uid>/dev.rigs.control`, so the new capture rights apply.
-4. Keep **Full Disk Access** on the daemon's `node`, not on RIGS Control. Screen Recording and Accessibility must not
-   be granted to `node`, or every agent bypasses the gate. Status warns when this happens.
-5. Re-run the macOS checks: ScreenCaptureKit capture, CGEvent input, window list and focus, the grant flow, lock
-   detection, helper stop, and the ⌃⌥⌘⎋ kill hotkey. Live screen driving on macbookpro needs Sir's explicit OK.
+   click those prompts. The Grant buttons (Access & control panel, `POST control/grant`) start the helper if needed,
+   let it show the system prompt (which adds it to the list), open the pane and reveal the app in Finder.
+   Status reads false with the pane's fix until the switch is on; no restart is needed.
+3. Keep **Full Disk Access** on the daemon's `node`, not on RIGS Control. Screen Recording and Accessibility must not
+   be granted to `node` (or a terminal that starts RIGS), or every agent bypasses the gate. Status warns (`nodeGrants`).
+4. The kill switch and switching control off unload the LaunchAgent (`launchctl bootout`); switching it on again
+   re-runs setup, which bootstraps it. The grants stay with the app across stops, reboots and RIGS updates that do not
+   change the helper's sources.
+5. Remove or reset by hand: `rigs control helper stop`, then `rigs control helper install` (or `remove`). A dev home
+   (`RIGS_HOME=<worktree>/.rigs-dev/mac`) gets the LaunchAgent `dev.rigs.control.<hash8>` and the app "RIGS Control (dev)";
+   remove it with `RIGS_HOME=<worktree>/.rigs-dev/mac node bin/rigs.js control helper remove`. A stale plain
+   "RIGS Control" entry from an older dev build stays in System Settings until the first real install's Grant clears it.
+6. Live check, after a human has switched on Screen Recording and Accessibility for the dev build and the Mac is unlocked:
+   start the dev daemon with the scratch env, then `node scripts/control/macos/live-check.js http://127.0.0.1:<port>`.
+   It writes a screenshot, the window list and a TextEdit screenshot, and checks that the typed text was saved.
+   Without Accessibility the window list, focus, pointer and typing cannot be checked.
 
 ### Windows (unverified)
 
