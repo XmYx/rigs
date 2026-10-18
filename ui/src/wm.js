@@ -1,12 +1,16 @@
 import { h } from './api.js';
 import { isPhone } from './mobile.js';
 import { dialogify } from './a11y.js';
+import { registerDockable, unregisterDockable, setDockTitle } from './docking.js';
 
-// Minimal floating window manager: drag by the title bar, resize from the corner,
-// click to raise, maximize, close. Terminals, file browsers and session viewers live here.
+// Minimal floating window manager: drag by the whole title bar (docking.js; buttons in it still click),
+// double-click the bar to maximise/restore, resize from the corner, click to raise, close. With the
+// docking layout on, a window docks beside a panel or another window, or as a tab. Terminals, file
+// browsers and session viewers live here.
 
 let z = 100;
 let cascade = 0;
+let seq = 0;
 const windows = new Set();
 // Phones: windows open full-screen (styles.css, MOBILE LAYOUT) and each owns a history entry, so the
 // browser/OS back gesture closes the top one instead of leaving JARVIS.
@@ -41,22 +45,18 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   win.addEventListener('pointerdown', raise);
 
   const bar = win.querySelector('.win-bar');
-  bar.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button,select,input') || win.classList.contains('max') || isPhone()) return;
-    const sx = e.clientX;
-    const sy = e.clientY;
-    const ox = win.offsetLeft;
-    const oy = win.offsetTop;
-    bar.setPointerCapture(e.pointerId);
-    const move = (ev) => {
-      win.style.left = Math.min(window.innerWidth - 80, Math.max(-w + 120, ox + ev.clientX - sx)) + 'px';
-      win.style.top = Math.min(window.innerHeight - 40, Math.max(0, oy + ev.clientY - sy)) + 'px';
-    };
-    const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); };
-    bar.addEventListener('pointermove', move);
-    bar.addEventListener('pointerup', up);
+  const id = `win-${++seq}`;
+  registerDockable(id, {
+    el: win, title, kind: 'window', handles: [bar], raise,
+    canDrag: () => !win.classList.contains('max') && !isPhone(),
+    // Keep at least 120px of the window and its bar on screen.
+    clamp: (left, top, ww) => [Math.min(window.innerWidth - 80, Math.max(-ww + 120, left)), Math.min(window.innerHeight - 40, Math.max(0, top))],
   });
-  bar.addEventListener('dblclick', (e) => { if (!e.target.closest('button')) win.classList.toggle('max'); });
+  bar.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button,select,input') || win.classList.contains('docked') || isPhone()) return;
+    const max = win.classList.toggle('max');
+    win.querySelector('.win-btn[aria-label="Maximize"]')?.setAttribute('aria-pressed', String(max));
+  });
 
   const ro = new ResizeObserver(() => win.dispatchEvent(new CustomEvent('winresize')));
   ro.observe(body);
@@ -69,6 +69,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     if (i >= 0) { backStack.splice(i, 1); if (!fromBack) { skipPop++; history.back(); } }
     ro.disconnect();
     windows.delete(win);
+    unregisterDockable(id);
     onClose?.();
     dlg.release();
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { win.remove(); return; }
@@ -76,7 +77,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     setTimeout(() => win.remove(), 180);
   }
   if (isPhone()) { history.pushState({ rigsWin: true }, ''); backStack.push(close); }
-  return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
+  return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }
