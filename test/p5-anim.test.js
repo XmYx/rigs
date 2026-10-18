@@ -82,11 +82,42 @@ test('every entry kind has a sketch, and unknown kinds get one too', () => {
   assert.deepEqual(Object.keys(A.SKETCHES).sort(), [...new Set(Object.values(A.KIND_SKETCH))].sort(), 'no sketch without a kind');
 });
 
+const INFO = A.contextFrom({ id: 'e1', kind: 'step', seq: 3, title: 'Migrate users table', caption: 'Dump 12 rows; rewrite schema; verify 100% copied' }, { title: 'Migration', total: 5, counts: { intake: 1, plan: 1, step: 2, result: 1 } });
+const BAD_INFO = A.contextFrom({ id: 'e2', kind: 'result', seq: 5, title: 'Build failed', caption: 'error in 3 files' }, { total: 5, counts: { step: 4, result: 1 } });
+
+test('contextFrom pulls keywords, numbers, steps, tone and position out of a card', () => {
+  assert.deepEqual(INFO.words.slice(0, 3), ['Migrate', 'users', 'table']);
+  assert.ok(!INFO.words.includes('and') && INFO.words.length <= 12);
+  assert.deepEqual(INFO.nums, ['12', '100%']);
+  assert.equal(INFO.steps.length, 3);
+  assert.equal(INFO.tone, 'neutral');
+  assert.equal(BAD_INFO.tone, 'bad');
+  assert.equal(A.contextFrom({ title: 'Merged and shipped' }).tone, 'good');
+  assert.equal(INFO.pos, 3 / 5);
+  assert.equal(INFO.docTitle, 'Migration');
+  const none = A.contextFrom();
+  assert.deepEqual([none.words, none.nums, none.seq, none.pos], [[], [], 0, 0.5], 'an empty card is harmless');
+});
+
+test('a sketch shows what the card is about: its words are drawn as text, and the cards differ', () => {
+  const texts = (id, info) => { const p = fakeP(); const ctx = { t: 0, seed: 5, pal: PAL, info, reset: null }; A.SKETCHES[id](p, ctx); ctx.reset?.(); for (let i = 0; i < 150; i++) { ctx.t++; p.draw(); } return p.calls.filter((c) => c[0] === 'text').map((c) => c[1]); };
+  assert.ok(texts('ripple', INFO).some((t) => INFO.words.includes(t)), 'intake: keywords ride the rings');
+  assert.ok(texts('constellation', INFO).length >= 3, 'plan: nodes are named');
+  assert.ok(texts('flow', INFO).includes('03 / 05'), 'step: n / total');
+  assert.ok(texts('orbit', INFO).includes('3 / 5'), 'milestone: n / total');
+  assert.ok(texts('bloom', BAD_INFO).includes('3'), 'result: the number from the text');
+  assert.ok(texts('aurora', INFO).includes('2 step'), 'summary: the kind mix');
+  assert.notEqual(JSON.stringify(texts('ripple', INFO)), JSON.stringify(texts('ripple', BAD_INFO)));
+  const bloomCalls = (info) => { const p = fakeP(); const ctx = { t: 0, seed: 5, pal: PAL, info, reset: null }; A.SKETCHES.bloom(p, ctx); for (let i = 0; i < 100; i++) { ctx.t++; p.draw(); } return JSON.stringify(p.calls); };
+  assert.notEqual(bloomCalls(INFO), bloomCalls(BAD_INFO), 'a failed result draws a cross, not a check');
+});
+
 for (const [id, sketch] of Object.entries(A.SKETCHES)) {
   test(`sketch ${id} draws over time, inside bounds, in both themes and at tiny sizes`, () => {
     for (const [pal, w, h] of [[PAL, 320, 180], [{ ...PAL, px: 4 }, 80, 45], [PAL, 1, 1]]) {
+      for (const info of [undefined, INFO, BAD_INFO]) {
       const p = fakeP(w, h);
-      const ctx = { t: 0, seed: A.hashSeed(id), pal, reset: null };
+      const ctx = { t: 0, seed: A.hashSeed(id), pal, info, reset: null };
       sketch(p, ctx);
       assert.equal(typeof p.draw, 'function', 'sets p.draw');
       ctx.reset?.();
@@ -95,6 +126,7 @@ for (const [id, sketch] of Object.entries(A.SKETCHES)) {
       for (const c of p.calls) for (const v of c.slice(1)) assert.ok(typeof v !== 'number' || Number.isFinite(v), `${id}: ${c[0]} got a non-finite number`);
       const bg = p.calls.filter((c) => c[0] === 'background' || (c[0] === 'rect' && c[3] >= w));
       assert.ok(bg.length > 0, `${id} paints its own background`);
+      }
     }
   });
 }

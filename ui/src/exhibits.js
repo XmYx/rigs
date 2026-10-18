@@ -3,7 +3,7 @@ import { prefersReducedMotion } from './a11y.js';
 import { isPhone } from './mobile.js';
 import { openWindow } from './wm.js';
 import { renderVisual } from './visual.js';
-import { mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
+import { contextFrom, mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
 import { onTheme } from './themes.js';
 import * as M from './exhibits-model.js';
 
@@ -171,8 +171,13 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     if (!fig) return;
     const host = h('div', { class: 'ex-p5', 'aria-hidden': 'true' });
     fig.prepend(host);
+    const rec = cur();
+    const entries = rec?.doc.entries || [];
+    const counts = {};
+    for (const e of entries) counts[e.kind] = (counts[e.kind] || 0) + 1;
     const handle = mountSketch(host, {
-      id: sketchFor(entry.kind), seed: entry.id,
+      id: sketchFor(entry.kind), seed: `${rec?.doc.title || ''}|${entry.id}`, // the document's title too: the same step in two tasks looks different
+      info: contextFrom(entry, { title: rec?.doc.title, total: entries.length, counts }), // what the card is about, drawn as data
       reducedMotion: () => prefersReducedMotion() || st.view === 'document',
       onReady: () => host.classList.add('in'),
       onError: () => { sketches.delete(entry.id); host.remove(); },
