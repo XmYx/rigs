@@ -344,10 +344,14 @@ const TOOLS = [
     },
   },
   {
-    name: 'exhibit_get', description: 'Exhibits (experimental, config.exhibits): the illustrated running account of a request (docId = its traceId) or a project (docId "pr-<projectId>"). Without docId: every machine\'s documents. With docId (and the machine that holds it as node, default this one): its entries in order (kind, title, caption, visual) and whether it is final; format "md" gives it as Markdown.',
-    inputSchema: { type: 'object', properties: { docId: { type: 'string' }, node: { type: 'string' }, format: { type: 'string', enum: ['json', 'md'] } } },
+    name: 'exhibit_get', description: 'Exhibits (experimental, config.exhibits): the illustrated running account of a request (docId = its traceId) or a project (docId "pr-<projectId>"). Without docId: every machine\'s documents. With docId (and the machine that holds it as node, default this one): its entries in order (kind, title, caption, visual) and whether it is final; format "md" gives it as Markdown. attach:true (project docId) first builds the document from the project\'s current state, for a project that was running before exhibits were switched on.',
+    inputSchema: { type: 'object', properties: { docId: { type: 'string' }, node: { type: 'string' }, format: { type: 'string', enum: ['json', 'md'] }, attach: { type: 'boolean', description: 'with a project docId ("pr-<projectId>", on the machine that owns the project): build its document from the project\'s current state first — for a project that was already running when exhibits came on. Idempotent.' } } },
     run: async (a) => {
       if (!a.docId) return api('/api/exhibits', { timeout: 30000 });
+      if (a.attach) {
+        if (!/^pr-/.test(a.docId)) throw new Error('attach needs a project docId (pr-<projectId>)');
+        await api(`/api/nodes/${n(a.node)}/exhibits/attach`, { method: 'POST', body: { projectId: a.docId.slice(3) }, timeout: 60000 });
+      }
       const d = await api(`/api/nodes/${n(a.node)}/exhibits/${encodeURIComponent(a.docId)}`, { timeout: 30000 });
       // Images are data URIs or files: name their source instead of sending base64 to the agent.
       if (a.format === 'md') return documentToMarkdown(d, { image: () => '' });

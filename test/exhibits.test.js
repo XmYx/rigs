@@ -136,6 +136,95 @@ test('projectToExhibits: baseline first; task outcomes and project done (final)'
   assert.deepEqual(X.projectToExhibits(p('running', []), { ...p('done', []), main: true }), [], 'the standing project never finishes');
 });
 
+// A project that was already running when exhibits came on: three tasks done / running / waiting, with a log.
+const RUNNING = () => ({
+  id: 'p0777', name: 'Backfill me', goal: 'Do the thing', request: `do the thing with key ${SECRETS[0]}`, summary: 'Three steps.', status: 'running', createdAt: 1000, updatedAt: 9000,
+  log: [{ ts: 1500, text: 'planned 3 tasks' }, { ts: 2000, text: 't1 started on mac via seat-a' }, { ts: 5000, text: 't1 → done: built it' }],
+  tasks: [
+    { id: 't1', title: 'Build', status: 'done', summary: 'Built it.', attempts: 0, deps: [], assign: { node: 'mac', model: 'claude-opus-5-5' }, run: { seat: 'seat-a', startedAt: 2000 } },
+    { id: 't2', title: 'Test', status: 'running', deps: ['t1'], assign: { node: 'mac', model: 'claude-opus-5-5' }, run: { seat: 'seat-b', startedAt: 6000 } },
+    { id: 't3', title: 'Review', status: 'todo', deps: ['t1', 't2'], assign: { node: 'mac' } },
+  ],
+});
+
+test('projectBackfill: intake, plan, a step per task and the outcomes so far; same ids as the live path; pure and redacted', () => {
+  const p = RUNNING();
+  const frozen = JSON.stringify(p);
+  const r = X.projectBackfill(p);
+  assert.equal(JSON.stringify(p), frozen, 'input untouched');
+  assert.deepEqual(r.map((d) => `${d.kind}:${d.title}`), ['intake:Request received', 'plan:Plan: 3 tasks', 'step:t1 started', 'result:t1 done: Build', 'step:t2 started', 'step:t3 waiting']);
+  assert.deepEqual(r.map((d) => d.at), [1000, 1500, 2000, 5000, 6000, 9000], 'times come from the project and its log');
+  assert.ok(r.every((d) => d.id && d.caption && d.visual && !d.final));
+  assert.equal(r[3].id, 'task:t1:done:0', 'the outcome uses the live path id, so a later live save cannot duplicate it');
+  assert.match(r[0].caption, /^Sir asked: “do the thing with key sk-ant-\*\*\*/);
+  assertClean(r, 'the backfill');
+  assert.match(r[5].caption, /waits for t1, t2/);
+  // a finished project ends on the final summary
+  const done = X.projectBackfill({ ...RUNNING(), status: 'done', tasks: RUNNING().tasks.map((t) => ({ ...t, status: 'done' })) });
+  assert.equal(done.at(-1).kind, 'summary');
+  assert.equal(done.at(-1).final, true);
+  assert.deepEqual(X.projectBackfill({ ...RUNNING(), main: true }), [], 'the standing project has no document');
+  assert.deepEqual(X.projectBackfill(null), []);
+  // a thin project (no log, no run records) still works
+  assert.deepEqual(X.projectBackfill({ id: 'p1', tasks: [{ id: 't1', title: 'A', status: 'running' }] }).map((d) => d.kind), ['intake', 'plan', 'step']);
+});
+
+test('service attach: off → refused; on → document built; twice adds nothing; later live saves append', async () => {
+  const home = path.join(TMP, 'attach');
+  let on = false;
+  const svc = X.createExhibits({ home, getSettings: () => ({ enabled: on, images: 'svg', maxPerDoc: 60 }) });
+  await assert.rejects(svc.attach(RUNNING()), /exhibits are off/);
+  assert.equal(fs.existsSync(path.join(home, 'exhibits')), false, 'nothing written while off');
+  on = true;
+  await assert.rejects(svc.attach({ ...RUNNING(), main: true }), /not a project/);
+
+  const a = await svc.attach(RUNNING());
+  assert.deepEqual(a, { docId: 'pr-p0777', added: 6, entries: 6, final: false });
+  const file = path.join(home, 'exhibits', 'pr-p0777.jsonl');
+  const first = fs.readFileSync(file, 'utf8');
+  assert.match(first.split('\n')[0], /^\{"t":"meta".*"title":"Backfill me"/);
+  assertClean(first, 'the stored file');
+  const b = await svc.attach(RUNNING());
+  assert.deepEqual(b, { docId: 'pr-p0777', added: 0, entries: 6, final: false });
+  assert.equal(fs.readFileSync(file, 'utf8'), first, 'the second attach appends nothing to the file');
+
+  // t2 finishes: the live save appends (the attach seeded the baseline, so this is a diff, not a first sight)
+  const next = RUNNING(); next.tasks[1].status = 'done'; next.tasks[1].summary = 'Tested.'; next.updatedAt = 9500;
+  svc.handleProject(next);
+  await svc.flush();
+  let doc = await svc.get('pr-p0777');
+  assert.equal(doc.entries.length, 7);
+  assert.equal(doc.entries.at(-1).title, 't2 done: Test');
+  assert.deepEqual(doc.entries.map((e) => e.seq), [1, 2, 3, 4, 5, 6, 7]);
+  // ...and attaching again afterwards, with t2 now done, still adds only what is new
+  const c = await svc.attach(next);
+  assert.equal(c.added, 0, 'the live t2 entry is recognised');
+  assert.equal(c.entries, 7);
+
+  // a file written behind the service's back (the one-off script, another process) is picked up, not shadowed by the cache
+  const other = X.createExhibits({ home, getSettings: () => ({ enabled: true, images: 'svg', maxPerDoc: 60 }) });
+  const later = RUNNING(); later.tasks[2].status = 'running'; later.tasks[2].run = { seat: 'seat-c', startedAt: 9600 }; later.updatedAt = 9600;
+  assert.equal((await other.attach(later)).added, 1, 't3 started: the one new step');
+  assert.equal((await svc.get('pr-p0777')).entries.length, 8, 'svc sees the entry the other service wrote');
+  svc.handleProject({ ...later, tasks: later.tasks.map((t) => (t.id === 't3' ? { ...t, status: 'done', summary: 'Reviewed.' } : t)) });
+  await svc.flush();
+  doc = await svc.get('pr-p0777');
+  assert.deepEqual(doc.entries.map((e) => e.seq), [1, 2, 3, 4, 5, 6, 7, 8, 9], 'a live save lands after it, numbered on');
+  assert.equal(doc.entries.at(-1).title, 't3 done: Review');
+  assert.equal(new Set(doc.entries.map((e) => e.id)).size, 9);
+
+  // a restart reads it back, and a finished project closes the document
+  const again = X.createExhibits({ home, getSettings: () => ({ enabled: true, images: 'svg', maxPerDoc: 60 }) });
+  assert.equal((await again.get('pr-p0777')).entries.length, 9);
+  const fin = RUNNING(); fin.status = 'done'; fin.tasks.forEach((t) => { t.status = 'done'; });
+  const d = await again.attach(fin);
+  assert.equal(d.final, true);
+  assert.equal((await again.get('pr-p0777')).entries.at(-1).kind, 'summary');
+  const md = (await again.exportDoc('pr-p0777', 'md')).body;
+  assert.match(md, /^# Backfill me\n/);
+  assertClean(md, 'the export');
+});
+
 test('svgFor: deterministic, themed per kind, escaped', () => {
   const e = { id: 'sp-1:end', kind: 'code', seq: 3, title: 'Edited <app>.js & more words that wrap across several lines of the card' };
   const a = X.svgFor(e, { docTitle: 'Ship "it"' });
@@ -362,6 +451,22 @@ test('API: off by default (no files); switched on, one JARVIS request → a fina
     assert.match(await md.text(), /^# write me a greeting card file\n/);
     assert.equal((await fetch(`${BASE}/api/local/exhibits/${traceId}/export?format=pdf`)).status, 400);
     assert.equal((await fetch(`${BASE}/api/local/exhibits/pr-nope`)).status, 404);
+
+    // attach: a project that existed before exhibits were on (a project file the planner reads)
+    const post = (p, b) => fetch(BASE + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+    const prj = { ...RUNNING(), id: 'p0888' };
+    fs.mkdirSync(path.join(env.RIGS_HOME, 'projects'), { recursive: true });
+    fs.writeFileSync(path.join(env.RIGS_HOME, 'projects', 'p0888.json'), JSON.stringify(prj));
+    assert.equal((await post('/api/local/exhibits/attach', {})).status, 400);
+    assert.equal((await post('/api/local/exhibits/attach', { projectId: 'nope' })).status, 404);
+    const at1 = await (await post('/api/local/exhibits/attach', { projectId: 'p0888' })).json();
+    assert.deepEqual(at1, { docId: 'pr-p0888', added: 6, entries: 6, final: false });
+    assert.deepEqual(await (await post('/api/local/exhibits/attach', { projectId: 'pr-p0888' })).json(), { docId: 'pr-p0888', added: 0, entries: 6, final: false });
+    assert.ok((await (await fetch(BASE + '/api/local/exhibits')).json()).docs.some((d) => d.docId === 'pr-p0888' && d.entries === 6));
+    assert.match(await (await fetch(`${BASE}/api/local/exhibits/pr-p0888/export?format=md`)).text(), /^# Backfill me\n/);
+    // switched off again: refused, nothing more written
+    await post('/api/local/exhibits/config', { enabled: false });
+    assert.equal((await post('/api/local/exhibits/attach', { projectId: 'p0888' })).status, 409);
   } finally {
     server.kill();
   }
