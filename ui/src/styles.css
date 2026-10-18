@@ -388,8 +388,9 @@ a.link { color: var(--accent); cursor: pointer; }
 .win { transition: opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
 .win.win-enter, .win.win-leave { opacity: 0; scale: .96; translate: 0 8px; }
 .win.win-leave { pointer-events: none; }
-#panels-menu { transition: opacity .16s ease, scale .16s ease, translate .16s ease; transform-origin: bottom right; }
-#panels-menu.hidden { display: flex !important; opacity: 0; scale: .95; translate: 0 6px; pointer-events: none; }
+#panels-menu { transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s; transform-origin: bottom right; }
+/* visibility (switched after the fade) keeps the closed menu's switches and buttons out of the Tab order */
+#panels-menu.hidden { display: flex !important; opacity: 0; scale: .95; translate: 0 6px; pointer-events: none; visibility: hidden; transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s .16s; }
 #brain-menu.open { animation: panel-reveal .18s ease both; }
 .app-tile { transition: border-color .15s, background .15s, translate .15s; }
 .app-tile:hover { translate: 0 -2px; }

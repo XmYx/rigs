@@ -201,8 +201,17 @@ export function panelMenu() {
   const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), dockRow, scaleRow, list, hiddenHead, hiddenList,
     h('button', { class: 'ibtn', onclick: () => { dockManager.resetLayout(); render(); } }, '↺ Reset layout'));
   menu = { box, list, hidden: hiddenList, hiddenHead, dockToggle, dockRow, scaleToggle, scaleRow };
-  btn.onclick = () => { renderMenu(); box.classList.toggle('hidden'); };
-  document.addEventListener('pointerdown', (e) => { if (!box.contains(e.target) && e.target !== btn) box.classList.add('hidden'); });
+  const setOpen = (open) => { box.classList.toggle('hidden', !open); btn.setAttribute('aria-expanded', String(open)); };
+  btn.setAttribute('aria-expanded', 'false');
+  btn.onclick = () => { renderMenu(); setOpen(box.classList.contains('hidden')); };
+  document.addEventListener('pointerdown', (e) => { if (!box.contains(e.target) && e.target !== btn) setOpen(false); });
+  // Esc closes the menu; focus goes back to ☰ when it was inside the menu.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || box.classList.contains('hidden')) return;
+    const inside = box.contains(document.activeElement);
+    setOpen(false);
+    if (inside || document.activeElement === btn) btn.focus({ preventScroll: true });
+  });
   document.body.append(btn, box);
   dockManager.subscribe(() => renderMenu());
   onDockingChange(() => renderMenu());
