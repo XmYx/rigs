@@ -1,5 +1,5 @@
 import { toast } from './api.js';
-import { focusPanel as focusFloating, hasPanel, listPanels as floatingPanels, resetLayout as resetFloating, setClosed, setRemoved, showPanel } from './panels.js';
+import { focusPanel as focusFloating, hasPanel, listPanels as floatingPanels, panelState, resetLayout as resetFloating, resetPanel as resetFloatingPanel, setClosed, setRemoved, showPanel, toggleCollapsed } from './panels.js';
 import { focusWindow, listWindows } from './wm.js';
 import { createRemovedStore } from './removed-store.js';
 
@@ -20,6 +20,10 @@ const floatingEngine = {
   focus: (id) => focusFloating(id),
   setRemoved: (id, on) => setRemoved(id, on),
   reset: () => resetFloating(),
+  isCollapsed: (id) => panelState(id).collapsed,
+  toggleCollapse: (id) => toggleCollapsed(id),
+  resetPanel: (id) => resetFloatingPanel(id),
+  // The dockable layout engine adds dock(id) / float(id) / isDocked(id) / canDock(id); the floating panels have none.
   windows: () => listWindows(),
   focusWindow: (id) => focusWindow(id),
 };
@@ -149,3 +153,12 @@ export function showAll() {
 }
 
 export function resetLayout() { engine.reset(); }
+
+// Per-panel layout actions behind the panel context menu (ctx-providers.js). Dock / Float exist only when the engine has them.
+export const isCollapsed = (id) => !!engine.isCollapsed?.(id);
+export const toggleCollapse = (id) => engine.toggleCollapse?.(id);
+export const resetPanel = (id) => engine.resetPanel?.(id);
+export const canDock = (id) => typeof engine.dock === 'function' && typeof engine.float === 'function' && (engine.canDock ? !!engine.canDock(id) : true);
+export const isDocked = (id) => !!engine.isDocked?.(id);
+export const dockPanel = (id) => engine.dock?.(id);
+export const floatPanel = (id) => engine.float?.(id);

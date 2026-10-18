@@ -1,6 +1,7 @@
 import { ago, api, h, node, toast } from './api.js';
 import { openTerminal } from './terminal-lazy.js';
 import { openWindow } from './wm.js';
+import { nativeCtx, tagCtx } from './ctx-tag.js';
 
 const KIND_ICON = { claude: '✳', codex: '◎', tmux: '▤', rig: '⛭', pty: '⌨', chat: '💬' };
 const KIND_LABEL = { claude: 'Claude Code', codex: 'Codex', tmux: 'tmux', rig: 'OpenRig seat', pty: 'RIGS terminal', chat: 'JARVIS chat' };
@@ -43,7 +44,7 @@ export function openSessions({ snapshot, focus, onContinueChat, onAttachChat, on
           h('div', { class: 'ss' }, `${n.name} · ${KIND_LABEL[s.kind] || s.kind}${s.project ? ' · ' + s.project : ''} · ${ago(s.updatedAt)}`)),
         s.live ? h('span', { class: 'live-dot', title: 'live' }) : null);
       el.addEventListener('click', () => show(n, s));
-      return el;
+      return tagCtx(el, 'session', s.id, { node: n, s, transcript: () => show(n, s) });
     }));
     if (!r.length) listEl.append(h('div', { class: 'muted pad' }, 'No sessions match.'));
   }
@@ -51,7 +52,7 @@ export function openSessions({ snapshot, focus, onContinueChat, onAttachChat, on
   async function show(n, s) {
     active = { node: n, s };
     render();
-    const msgs = h('div', { class: 'transcript' }, h('div', { class: 'muted pad' }, 'Loading transcript…'));
+    const msgs = nativeCtx(h('div', { class: 'transcript' }, h('div', { class: 'muted pad' }, 'Loading transcript…'))); // selectable text: the browser's menu
     const input = h('input', { class: 'path-input', placeholder: s.live || s.kind === 'claude' || s.kind === 'codex' ? `Type into this ${KIND_LABEL[s.kind]} on ${n.name}…` : 'Not live — attach/resume to continue' });
     const canType = (s.live && ['tmux', 'rig', 'pty'].includes(s.kind)) || s.kind === 'claude' || s.kind === 'codex';
     input.disabled = !canType;

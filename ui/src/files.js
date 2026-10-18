@@ -1,5 +1,6 @@
 import { ago, api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
+import { nativeCtx, tagCtx } from './ctx-tag.js';
 
 const ICON = { dir: '📁', file: '📄', link: '🔗' };
 const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -32,6 +33,23 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
     h('label', { class: 'tb check' }, h('input', { type: 'checkbox', onchange: (e) => { showHidden = e.target.checked; load(cur.path); } }), ' hidden'),
     upload);
   w.body.append(toolbar, h('div', { class: 'files-split' }, list, preview));
+
+  // Right-click / long-press (contextmenu.js): a row is a file or folder, the empty list is the current folder.
+  const fileActions = {
+    open: (e) => { if (e.type === 'dir') load(e.path); else { selected = e.path; render(); showPreview(e); } },
+    download: (e) => download(e),
+    rename: (e) => renameItem(e),
+    trash: (e) => trashItem(e),
+    copyTo: (e, m) => copyBetween(nodeId, nodeName, e.path, m.id, m.name, `~/Downloads/${e.name}`),
+    terminalHere: onTerminalHere ? (p) => onTerminalHere(p) : undefined,
+  };
+  tagCtx(list, 'folder', nodeId, {
+    get path() { return cur.path; },
+    actions: {
+      newFolder, upload: () => upload.click(), refresh: () => load(cur.path), terminalHere: fileActions.terminalHere,
+      toggleHidden: () => { showHidden = !showHidden; load(cur.path); }, showHidden: () => showHidden,
+    },
+  });
 
   pathInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(pathInput.value); });
   rootsSel.addEventListener('change', () => load(rootsSel.value));
@@ -82,7 +100,7 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
       row.addEventListener('click', () => { selected = e.path; render(); if (e.type !== 'dir') showPreview(e); else showDirActions(e); });
       row.addEventListener('dblclick', () => (e.type === 'dir' ? load(e.path) : download(e)));
       row.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('application/x-rigs-file', JSON.stringify({ nodeId, nodeName, path: e.path, name: e.name })));
-      return row;
+      return tagCtx(row, 'file', e.path, { entry: e, actions: fileActions, get machines() { return machines().filter((m) => m.id !== nodeId); } });
     }));
     if (!cur.entries.length) list.append(h('div', { class: 'muted pad' }, 'Empty folder'));
   }
@@ -115,7 +133,7 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
     else if ((TEXT.test(e.name) || !/\.\w+$/.test(e.name)) && e.size < 2 * 1024 * 1024) {
       try {
         const r = await api(`${node(nodeId)}/files/read?path=${encodeURIComponent(e.path)}`);
-        preview.append(h('pre', { class: 'pv-text' }, r.text.slice(0, 200000)));
+        preview.append(nativeCtx(h('pre', { class: 'pv-text' }, r.text.slice(0, 200000)))); // file text: the browser's menu (copy, search)
       } catch (err) { preview.append(h('div', { class: 'muted pad' }, err.message)); }
     } else if (/\.(mp4|webm|mov)$/i.test(e.name)) preview.append(h('video', { class: 'pv-img', src: raw, controls: true }));
     else if (/\.pdf$/i.test(e.name)) preview.append(h('iframe', { class: 'pv-frame', src: raw }));

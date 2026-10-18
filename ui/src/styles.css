@@ -1184,6 +1184,10 @@ body.mb-hidden:not(.mb-peek) #mb-zone { display: block; }
 .mb-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .mb-header { padding: 6px 10px 3px 30px; color: var(--muted); font: 600 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 .mb-back { color: var(--accent-2); }
+.mb-item.danger { color: #f87171; }
+.mb-item.danger:focus { background: rgba(248, 113, 113, .16); color: #fecaca; }
+.mb-ctx .mb-label { max-width: 300px; } /* context menus: long names (a file, a request) truncate instead of widening the menu */
+[data-ctx] { -webkit-touch-callout: none; } /* iOS: our long-press menu, not the system callout */
 #mb-phone { display: none; }
 .kbd-table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; }
 .kbd-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
@@ -1207,6 +1211,8 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   #mb-phone { display: grid; place-items: center; font-size: 20px; }
   #brain-badge { max-width: calc(100vw - 300px - var(--sal) - var(--sar)); }
   .mb-menu.mb-phone-menu { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); top: var(--hdr) !important; width: auto; max-width: none; max-height: var(--room) !important; }
-  .mb-phone-menu .mb-item { min-height: 44px; font-size: 15px; }
-  .mb-phone-menu .mb-sc { display: none; }
+  .mb-phone-menu .mb-item, .mb-drill .mb-item { min-height: 44px; font-size: 15px; }
+  .mb-phone-menu .mb-sc, .mb-drill .mb-sc { display: none; }
+  .mb-drill { min-width: min(260px, calc(100vw - 16px)); }
+  .mb-ctx .mb-label { max-width: calc(100vw - 80px); }
 }

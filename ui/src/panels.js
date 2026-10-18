@@ -1,5 +1,6 @@
 import { h } from './api.js';
 import { isPhone } from './mobile.js';
+import { tagCtx } from './ctx-tag.js';
 
 // Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
 // bottom toolbar) can be dragged by its ⠿ grip, collapsed with ▾ to its header (elements marked .keep or
@@ -125,6 +126,7 @@ export function makeFloating(el, { id, title, into = el, keep = [], onToggle, cl
   panels.set(id, { el, title, collapseBtn, onToggle });
   into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
+  tagCtx(el, 'panel', id, { id, title }); // right-click / long-press: Collapse, Reset, Hide, Remove (contextmenu.js)
   addResizeHandles(el, id);
 
   grip.addEventListener('pointerdown', (e) => {
@@ -183,6 +185,8 @@ export function inheritPanel(id, fromId) {
 }
 export function showPanel(id) { setClosed(id, false); if (state[id]?.collapsed) setCollapsed(id, false); }
 export function togglePanel(id) { if (state[id]?.closed) showPanel(id); else setClosed(id, true); }
+export function toggleCollapsed(id) { setCollapsed(id, !state[id]?.collapsed); }
+export function resetPanel(id) { reset(id); }
 export function panelState(id) { return { closed: !!state[id]?.closed, collapsed: !!state[id]?.collapsed }; }
 export function isClosed(id) { return !!state[id]?.closed; }
 

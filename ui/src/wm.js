@@ -1,6 +1,7 @@
 import { h } from './api.js';
 import { isPhone } from './mobile.js';
 import { dialogify } from './a11y.js';
+import { tagCtx } from './ctx-tag.js';
 
 // Minimal floating window manager: drag by the title bar, resize from the corner,
 // click to raise, maximize, close. Terminals, file browsers and session viewers live here.
@@ -38,6 +39,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   windows.add(win);
   const dlg = dialogify(win, { label: title, onClose: () => close() }); // role=dialog, focus in, Tab trap, Esc closes, focus returns on close
 
+  tagCtx(win, 'window', win.dataset.winId, { get title() { return titleEl.textContent; } }); // right-click on the title bar: front, maximize, close…
   const raise = () => { win.style.zIndex = ++z; };
   win._wm = { title: () => titleEl.textContent, icon, raise, close: () => close() };
   win.addEventListener('pointerdown', raise);
@@ -95,5 +97,17 @@ export function focusWindow(id) {
   (w.el.querySelector('.win-body input, .win-body textarea, .win-body button, .win-body [tabindex="0"]') || w.el.querySelector('.win-btn'))?.focus({ preventScroll: true });
   return true;
 }
+
+export const windowCount = () => windows.size;
+export const isMaximized = (id) => !!listWindows().find((w) => w.id === String(id))?.el.classList.contains('max');
+export function toggleMaximize(id) {
+  const w = listWindows().find((x) => x.id === String(id));
+  if (!w) return false;
+  w.el.querySelector('.win-btn[aria-pressed]')?.click();
+  w.raise();
+  return true;
+}
+/** Close every window except `id`. */
+export function closeOthers(id) { for (const w of listWindows()) if (w.id !== String(id)) w.close(); }
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }

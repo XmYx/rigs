@@ -1,6 +1,7 @@
 import { api, h, node, wsUrl } from './api.js';
 import { isPhone } from './mobile.js';
 import { openWindow } from './wm.js';
+import { tagCtx } from './ctx-tag.js';
 
 // "Desktops" floating panel: one small live tile per online machine, a large view on click. Frames come from
 // the access-gated stream endpoint (src/screen-stream.js, /api/nodes/<id>/screen/stream). A machine whose screen
@@ -119,7 +120,7 @@ export function createDesktops(el, opts = {}) {
     const dot = h('i', { class: 'dk-dot' });
     const open = () => { if (!access?.ok) return; if (big.has(m.id)) { big.get(m.id).raise(); return; } const win = openLargeView(m, { onClose: () => { big.delete(m.id); sync(); } }); big.set(m.id, win); sync(); };
     const btn = h('button', { class: 'dk-tile-btn', 'aria-label': `Open ${m.name} desktop`, onclick: open }, img, ph);
-    const root = h('div', { class: 'dk-tile' }, h('div', { class: 'dk-cap' }, dot, h('span', { class: 'dk-name' }, m.name)), btn);
+    const root = tagCtx(h('div', { class: 'dk-tile' }, h('div', { class: 'dk-cap' }, dot, h('span', { class: 'dk-name' }, m.name)), btn), 'node', m.id, { node: m });
     function stop() { live?.close(); live = null; }
     function sync() {
       const want = active && !document.hidden && visible && access?.ok && !big.has(m.id);

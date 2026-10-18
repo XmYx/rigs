@@ -2,6 +2,7 @@ import { api, h, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { openAppStore } from './appstore.js';
 import { isAppRemoved } from './layout-actions.js';
+import { tagCtx } from './ctx-tag.js';
 
 // App Cloud: web apps hosted anywhere on the mesh, opened in floating windows through the daemon's
 // proxy (/api/nodes/<node>/apps/<id>/). The catalog refreshes on its own: on 'apps'/'mesh' events
@@ -22,6 +23,8 @@ const statusOf = (a) => a.health?.status || 'unknown';
 export function appsCatalog() { return catalog; }
 export const isAppOpen = (a) => appWindows.has(key(a));
 export function closeApp(a) { appWindows.get(key(a))?.win.close(); }
+/** Reload an open app's window (the context menu's Reload). */
+export function reloadApp(a) { const w = appWindows.get(key(a)); if (w) reload(w); }
 /** Re-render the launcher (an app was removed or restored). */
 export function rerenderApps() { renderLauncher(); }
 
@@ -71,10 +74,10 @@ function renderLauncher() {
   const store = h('button', { class: 'app-tile store-tile', title: 'App Store — install new apps on any machine', onclick: () => openAppStore() },
     h('span', { class: 'app-icon' }, '🛍'), h('span', { class: 'app-name' }, 'App Store'), h('span', { class: 'app-node' }, 'install apps'));
   const shown = catalog.filter((a) => !isAppRemoved(a)); // removed apps are hidden, never deleted (Window › Removed items)
-  launcher.grid.replaceChildren(store, ...(shown.length ? shown.map((a) => h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
+  launcher.grid.replaceChildren(store, ...(shown.length ? shown.map((a) => tagCtx(h('button', { class: `app-tile ${statusOf(a)}`, title: `${a.name} on ${a.node} — ${statusOf(a)}`, onclick: () => openApp(a) },
     h('span', { class: 'app-icon' }, a.icon || '▦'),
     h('span', { class: 'app-name' }, a.name),
-    h('span', { class: 'app-node' }, h('i', { class: 'app-dot' }), a.node)))
+    h('span', { class: 'app-node' }, h('i', { class: 'app-dot' }), a.node)), 'app', `${a.nodeId || a.node}/${a.id}`, { app: a }))
     : [h('div', { class: 'muted apps-empty' }, 'No apps installed yet. Get one from the App Store, or publish your own with mesh_app_register; it appears here on its own.')]));
 }
 
@@ -94,6 +97,7 @@ export function openApp(a) {
     ],
     onClose: () => { appWindows.delete(k); ensurePoll(); },
   });
+  tagCtx(w.win.el.querySelector('.win-bar'), 'app', `${a.nodeId || a.node}/${a.id}`, { get app() { return w.app; } }); // the title bar is the app's; the page inside is its own document
   w.win.body.append(h('div', { class: 'app-stage' }, frame, overlay));
   appWindows.set(k, w);
   ensurePoll();

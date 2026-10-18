@@ -108,7 +108,7 @@ export function buildGraph(snapshot) {
       link(`m:${entry.node.id}`, pid, 'plan');
       for (const t of pj.tasks) {
         const tid = `tk:${pj.id}:${t.id}`;
-        add({ id: tid, type: 'task', name: `${t.id} ${t.title}`, val: t.status === 'running' ? 5 : 3, task: t, plan: pj, live: t.status === 'running' });
+        add({ id: tid, type: 'task', name: `${t.id} ${t.title}`, val: t.status === 'running' ? 5 : 3, task: t, plan: pj, owner: entry.node.id, live: t.status === 'running' });
         link(pid, tid, 'plan');
         const target = t.assign && machineByName.get(t.assign.node);
         if (target) link(tid, target.id && ['claude', 'codex', 'ollama'].includes(t.assign.provider) ? `a:${target.id}:${t.assign.provider}` : `m:${target.id}`, t.status === 'running' ? 'live' : 'delegate');
@@ -440,12 +440,30 @@ export function createGraph(el, { onSelect, onBackground }) {
     },
     setHidden(types) { state.hidden = new Set(types); Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility()); for (const n of state.data.nodes) styleLabel(n); },
     resize() { Graph.width(el.clientWidth).height(el.clientHeight); bloom.setSize(el.clientWidth, el.clientHeight); },
+    /** The visible node under a point in client pixels (right-click / long-press), or null: nearest centre within the node's drawn radius. */
+    nodeAt(clientX, clientY) {
+      const box = el.getBoundingClientRect();
+      const px = clientX - box.left;
+      const py = clientY - box.top;
+      let best = null;
+      let bestD = Infinity;
+      for (const n of state.data.nodes) {
+        if (state.hidden.has(n.type) || n.x == null) continue;
+        const c = Graph.graph2ScreenCoords(n.x, n.y, n.z);
+        const unit = Graph.graph2ScreenCoords(n.x + 1, n.y, n.z);
+        const perUnit = Math.hypot(unit.x - c.x, unit.y - c.y) || 1;
+        const radius = Math.max(14, 2.6 * Math.cbrt(n.val || 1) * perUnit); // nodeRelSize * cbrt(val), at least a fingertip
+        const dist = Math.hypot(c.x - px, c.y - py);
+        if (dist <= radius && dist / radius < bestD) { best = n; bestD = dist / radius; }
+      }
+      return best;
+    },
     get focused() { return state.focus; },
     get depth() { return state.depth; },
   };
   window.addEventListener('resize', () => api.resize());
   // Anything that changes the scene (every API method) or touches the galaxy wakes the idle sleep below.
-  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['get', 'nodes', 'neighbors', 'setAttention', 'setData'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
+  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['get', 'nodes', 'neighbors', 'setAttention', 'setData', 'nodeAt'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
   return api;
 }
 

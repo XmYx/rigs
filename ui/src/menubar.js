@@ -59,13 +59,13 @@ function renderMenu(entries, { level = 0, labelledBy, label, back } = {}) {
     if (e.header) { el.append(h('div', { class: 'mb-header', role: 'presentation' }, e.header)); continue; }
     const cmd = e.cmd ? commands.get(e.cmd) : null;
     const enabled = !e.disabled && (!cmd || commands.isEnabled(e.cmd, ctx, e.args));
-    const checkable = !!cmd?.checked;
-    const checked = checkable && commands.isChecked(e.cmd, ctx, e.args);
+    const checkable = cmd ? !!cmd.checked : e.checked !== undefined; // inline entries (context menus) may carry their own checked state
+    const checked = checkable && (cmd ? commands.isChecked(e.cmd, ctx, e.args) : !!e.checked);
     const text = e.label || (cmd ? commands.label(e.cmd, ctx, e.args) : '');
-    const scDef = cmd ? (cmd.shortcut ? [].concat(cmd.shortcut)[0] : cmd.hint) : '';
+    const scDef = cmd ? (cmd.shortcut ? [].concat(cmd.shortcut)[0] : cmd.hint) : (e.shortcut || e.hint || '');
     const sc = scDef ? formatShortcut(scDef, mac) : '';
     const item = h('div', {
-      class: `mb-item${enabled ? '' : ' disabled'}${e.submenu ? ' has-sub' : ''}`,
+      class: `mb-item${enabled ? '' : ' disabled'}${e.submenu ? ' has-sub' : ''}${e.danger ? ' danger' : ''}`,
       role: checkable ? 'menuitemcheckbox' : 'menuitem', tabindex: '-1',
       ...(checkable ? { 'aria-checked': String(checked) } : {}),
       ...(enabled ? {} : { 'aria-disabled': 'true' }),
@@ -172,7 +172,7 @@ function openSubmenu(item, { focus = 'none' } = {}) {
   closeFrom(level + 1);
   const entries = item._entry.submenu();
   const label = item.querySelector('.mb-label')?.textContent;
-  if (menuEl.classList.contains('mb-phone-menu')) { drill(menuEl, entries, label); return; }
+  if (menuEl._stack) { drill(menuEl, entries, label); return; }
   const el = renderMenu(entries, { level: level + 1, label });
   show(el);
   const r = item.getBoundingClientRect();
@@ -194,6 +194,7 @@ function fillPhone(menuEl, entries, label) {
   menuEl._entries = entries;
   menuEl.replaceChildren(...fresh.childNodes);
   menuEl.setAttribute('aria-label', label || 'JARVIS menu');
+  if (menuEl._at) place(menuEl, menuEl._at.x, menuEl._at.y); // a context menu changes height as it drills: keep it on screen
   focusItem(menuEl, 'first');
 }
 
@@ -212,11 +213,17 @@ function openPhoneMenu() {
   focusItem(el, 'first');
 }
 
-/** A context menu at a point (same rendering, keyboard and commands as the bar's menus). */
+/**
+ * A context menu at a point (same rendering, keyboard and commands as the bar's menus). Entries are the menu model's:
+ * { cmd, args } or inline { label, run, icon?, hint?, disabled?, danger?, checked?, submenu? }. Stays inside the viewport;
+ * on a phone submenus drill in place (with a Back row) instead of flying out sideways.
+ */
 export function openMenuAt(x, y, entries, { label = 'Context menu' } = {}) {
   rememberFocus();
   closeFrom(0);
   const el = renderMenu(entries, { label });
+  el.classList.add('mb-ctx');
+  if (isPhone()) { el.classList.add('mb-drill'); el._entries = entries; el._stack = []; el._at = { x, y }; }
   show(el);
   place(el, x, y);
   openTop = -3;
@@ -225,17 +232,20 @@ export function openMenuAt(x, y, entries, { label = 'Context menu' } = {}) {
   return el;
 }
 
+/** Is a context menu (not a bar menu) open right now? */
+export const contextMenuOpen = () => openTop === -3 && open.length > 0;
+
 // ------------------------------------------------------------------ activation
 
 function activate(item) {
   const e = item._entry;
   if (!e || !item._enabled) return;
   if (e.submenu && (!e.cmd || isPhone())) { openSubmenu(item, { focus: 'first' }); return; }
-  if (!e.cmd) return;
+  if (!e.cmd && typeof e.run !== 'function') return;
   const ctx = menuCtx();
   closeMenus({ restore: true });
   try {
-    const r = commands.run(e.cmd, ctx, e.args);
+    const r = e.cmd ? commands.run(e.cmd, ctx, e.args) : e.run(ctx);
     if (r && typeof r.catch === 'function') r.catch((err) => toast(err.message, 'error'));
   } catch (err) { toast(err.message, 'error'); }
 }
@@ -248,7 +258,7 @@ function onMenuClick(ev) {
 }
 
 function onMenuHover(ev) {
-  if (ev.pointerType === 'touch' || ev.currentTarget.classList.contains('mb-phone-menu')) return;
+  if (ev.pointerType === 'touch' || ev.currentTarget._stack) return;
   const item = ev.target.closest('.mb-item');
   if (!item) return;
   const menuEl = item.parentElement;
@@ -302,6 +312,7 @@ function onMenuKey(ev) {
     case 'Escape':
       stop();
       if (backOrClose(menuEl, level)) break;
+      if (open.length > level + 1) { closeFrom(level + 1); break; } // a flyout opened by hover: close it first
       if (openTop === -2) { closeMenus({ restore: false }); phoneBtn?.focus(); } else closeMenus({ focusTop: openTop >= 0 });
       break;
     case 'Tab': closeMenus({ restore: false }); break;
