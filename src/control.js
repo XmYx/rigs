@@ -66,7 +66,29 @@ const finite = (v, name, min = 0, max = 100000) => {
 };
 const integer = (v, name, min, max) => { finite(v, name, min, max); if (!Number.isInteger(v)) throw new ControlError('bad-args', `${name} must be an integer`); return v; };
 const callerInfo = (c = {}) => Object.fromEntries(['via', 'who', 'from', 'agent', 'session', 'seat', 'cwd', 'human'].filter((k) => c[k] != null).map((k) => [k, typeof c[k] === 'string' ? c[k].slice(0, 1000) : c[k] === true]));
-const holderKey = (c) => JSON.stringify([c.from || '', c.agent || '', c.session || '', c.seat || '', c.who || '']);
+/**
+ * Who holds the lease: an agent session (or OpenRig seat), or the person, on the machine where the call entered the mesh.
+ * Never the transport identity (`who` is `local`, `peer` or the tailnet login depending on the path), so one caller
+ * cannot lock itself out by reaching the machine another way. Pure.
+ */
+export const holderKey = (c = {}) => JSON.stringify([c.from || '', c.agent && c.human !== true ? c.agent : 'human', c.session || c.seat || '']);
+
+const GRANT_NAMES = {
+  mac: { screenCapture: 'Screen Recording', accessibility: 'Accessibility', input: 'Accessibility' },
+  linux: { screenCapture: 'screen capture', accessibility: 'the window list (accessibility)', input: 'input injection' },
+};
+
+/**
+ * The refusal text for a missing OS grant: which grant, for which app or binary, on which machine. The `fix` that
+ * travels with it says how to grant it. Pure.
+ */
+export function permissionMessage(op, key, permission = {}, { platform, node } = {}) {
+  const names = GRANT_NAMES[['mac', 'darwin'].includes(platform) ? 'mac' : 'linux'];
+  const grant = names[permission.fix?.permission || key] || names[key] || key;
+  const app = permission.fix?.app;
+  const holder = app ? ` for ${path.basename(app)} (${app})` : permission.via ? ` (checked via ${permission.via})` : '';
+  return `${op} needs ${grant}${holder}, which is not granted${node ? ` on ${node}` : ''}`;
+}
 
 export function imageSize(data) {
   if (data.length >= 24 && data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
@@ -154,7 +176,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     try { info = await inspect(force); }
     catch (e) { info = { session: platform === 'mac' ? 'quartz' : platform === 'windows' ? 'windows' : 'none', desktop: '', displays: [], locked: null, backend: { capture: null, input: null, windows: null, missing: ['capture', 'input', 'windows'] }, permissions: {}, error: { code: e.code || 'error', message: e.message } }; }
     const s = settings(), enabled = !!s.enabled && !state.killed, input = enabled && !!s.input;
-    return { node: getConfig().name, platform, session: info.session, desktop: info.desktop, enabled, input, killed: state.killed || null, backend: { ...info.backend, helper: info.helper || null }, permissions: info.permissions, ready: { see: enabled && !!info.backend.capture && info.locked === false && info.permissions?.screenCapture?.ok !== false, act: input && !!info.backend.input && info.locked === false && info.permissions?.input?.ok !== false }, displays: info.displays || [], locked: info.locked, lease: lease ? structuredClone(lease) : null, ...(info.error ? { error: info.error } : {}) };
+    return { node: getConfig().name, platform, session: info.session, desktop: info.desktop, enabled, input, killed: state.killed || null, backend: { ...info.backend, helper: info.helper || null }, permissions: info.permissions, ready: { see: enabled && !!info.backend.capture && info.locked === false && info.permissions?.screenCapture?.ok !== false, act: input && !!info.backend.input && info.locked === false && info.permissions?.input?.ok !== false }, displays: info.displays || [], locked: info.locked, lease: lease ? structuredClone(lease) : null, needs: access.missingGrants(info.permissions, platform), ...(info.error ? { error: info.error } : {}) };
   }
   async function gate(caller, act) {
     const s = settings();
@@ -163,13 +185,14 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     if (s.allowFrom?.length && !s.allowFrom.includes(caller.from)) throw new ControlError('not-allowed', 'Caller node is not in control.allowFrom');
     if (lease && now() - lease.lastAt >= (s.leaseIdleSec ?? 60) * 1000) { await endLease('idle'); await adapter.stop(); cached = null; }
     if (lease && holderKey(lease.holder) !== holderKey(caller)) throw new ControlError('busy', `Screen lease is held by ${lease.holder.agent || lease.holder.who || 'another caller'} on ${lease.holder.from || 'this machine'}`);
-    touchLease(caller);
+    // The lease is only checked here. perform() takes it once every other check passed, so a refused call never holds it.
   }
-  function perform(op, args, caller, act, backendKey, fn) {
+  /** `dryRun`: run every check a real call runs (switches, allowFrom, lease, lock, backend, permission), touch nothing. */
+  function perform(op, args, caller, act, backendKey, fn, { dryRun = false } = {}) {
     caller = callerInfo(caller);
     const submitted = generation;
     const task = serial.then(async () => {
-      const started = now(); let backend, timer, cancel;
+      const started = now(); let backend, timer, cancel, opened = false, touched = false;
       try {
         if (submitted !== generation) throw new ControlError('off', 'Control was stopped before this action ran');
         await gate(caller, act);
@@ -191,21 +214,27 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
             if (submitted !== generation) throw new ControlError('off', 'Control stopped');
             return result;
           };
+          opened = true;
           await adapter.configure({ ...info.backend, displays: info.displays, restoreToken: state.restoreToken });
           // Always re-probe lock immediately before acting, even when status was cached.
           const lock = await request('locked');
           if (lock.locked !== false) throw new ControlError('locked', lock.locked ? 'The screen is locked' : 'Cannot verify that the screen is unlocked');
+          const key = permissionFor(op, backendKey, platform), permission = info.permissions[key];
+          const chosen = info.backend[backendKey];
+          // macOS has one backend, the RIGS Control helper: when it is not running, say how to start it.
+          if (!chosen && platform === 'mac' && permission?.fix) throw new ControlError('needs-permission', `RIGS Control is not running on ${getConfig().name}, so ${op} is not possible`, permission.fix);
+          if (!chosen) throw new ControlError('unsupported', `No ${backendKey} backend is available for this desktop`, { kind: 'backend', text: `Install/configure a supported ${backendKey} backend; see docs/full-access.md` });
+          if (permission?.ok === false) throw new ControlError('needs-permission', permissionMessage(op, key, permission, { platform, node: getConfig().name }), permission.fix);
+          backend = chosen;
+          if (dryRun) return { ok: true, op, dryRun: true, backend, permission: { [key]: permission?.ok ?? null }, lease: lease ? callerInfo(lease.holder) : null };
+          // A refused call must not use up the budget either.
           const bucket = rates[op === 'screenshot' ? 'shots' : 'actions'];
           while (bucket.length && now() - bucket[0] >= 60000) bucket.shift();
           const max = op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120;
           if (bucket.length >= max) throw new ControlError('rate', 'Control rate limit reached; try again in a minute');
           bucket.push(now());
-          const permission = info.permissions[permissionFor(op, backendKey, platform)];
-          backend = info.backend[backendKey];
-          // macOS has one backend, the RIGS Control helper: when it is not running, say how to start it.
-          if (!backend && platform === 'mac' && permission?.fix) throw new ControlError('needs-permission', `RIGS Control is not running, so ${op} is not possible`, permission.fix);
-          if (!backend) throw new ControlError('unsupported', `No ${backendKey} backend is available for this desktop`, { kind: 'backend', text: `Install/configure a supported ${backendKey} backend; see docs/full-access.md` });
-          if (permission?.ok === false) throw new ControlError('needs-permission', `Permission required for ${op}`, permission.fix);
+          // Only now, about to touch the desktop, does the call take (or renew) the lease.
+          touchLease(caller); touched = true;
           const result = await fn(info, request);
           if (submitted !== generation) throw new ControlError('off', 'Control was stopped during this action');
           lease.actions++;
@@ -213,12 +242,15 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           return result;
         })();
         const result = await Promise.race([work, deadline, canceled]);
-        audit(op, args, caller, true, started, null, backend);
+        // Nothing holds a lease to idle the helper out later: a dry run leaves it as it found it.
+        if (dryRun && !lease) { try { await adapter.stop(); } catch {} }
+        audit(dryRun ? 'check' : op, dryRun ? { op, ...args } : args, caller, true, started, null, backend);
         return result;
       } catch (e) {
-        // An error must never leave a pressed key/button behind. Policy refusals do not touch the device.
-        if (backend) { try { await adapter.stop(); } catch {} cached = null; }
-        audit(op, args, caller, false, started, e, backend);
+        // An error must never leave a pressed key/button behind. Policy refusals do not touch the device; a refusal
+        // after the helper was opened stops it when no lease would idle it out.
+        if (touched || (opened && !lease)) { try { await adapter.stop(); } catch {} cached = null; }
+        audit(dryRun ? 'check' : op, dryRun ? { op, ...args } : args, caller, false, started, e, backend);
         throw e;
       } finally { clearTimeout(timer); active.delete(cancel); }
     });
@@ -252,6 +284,14 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     });
   }
   const listWindows = (caller) => perform('windows', {}, caller, false, 'windows', (_, request) => request('windows'));
+  // Which backend and permission each op needs, and whether it acts (needs the input switch).
+  const OP_NEEDS = { screenshot: ['capture', false], windows: ['windows', false], focus: ['windows', true], pointer: ['input', true], type: ['input', true], key: ['input', true] };
+  /** Read-only: would `op` be allowed right now? Runs the real call's checks, takes no lease, sends no input. */
+  function check(op = 'pointer', caller) {
+    if (!OP_NEEDS[op]) return Promise.reject(new ControlError('bad-args', `op must be one of ${Object.keys(OP_NEEDS).join(', ')}`));
+    const [backendKey, act] = OP_NEEDS[op];
+    return perform(op, {}, caller, act, backendKey, null, { dryRun: true });
+  }
   const focusWindow = (id, caller) => perform('focus', { windowId: id }, caller, true, 'windows', async (_, request) => {
     if (!['string', 'number'].includes(typeof id) || !String(id) || String(id).length > 256) throw new ControlError('bad-args', 'A window id is required');
     return { ok: true, id: String(id), ...await request('focus', { windowId: String(id) }) };
@@ -364,8 +404,8 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     if (msg.event === 'exit') { revoke('Control helper stopped'); endLease('helper exit'); return; }
     if (['closed', 'hotkey', 'locked'].includes(msg.event) && settings().enabled) kill({ reason: msg.reason || `helper ${msg.event}` }, { who: 'desktop' }).catch((e) => events.emit('fault', e));
   });
-  return { status, screenshot, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
+  return { status, screenshot, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
 }
 
 const instance = createControl();
-export const { status, screenshot, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;
+export const { status, screenshot, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;

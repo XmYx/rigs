@@ -92,13 +92,47 @@ or with a plain command, so it is not part of the product failure.
 
 ## Fix plan
 
-| # | change | who |
-| --- | --- | --- |
-| 1 | Grant Screen Recording and Accessibility to "RIGS Control" on `macbookpro` and `mac`, then re-run `mesh_access` | **Sir** (OS permission) |
-| 2 | Distinct bundle id for dev-worktree helpers | code |
-| 3 | Check permissions before taking the lease; do not take it on a refused call | code (src/control.js `gate`/`perform`) |
-| 4 | Key the lease on session/seat when available | code (src/control.js:69) |
-| 5 | Add a read-only cursor action to `mesh_control` | code (src/mcp.js, src/control.js) |
+| # | change | who | fixed |
+| --- | --- | --- | --- |
+| 1 | Grant Screen Recording and Accessibility to "RIGS Control" on `macbookpro` and `mac`, then re-run `mesh_access` | **Sir** (OS permission) | **open, needs Sir** (see "Needs Sir" below). `mesh_access` and every 412 now name the grant, the app path and the machine |
+| 2 | Distinct bundle id for dev-worktree helpers | code | **already in place, no change.** Re-checked (t2): the dev helper runs as `dev.rigs.control.6c5a13de` (`launchctl list`, `codesign -dv`, its `source.sha256` stamp, LaunchAgent `dev.rigs.control.6c5a13de.plist`), the real one as `dev.rigs.control`. `helperLabel` (src/control-mac-helper.js:24) already gives every non-default home its own id, covered by test/control-mac-helper.test.js "helperLabel". t1 read the id off the process path, not the bundle |
+| 3 | Check permissions before taking the lease; do not take it on a refused call | code (src/control.js `gate`/`perform`) | **fixed.** `gate()` only checks the lease; `perform()` takes it after lock, backend, OS permission and rate checks pass. Refusals no longer use up the rate budget, and a refusal after the helper was opened stops it when no lease would idle it out. Tests: test/control-remote-desktop.test.js (first two tests; both fail on 07f01e5) |
+| 4 | Key the lease on session/seat when available | code (src/control.js:69) | **fixed.** `holderKey` = entry node + agent session (or seat), or "human"; `who` (the transport: `local`/`peer`/tailnet login) is no longer part of it. Test: "the lease follows the agent session, not the transport" (fails on 07f01e5 with `busy`) |
+| 5 | Add a read-only cursor action to `mesh_control` | code (src/mcp.js, src/control.js) | **fixed differently:** `mesh_control action:"check"` (`GET control/check?op=`) runs the real gate for an op (switches, allowFrom, lease, lock, backend, OS permission) and stops: no lease, no input, audited as `check`. A cursor read would have meant changing RigsControl.swift, and any change there rebuilds the ad-hoc-signed helper and drops the grants on every Mac at rollout (cause 1). Tests: "check runs the real gate read-only", "check honours the switches", "control API exposes GET control/check" |
+| 6 | (new) `mesh_access` / 412 say exactly what is missing | code (src/access.js, src/control.js, src/mcp.js) | **fixed.** `status().needs` (`missingGrants`): one entry per grant with app path, how, settings URL and the `mesh_access grant:"…"` step; fix text names the app path; the 412 message is "screenshot needs Screen Recording for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro" instead of "Permission required for screenshot". Tests: "permissionMessage …", "missingGrants …", "status reports needs" |
+
+Proxy and auth needed no change (t1). test/control-remote-desktop.test.js now also pins the relay: a 2 MB PNG through
+`forwardHttp` arrives byte for byte with its `x-rigs-*` headers, the agent's `x-rigs-caller` reaches the target, the caller's
+token and cookie are replaced/stripped, and a 412 arrives with its JSON body.
+
+## After the fix (t2, 2026-10-18 13:56Z)
+
+Worktree server on macbookpro (`RIGS_PORT=4799`, scratch `RIGS_HOME`, `RIGS_NO_MIGRATIONS/AUTOUPDATE/OPENRIG=1`, static peers at
+the live daemons' `:4719`), calling `/api/nodes/<id>/control`, `/control/windows` and `/control/screenshot?maxWidth=800`. The targets still
+run `07f01e5`: the target-side fixes (lease, `check`, `needs`, messages) reach them only with the rollout after merge. Raw output:
+`docs/remote-desktop-evidence/relay-matrix.txt`.
+
+| source → target | before (07f01e5, t1) | after: worktree build as source, live target | after: worktree code as target |
+| --- | --- | --- | --- |
+| macbookpro → magix-system | 200 / 200 (409 busy while another caller's probe held the lease) | access 200 `ready.see/act=true` · windows **200** (6) · screenshot **200** 800×450, 137 kB, scale 4.8 → `docs/remote-desktop-evidence/magix-system.png` | refused calls no longer lock it (unit tests) |
+| macbookpro → mac | 412 / 412 "Permission required for …" | 412 / 412 (helper has no grants; target still on 07f01e5, so the old message) | — (not deployed on `mac`) |
+| macbookpro → macbookpro | 412 / 412 | 412 / 412 via the live daemon | **412 / 412 with "screenshot needs Screen Recording for RIGS Control.app (/Users/mix/.rigs/bin/RIGS Control.app), which is not granted on macbookpro"**, `needs` = Screen Recording + Accessibility for that app, `check` → same 412, lease after the refused calls: `null` (`docs/remote-desktop-evidence/macbookpro-new-code.txt`: the worktree's src/control.js driving the running helper read-only, audit in a scratch home) |
+
+`mac` and `magix-system` as sources are unchanged from t1 (they relay byte for byte, see the matrix above); they run the new code only
+after the rollout. Every pair whose only causes were code-fixable (all pairs to `magix-system`, which failed only through lease contention)
+works; the pairs to the two Macs stay blocked on cause 1 alone.
+
+## Needs Sir
+
+| machine | grant | app to switch on | how |
+| --- | --- | --- | --- |
+| macbookpro | Screen Recording | RIGS Control — `/Users/mix/.rigs/bin/RIGS Control.app` (bundle `dev.rigs.control`) | System Settings > Privacy & Security > Screen Recording → switch on "RIGS Control". It is a new build: click Grant in JARVIS → Access & control first (or `mesh_access grant:"screenCapture"`), which clears an entry left by an older build |
+| macbookpro | Accessibility (input + window focus) | same app | System Settings > Privacy & Security > Accessibility → switch on "RIGS Control" (`mesh_access grant:"accessibility"`) |
+| mac | Screen Recording | RIGS Control — `/Users/miklosnagy/.rigs/bin/RIGS Control.app` | as above, on `mac` |
+| mac | Accessibility | same app | as above, on `mac` |
+
+Grant it to RIGS Control, not to `node`. Then `mesh_access` on each Mac should show `needs: []` and `ready.see/act: true`. Each rebuild
+of the helper (a change to scripts/control/macos) changes its ad-hoc cdhash and needs the grant again.
 
 ## Appendix — raw responses (trimmed)
 

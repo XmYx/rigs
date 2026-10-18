@@ -65,6 +65,7 @@ export function createControlApi({ control, access, nodeName }) {
     switch (sub) {
       case '': need('GET'); return control.status({ force: q.get('force') === '1' });
       case 'windows': need('GET'); return control.listWindows(caller);
+      case 'check': need('GET'); return control.check(q.get('op') || 'pointer', caller);
       case 'audit': need('GET'); return control.auditTail({ limit: num(q.get('limit'), 'limit') ?? 50 });
       case 'screenshot': {
         need('GET');

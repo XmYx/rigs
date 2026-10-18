@@ -393,14 +393,20 @@ so any user process can already inject input there today.
 
 1. `enabled` (and `input` for act ops), else `off` / `input-off`.
 2. `allowFrom`, else `not-allowed`.
-3. **Lease**: one controller per machine. The first caller becomes the holder (key = from + agent + session).
-   Others get `busy` with the holder named. The lease ends after `leaseIdleSec`, on kill, or when a human in
-   the UI presses **Take over**.
+3. **Lease free**: one controller per machine. A lease held by another caller gives `busy` with the holder named.
+   The holder key is the entry node (`from`) + the agent session (or OpenRig seat), or "human" for a person at the
+   UI/CLI; never the transport identity (`who` is `local`, `peer` or the tailnet login depending on the path).
+   The lease ends after `leaseIdleSec`, on kill, or when a human in the UI presses **Take over**.
 4. **Lock screen**: act ops are refused with `locked`, and screenshots of a locked screen are refused too.
-5. **Rate limits**: `rate`.
-6. **Backend ready**, else `needs-permission` with `fix`.
-7. **Run** with a 10 s timeout. On timeout or error, the helper releases everything it holds.
-8. **Audit and announce**, for refusals as well as successes.
+5. **Backend ready and OS permission granted**, else `needs-permission` with `fix`; the message names the grant,
+   the app or binary that needs it and the machine (`permissionMessage`).
+6. **Rate limits**: `rate`.
+7. **Take the lease**, only now: a call refused at 1–6 never takes or renews it and never uses up the rate budget.
+8. **Run** with a 10 s timeout. On timeout or error, the helper releases everything it holds.
+9. **Audit and announce**, for refusals as well as successes.
+
+`check(op)` (`GET /api/local/control/check?op=pointer|type|key|focus|screenshot|windows`, MCP `mesh_control
+action:"check"`) runs steps 1–5 for that op and stops: no lease, no input, no rate budget; it is audited as `check`.
 
 ### Audit log
 

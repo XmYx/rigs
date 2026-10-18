@@ -1,0 +1,90 @@
+# 2026-10-18T13:56:49Z worktree server :4799 (branch work/macbookpro/debug-mesh-remote-desktop-acro-2f61) -> /api/nodes/<id>/control/* on the live daemons (07f01e5)
+{
+ "target": "magix-system",
+ "access": {
+  "status": 200,
+  "ready": {
+   "see": true,
+   "act": true
+  },
+  "needs": "(field not in this build)",
+  "missing": []
+ },
+ "check": {
+  "status": 404,
+  "body": "{\"error\":\"unknown control route check\",\"code\":\"bad-args\"}"
+ },
+ "windows": {
+  "status": 200,
+  "ms": 27,
+  "count": 6
+ },
+ "screenshot": {
+  "status": 200,
+  "ms": 163,
+  "bytes": 135405,
+  "scale": "4.8",
+  "size": "800x450",
+  "file": "docs/remote-desktop-evidence/magix-system.png"
+ }
+}
+{
+ "target": "mac",
+ "access": {
+  "status": 200,
+  "ready": {
+   "see": false,
+   "act": false
+  },
+  "needs": "(field not in this build)",
+  "missing": [
+   "screenCapture: Open System Settings > Privacy & Security > Screen Recording and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is c",
+   "input: Open System Settings > Privacy & Security > Accessibility and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is clea",
+   "accessibility: Open System Settings > Privacy & Security > Accessibility and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is clea"
+  ]
+ },
+ "check": {
+  "status": 404,
+  "body": "{\"error\":\"unknown control route check\",\"code\":\"bad-args\"}"
+ },
+ "windows": {
+  "status": 412,
+  "ms": 23,
+  "body": "{\"error\":\"Permission required for windows\",\"code\":\"needs-permission\",\"fix\":{\"kind\":\"settings\",\"permission\":\"screenCapture\",\"url\":\"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\",\"app\":\"/Users/miklosnagy/.rigs/bin/RIGS Control.app\",\"text\":\"Open System Settings > Privacy"
+ },
+ "screenshot": {
+  "status": 412,
+  "ms": 34,
+  "body": "{\"error\":\"Permission required for screenshot\",\"code\":\"needs-permission\",\"fix\":{\"kind\":\"settings\",\"permission\":\"screenCapture\",\"url\":\"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\",\"app\":\"/Users/miklosnagy/.rigs/bin/RIGS Control.app\",\"text\":\"Open System Settings > Privacy & Security > Screen Recording and switch on RIGS Control (a new build: click Grant first, so an "
+ }
+}
+{
+ "target": "macbookpro",
+ "access": {
+  "status": 200,
+  "ready": {
+   "see": false,
+   "act": false
+  },
+  "needs": "(field not in this build)",
+  "missing": [
+   "screenCapture: Open System Settings > Privacy & Security > Screen Recording and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is c",
+   "input: Open System Settings > Privacy & Security > Accessibility and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is clea",
+   "accessibility: Open System Settings > Privacy & Security > Accessibility and switch on RIGS Control (a new build: click Grant first, so an entry left by an older build is clea"
+  ]
+ },
+ "check": {
+  "status": 404,
+  "body": "{\"error\":\"unknown control route check\",\"code\":\"bad-args\"}"
+ },
+ "windows": {
+  "status": 412,
+  "ms": 16,
+  "body": "{\"error\":\"Permission required for windows\",\"code\":\"needs-permission\",\"fix\":{\"kind\":\"settings\",\"permission\":\"screenCapture\",\"url\":\"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\",\"app\":\"/Users/mix/.rigs/bin/RIGS Control.app\",\"text\":\"Open System Settings > Privacy & Secu"
+ },
+ "screenshot": {
+  "status": 412,
+  "ms": 63,
+  "body": "{\"error\":\"Permission required for screenshot\",\"code\":\"needs-permission\",\"fix\":{\"kind\":\"settings\",\"permission\":\"screenCapture\",\"url\":\"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\",\"app\":\"/Users/mix/.rigs/bin/RIGS Control.app\",\"text\":\"Open System Settings > Privacy & Security > Screen Recording and switch on RIGS Control (a new build: click Grant first, so an entry l"
+ }
+}

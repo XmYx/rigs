@@ -144,7 +144,7 @@ export function decideMac({ probe, fullDiskAccess }) {
 
 const helperFix = (permission, { app, name, regrant }) => ({
   kind: 'settings', permission, url: MAC_PANES[permission], app,
-  text: `Open System Settings > Privacy & Security > ${MAC_LABEL[permission]} and switch on ${name}${regrant ? ' (a new build: click Grant first, so an entry left by an older build is cleared, then switch it on)' : ''}. Grant it to ${name}, not to node: the helper holds these rights so agents cannot bypass the control gate.`,
+  text: `Open System Settings > Privacy & Security > ${MAC_LABEL[permission]} and switch on ${name}${app ? ` (${app})` : ''}${regrant ? ' (a new build: click Grant first, so an entry left by an older build is cleared, then switch it on)' : ''}. Grant it to ${name}, not to node: the helper holds these rights so agents cannot bypass the control gate.`,
 });
 
 /**
@@ -171,6 +171,37 @@ export function decideMacHelper({ running = false, grants, app = '', name = 'RIG
     input: { ...one('accessibility', input, 'CGEventPost'), requires: 'accessibility' },
     accessibility: one('accessibility', ax, 'AXIsProcessTrusted'),
   };
+}
+
+const GRANT_LABEL = { ...MAC_LABEL, input: 'input injection' };
+const LINUX_LABEL = { screenCapture: 'screen capture', input: 'input injection', accessibility: 'accessibility (window list)' };
+
+/**
+ * The OS grants screen control still needs, one entry per grant a person has to give (on macOS input and
+ * accessibility are both the Accessibility switch): which grant, for which app or binary, how to give it, and
+ * whether `mesh_access grant:"…"` can start that step. `state` is `missing` (the OS said no) or `unconfirmed`
+ * (it cannot tell yet, e.g. a portal that asks on first use). Pure.
+ */
+export function missingGrants(permissions = {}, platform = '') {
+  const mac = ['mac', 'darwin'].includes(platform);
+  const out = new Map();
+  for (const key of ['screenCapture', 'input', 'accessibility']) {
+    const p = permissions[key];
+    if (!p || p.ok === true || !p.fix) continue;
+    const permission = p.fix.kind === 'helper' ? 'helper' : p.fix.permission || (key === 'input' && mac ? 'accessibility' : key);
+    const id = `${permission}|${p.fix.app || ''}|${p.fix.kind}`;
+    const prev = out.get(id);
+    if (prev) { prev.for.push(key); if (p.ok === false) prev.state = 'missing'; continue; }
+    const grantable = (mac && ['settings', 'helper'].includes(p.fix.kind)) || (p.fix.kind === 'rootstep' && p.fix.id === 'uinput');
+    out.set(id, {
+      grant: p.fix.kind === 'helper' ? 'RIGS Control running' : (mac ? GRANT_LABEL : LINUX_LABEL)[permission] || permission,
+      permission, for: [key], state: p.ok === false ? 'missing' : 'unconfirmed',
+      ...(p.fix.app ? { app: p.fix.app } : {}), ...(p.via ? { via: p.via } : {}),
+      how: p.fix.text, ...(p.fix.url ? { url: p.fix.url } : {}),
+      ...(grantable ? { step: `mesh_access grant:"${p.fix.kind === 'helper' ? 'screenCapture' : permission}" (a person confirms it at the machine)` } : {}),
+    });
+  }
+  return [...out.values()];
 }
 
 /** The daemon's own node must not hold screen/input rights: every agent it starts would inherit them. Pure. */
