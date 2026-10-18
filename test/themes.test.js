@@ -39,6 +39,8 @@ test('playbooks: a theme request matches the ui-theme playbook and plans one tas
   const pb = await findPlaybook('add an 8bit dark atari theme to JARVIS');
   assert.equal(pb?.file, 'ui-theme.md');
   assert.equal(await findPlaybook('fix the merge steward retry loop'), null);
+  assert.equal((await findPlaybook('write an internal p5.js animation library that fits our theme and use it in the exhibitor'))?.file, 'p5-sketch.md', 'mentioning the theme is not asking for one');
+  assert.equal((await findPlaybook('add a p5.js sketch for the exhibitor'))?.file, 'p5-sketch.md');
   const tasks = playbookTasks({ goal: 'add a solarized theme', request: '' }, pb);
   assert.deepEqual(tasks.map((t) => t.kind), ['code', 'review']);
   assert.match(tasks[0].description, /themes\.js/);
