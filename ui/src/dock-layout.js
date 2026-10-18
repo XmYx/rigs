@@ -479,6 +479,19 @@ export function layoutTree(node, rect, mins = {}, def = DEFAULT_MIN) {
 }
 
 /**
+ * A floating rect as the fit solver should see it on this viewport: a panel placed on a screen at least as
+ * big as this one keeps its viewport (it shrinks proportionally), a panel placed on a smaller screen is
+ * treated as placed on this one — homes never stretch, so a window that grows past where a panel was put
+ * leaves it exactly there instead of pushing it right and down. Rects without a size pass through.
+ */
+export function fitHome(f, viewport) {
+  const vw = num(viewport?.w) ?? 1;
+  const vh = num(viewport?.h) ?? 1;
+  if (!f || [f.x, f.y, f.w, f.h].some((v) => num(v) === null)) return f;
+  return { ...f, vw: Math.max(num(f.vw) ?? vw, vw), vh: Math.max(num(f.vh) ?? vh, vh) };
+}
+
+/**
  * Keep every visible panel fully on screen.
  *   viewport  {w, h}             the window now
  *   floating  [{id,x,y,w,h,z,vw,vh}]  home rects (vw/vh: viewport they were placed in; default = now).

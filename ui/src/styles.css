@@ -1223,3 +1223,26 @@ body.dock-dragging .dock-stage { opacity: 1; }
   #dock-layer, .dock-overlay { display: none !important; }
 }
 /* === END DOCKING === */
+
+/* === SMART SCALING (docking.js, scaling.js) === panels and windows glide to fit when the window resizes. ===
+   html.smart-scaling = the mode is on. html.fit-moving = a fit just moved something (eased, spring-like, ~260 ms);
+   it is on for a moment only, so dragging a panel or the corner of a window never lags. html.fit-live = the window
+   edge is being dragged: no transitions, panels follow it exactly. Reduced motion: nothing glides. */
+:root { --fit-ease: cubic-bezier(.22, 1.1, .36, 1); --fit-time: .26s; }
+#fit-probe { position: fixed; inset: 0; pointer-events: none; visibility: hidden; }
+html.smart-scaling.fit-moving .floating {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease),
+    opacity .19s ease, translate .19s cubic-bezier(.2, .8, .2, 1), filter .19s ease; }
+html.smart-scaling.fit-moving .win {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease),
+    opacity .18s ease, translate .18s cubic-bezier(.2, .8, .2, 1); }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .docked {
+  transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease), scale var(--fit-time) var(--fit-ease), opacity .19s ease !important; }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .dock-tabs { transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease); }
+html.smart-scaling.fit-moving body:not(.dock-resizing) .dock-split { transition: left var(--fit-time) var(--fit-ease), top var(--fit-time) var(--fit-ease), width var(--fit-time) var(--fit-ease), height var(--fit-time) var(--fit-ease); }
+html.smart-scaling.fit-moving .floating.dragging, html.smart-scaling.fit-moving .floating.resizing, .win.dragging, .win.resizing { transition: none !important; }
+html.fit-live .docked, html.fit-live .dock-tabs, html.fit-live .dock-split { transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  html.smart-scaling .floating, html.smart-scaling .win, html.smart-scaling .docked, html.smart-scaling .dock-tabs, html.smart-scaling .dock-split { transition: none !important; }
+}
+/* === END SMART SCALING === */

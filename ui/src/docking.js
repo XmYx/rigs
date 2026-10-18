@@ -3,8 +3,9 @@ import { isPhone } from './mobile.js';
 import { announce } from './a11y.js';
 import {
   dockManager, panelStatus, panelsIn, dropZoneAt, allocate, minSizeOf, setActiveTab, reorder, resizeSplit,
-  dock, undock, removePanel,
+  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN,
 } from './dock-layout.js';
+import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion } from './scaling.js';
 
 // The DOM side of the dock layout engine (dock-layout.js holds the model; this module draws it).
 //
@@ -16,6 +17,14 @@ import {
 // screen: they keep their own element (never reparented) and get a fixed rect, tab groups get a tab strip
 // (role=tablist) and splits get draggable separators. The galaxy is the 'stage' leaf of the tree: it is
 // never a tab and never closes, so docked panels gather around it. Phones never dock.
+//
+// Smart scaling (scaling.js, off by default) adds the fit pass at the top of render(): the solver in
+// dock-layout.js (solveFit) places every visible floating panel, window and the docked tree so all of them stay
+// fully on screen. Panels shrink toward their minimum before anything scales, and only when the minimums
+// themselves overflow does the one shared scale factor kick in (content drawn with the `scale` property). Fitted
+// rects are never stored: the layout keeps each panel's home, so a growing window brings it back. Motion is
+// CSS transitions (styles.css, SMART SCALING): eased and spring-like for a discrete resize, switched off
+// (.fit-live) while the window edge is being dragged and under prefers-reduced-motion.
 
 export const STAGE = 'stage';
 const MODE_KEY = 'rigs.docking';
@@ -24,6 +33,9 @@ const GAP = 6; // space between docked panels
 const PAD = 8; // space between the docked area and the screen edge
 const ROOT_EDGE = 26; // pointer this close to a screen edge = dock against the whole layout
 const THRESHOLD = 4; // px before a press on a bar becomes a drag
+const FIT_MARGIN = 8; // breathing room kept between a fitted panel and the screen edge
+const LIVE_MS = 340; // another resize before the last glide ended (= MOVE_MS) = the window edge is being dragged, or the OS animates a maximise
+const MOVE_MS = 340; // how long .fit-moving (the eased transitions) stays on after a fit that moved something
 // What a press on a title bar must leave alone: controls, tabs, resize handles.
 const NO_DRAG = 'button, a, input, select, textarea, label, summary, [contenteditable=""], [contenteditable="true"], [role="button"], [role="tab"], [role="slider"], [role="separator"], .presize, .no-drag';
 
@@ -103,8 +115,48 @@ export function registerDockable(id, opts) {
   if (!it.el.id) it.el.id = `dock-${id}`;
   items.set(id, it);
   for (const hd of it.handles) bindHandle(it, hd);
-  render();
+  if (it.kind === 'window') trackWindowResize(it);
+  if (!adoptWindow(it)) render();
   return it;
+}
+
+/**
+ * Windows live outside the layout until they are moved. With smart scaling on, a window needs a home like a
+ * panel's, so it joins the floating layer at the rect the window manager gave it (adopting renders).
+ */
+function adoptWindow(it) {
+  if (it.kind !== 'window' || !scalingActive() || panelStatus(dockManager.getLayout(), it.id)) return false;
+  const s = it.el.style;
+  const r = it.el.getBoundingClientRect();
+  const x = px(s.left) ?? r.left;
+  const y = px(s.top) ?? r.top;
+  const w = px(s.width) ?? r.width;
+  const hh = px(s.height) ?? r.height;
+  if (!(w > 0 && hh > 0)) return false;
+  dockManager.floatPanel(it.id, { x, y, w, h: hh, vw: window.innerWidth, vh: window.innerHeight });
+  return true;
+}
+
+/** The corner grip of a window is the browser's own resize handle: when it lets go, the new size is the window's home. */
+function trackWindowResize(it) {
+  const { el } = it;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || el.classList.contains('docked') || el.classList.contains('max')) return;
+    const r = el.getBoundingClientRect();
+    if (e.clientX < r.right - 18 || e.clientY < r.bottom - 18) return;
+    el.classList.add('resizing'); // no eased transitions while the handle is held
+    const up = () => {
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      el.classList.remove('resizing');
+      const b = el.getBoundingClientRect();
+      if (scalingActive() && (Math.abs(b.width - r.width) > 1 || Math.abs(b.height - r.height) > 1)) {
+        dockManager.floatPanel(it.id, { x: b.left, y: b.top, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight });
+      }
+    };
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+  }, true);
 }
 
 export function unregisterDockable(id) {
@@ -130,18 +182,23 @@ function dockArea() {
 }
 const inset = (r) => ({ x: r.x + GAP / 2, y: r.y + GAP / 2, w: Math.max(0, r.w - GAP), h: Math.max(0, r.h - GAP) });
 
-/** Screen rects of the docked tree: leaves (panel content), tab groups, splitters and the stage. */
-function computeGeo(L) {
+/**
+ * Screen rects of the docked tree: leaves (panel content), tab groups, splitters and the stage. With smart
+ * scaling below 1 the tree is laid out in a virtual screen of size / scale (so its minimums fit) and the
+ * rects are mapped back to screen pixels; gaps and tab strips keep their real size.
+ */
+function computeGeo(L, scale = 1) {
   const out = { leaves: {}, groups: [], splits: [], stage: null };
   if (!L.root) return out;
+  const S = (r) => (scale === 1 ? r : { x: r.x * scale, y: r.y * scale, w: r.w * scale, h: r.h * scale });
   const walk = (n, r, path) => {
     if (n.type === 'panel') {
-      if (n.id === STAGE) out.stage = inset(r);
-      else out.leaves[n.id] = inset(r);
+      if (n.id === STAGE) out.stage = inset(S(r));
+      else out.leaves[n.id] = inset(S(r));
       return;
     }
     if (n.type === 'tabs') {
-      const g = inset(r);
+      const g = inset(S(r));
       out.groups.push({ key: path.join('.') || 'root', path, panels: n.panels, active: n.active, rect: g });
       const body = { x: g.x, y: g.y + TAB_H, w: g.w, h: Math.max(0, g.h - TAB_H) };
       for (const id of n.panels) out.leaves[id] = body;
@@ -154,10 +211,11 @@ function computeGeo(L) {
     n.children.forEach((c, i) => {
       walk(c, row ? { x: at, y: r.y, w: sizes[i], h: r.h } : { x: r.x, y: at, w: r.w, h: sizes[i] }, [...path, i]);
       at += sizes[i];
-      if (i < n.children.length - 1) out.splits.push({ key: `${path.join('.')}:${i}`, path, index: i, dir: n.dir, at, rect: r, sizes, ratios: n.ratios, a: panelsIn(c), b: panelsIn(n.children[i + 1]) });
+      if (i < n.children.length - 1) out.splits.push({ key: `${path.join('.')}:${i}`, path, index: i, dir: n.dir, at: at * scale, rect: S(r), sizes: sizes.map((v) => v * scale), ratios: n.ratios, a: panelsIn(c), b: panelsIn(n.children[i + 1]) });
     });
   };
-  walk(L.root, dockArea(), []);
+  const a = dockArea();
+  walk(L.root, scale === 1 ? a : { x: a.x / scale, y: a.y / scale, w: a.w / scale, h: a.h / scale }, []);
   return out;
 }
 
@@ -166,9 +224,16 @@ export function clampPanel(left, top, w) {
   return [Math.min(Math.max(0, left), Math.max(0, window.innerWidth - Math.min(w, 80))), Math.min(Math.max(0, top), Math.max(0, window.innerHeight - 28))];
 }
 
-const GEOM = ['left', 'top', 'right', 'bottom', 'transform', 'width', 'height'];
-function setGeom(el, r) {
-  Object.assign(el.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
+const GEOM = ['left', 'top', 'right', 'bottom', 'transform', 'scale', 'transformOrigin', 'width', 'height'];
+/**
+ * Put an element at a screen rect. Below scale 1 its box is rect / scale, drawn scaled down from the top-left
+ * corner with the individual `scale` property (windows hold `transform` in their entrance animation).
+ */
+function setGeom(el, r, scale = 1) {
+  Object.assign(el.style, {
+    left: r.x + 'px', top: r.y + 'px', width: r.w / scale + 'px', height: r.h / scale + 'px', right: 'auto', bottom: 'auto',
+    transform: 'none', scale: scale < 1 ? String(scale) : '', transformOrigin: scale < 1 ? '0 0' : '',
+  });
 }
 function clearGeom(el) { for (const k of GEOM) el.style[k] = ''; }
 
@@ -178,13 +243,21 @@ let renderQueued = false;
 /** Draw the current layout. Cheap enough to run on every change; a drag skips the element being dragged. */
 export function render() {
   renderQueued = false;
+  const t0 = performance.now();
   const L = dockManager.getLayout();
   const active = dockingActive();
-  geo = active ? computeGeo(L) : { leaves: {}, groups: [], splits: [], stage: null };
+  const scaling = scalingActive();
+  root.classList.toggle('smart-scaling', scaling);
+  fitMoved = false;
+  const fit = scaling ? computeFit(L, active) : null;
+  const t1 = performance.now();
+  geo = active ? computeGeo(L, fit?.scale ?? 1) : { leaves: {}, groups: [], splits: [], stage: null };
   const tabbed = new Map();
   for (const g of geo.groups) for (const id of g.panels) tabbed.set(id, g);
-  for (const it of items.values()) applyItem(it, L, active, tabbed.get(it.id));
+  for (const it of items.values()) applyItem(it, L, active, tabbed.get(it.id), fit);
   drawLayer(active);
+  if (fitMoved) eased();
+  if (scaling) recordFit(performance.now() - t0, t1 - t0);
 }
 function queueRender() {
   if (renderQueued) return;
@@ -192,7 +265,90 @@ function queueRender() {
   requestAnimationFrame(render);
 }
 
-function applyItem(it, L, active, group) {
+// ---------------------------------------------------------------- smart scaling: the fit pass
+
+const root = document.documentElement;
+let fitMoved = false; // something was placed somewhere new by the fit pass in this render
+let movingTimer = 0;
+let liveTimer = 0;
+let lastResize = 0;
+let lastVp = '';
+
+/** Turn the eased transitions on for a moment (html.fit-moving); they are off the rest of the time. */
+function eased() {
+  if (reducedMotion() || root.classList.contains('fit-live')) return;
+  root.classList.add('fit-moving');
+  clearTimeout(movingTimer);
+  movingTimer = setTimeout(() => root.classList.remove('fit-moving'), MOVE_MS);
+}
+
+const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+/** The element's own minimum size (CSS min-width/min-height in px), else the panel default. */
+function minOf(el) {
+  const cs = getComputedStyle(el);
+  return { w: Math.max(px(cs.minWidth) ?? 0, DEFAULT_MIN.w), h: Math.max(px(cs.minHeight) ?? 0, DEFAULT_MIN.h) };
+}
+const overflows = (b, vw, vh) => b.x < -0.5 || b.y < -0.5 || b.x + b.w > vw + 0.5 || b.y + b.h > vh + 0.5;
+
+/**
+ * The fit pass: gather the home of every visible floating panel and window (the rect stored in the layout;
+ * a panel still at its CSS place is measured, and only moved when it would overflow), run solveFit with the
+ * docked tree and return where each goes. Reads first, then the caller writes: one forced layout at most.
+ */
+function computeFit(L, docked) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const vp = { w: vw, h: vh };
+  const vpKey = `${vw}x${vh}`;
+  const floating = [];
+  const mins = {};
+  const bare = [];
+  for (const f of L.floating) {
+    const it = items.get(f.id);
+    if (!it || it.closed || drag?.it === it || it.el.classList.contains('max') || it.el.classList.contains('panel-closed')) continue;
+    const m = minOf(it.el);
+    mins[f.id] = m;
+    if ([f.x, f.y, f.w, f.h].every((v) => v !== null)) {
+      // A collapsed panel is only its header tall; a rect smaller than the element's own minimum is that minimum.
+      const hh = it.collapsed ? Math.min(f.h, it.el.offsetHeight || f.h) : Math.max(f.h, m.h);
+      if (it.collapsed) m.h = Math.min(m.h, hh);
+      floating.push(fitHome({ ...f, w: Math.max(f.w, m.w), h: hh }, vp));
+    } else if (it.kind === 'panel') bare.push(it);
+  }
+  for (const it of bare) {
+    if (it.bareKey !== vpKey || it.bareL !== L) {
+      if (it.fitted) { clearGeom(it.el); it.fitted = false; it.styled = false; } // back to its CSS place, to measure it
+      const b = it.el.getBoundingClientRect();
+      const home = { x: b.left, y: b.top, w: b.width, h: b.height };
+      it.bareKey = vpKey;
+      it.bareL = L;
+      it.bareHome = b.width > 0 && b.height > 0 && overflows(home, vw, vh) ? home : null;
+    }
+    if (it.bareHome) floating.push({ id: it.id, ...it.bareHome, z: 0, vw, vh });
+  }
+  const res = solveFit({ viewport: vp, floating, root: docked ? L.root : null, dockRect: dockArea(), mins, mode: 'fit', margin: FIT_MARGIN });
+  return { scale: res.scale, byId: new Map(res.floating.map((f) => [f.id, f])) };
+}
+
+/** Place a floating panel or window at its fitted rect (drawn scaled when the scale is below 1). */
+function placeFit(it, r, scale) {
+  const key = [r.x, r.y, r.w, r.h, scale].map((v) => Math.round(v * 10) / 10).join();
+  if (it.fitKey !== key) { if (it.fitKey || it.styled) fitMoved = true; it.fitKey = key; } // the first placement (page load) does not glide
+  it.fitted = true;
+  it.styled = true;
+  setGeom(it.el, r, scale);
+}
+
+/** Leave smart scaling for an element: its stored place takes over again (the caller writes it). */
+function unfit(it) {
+  it.fitted = false;
+  it.fitKey = null;
+  it.el.style.scale = '';
+  it.el.style.transformOrigin = '';
+  fitMoved = true;
+}
+
+function applyItem(it, L, active, group, fit) {
   const { el, id } = it;
   const status = panelStatus(L, id);
   const initial = it.init;
@@ -215,7 +371,9 @@ function applyItem(it, L, active, group) {
       el.setAttribute('aria-labelledby', `dtab-${id}`);
     } else unTab(el, id);
     const changed = !it.rect || ['x', 'y', 'w', 'h'].some((k) => Math.abs(it.rect[k] - r[k]) > 0.5);
-    setGeom(el, r);
+    setGeom(el, r, fit?.scale ?? 1);
+    if (changed && fit) fitMoved = true;
+    it.fitted = !!fit;
     it.rect = { ...r };
     it.styled = true;
     if (changed) el.dispatchEvent(new CustomEvent(it.kind === 'window' ? 'winresize' : 'panelresize'));
@@ -228,6 +386,9 @@ function applyItem(it, L, active, group) {
     if (it.kind === 'window') it.raise?.();
   }
   if (status === 'floating') {
+    const fr = fit?.byId.get(id);
+    if (fr) { placeFit(it, fr, fit.scale); return; }
+    if (it.fitted) unfit(it);
     const f = L.floating.find((x) => x.id === id);
     if (f && f.x !== null && f.y !== null) {
       if (f.w !== null) el.style.width = f.w + 'px';
@@ -674,8 +835,47 @@ export function initDocking({ defaults }) {
   if (panelStatus(L, STAGE) !== 'docked') L = dock(removePanel(L, STAGE), STAGE, 'root', 'right', { share: 0.7 });
   dockManager.setLayout(L);
   dockManager.subscribe(() => render());
-  window.addEventListener('resize', queueRender);
+  window.addEventListener('resize', onResize);
   window.matchMedia?.('(max-width: 640px), (max-height: 500px) and (pointer: coarse)')?.addEventListener?.('change', queueRender);
+  onScalingChange(() => {
+    if (scalingActive()) for (const it of items.values()) adoptWindow(it);
+    watchViewport();
+    render();
+  });
+  watchViewport();
+}
+
+/**
+ * Resize handling for smart scaling: coalesced to one render per frame. Events that follow each other within
+ * LIVE_MS mean the window edge is being dragged: .fit-live switches the transitions off so panels track the
+ * edge exactly (no lag, no jitter); a single jump (maximise, restore, rotate) glides instead.
+ */
+function onResize() {
+  const vp = `${window.innerWidth}x${window.innerHeight}`;
+  if (vp === lastVp) return; // the same change seen twice (resize event + probe)
+  lastVp = vp;
+  const now = performance.now();
+  if (scalingActive()) {
+    if (now - lastResize < LIVE_MS) { root.classList.add('fit-live'); root.classList.remove('fit-moving'); }
+    lastResize = now;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => root.classList.remove('fit-live'), LIVE_MS * 1.2);
+  }
+  queueRender();
+}
+
+// A fixed, invisible full-screen probe: its ResizeObserver catches viewport changes the resize event can miss
+// (an embedded frame, devtools docking). The rAF queue and the viewport check make a second signal free.
+let probe = null;
+let probeObserver = null;
+function watchViewport() {
+  if (typeof ResizeObserver === 'undefined') return;
+  if (!scalingActive()) { probeObserver?.disconnect(); probe?.remove(); probe = probeObserver = null; return; }
+  if (probe) return;
+  probe = h('div', { id: 'fit-probe', 'aria-hidden': 'true' });
+  document.body.append(probe);
+  probeObserver = new ResizeObserver(() => { if (`${window.innerWidth}x${window.innerHeight}` !== lastVp) onResize(); });
+  probeObserver.observe(probe);
 }
 
 /** Commands for menus (☰ today; the top menu and context menus can call the same). */
@@ -687,4 +887,5 @@ export const dockCommands = {
   restorePanel: (...a) => dockManager.restorePanel(...a),
   resetLayout: (...a) => dockManager.resetLayout(...a),
   listPanels: () => dockManager.listPanels().filter((p) => p.id !== STAGE && items.get(p.id)?.kind !== 'window'),
+  ...scaleCommands, // isScaling, setScaling, toggleScaling, fitStats, resetFitStats (smart scaling)
 };

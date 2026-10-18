@@ -2,6 +2,7 @@ import { h } from './api.js';
 import { isPhone } from './mobile.js';
 import { dockManager, panelStatus, setCollapsed as setCollapsedOp, emptyLayout } from './dock-layout.js';
 import { initDocking, registerDockable, render, isDocking, toggleDocking, onDockingChange, clampPanel, STAGE } from './docking.js';
+import { isScaling, toggleScaling, onScalingChange } from './scaling.js';
 
 // Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
 // bottom toolbar) moves like a desktop window: its whole header is the grab area (the ⠿ grip still works),
@@ -9,7 +10,8 @@ import { initDocking, registerDockable, render, isDocking, toggleDocking, onDock
 // animated. The layout lives in the dock layout engine (dock-layout.js, storage 'rigs.dock', migrated from
 // the old 'rigs.panels') and is drawn by docking.js: floating rects, the optional docked tree with tabs,
 // hidden panels with the exact place they were hidden from, collapsed panels. The ☰ corner button (never
-// closable) switches the docking layout, lists hidden panels to bring them back, and resets the layout.
+// closable) switches the docking layout and Smart scaling (scaling.js: keeps every panel on screen as the window
+// resizes), lists hidden panels to bring them back, and resets the layout.
 
 const panels = new Map(); // id → { el, title, collapseBtn, onToggle }
 const startHidden = new Set(); // panels closed by default (also after Reset layout)
@@ -177,6 +179,8 @@ function renderMenu() {
   const hidden = list.filter((x) => x.status === 'hidden');
   menu.dockToggle.checked = isDocking();
   menu.dockRow.hidden = isPhone(); // phones never dock
+  menu.scaleToggle.checked = isScaling();
+  menu.scaleRow.hidden = isPhone(); // phones keep the mobile layout
   menu.list.replaceChildren(...list.filter((x) => x.status !== 'hidden').map((x) => h('label', { class: 'check' },
     h('input', { type: 'checkbox', checked: true, onchange: (e) => setClosed(x.id, !e.target.checked) }), ' ', x.title,
     x.status === 'docked' && isDocking() ? h('span', { class: 'pm-where' }, 'docked') : '')));
@@ -192,13 +196,16 @@ export function panelMenu() {
   const hiddenHead = h('h5', { class: 'pm-sub' }, 'Hidden — restore to their last place');
   const dockToggle = h('input', { type: 'checkbox', role: 'switch', onchange: (e) => { toggleDocking(); e.target.checked = isDocking(); } });
   const dockRow = h('label', { class: 'check pm-dock', title: 'Drag a panel or window by its title bar onto another to dock it beside it or as a tab' }, dockToggle, ' Docking layout');
-  const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), dockRow, list, hiddenHead, hiddenList,
+  const scaleToggle = h('input', { type: 'checkbox', role: 'switch', onchange: (e) => { toggleScaling(); e.target.checked = isScaling(); } });
+  const scaleRow = h('label', { class: 'check pm-dock pm-scale', title: 'Keep every panel and window fully on screen as the window resizes: they glide to fit and drift back to where you put them when it grows' }, scaleToggle, ' Smart scaling');
+  const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), dockRow, scaleRow, list, hiddenHead, hiddenList,
     h('button', { class: 'ibtn', onclick: () => { dockManager.resetLayout(); render(); } }, '↺ Reset layout'));
-  menu = { box, list, hidden: hiddenList, hiddenHead, dockToggle, dockRow };
+  menu = { box, list, hidden: hiddenList, hiddenHead, dockToggle, dockRow, scaleToggle, scaleRow };
   btn.onclick = () => { renderMenu(); box.classList.toggle('hidden'); };
   document.addEventListener('pointerdown', (e) => { if (!box.contains(e.target) && e.target !== btn) box.classList.add('hidden'); });
   document.body.append(btn, box);
   dockManager.subscribe(() => renderMenu());
   onDockingChange(() => renderMenu());
+  onScalingChange(() => renderMenu());
   renderMenu();
 }

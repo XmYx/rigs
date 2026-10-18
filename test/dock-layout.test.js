@@ -60,7 +60,7 @@ test('the module touches no DOM and imports nothing', () => {
   assert.doesNotMatch(code, /\b(document|window|localStorage|sessionStorage|navigator|HTMLElement|requestAnimationFrame)\b/);
   assert.doesNotMatch(code, /^\s*import\b/m);
   for (const name of ['dock', 'undock', 'moveTab', 'reorder', 'setActiveTab', 'resizeSplit', 'hide', 'restore', 'removePanel', 'normalize',
-    'serialize', 'deserialize', 'migrateLegacy', 'dropZoneAt', 'solveFit', 'dockPanel', 'floatPanel', 'hidePanel', 'restorePanel', 'resetLayout', 'listPanels']) {
+    'serialize', 'deserialize', 'migrateLegacy', 'dropZoneAt', 'solveFit', 'fitHome', 'dockPanel', 'floatPanel', 'hidePanel', 'restorePanel', 'resetLayout', 'listPanels']) {
     assert.equal(typeof D[name], 'function', name);
   }
 });
@@ -362,6 +362,27 @@ test('fit solver: home layout untouched at home, shrink before scale, scale only
   // Panels without a rect (CSS default place) pass through untouched.
   const pass = D.solveFit({ viewport: { w: 390, h: 844 }, floating: [{ id: 'n', x: null, y: null, w: null, h: null, z: 1 }] });
   assert.deepEqual(pass.floating, [{ id: 'n', x: null, y: null, w: null, h: null, z: 1 }]);
+});
+
+test('fitHome: homes never stretch, so growing the window brings panels back to exactly where they were put', () => {
+  const home = homeFloating().filter((f) => f.id !== 'wide');
+  const rects = (fs) => fs.map(({ id, x, y, w, h, z }) => ({ id, x, y, w, h, z }));
+  const fitAt = (vp) => D.solveFit({ viewport: vp, floating: home.map((f) => D.fitHome(f, vp)), mins: MINS, margin: 8 });
+  // 1920x1080 -> 900x600: everything fits (margin 8), nothing is stored back, so 1920x1080 again is the home layout.
+  const small = fitAt({ w: 900, h: 600 });
+  assertOnScreen(small, { w: 900, h: 600 }, 'small');
+  assert.ok(small.floating.some((f) => f.x !== home.find((h) => h.id === f.id).x), 'something moved');
+  const back = fitAt(HOME);
+  approxEqual(rects(back.floating), rects(home));
+  // A bigger window than the home one leaves panels where they are (no proportional push right and down).
+  const big = fitAt({ w: 3840, h: 2160 });
+  approxEqual(rects(big.floating), rects(home));
+  // Panels placed on a smaller screen are not stretched when the window grows; rects without a size pass through.
+  const placed = { id: 'p', x: 100, y: 80, w: 300, h: 200, z: 1, vw: 800, vh: 600 };
+  assert.deepEqual(D.fitHome(placed, { w: 1920, h: 1080 }), { ...placed, vw: 1920, vh: 1080 });
+  assert.deepEqual(D.fitHome(placed, { w: 640, h: 480 }), placed);
+  const bare = { id: 'n', x: null, y: null, w: null, h: null, z: 1 };
+  assert.equal(D.fitHome(bare, { w: 640, h: 480 }), bare);
 });
 
 test('layoutTree honours ratios and per-panel minimums', () => {
