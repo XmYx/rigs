@@ -24,6 +24,7 @@
     "@xterm/xterm": "^6.0.0",
     "3d-force-graph": "^1.80.1",
     "esbuild": "^0.28.2",
+    "p5": "^1.11.13",
     "three": "^0.186.1",
     "three-spritetext": "^1.10.0",
     "ws": "^8.22.0"
