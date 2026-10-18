@@ -818,6 +818,8 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
   --mono: "VT323", ui-monospace, Menlo, Consolas, monospace;
   --sans: var(--mono);
 }
+:root[data-theme="atari"] { --ex-pixel: 4; } /* Exhibit sketches render at 1/4 resolution, scaled up pixelated */
+:root[data-theme="atari"] .ex-p5 canvas { image-rendering: pixelated; }
 :root[data-theme="atari"] body { font-size-adjust: 0.62; -webkit-font-smoothing: none; text-rendering: optimizeSpeed; }
 :root[data-theme="atari"] *, :root[data-theme="atari"] *::before, :root[data-theme="atari"] *::after { border-radius: 0 !important; }
 :root[data-theme="atari"] .panel, :root[data-theme="atari"] .win, :root[data-theme="atari"] #chat-dock {
@@ -1378,7 +1380,11 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   transition: opacity .5s ease, clip-path .9s cubic-bezier(.2, .8, .2, 1), transform 1.4s cubic-bezier(.2, .8, .2, 1), filter .9s ease; }
 .ex-img.in { opacity: 1; clip-path: inset(0 0 0 0); transform: scale(1); filter: none; animation: ex-kb 24s ease-in-out 1.5s infinite alternate; }
 .ex-img.broken { opacity: .2; }
-.ex-img-next.in { z-index: 1; }
+.ex-img-next.in { z-index: 2; }
+/* the live p5.js sketch (p5-anim.js) over the built-in SVG picture; ComfyUI pictures (.ex-img-next, z-index 2) replace it */
+.ex-p5 { position: absolute; inset: 0; z-index: 1; opacity: 0; transition: opacity .6s ease; }
+.ex-p5.in { opacity: 1; }
+.ex-p5 canvas { display: block; width: 100% !important; height: 100% !important; }
 .ex-sheen { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .16) 50%, transparent 62%); transform: translateX(-120%); animation: ex-sheen 1.6s ease-out .5s 1 both; }
 .ex-ghost { margin: 0 0 14px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: 12px; display: grid; gap: 8px; }
 .ex-ghost i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, rgba(var(--accent-rgb), .06), rgba(var(--accent-rgb), .24), rgba(var(--accent-rgb), .06)); background-size: 220% 100%; animation: ex-shimmer 1.5s linear infinite; }
@@ -1410,6 +1416,7 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   .ex-img { opacity: 1; clip-path: none; transform: none; filter: none; }
   .ex-sheen { display: none; }
   .ex-scan { display: none; }
+  .ex-p5 { transition: none; }
 }
 
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
@@ -1436,6 +1443,7 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   .ex-h, .ex-cap { color: #000 !important; opacity: 1; }
   .ex-img { opacity: 1 !important; clip-path: none !important; transform: none !important; filter: none !important; animation: none !important; transition: none !important; }
   .ex-fig { border-color: #bbb; }
+  .ex-p5 { display: none !important; }
   .ex-vis .vz-card, .ex-vis .vz-card * { color: #000 !important; background: none !important; animation: none !important; border-color: #bbb !important; }
 }
 /* === END EXHIBITS === */

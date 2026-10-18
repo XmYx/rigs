@@ -3,6 +3,8 @@ import { prefersReducedMotion } from './a11y.js';
 import { isPhone } from './mobile.js';
 import { openWindow } from './wm.js';
 import { renderVisual } from './visual.js';
+import { mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
+import { onTheme } from './themes.js';
 import * as M from './exhibits-model.js';
 
 // EXPERIMENTAL — the Exhibit window. While a request or project is being worked on, src/exhibits.js turns what happens
@@ -14,7 +16,10 @@ import * as M from './exhibits-model.js';
 //   - a picker switches between recent request and project documents (mesh /api/exhibits); a final document can be
 //     exported (HTML, Markdown), printed, or read as a plain document view
 // The toggle lives in the menu bar: Experimental › Exhibits (POST /api/local/exhibits/config). With it on, the window
-// opens by itself (without taking the cursor) for the first push of each new request or project. Pure logic:
+// opens by itself (without taking the cursor) for the first push of each new request or project. A card whose picture is
+// the built-in SVG (not a ComfyUI one) is drawn live by an internal p5.js sketch for its kind (p5-anim.js: lazy-loaded,
+// themed from the CSS variables, paused off-screen, one settled frame under reduced motion or in Document view); the SVG
+// stays underneath as the fallback if p5 cannot load, and a ComfyUI picture replaces the sketch. Pure logic:
 // exhibits-model.js (tested in test/exhibits-ui.test.js). Styles: the "EXHIBITS" block of styles.css.
 
 const pref = (k, d) => { try { return localStorage.getItem('rigs.exhibits.' + k) ?? d; } catch { return d; } };
@@ -34,6 +39,8 @@ const st = {
   view: pref('view', 'cards'), // 'cards' | 'document'
   ui: null,
 };
+
+onTheme(refreshSketches);
 
 export const exhibitsEnabled = () => st.enabled;
 
@@ -119,7 +126,10 @@ export function onExhibitEvent(m) {
 export function openExhibits({ docId = null, auto = false } = {}) {
   if (st.ui) { st.ui.win.raise(); if (docId) st.ui.show(docId); return st.ui; }
   let timer = null;
-  const win = openWindow({ title: 'Exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); st.ui = null; } });
+  const sketches = new Map(); // entry id → { handle, host }: the p5 sketch drawing that card's picture
+  const unmount = (id) => { const s = sketches.get(id); if (s) { s.handle.destroy(); s.host.remove(); sketches.delete(id); } };
+  const unmountAll = () => { for (const id of [...sketches.keys()]) unmount(id); };
+  const win = openWindow({ title: 'Exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); unmountAll(); st.ui = null; } });
   if (!isPhone()) { // beside the work: the right edge, under the menu bar
     const w = win.el.offsetWidth;
     Object.assign(win.el.style, { left: Math.max(16, window.innerWidth - w - 20) + 'px', top: (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mb-h')) || 0) + 56 + 'px' });
@@ -152,6 +162,22 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     list.classList.toggle('ex-doc', st.view === 'document');
     viewBtn.setAttribute('aria-pressed', String(st.view === 'document'));
     viewBtn.classList.toggle('on', st.view === 'document');
+    for (const { handle } of sketches.values()) handle.refresh(); // Document view is motionless: each sketch settles to one still frame
+  }
+
+  /** Draw the card's picture live with the p5 sketch for its kind, over the built-in SVG (kept as the fallback). */
+  function mountFor(entry, el) {
+    const fig = entry.image?.source === 'svg' ? el.querySelector('.ex-fig') : null;
+    if (!fig) return;
+    const host = h('div', { class: 'ex-p5', 'aria-hidden': 'true' });
+    fig.prepend(host);
+    const handle = mountSketch(host, {
+      id: sketchFor(entry.kind), seed: entry.id,
+      reducedMotion: () => prefersReducedMotion() || st.view === 'document',
+      onReady: () => host.classList.add('in'),
+      onError: () => { sketches.delete(entry.id); host.remove(); },
+    });
+    sketches.set(entry.id, { handle, host });
   }
 
   function figure(entry, rec, next = false) {
@@ -191,8 +217,10 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     const stick = nearBottom();
     const old = cards.get(entry.id);
     const el = card(entry, rec, { animate: isNew && !prefersReducedMotion(), index });
+    unmount(entry.id);
     if (old) { old.replaceWith(el); el.classList.add('ex-updated'); } else place(el, entry.seq ?? 0);
     cards.set(entry.id, el);
+    mountFor(entry, el); // after the card is in the list: the sketch sizes itself from its host
     if (isNew && stick) toBottom();
   }
 
@@ -207,11 +235,12 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     if (!fig) { fig = h('figure', { class: 'ex-fig' }, h('span', { class: 'ex-sheen', 'aria-hidden': 'true' })); el.querySelector('.ex-h').after(fig); }
     const prev = [...fig.querySelectorAll('.ex-img')];
     fig.prepend(next);
-    const done = () => { prev.forEach((p) => p.remove()); next.classList.remove('ex-img-next'); };
+    const done = () => { prev.forEach((p) => p.remove()); next.classList.remove('ex-img-next'); unmount(entry.id); }; // the picture replaces the sketch
     if (prefersReducedMotion()) done(); else setTimeout(done, 900);
   }
 
   function renderAll() {
+    unmountAll();
     for (const c of cards.values()) c.remove();
     cards.clear();
     const rec = cur();
