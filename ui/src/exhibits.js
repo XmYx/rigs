@@ -3,7 +3,7 @@ import { prefersReducedMotion } from './a11y.js';
 import { isPhone } from './mobile.js';
 import { openWindow } from './wm.js';
 import { renderVisual } from './visual.js';
-import { mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
+import { contextFrom, mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
 import { onTheme } from './themes.js';
 import * as M from './exhibits-model.js';
 
@@ -171,13 +171,30 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     if (!fig) return;
     const host = h('div', { class: 'ex-p5', 'aria-hidden': 'true' });
     fig.prepend(host);
+    const rec = cur();
     const handle = mountSketch(host, {
-      id: sketchFor(entry.kind), seed: entry.id,
+      id: sketchFor(entry.kind), seed: `${rec?.doc.title || ''}|${entry.id}`, // the document's title too: the same step in two tasks looks different
+      info: contextFrom(entry, docInfo()), // what the card is about, drawn as data
       reducedMotion: () => prefersReducedMotion() || st.view === 'document',
       onReady: () => host.classList.add('in'),
       onError: () => { sketches.delete(entry.id); host.remove(); },
     });
-    sketches.set(entry.id, { handle, host });
+    sketches.set(entry.id, { handle, host, entry });
+  }
+
+  /** The current document as the sketches see it: title, entries so far, how many of each kind. */
+  function docInfo() {
+    const rec = cur();
+    const entries = rec?.doc.entries || [];
+    const counts = {};
+    for (const e of entries) counts[e.kind] = (counts[e.kind] || 0) + 1;
+    return { title: rec?.doc.title, total: entries.length, counts };
+  }
+
+  /** A live document grew: earlier cards re-read their place in it ("3 / 5", not the "3 / 3" they were mounted with). */
+  function refreshInfo() {
+    const d = docInfo();
+    for (const { handle, entry } of sketches.values()) handle.setInfo(contextFrom(entry, d));
   }
 
   function figure(entry, rec, next = false) {
@@ -221,6 +238,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     if (old) { old.replaceWith(el); el.classList.add('ex-updated'); } else place(el, entry.seq ?? 0);
     cards.set(entry.id, el);
     mountFor(entry, el); // after the card is in the list: the sketch sizes itself from its host
+    if (isNew) refreshInfo();
     if (isNew && stick) toBottom();
   }
 
