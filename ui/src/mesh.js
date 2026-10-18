@@ -2,6 +2,7 @@ import { api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { openControl } from './control.js';
 import { tagCtx } from './ctx-tag.js';
+import { createConnectors } from './connectors-panel.js';
 
 const AGENTS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig'], ['rea', 'REA'], ['sunshine', 'Sunshine'], ['moonlight', 'Moonlight'], ['tmux', 'tmux']];
 
@@ -15,7 +16,8 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
   const toolsEl = h('div', { class: 'pad settings' });
   const routingEl = h('div', { class: 'pad settings' });
   const changesEl = h('div', { class: 'pad settings' });
-  const tabs = [['Machines', table], ['Changes', changesEl], ['Tools', toolsEl], ['Routing', routingEl], ['Updates', updates], ['JARVIS', settings]];
+  const connectorsEl = h('div', { class: 'pad settings' });
+  const tabs = [['Machines', table], ['Changes', changesEl], ['Tools', toolsEl], ['Routing', routingEl], ['Connectors', connectorsEl], ['Updates', updates], ['JARVIS', settings]];
   const tabBar = h('div', { class: 'tabs' }, ...tabs.map(([name, el], i) => h('button', { class: 'tab' + (i ? '' : ' on'), onclick: (e) => { tabBar.querySelectorAll('.tab').forEach((t) => t.classList.remove('on')); e.target.classList.add('on'); tabs.forEach(([, x]) => (x.style.display = 'none')); el.style.display = ''; } }, name)));
   w.body.append(tabBar, ...tabs.map(([, el], i) => { el.style.display = i ? 'none' : ''; return el; }));
 
@@ -239,6 +241,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
   w.el.querySelector('.win-btn.close').addEventListener('click', () => clearInterval(changesTimer));
   renderTools();
   renderRouting();
+  createConnectors(connectorsEl);
   renderUpdates();
   renderSettings();
   timer = setInterval(renderMachines, 5000);

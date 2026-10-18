@@ -215,6 +215,18 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .settings label { display: flex; flex-direction: column; gap: 4px; color: #9fb2bf; font-size: 12px; }
 .settings label.check { flex-direction: row; }
 .settings textarea { resize: vertical; }
+/* Connectors tab (Mesh control) */
+.conn-list { display: flex; flex-direction: column; gap: 12px; }
+.conn-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(var(--accent-rgb), .04); max-width: 560px; }
+.conn-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.conn-name { font-size: 14px; }
+.conn-detail { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.conn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.conn-actions .btn:disabled { opacity: .45; cursor: not-allowed; }
+.conn-setup { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.conn-setup summary { cursor: pointer; color: #9fb2bf; }
+.conn-setup .path-input { width: 100%; box-sizing: border-box; }
+.conn-redirect { overflow-wrap: anywhere; }
 
 /* Notifications: a quiet column top-right, under the filters panel; they close themselves (docs/notes/notifications-audit.md). */
 #toasts { position: fixed; top: 56px; right: 12px; width: 320px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 6px; z-index: 9999; align-items: flex-end; pointer-events: none; }
