@@ -261,7 +261,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
           chat[usageKey] = usage.cumulative; delete usage.cumulative;
           if (viaOllama) usage.costUsd = 0; // local model: nothing is billed (Claude Code would price it as a Claude model)
         } catch {}
-        if (e.is_error) error = e.result || 'Claude Code returned an error';
+        // --max-turns (the fast path) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
+        if (e.is_error) error = e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
     },
@@ -416,7 +417,9 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
     const { chatId, hint, decision } = m.preroute ? await preroutedTurn(text, { brain, model, effort }, emit, opts, m) : await directTurn(text, emit, opts);
     m.chatId = chatId;
     const onTool = (name, r) => { if (!m.filedAt && r.status === 'ok' && HANDOFF_TOOL.test(name || '')) Object.assign(m, { filedAt: r.end || Date.now(), filedBy: 'brain' }); };
-    const q = resolveQuick({ text, route: m.preroute ? m.route : '', override: opts.quick, brain, routeInfo: decision || {}, settings: config().quick });
+    // A request that names no brain goes to the thread's own: a thread set to Codex / Ollama / Claude via Ollama is left alone too.
+    const threadBrain = !brain && m.route === 'answer' ? (await getChat(chatId))?.brain || '' : '';
+    const q = resolveQuick({ text, route: m.preroute ? m.route : '', override: opts.quick, brain: brain || threadBrain, routeInfo: decision || {}, settings: config().quick });
     if (q.on) {
       Object.assign(m, { lane: 'quick', tier: q.tier });
       const r = await (opts.sendQuick || quickTurn)(chatId, text, q, emit, { ...opts, hint, onTool });
@@ -424,7 +427,8 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
       m.escalated = r.escalate;
       if (opts.trace) trace.recordSpan({ traceId: opts.trace.traceId, parentId: opts.trace.parentId || '', kind: 'event', name: 'escalate', start: Date.now(),
         input: { reason: r.escalate, ran: r.tools || [] }, output: 'handed to the full JARVIS brain', meta: { lane: 'quick', tier: q.tier, model: q.model, effort: q.effort, to: 'full' } });
-      emit({ type: 'status', text: 'handing this to the full brain…' });
+      // reset: what the fast turn already streamed (text before a tool call, a cut-off reply) is not part of the answer.
+      emit({ type: 'status', text: 'handing this to the full brain…', reset: true });
       const ran = r.tools?.length ? ` It already ran: ${r.tools.slice(0, 8).join('; ')} — don't repeat what is done.` : '';
       out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint: `${hint}\n[The fast path (${q.model}) handed this request to you: ${r.escalate}.${ran}]`.trim(), onTool });
       return out;
@@ -561,8 +565,8 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
   if (!resolved) return { escalate: `${q.provider} is not available on this machine`, ran: false, tools: [] };
   chat.messages.push({ role: 'user', text, ts: Date.now() });
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', tier: q.tier });
-  const turn = activeTurns.get(id);
-  if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
+  // Shown on the work dashboard as JARVIS answering, like a full turn (sendMessage); cleared before an escalation re-runs.
+  activeTurns.set(id, { id, title: chat.title, brain: resolved.brain, model: resolved.model, startedAt: Date.now(), text: truncate(text, 120), lane: 'quick' });
   // Bounded: its own abort (the timeout) on top of Sir's stop.
   const ac = new AbortController();
   let timedOut = false;
@@ -580,7 +584,7 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
       onToolStart: (c) => ran.push(`${c.name}${c.input ? ' ' + truncate(typeof c.input === 'string' ? c.input : JSON.stringify(c.input), 120) : ''}`),
       onTool: (name, r) => { if (r.status === 'ok' && HANDOFF_TOOL.test(name || '')) filed = true; onTool?.(name, r); },
       runOpts: { quick: { maxTurns: q.maxTurns } } });
-  } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); }
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); activeTurns.delete(id); }
   const userStopped = !!signal?.aborted;
   const asked = parseEscalation(out.text);
   const escalate = userStopped || filed ? null

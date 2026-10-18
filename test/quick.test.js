@@ -24,6 +24,11 @@ out({ type: 'system', subtype: 'init', session_id: 'quick-sess-1' });
 out({ type: 'assistant', session_id: 'quick-sess-1', message: { content: [{ type: 'tool_use', id: 'tu1', name: 'mcp__rigs__mesh_status', input: {} }] } });
 out({ type: 'user', session_id: 'quick-sess-1', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok' }] } });
 if (process.env.FAKE_CLAUDE_SLEEP) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_CLAUDE_SLEEP));
+if (process.env.FAKE_CLAUDE_MAX_TURNS) {
+  out({ type: 'stream_event', session_id: 'quick-sess-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Let me check, sir.' } } });
+  out({ type: 'result', subtype: 'error_max_turns', session_id: 'quick-sess-1', is_error: true, result: null, errors: ['Reached maximum number of turns (8)'] });
+  process.exit(1);
+}
 for (const part of reply.match(/.{1,5}/gs)) out({ type: 'stream_event', session_id: 'quick-sess-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } });
 out({ type: 'result', session_id: 'quick-sess-1', is_error: false, result: reply, total_cost_usd: 0.001,
   usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { [model]: { inputTokens: 10, outputTokens: 5 } } });
@@ -237,6 +242,19 @@ test('work requests and pre-routing off never take the fast path', async () => {
   assert.equal(sent.length, 3);
 });
 
+test('a request that names no brain follows the thread: a JARVIS thread on Codex / Claude via Ollama keeps its brain', async () => {
+  const main = await chat.mainChat();
+  const sent = [];
+  const calls = [];
+  for (const b of ['codex', 'claude-ollama']) {
+    await fs.promises.writeFile(path.join(process.env.RIGS_HOME, 'chats', main.id + '.json'), JSON.stringify({ ...main, brain: b }));
+    await chat.jarvisSend('what time is it?', {}, () => {}, { router: answerRouter, send: fakeSend(sent), sendQuick: fakeQuick(calls, { text: 'x' }) });
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(sent.length, 2);
+  await fs.promises.writeFile(path.join(process.env.RIGS_HOME, 'chats', main.id + '.json'), JSON.stringify(main));
+});
+
 test('escalation: the request re-runs on the full brain, told why and what already ran; an escalate event span', async () => {
   const sent = [];
   const calls = [];
@@ -249,6 +267,7 @@ test('escalation: the request re-runs on the full brain, told why and what alrea
   assert.match(sent[0].hint, /^\[routed: answer · a question\]\n\[The fast path \(claude-haiku-5-5\) handed this request to you: needs a long investigation\. It already ran: mcp__rigs__mesh_status \{\}/);
   const timing = events.find((e) => e.type === 'timing');
   assert.deepEqual([timing.lane, timing.escalated], ['quick', 'needs a long investigation']);
+  assert.ok(events.find((e) => e.type === 'status' && /full brain/.test(e.text)).reset, 'the screen drops what the fast turn streamed');
   await trace.flush();
   const ev = (await trace.readSpans({ traceId: intake.traceId })).find((s) => s.kind === 'event' && s.name === 'escalate');
   assert.equal(ev.meta.lane, 'quick');
@@ -329,4 +348,19 @@ test('quickTurn: a fast turn that runs past timeoutMs is stopped and handed to t
     assert.equal(r.escalate, 'the fast path timed out after 0 s');
     assert.equal((await chat.getChat(main.id)).messages.length, before);
   } finally { delete process.env.FAKE_CLAUDE_SLEEP; }
+});
+
+test('quickTurn: a fast turn that hits --max-turns is handed over with the reason; it shows on the dashboard while it runs', { skip: !posix && 'stand-in claude is a POSIX script' }, async () => {
+  process.env.FAKE_CLAUDE_MAX_TURNS = '1';
+  try {
+    const main = await chat.mainChat();
+    const before = main.messages.length;
+    const q = Q.resolveQuick({ text: 'how loaded is magix?', route: 'answer', settings: {} });
+    let seenActive = null;
+    const r = await chat.quickTurn(main.id, 'how loaded is magix?', q, (e) => { if (e.type === 'delta') seenActive = chat.activeTurns.get(main.id); });
+    assert.equal(r.escalate, 'the fast path failed: Reached maximum number of turns (8)');
+    assert.deepEqual([seenActive?.lane, seenActive?.model], ['quick', 'claude-haiku-5-5'], 'listed as JARVIS answering');
+    assert.ok(!chat.activeTurns.has(main.id), 'cleared before the full brain re-runs');
+    assert.equal((await chat.getChat(main.id)).messages.length, before);
+  } finally { delete process.env.FAKE_CLAUDE_MAX_TURNS; }
 });
