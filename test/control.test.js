@@ -221,6 +221,14 @@ test('a helper that exits on its own (crash, logout) ends the lease but is not a
   assert.deepEqual(seen, ['exit']);
 });
 
+test('Linux session type ignores XDG_SESSION_TYPE=tty and falls back to WAYLAND_DISPLAY, then DISPLAY', async () => {
+  const session = async (env) => (await createLinuxAdapter({ runner: async () => ({ code: 1, stdout: '', stderr: '' }), find: () => null, environment: () => env, refresh: async () => {} }).inspect()).session;
+  assert.equal(await session({ XDG_SESSION_TYPE: 'tty', WAYLAND_DISPLAY: 'wayland-0', DISPLAY: ':0' }), 'wayland');
+  assert.equal(await session({ XDG_SESSION_TYPE: 'tty', DISPLAY: ':0' }), 'x11');
+  assert.equal(await session({ XDG_SESSION_TYPE: 'tty' }), 'none');
+  assert.equal(await session({ XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: 'wayland-0' }), 'x11');
+});
+
 test('Linux runner receives literal Unicode/text args and X11 window focus validates ids', async () => {
   const calls = [];
   const adapter = createLinuxAdapter({ runner: async (...args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; }, find: () => true, environment: () => ({ DISPLAY: ':test' }), refresh: async () => {} });
