@@ -105,7 +105,7 @@ The daemon normally runs as `rigs.service` (systemd --user), and agents often re
 `control-linux.js` trusts only `wayland`/`x11` from `XDG_SESSION_TYPE`, then `WAYLAND_DISPLAY`, then `DISPLAY`
 (38cd719, af16f7a). Second, `parseCombo('ctrl++')` is ctrl plus the `+` key (38cd719).
 
-Live on `magix-system` (GNOME Shell 50.1, Wayland, DP-1 3840×2160 @1.5), 2026-10-18 03:0xZ, scratch clone
+Live on `magix-system` (GNOME Shell 50.1, Wayland, DP-1 3840×2160 @1.5), 2026-10-18 03:05–03:31Z, scratch clone
 `/tmp/rigs-t2` of this branch, dev daemon as a transient unit:
 
 ```bash
@@ -122,7 +122,7 @@ node scripts/control/linux/live-check.js http://127.0.0.1:4793
 | Locked screen | `GET screenshot`, `POST type`, `POST key {ctrl++}`, `GET windows` → HTTP 423 `locked` "The screen is locked" in 11–80 ms |
 | No backend / no session | the lock check answers first while locked, so this is covered by the unit test "no backend or no graphical session…": a forced backend with no tool → `unsupported` "No capture/input backend is available", session `none` → `no-session`, both before any input reaches the helper. A hung helper → `timeout` at the 10 s deadline (existing test). |
 | Unicode | refused with `unsupported` before any key is sent (no `SetKeymap`, see below); the live check asserts this in the scratch window |
-| Screenshot + typing into a scratch window | **pending**: the screen had been locked for ~7 h (`LockedHint=yes`). It was not unlocked from a script: that would bypass the owner's lock screen. Asked through JARVIS at 03:1xZ. Run the command above once the screen is unlocked |
+| Screenshot + typing into a scratch window | the screen had been locked for ~7 h. It was not unlocked from a script, which would bypass the owner's lock screen; Sir unlocked it when asked through JARVIS. At 03:30Z the live check passed every check: `/tmp/rigs-wayland-service-shot.png` 3840×2160 (2.58 MB, real desktop), the scratch window active per AT-SPI, Unicode `é` → 501 `unsupported` in 6 ms, 46 characters typed via keysym, the exact string `RIGS wayland service check 2026-10-18T03:30:40` read back from the window's output file and visible in `/tmp/rigs-wayland-service-typed.png` (viewed) |
 
 `scripts/control/linux/live-check.js` runs both cases. When locked, it checks the 423s and exits 2. When unlocked, it
 writes `/tmp/rigs-wayland-service-shot.png`, then opens its own GTK4 scratch window as a transient unit
