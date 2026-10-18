@@ -16,17 +16,24 @@ export const APP_NAME = 'RIGS Control.app';
 export const SOURCE_DIR = path.join(APP_DIR, 'scripts/control/macos');
 const SOURCE_FILES = ['RigsControl.swift', 'Info.plist', 'build.sh'];
 
-/** Pure: the real home owns dev.rigs.control; a scratch or dev home gets its own label, so it never replaces the real helper. */
+/**
+ * Pure: the real home owns dev.rigs.control; a scratch or dev home gets its own label, so it never replaces the real
+ * helper. The label is also the app's bundle id: TCC keeps one entry per bundle id, so a dev build never takes over
+ * (or resets) the real helper's grants.
+ */
 export function helperLabel(home, defaultHome = path.join(os.homedir(), '.rigs')) {
   const h = path.resolve(home);
   return h === path.resolve(defaultHome) ? BUNDLE_ID : `${BUNDLE_ID}.${crypto.createHash('sha256').update(h).digest('hex').slice(0, 8)}`;
 }
 
+/** Pure: the name System Settings lists the app under. */
+export const helperName = (label) => (label === BUNDLE_ID ? 'RIGS Control' : 'RIGS Control (dev)');
+
 export function helperPaths(home = RIGS_HOME, { launchAgents = path.join(os.homedir(), 'Library/LaunchAgents'), defaultHome } = {}) {
   const label = helperLabel(home, defaultHome);
   const app = path.join(home, 'bin', APP_NAME);
   return {
-    label, app,
+    label, app, bundleId: label, name: helperName(label),
     exe: path.join(app, 'Contents/MacOS/rigs-control'),
     hashFile: path.join(app, 'Contents/Resources/source.sha256'),
     plist: path.join(launchAgents, `${label}.plist`),
@@ -37,7 +44,7 @@ export function helperPaths(home = RIGS_HOME, { launchAgents = path.join(os.home
   };
 }
 
-/** Hash of the helper's sources: the same bytes in the same order as build.sh, which stores it in the bundle. */
+/** Hash of the helper's sources: the same bytes in the same order as build.sh, which stores it (and the bundle id) in the bundle. */
 export function sourceHash(dir = SOURCE_DIR) {
   const h = crypto.createHash('sha256');
   for (const f of SOURCE_FILES) h.update(fs.readFileSync(path.join(dir, f)));
@@ -79,9 +86,11 @@ function writeHelperState(home, state) {
   fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
 }
 
-function builtHash(p) {
+export function builtHash(p) {
   try { return fs.readFileSync(p.hashFile, 'utf8').trim(); } catch { return null; }
 }
+/** What build.sh stamps into a current build for these paths: the source hash and the bundle id. */
+export const wantedHash = (p) => `${sourceHash()} ${p.bundleId}`;
 
 /**
  * One request on a fresh authenticated connection (status, grant, install checks). The control adapter keeps
@@ -115,23 +124,24 @@ export function requestHelper(home, op, args = {}, { timeout = 5000, connect = n
 const launchctl = (runner, ...args) => runner('launchctl', args, { timeout: 15000 });
 
 /**
- * Builds the app when its sources changed, writes the LaunchAgent and (re)starts it, then waits until it answers.
- * Idempotent: with nothing changed it only makes sure the job is running. A rebuild has a new cdhash, so the
- * old TCC entries no longer apply: `regrant` is recorded and the grant flow resets RIGS Control's entries first.
+ * Builds the app when its sources or bundle id changed, writes the LaunchAgent and (re)starts it, then waits until
+ * it answers. Idempotent: with nothing changed it only makes sure the job is running. A new build has a new cdhash,
+ * so any TCC entry under its bundle id (an older build's) no longer applies: `regrant` is recorded and the grant
+ * flow resets that bundle id's entries first.
  */
 export async function installMacHelper({ home = RIGS_HOME, runner = run, launchAgents, defaultHome, uid = process.getuid?.(), ready, wait = 8000 } = {}) {
   const p = helperPaths(home, { launchAgents, defaultHome });
-  const want = sourceHash();
+  const want = wantedHash(p);
   const had = builtHash(p);
   let built = false;
   if (had !== want) {
-    const r = await runner('bash', [path.join(SOURCE_DIR, 'build.sh'), p.app], { timeout: 300000 });
+    const r = await runner('bash', [path.join(SOURCE_DIR, 'build.sh'), p.app, p.bundleId, p.name], { timeout: 300000 });
     if (r.code === 2 || /swiftc not found/.test(r.stderr || '')) {
       throw new ControlError('unsupported', 'Building RIGS Control needs swiftc', { kind: 'command', text: 'Install the Xcode Command Line Tools: run `xcode-select --install` in a terminal on this Mac, then restart RIGS.' });
     }
     if (r.code !== 0) throw new ControlError('error', `Building RIGS Control failed: ${String(r.stderr || r.stdout || '').trim().slice(-600)}`);
     built = true;
-    writeHelperState(home, { ...readHelperState(home), hash: want, builtAt: new Date().toISOString(), regrant: !!had || !!readHelperState(home).regrant });
+    writeHelperState(home, { ...readHelperState(home), hash: want, builtAt: new Date().toISOString(), regrant: true });
   }
   const plist = launchAgentPlist({ label: p.label, exe: p.exe, home, log: p.log });
   let old = null;
@@ -184,13 +194,16 @@ export async function uninstallMacHelper({ home = RIGS_HOME, runner = run, launc
 }
 
 /**
- * Before a grant after a rebuild: TCC pinned the old entries to the old cdhash, so they show "on" but no longer
- * apply. Reset only RIGS Control's own entries, then the person switches the new build on.
+ * Before a grant after a build: TCC pinned any entry under this bundle id to an older cdhash, so it shows "on" but no
+ * longer applies. Reset only this home's own entries, then the person switches the new build on.
  */
-export async function resetStaleGrants({ home = RIGS_HOME, runner = run } = {}) {
+export async function resetStaleGrants({ home = RIGS_HOME, runner = run, defaultHome, grants = {} } = {}) {
   const st = readHelperState(home);
   if (!st.regrant) return { reset: false };
-  for (const service of ['ScreenCapture', 'Accessibility']) await runner('tccutil', ['reset', service, BUNDLE_ID], { timeout: 10000 });
+  const { bundleId } = helperPaths(home, { defaultHome });
+  // A grant the running build already holds is not stale: never take it away (e.g. one switched on by hand).
+  const services = [['ScreenCapture', grants.screen], ['Accessibility', grants.ax]].filter(([, ok]) => ok !== true).map(([s]) => s);
+  for (const service of services) await runner('tccutil', ['reset', service, bundleId], { timeout: 10000 });
   writeHelperState(home, { ...st, regrant: false });
-  return { reset: true };
+  return { reset: services.length > 0, services };
 }

@@ -38,6 +38,15 @@ export function selectBackend({ platform, session, desktop = '', available: a = 
   return { capture, input, windows, missing: Object.entries({ capture, input, windows }).filter(([, v]) => !v).map(([k]) => k) };
 }
 
+/**
+ * The permission an operation needs. Pure. macOS lists windows with CGWindowList, whose titles need Screen Recording;
+ * focusing a window goes through AX and needs Accessibility. Elsewhere the window backend needs accessibility.
+ */
+export function permissionFor(op, backendKey, platform) {
+  if (backendKey === 'capture' || (op === 'windows' && ['mac', 'darwin'].includes(platform))) return 'screenCapture';
+  return backendKey === 'windows' ? 'accessibility' : 'input';
+}
+
 const ALIASES = { control: 'ctrl', option: 'alt', cmd: 'super', command: 'super', win: 'super', meta: 'super', return: 'enter', escape: 'esc' };
 const NAMED = new Set('enter tab esc space backspace delete insert up down left right home end pageup pagedown capslock printscreen menu'.split(' '));
 export function parseCombo(combo, platform = platformName()) {
@@ -191,7 +200,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           const max = op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120;
           if (bucket.length >= max) throw new ControlError('rate', 'Control rate limit reached; try again in a minute');
           bucket.push(now());
-          const permission = info.permissions[backendKey === 'capture' ? 'screenCapture' : backendKey === 'windows' ? 'accessibility' : 'input'];
+          const permission = info.permissions[permissionFor(op, backendKey, platform)];
           backend = info.backend[backendKey];
           // macOS has one backend, the RIGS Control helper: when it is not running, say how to start it.
           if (!backend && platform === 'mac' && permission?.fix) throw new ControlError('needs-permission', `RIGS Control is not running, so ${op} is not possible`, permission.fix);

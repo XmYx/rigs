@@ -142,9 +142,9 @@ export function decideMac({ probe, fullDiskAccess }) {
   };
 }
 
-const helperFix = (permission, { app, regrant }) => ({
+const helperFix = (permission, { app, name, regrant }) => ({
   kind: 'settings', permission, url: MAC_PANES[permission], app,
-  text: `Open System Settings > Privacy & Security > ${MAC_LABEL[permission]} and switch on RIGS Control${regrant ? ' (it was updated: click Grant so the old entry is reset, then switch it on again)' : ''}. Grant it to RIGS Control, not to node: the helper holds these rights so agents cannot bypass the control gate.`,
+  text: `Open System Settings > Privacy & Security > ${MAC_LABEL[permission]} and switch on ${name}${regrant ? ' (a new build: click Grant first, so an entry left by an older build is cleared, then switch it on)' : ''}. Grant it to ${name}, not to node: the helper holds these rights so agents cannot bypass the control gate.`,
 });
 
 /**
@@ -152,7 +152,7 @@ const helperFix = (permission, { app, regrant }) => ({
  * Not running → every control permission is missing with the fix to start it. A grant the helper did not report
  * (an older helper) is unknown (null), never assumed.
  */
-export function decideMacHelper({ running = false, grants, app = '', regrant = false, error } = {}) {
+export function decideMacHelper({ running = false, grants, app = '', name = 'RIGS Control', regrant = false, error } = {}) {
   if (!running) {
     const fix = { kind: 'helper', app, text: `RIGS Control (the macOS helper that holds the screen and input rights) is not running${error ? ` (${error})` : ''}. Click Grant (JARVIS → Access & control) or run \`rigs control helper install\` on this Mac.` };
     return {
@@ -163,7 +163,7 @@ export function decideMacHelper({ running = false, grants, app = '', regrant = f
   }
   const g = grants || {};
   const flag = (v) => (typeof v === 'boolean' ? v : null);
-  const one = (key, ok, via) => ({ ok, via: `RIGS Control · ${via}`, ...(ok === true ? {} : { fix: helperFix(key, { app, regrant }) }) });
+  const one = (key, ok, via) => ({ ok, via: `RIGS Control · ${via}`, ...(ok === true ? {} : { fix: helperFix(key, { app, name, regrant }) }) });
   const ax = flag(g.ax), post = flag(g.post);
   const input = ax === false || post === false ? false : ax === null || post === null ? null : true;
   return {
@@ -185,9 +185,9 @@ async function probeMacHelper() {
   const regrant = !!readHelperState(RIGS_HOME).regrant;
   try {
     const r = await requestHelper(RIGS_HOME, 'probe', {}, { timeout: 8000 });
-    return { running: true, grants: r.grants, app: r.helper?.path || p.app, regrant };
+    return { running: true, grants: r.grants, app: r.helper?.path || p.app, name: p.name, regrant };
   } catch (e) {
-    return { running: false, app: p.app, regrant, error: fs.existsSync(p.app) ? e.message : 'not installed' };
+    return { running: false, app: p.app, name: p.name, regrant, error: fs.existsSync(p.app) ? e.message : 'not installed' };
   }
 }
 
@@ -328,14 +328,15 @@ export async function grant(permission) {
     }
     // Screen Recording and Accessibility go to RIGS Control: make sure it runs, then let it ask (adds it to the list).
     const installed = await installMacHelper();
-    const reset = await resetStaleGrants();
+    const before = await requestHelper(RIGS_HOME, 'probe', {}, { timeout: 8000 }).catch(() => null);
+    const reset = await resetStaleGrants({ grants: before?.grants });
     let asked = null;
     try { asked = await requestHelper(RIGS_HOME, 'grant', { permission: key }, { timeout: 15000 }); } catch {}
     await run('open', [MAC_PANES[key]], { timeout: 10000 });
     await run('open', ['-R', installed.app], { timeout: 10000 });
     return {
       ok: true, pane: MAC_PANES[key], app: installed.app, granted: asked?.granted ?? null, reset: reset.reset,
-      message: `In ${MAC_LABEL[key]}, switch on RIGS Control (${APP_NAME} is shown in Finder; drag it into the list if missing). It applies at once; no restart needed.`,
+      message: `In ${MAC_LABEL[key]}, switch on ${helperPaths(RIGS_HOME).name} (${APP_NAME} is shown in Finder; drag it into the list if missing). It applies at once; no restart needed.`,
     };
   }
   if (isLinux && (permission === 'input' || permission === 'uinput')) {

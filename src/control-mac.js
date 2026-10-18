@@ -54,7 +54,7 @@ export function createMacAdapter({ home, connect = net.createConnection, stopHel
     events: rpc,
     async inspect() {
       // Status never launches an app or causes a permission prompt: it only asks a helper that is already running.
-      const app = helperPaths(home).app, regrant = !!readHelperState(home).regrant;
+      const { app, name } = helperPaths(home), regrant = !!readHelperState(home).regrant;
       const missing = (error) => ({ session: 'quartz', desktop: '', available: {}, displays: [], locked: null, permissions: decideMacHelper({ running: false, app, error }), helper: { kind: 'mac-helper', running: false } });
       if (!fs.existsSync(socketPath)) return missing(fs.existsSync(app) ? 'stopped' : 'not installed');
       let result;
@@ -66,7 +66,7 @@ export function createMacAdapter({ home, connect = net.createConnection, stopHel
       return {
         session: 'quartz', desktop: '', available: { macHelper: true }, locked: result.locked ?? null, displays: result.displays || [],
         helper: result.helper || { kind: 'mac-helper', running: true },
-        permissions: decideMacHelper({ running: true, grants: result.grants, app: result.helper?.path || app, regrant }),
+        permissions: decideMacHelper({ running: true, grants: result.grants, app: result.helper?.path || app, name, regrant }),
       };
     },
     request: (op, args) => rpc.request(op, args),

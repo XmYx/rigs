@@ -15,7 +15,7 @@ process.env.RIGS_NO_OPENRIG = '1';
 
 const H = await import('../src/control-mac-helper.js');
 const A = await import('../src/access.js');
-const { createControl } = await import('../src/control.js');
+const { createControl, permissionFor } = await import('../src/control.js');
 const { createMacAdapter } = await import('../src/control-mac.js');
 
 test('helperLabel: the real home owns dev.rigs.control; any other home gets its own stable label', () => {
@@ -25,6 +25,17 @@ test('helperLabel: the real home owns dev.rigs.control; any other home gets its 
   assert.match(dev, /^dev\.rigs\.control\.[0-9a-f]{8}$/);
   assert.equal(H.helperLabel('/Users/x/proj/.rigs-dev/mac', '/Users/x/.rigs'), dev);
   assert.notEqual(H.helperLabel('/Users/x/other', '/Users/x/.rigs'), dev);
+});
+
+test('helperPaths: the label is the bundle id too, so a dev build never shares the real helper\'s TCC entries', () => {
+  const real = H.helperPaths('/Users/x/.rigs', { defaultHome: '/Users/x/.rigs', launchAgents: '/L' });
+  assert.equal(real.bundleId, 'dev.rigs.control');
+  assert.equal(real.name, 'RIGS Control');
+  const dev = H.helperPaths('/Users/x/proj/.rigs-dev/mac', { defaultHome: '/Users/x/.rigs', launchAgents: '/L' });
+  assert.equal(dev.bundleId, dev.label);
+  assert.notEqual(dev.bundleId, real.bundleId);
+  assert.equal(dev.name, 'RIGS Control (dev)');
+  assert.equal(H.wantedHash(dev), `${H.sourceHash()} ${dev.bundleId}`);
 });
 
 test('launchAgentPlist: own Aqua job, interactive, restarted only after a crash, paths escaped', () => {
@@ -47,15 +58,15 @@ test('sourceHash matches what build.sh stores in the bundle', { skip: spawnSync(
   assert.equal(r.stdout.trim(), H.sourceHash());
 });
 
-/** launchctl/bash fake: records calls; bash "builds" by writing the bundle's hash file. */
+/** launchctl/bash fake: records calls; bash "builds" by writing the bundle's stamp (source hash + bundle id) like build.sh. */
 function fakeRunner({ loaded = false } = {}) {
   const calls = [];
   const runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
     if (cmd === 'bash') {
-      const app = args[1];
+      const [, app, bundleId] = args;
       fs.mkdirSync(path.join(app, 'Contents/Resources'), { recursive: true });
-      fs.writeFileSync(path.join(app, 'Contents/Resources/source.sha256'), H.sourceHash() + '\n');
+      fs.writeFileSync(path.join(app, 'Contents/Resources/source.sha256'), `${H.sourceHash()} ${bundleId}\n`);
       return { code: 0, stdout: '', stderr: '' };
     }
     if (cmd === 'launchctl' && args[0] === 'print') return { code: loaded ? 0 : 113, stdout: '', stderr: '' };
@@ -70,10 +81,12 @@ test('installMacHelper: builds once, bootstraps its own job, then only makes sur
   const home = fs.mkdtempSync(path.join(root, 'h-')), agents = path.join(root, 'agents-' + path.basename(home));
   const ready = async () => ({});
   const f = fakeRunner();
+  const { bundleId } = H.helperPaths(home);
   const first = await H.installMacHelper({ home, runner: f.runner, launchAgents: agents, uid: 501, ready });
   assert.equal(first.built, true);
-  assert.equal(first.regrant, false, 'a first build has no old grant to reset');
+  assert.equal(first.regrant, true, 'an entry under this bundle id can only be an older build\'s');
   assert.deepEqual(f.calls.map((c) => c.slice(0, 2).join(' ')), ['bash ' + path.join(H.SOURCE_DIR, 'build.sh'), 'launchctl print', 'launchctl bootstrap']);
+  assert.deepEqual(f.calls[0].slice(2), [path.join(home, 'bin', H.APP_NAME), bundleId, 'RIGS Control (dev)']);
   assert.equal(f.calls[2][2], 'gui/501');
   const plist = fs.readFileSync(first.plist, 'utf8');
   assert.match(plist, new RegExp(`<string>${first.label.replace(/\./g, '\\.')}</string>`));
@@ -86,20 +99,27 @@ test('installMacHelper: builds once, bootstraps its own job, then only makes sur
   assert.deepEqual(f.calls.map((c) => c.slice(0, 2).join(' ')), ['launchctl print', 'launchctl kickstart']);
   assert.ok(!f.calls[1].includes('-k'));
 
-  // Sources changed (old hash in the bundle): rebuild, reload, and remember that the old TCC entries are stale.
-  fs.writeFileSync(path.join(home, 'bin', H.APP_NAME, 'Contents/Resources/source.sha256'), 'old\n');
-  f.calls.length = 0;
-  const rebuilt = await H.installMacHelper({ home, runner: f.runner, launchAgents: agents, uid: 501, ready });
-  assert.equal(rebuilt.built, true);
-  assert.equal(rebuilt.regrant, true);
-  assert.deepEqual(f.calls.map((c) => c.slice(0, 2).join(' ')), ['bash ' + path.join(H.SOURCE_DIR, 'build.sh'), 'launchctl print', 'launchctl bootout', 'launchctl bootstrap']);
-
-  // The grant flow resets only RIGS Control's own entries, once.
+  // The grant flow resets only this home's own entries, once.
   const t = fakeRunner();
-  assert.deepEqual(await H.resetStaleGrants({ home, runner: t.runner }), { reset: true });
-  assert.deepEqual(t.calls, [['tccutil', 'reset', 'ScreenCapture', 'dev.rigs.control'], ['tccutil', 'reset', 'Accessibility', 'dev.rigs.control']]);
+  assert.deepEqual(await H.resetStaleGrants({ home, runner: t.runner }), { reset: true, services: ['ScreenCapture', 'Accessibility'] });
+  assert.deepEqual(t.calls, [['tccutil', 'reset', 'ScreenCapture', bundleId], ['tccutil', 'reset', 'Accessibility', bundleId]]);
   assert.deepEqual(await H.resetStaleGrants({ home, runner: t.runner }), { reset: false });
   assert.equal(t.calls.length, 2);
+
+  // Sources changed (old stamp in the bundle), or a build from before per-home bundle ids: rebuild and reload.
+  for (const old of ['old', H.sourceHash()]) {
+    fs.writeFileSync(path.join(home, 'bin', H.APP_NAME, 'Contents/Resources/source.sha256'), old + '\n');
+    f.calls.length = 0;
+    const rebuilt = await H.installMacHelper({ home, runner: f.runner, launchAgents: agents, uid: 501, ready });
+    assert.equal(rebuilt.built, true);
+    assert.equal(rebuilt.regrant, true);
+    assert.deepEqual(f.calls.map((c) => c.slice(0, 2).join(' ')), ['bash ' + path.join(H.SOURCE_DIR, 'build.sh'), 'launchctl print', 'launchctl bootout', 'launchctl bootstrap']);
+  }
+
+  // A grant the new build already holds (switched on by hand) is never reset; only the missing one is.
+  const u = fakeRunner();
+  assert.deepEqual(await H.resetStaleGrants({ home, runner: u.runner, grants: { screen: true, ax: false } }), { reset: true, services: ['Accessibility'] });
+  assert.deepEqual(u.calls, [['tccutil', 'reset', 'Accessibility', bundleId]]);
 });
 
 test('installMacHelper: no swiftc gives the xcode-select fix', async () => {
@@ -123,7 +143,9 @@ test('decideMacHelper: the helper\'s own grants, each missing one with its Syste
   // An older helper that reports nothing: unknown, never assumed granted.
   assert.equal(A.decideMacHelper({ running: true, grants: {} }).screenCapture.ok, null);
   const regrant = A.decideMacHelper({ running: true, grants: { screen: false }, regrant: true });
-  assert.match(regrant.screenCapture.fix.text, /it was updated/);
+  assert.match(regrant.screenCapture.fix.text, /a new build: click Grant first/);
+  // A dev home's helper is named as such, so the person switches on the right entry.
+  assert.match(A.decideMacHelper({ running: true, grants: { screen: false }, name: 'RIGS Control (dev)' }).screenCapture.fix.text, /switch on RIGS Control \(dev\)\. Grant it to RIGS Control \(dev\), not to node/);
   const down = A.decideMacHelper({ running: false, error: 'not installed' });
   assert.equal(down.screenCapture.ok, false);
   assert.equal(down.input.fix.kind, 'helper');
@@ -161,4 +183,28 @@ test('ready follows the helper\'s grants: no Screen Recording means not ready to
   const st = await control.status({ force: true });
   assert.deepEqual(st.ready, { see: false, act: true });
   await assert.rejects(control.screenshot({}, { from: 'test', agent: 'a' }), (e) => e.code === 'needs-permission' && /Privacy_ScreenCapture$/.test(e.fix.url));
+});
+
+test('permissionFor: macOS lists windows with Screen Recording; focus and input need Accessibility', () => {
+  assert.equal(permissionFor('windows', 'windows', 'mac'), 'screenCapture');
+  assert.equal(permissionFor('focus', 'windows', 'mac'), 'accessibility');
+  assert.equal(permissionFor('screenshot', 'capture', 'mac'), 'screenCapture');
+  assert.equal(permissionFor('type', 'input', 'mac'), 'input');
+  assert.equal(permissionFor('windows', 'windows', 'linux'), 'accessibility');
+  assert.equal(permissionFor('windows', 'windows', 'windows'), 'accessibility');
+});
+
+test('macOS with Screen Recording but no Accessibility: the window list works, focus and typing say to grant Accessibility', async () => {
+  const home = fs.mkdtempSync(path.join(root, 'win-'));
+  const cfg = { name: 'mac-test', control: { enabled: true, input: true } };
+  const permissions = A.decideMacHelper({ running: true, grants: { screen: true, ax: false, post: false } });
+  const sent = [];
+  const adapter = { events: null, async inspect() { return { session: 'quartz', desktop: '', available: { macHelper: true }, locked: false, displays: [], permissions }; },
+    async request(op) { sent.push(op); return op === 'windows' ? [{ id: '7', title: 'Untitled', app: 'TextEdit', focused: true }] : { locked: false }; }, async configure() {}, async stop() {} };
+  const control = createControl({ home, platform: 'mac', getConfig: () => cfg, persistConfig: () => {}, adapter });
+  assert.deepEqual(await control.listWindows({ from: 'test', agent: 'a' }), [{ id: '7', title: 'Untitled', app: 'TextEdit', focused: true }]);
+  for (const op of [() => control.focusWindow('7', { from: 'test', agent: 'a' }), () => control.typeText('x', {}, { from: 'test', agent: 'a' })]) {
+    await assert.rejects(op(), (e) => e.code === 'needs-permission' && /Privacy_Accessibility$/.test(e.fix.url));
+  }
+  assert.ok(!sent.includes('focus') && !sent.includes('type'), 'nothing reaches the helper without the grant');
 });

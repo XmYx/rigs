@@ -186,7 +186,7 @@ const commands = {
           const p = H.helperPaths();
           let probe = null;
           try { probe = await H.requestHelper(undefined, 'probe'); } catch (e) { probe = { error: e.message }; }
-          console.log(JSON.stringify({ label: p.label, app: p.app, built: fs.existsSync(p.hashFile), current: fs.existsSync(p.hashFile) && fs.readFileSync(p.hashFile, 'utf8').trim() === H.sourceHash(), ...probe }, null, 2));
+          console.log(JSON.stringify({ label: p.label, name: p.name, app: p.app, built: fs.existsSync(p.hashFile), current: H.builtHash(p) === H.wantedHash(p), ...probe }, null, 2));
         } else { console.log('usage: rigs control helper [status|install|stop|remove]'); process.exit(1); }
       } catch (e) { console.error(`${e.message}${e.fix?.text ? `\n${e.fix.text}` : ''}`); process.exit(1); }
       return;
