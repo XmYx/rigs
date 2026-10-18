@@ -1421,7 +1421,8 @@ export async function startServer() {
   trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
   planner.onProjectSaved((p) => exhibitSvc.handleProject(p));
   exhibits.events.on('entry', ({ docId, entry, final }) => broadcast({ type: 'exhibit', docId, entry, final }));
-  exhibits.events.on('image', ({ docId, entry }) => broadcast({ type: 'exhibit-image', docId, entry }));
+  exhibits.events.on('live', (l) => broadcast({ type: 'exhibit-live', ...l }));
+  exhibits.events.on('image',({ docId, entry }) => broadcast({ type: 'exhibit-image', docId, entry }));
   exhibits.events.on('final', ({ docId, at }) => broadcast({ type: 'exhibit-final', docId, at }));
   const pruneTraces = () => trace.prune().then((f) => f.length && log(`traces: pruned ${f.length} day file(s)`)).catch((e) => log('traces prune:', e.message));
   pruneTraces();

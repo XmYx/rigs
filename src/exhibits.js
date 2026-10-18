@@ -119,8 +119,12 @@ export function spanToExhibit(span) {
       return [draft(span, 'end', 'step', `Routed: ${route}`, `The router classified the request as “${route}”${m.via ? ` (${m.via})` : ''}${why}.`, { kind: 'status', title: 'Route', items }, { projectId: m.projectId || undefined })];
     }
     case 'brain-turn': {
-      if (!ended) return [];
       const who = [m.model || span.name, m.effort].filter(Boolean).join(' · ');
+      if (!ended) {
+        // Shown as soon as the turn starts: a long turn must not leave the window silent.
+        return [draft(span, 'start', 'step', 'Thinking…', `${who || 'The brain'} is working on it.`,
+          { kind: 'steps', title: who || 'Brain turn', items: [{ text: 'Read the request', done: true }, { text: 'Think', status: 'running' }, { text: 'Reply' }] })];
+      }
       const tok = (Number(m.inputTokens) || 0) + (Number(m.outputTokens) || 0);
       const items = [{ label: 'Time', value: Math.round(durOf(span) / 100) / 10, unit: ' s', max: Math.max(10, Math.ceil(durOf(span) / 1000)) }];
       if (tok) items.push({ label: 'Tokens', value: tok, max: Math.max(1000, tok) });
@@ -175,6 +179,29 @@ export function spanToExhibit(span) {
     }
     default: return [];
   }
+}
+
+const toolName = (n) => String(n || '').replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '').replace(/_/g, ' ');
+
+/**
+ * The live "now" line for a stage that just started: a short present-tense status the window shows at once (it is not
+ * stored; the entries are the record). null when the span is not running or is too fine to mention. Redacted. Pure.
+ */
+export function liveLine(span) {
+  if (!span?.spanId || span.end != null || span.status !== 'running') return null;
+  const m = span.meta || {};
+  const t = span.input?.task || {};
+  const text = {
+    intake: () => 'Request received — on it.',
+    router: () => 'Working out where this goes…',
+    'brain-turn': () => `Thinking with ${m.model || span.name || 'the brain'}…`,
+    'tool-call': () => `Using ${clip(toolName(span.name), 40)}${span.input?.file_path ? ` on ${String(span.input.file_path).split(/[\\/]/).pop()}` : ''}…`,
+    handoff: () => 'Filing the work…',
+    plan: () => 'Drawing up the plan…',
+    dispatch: () => `Sending ${t.id || m.taskId || 'a task'} to ${m.target || span.input?.node || 'a machine'}…`,
+    task: () => `${t.id || m.taskId || 'A task'} is running on ${span.node}…`,
+  }[span.kind];
+  return text ? { docId: span.traceId, kind: span.kind, text: safe(text(), 120), at: span.start || Date.now() } : null;
 }
 
 /**
@@ -482,13 +509,14 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
       r = mergeIntoDocument(doc, { ...rec, image: svgImage(r.entry, r.doc.title) }, { maxPerDoc });
     }
     // An entry past maxPerDoc is not written (only counted in memory); entries, images and finals are.
-    if (rec.t !== 'entry' || r.entry) await append(docId, rec.t === 'entry' ? { ...rec, image: r.entry.image } : rec);
+    // Live first, disk second: the window gets the entry before the append finishes.
     docs.set(docId, r.doc);
     if (rec.t === 'entry' && r.entry) {
       try { events.emit('entry', { docId, entry: r.entry, final: r.doc.final }); } catch {}
       if (images === 'comfyui' || images === 'auto') maybeComfy(docId, r.entry, r.doc.title);
     } else if (rec.t === 'image' && r.entry) try { events.emit('image', { docId, entry: r.entry }); } catch {}
     if (r.doc.final && !doc.final) try { events.emit('final', { docId, at: r.doc.finalAt }); } catch {}
+    if (rec.t !== 'entry' || r.entry) await append(docId, rec.t === 'entry' ? { ...rec, image: r.entry.image } : rec);
     return r.entry;
   }
 
@@ -578,6 +606,9 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
     /** A span was written (trace.events 'span'). Returns at once. */
     handleSpan(span) {
       if (!span?.spanId || !getSettings().enabled) return;
+      // The "now" line goes out at once, ahead of the queue and any disk work.
+      const live = liveLine(span);
+      if (live) try { events.emit('live', live); } catch {}
       queue(() => onSpan(span));
     },
     /** A project was saved (planner.onProjectSaved). Returns at once; the snapshot is taken now. */

@@ -69,6 +69,19 @@ test('spanToExhibit: the stages that make entries, in kinds the UI knows; noise 
   assert.deepEqual(X.spanToExhibit(null), []);
 });
 
+test('liveLine: a present-tense "now" line for each running stage, redacted; none once it ends', () => {
+  const run = (o) => X.liveLine(span({ end: null, status: 'running', ...o }));
+  assert.equal(run({ kind: 'intake' }).text, 'Request received — on it.');
+  assert.equal(run({ kind: 'brain-turn', meta: { model: 'claude-opus-5-5' } }).text, 'Thinking with claude-opus-5-5…');
+  assert.equal(run({ kind: 'tool-call', name: 'mcp__rigs__project_create' }).text, 'Using project create…');
+  assert.equal(run({ kind: 'tool-call', name: 'Edit', input: { file_path: '/a/b/app.js' } }).text, 'Using Edit on app.js…');
+  assert.equal(run({ kind: 'dispatch', input: { task: { id: 't1' } }, meta: { target: 'mac' } }).text, 'Sending t1 to mac…');
+  assert.equal(run({ kind: 'intake' }).docId, TR);
+  assertClean(run({ kind: 'brain-turn', meta: { model: SECRETS[0] } }), 'live line');
+  assert.equal(X.liveLine(FIXTURE[1]), null, 'ended stage');
+  assert.equal(run({ kind: 'assistant' }), null);
+});
+
 test('redaction: no token or secret from the fixture reaches a caption, visual or export', () => {
   const all = FIXTURE.flatMap(X.spanToExhibit);
   assertClean(all, 'drafts');
