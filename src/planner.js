@@ -6,7 +6,9 @@ import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { PROVIDERS, coreBrain } from './models.js';
+import { briefSection, matchTools, planNote } from './toolbox.js';
 import * as trace from './trace.js';
+import * as usage from './usage.js';
 import { parseContext } from './trace.js';
 import { log, readJson, truncate, writeJsonAtomic } from './util.js';
 import { slug } from './work.js';
@@ -121,7 +123,7 @@ export function workspaceBrief(p) {
   ].filter(Boolean).join('\n');
 }
 
-function planningPrompt(p, snapshot, guide = '') {
+function planningPrompt(p, snapshot, guide = '', tools = []) {
   const rules = config().routing.rules.map((r) => `${r.kind}${r.size ? '/' + r.size : ''}${r.tool ? ' [needs ' + r.tool + ']' : ''} → ${r.provider} ${r.model || '(default)'} effort=${r.effort || 'default'}`).join('; ');
   return `You are the planning brain of RIGS, a mesh of the user's workstations with coding agents on each.
 Break this project into concrete, independently executable tasks for coding agents.
@@ -157,6 +159,7 @@ Rules:
 - OpenRig vocabulary: an "OpenRig project" is an OpenRig project workspace — SPEC.md (intent), project.yaml (install:
   intent/context/skills/worlds), missions/ — plus the rig spec of the team (pods, seats, runtimes, models, edges) that
   works on it. Agents can read \`rig context get reference/project-workspace.md\` and \`reference/rig-spec.md\`.
+${planNote(matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 }))}
 - kind is one of: ${KINDS.join(', ')}. Use "review" for an independent check of another task's output (list it in deps).
   Use "reverse-engineer" when existing software/binaries must be understood (agents have REA for that).
   Use "text" for simple writing/transformation, "docs" for documentation, "media" for image/video/audio generation
@@ -285,7 +288,10 @@ export async function planProject(id, ctx, { brain } = {}) {
     return saveProject(p);
   }
   const guide = await readGuide(p, ctx);
-  const prompt = planningPrompt(p, snapshot, guide);
+  const tools = ctx.tools ? await ctx.tools().catch(() => []) : [];
+  const prompt = planningPrompt(p, snapshot, guide, tools);
+  const planHints = matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 });
+  if (planHints.length) usage.recordToolEvent({ event: 'hint', toolIds: planHints.map((x) => x.id), query: p.goal, trace: parseContext(p.trace)?.traceId });
   p.status = 'planning';
   event(p, `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
   await saveProject(p);
@@ -479,7 +485,10 @@ export function traceLine(c) {
   return ctx ? `- Request trace: \`${ctx.traceId}\`${ctx.parentId ? ` (parent span \`${ctx.parentId}\`)` : ''} — what is done for this task is recorded under Sir's original request; pass it on as \`trace\` when you file follow-up work.\n` : '';
 }
 
-function taskPrompt(p, t) {
+/** The tool registry entries a task's brief should name: matched on its title and description. */
+export function toolHints(tools, t) { return matchTools(tools, `${t.title} ${t.description || ''}`); }
+
+export function taskPrompt(p, t, tools = []) {
   const done = t.deps.map((d) => p.tasks.find((x) => x.id === d)).filter(Boolean);
   const others = p.tasks.filter((x) => x.id !== t.id && x.status === 'running').map((x) => `- ${x.id} ${x.title} (${x.assign?.provider} on ${x.assign?.node})`);
   return `# ${t.title}
@@ -507,7 +516,7 @@ ${t.needs?.tool ? `## Tool for this task\nThis machine provides **${t.needs.tool
 - Before reporting done: \`npm test\` passes (and \`npm run build\` when ui/ changed), and your work is committed.
 
 ` : ''}${autonomyBrief(p)}
-${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}## How to work
+${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}${briefSection(toolHints(tools, t))}## How to work
 - Stay inside your task. If you need something from another machine, use the rigs MCP tools (mesh_*).
 - To understand existing software, binaries or apps, use REA (the \`rea\` MCP / \`npx -y rea-agents@latest\`).
 - Nobody is watching this session: never stop to ask a question or wait for a reply. Decide sensibly, note the assumption in your summary.
@@ -598,6 +607,8 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
     await saveProject(p);
     return { p, ts: ts.map((t) => ({ ...t })) };
   });
+  // The registry's tools that fit each task go into its brief (cached catalog, empty when the mesh is slow).
+  const catalog = ctx.tools ? await ctx.tools().catch(() => []) : [];
   const started = [];
   for (const t0 of claim.ts) {
     const p0 = claim.p;
@@ -608,11 +619,13 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
     // hangs under it.
     const tc = traceOf(p0, t0);
     const attempt = (t0.attempts || 0) + 1;
+    const hints = toolHints(catalog, t0);
+    if (hints.length) usage.recordToolEvent({ event: 'hint', toolIds: hints.map((x) => x.id), query: t0.title, trace: tc?.traceId });
     const ds = tc ? trace.startSpan({ ...tc, kind: 'dispatch', name: `${t0.id} → ${t0.assign.node}`,
       input: { task: { id: t0.id, title: t0.title, kind: t0.kind, size: t0.size }, node: t0.assign.node, provider: t0.assign.provider, model: t0.assign.model, effort: t0.assign.effort, why: t0.reason, workdir, mode: p0.dispatch, attempt, ...(t0.escalate ? { escalated: t0.escalate } : {}) },
       meta: { projectId: p0.id, taskId: t0.id, attempt, target: t0.assign.node } }) : null;
     try {
-      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl, selfDev: p0.selfDev ? { branch: p0.selfDev.branch } : null }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined, trace: ds ? ds.ctx : t0.trace || p0.trace || undefined }, timeout: 10 * 60 * 1000 });
+      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl, selfDev: p0.selfDev ? { branch: p0.selfDev.branch } : null }, task: t0, prompt: taskPrompt(p0, t0, catalog), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined, trace: ds ? ds.ctx : t0.trace || p0.trace || undefined }, timeout: 10 * 60 * 1000 });
     } catch (e) { err = e; }
     ds?.end(r ? { output: { mode: r.mode, seat: r.seat || '', rig: r.rig || '', qitem: r.qitem || '', session: r.session?.id || '', run: r.traceRun?.spanId || '' } } : { status: 'error', output: err?.message || 'no answer' });
     await withProject(id, async () => {

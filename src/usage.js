@@ -302,6 +302,92 @@ export function appendRecord(x) {
   return done;
 }
 
+// ---------------------------------------------------------------- tool reuse (src/toolbox.js)
+// The tool registry's own small log, next to the token ledger but in files of its own (tools-<YYYY-MM>.jsonl), so its
+// events never count as runs in the token totals. One event per tool_run ("run"), per tracked tool_list ("list": the
+// ids it returned) and per brief or plan that named tools ("hint").
+
+export const TOOL_EVENTS = ['run', 'list', 'hint'];
+const toolLog = (ms) => path.join(ledgerDir(), `tools-${monthOf(ms)}.jsonl`);
+
+/** One clean tool event. Pure (apart from a fresh id). */
+export function makeToolEvent(x = {}) {
+  const ts = Number(x.ts) || Date.now();
+  const ids = (Array.isArray(x.toolIds) ? x.toolIds : []).map((i) => String(i).slice(0, 60)).slice(0, 10);
+  return {
+    id: String(x.id || crypto.randomUUID()), ts, node: String(x.node || config().name || ''),
+    event: TOOL_EVENTS.includes(x.event) ? x.event : 'run',
+    toolId: String(x.toolId || '').slice(0, 60), toolIds: ids,
+    ok: x.ok !== false, hits: x.hits != null ? num(x.hits) : ids.length,
+    query: truncate(String(x.query || '').replace(/\s+/g, ' ').trim(), 120),
+    durationMs: num(x.durationMs), trace: String(x.trace || ''), seat: String(x.seat || '').slice(0, 80),
+    ...(x.error ? { error: truncate(String(x.error), 200) } : {}),
+  };
+}
+
+/** Append a tool event to this machine's log. Never throws (nothing here may fail a tool call or a dispatch). */
+export function recordToolEvent(x) {
+  let ev;
+  try { ev = makeToolEvent(x); } catch (e) { log('tool log: bad event: ' + e.message); return Promise.resolve(null); }
+  const done = appending.then(async () => {
+    await fsp.mkdir(ledgerDir(), { recursive: true });
+    await fsp.appendFile(toolLog(ev.ts), JSON.stringify(ev) + '\n');
+    return ev;
+  }).catch((e) => { log('tool log: append failed: ' + e.message); return null; });
+  appending = done;
+  return done;
+}
+
+/** Tool events with ts in [since, until], oldest first. */
+export async function readToolEvents({ since = 0, until = Infinity } = {}) {
+  const files = (await fsp.readdir(ledgerDir()).catch(() => [])).filter((f) => /^tools-\d{4}-\d{2}\.jsonl$/.test(f)).sort();
+  const from = since ? monthOf(since) : '';
+  const to = Number.isFinite(until) ? monthOf(until) : '9999-99';
+  const out = [];
+  for (const f of files) {
+    const m = f.slice(6, 13);
+    if (m < from || m > to) continue;
+    for (const line of (await fsp.readFile(path.join(ledgerDir(), f), 'utf8').catch(() => '')).split('\n')) {
+      if (!line) continue;
+      try { const e = JSON.parse(line); if (e.ts >= since && e.ts <= until) out.push(e); } catch {}
+    }
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+export const emptyToolReuse = () => ({ runs: 0, failed: 0, lists: 0, listHits: 0, listMisses: 0, hinted: 0, byTool: [] });
+
+/**
+ * Tool reuse counts: runs (and failed ones), lists (with hits / misses), briefs and plans that named tools, and per
+ * tool how often it ran, was listed or was named. Pure; byTool is most used first.
+ */
+export function toolReuse(events) {
+  const out = emptyToolReuse();
+  const by = new Map();
+  const row = (id) => { if (!by.has(id)) by.set(id, { id, runs: 0, failed: 0, listed: 0, hinted: 0 }); return by.get(id); };
+  for (const e of events || []) {
+    if (e.event === 'run') { out.runs++; const r = row(e.toolId || '(unknown)'); r.runs++; if (e.ok === false) { out.failed++; r.failed++; } }
+    else if (e.event === 'list') { out.lists++; if ((e.hits || 0) > 0) out.listHits++; else out.listMisses++; for (const i of e.toolIds || []) row(i).listed++; }
+    else if (e.event === 'hint') { out.hinted++; for (const i of e.toolIds || []) row(i).hinted++; }
+  }
+  out.byTool = [...by.values()].sort((a, b) => b.runs - a.runs || b.listed - a.listed || b.hinted - a.hinted || a.id.localeCompare(b.id));
+  return out;
+}
+
+/** Two toolReuse sums added up (the mesh view adds every node's). Pure. */
+export function addToolReuse(a, b) {
+  const out = { ...emptyToolReuse(), ...a, byTool: [] };
+  for (const k of ['runs', 'failed', 'lists', 'listHits', 'listMisses', 'hinted']) out[k] = (Number(a?.[k]) || 0) + (Number(b?.[k]) || 0);
+  const by = new Map();
+  for (const r of [...(a?.byTool || []), ...(b?.byTool || [])]) {
+    const x = by.get(r.id) || { id: r.id, runs: 0, failed: 0, listed: 0, hinted: 0 };
+    for (const k of ['runs', 'failed', 'listed', 'hinted']) x[k] += Number(r[k]) || 0;
+    by.set(r.id, x);
+  }
+  out.byTool = [...by.values()].sort((x, y) => y.runs - x.runs || y.listed - x.listed || y.hinted - x.hinted || x.id.localeCompare(y.id));
+  return out;
+}
+
 /** Records whose run overlaps [since, until] (ms; either may be omitted), oldest first. */
 export async function readRecords({ since = 0, until = Infinity } = {}) {
   const files = (await fsp.readdir(ledgerDir()).catch(() => [])).filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f)).sort();
@@ -405,7 +491,9 @@ export async function report(q = {}) {
   let recs = await readRecords({ since: since || 0, until: until ?? Infinity });
   if (q.kind) recs = recs.filter((r) => r.kind === q.kind);
   if (q.project) recs = recs.filter((r) => r.projectId === q.project);
-  return summarize(recs, { groupBy: q.groupBy, limit: q.limit != null && q.limit !== '' ? Number(q.limit) : 500, node: config().name, since, until });
+  const out = summarize(recs, { groupBy: q.groupBy, limit: q.limit != null && q.limit !== '' ? Number(q.limit) : 500, node: config().name, since, until });
+  out.toolReuse = toolReuse(await readToolEvents({ since: since || 0, until: until ?? Infinity }));
+  return out;
 }
 
 /** Two totals (or group rows) added up; costUsd stays null only when neither side had one. Pure. */
@@ -428,6 +516,7 @@ export function aggregateUsage(results, q = {}) {
   const dims = parseGroupBy(q.groupBy);
   const limit = q.limit != null && q.limit !== '' ? Number(q.limit) : 500;
   let sum = totals([]);
+  let reuse = emptyToolReuse();
   const groups = Object.fromEntries(dims.map((d) => [d, new Map()]));
   const records = [];
   const errors = [];
@@ -435,6 +524,7 @@ export function aggregateUsage(results, q = {}) {
     if (r.error) { errors.push({ node: r.node.name, error: r.error }); continue; }
     const rep = r.report || {};
     sum = addTotals(sum, rep.totals || totals([]));
+    reuse = addToolReuse(reuse, rep.toolReuse);
     for (const d of dims) for (const g of rep.groups?.[d] || []) groups[d].set(g.key, groups[d].has(g.key) ? addTotals(groups[d].get(g.key), g) : { ...g });
     records.push(...(rep.records || []));
   }
@@ -444,7 +534,7 @@ export function aggregateUsage(results, q = {}) {
     since: parseTime(q.since), until: parseTime(q.until), groupBy: dims, count: sum.count, totals: sum,
     groups: Object.fromEntries(dims.map((d) => [d, order(d, [...groups[d].values()])])),
     records: records.slice(0, Math.max(0, limit)), truncated: records.length > limit || results.some((r) => r.report?.truncated),
-    nodes: results.map((r) => r.node.name), errors,
+    toolReuse: reuse, nodes: results.map((r) => r.node.name), errors,
   };
 }
 

@@ -23,6 +23,18 @@ function sectionRows(title, groups, label, max = 8) {
       : [h('div', { class: 'muted small pad' }, 'Nothing recorded.')])];
 }
 
+// Tool reuse (src/toolbox.js): how often agents ran filed tools instead of writing a helper, and how often tool_list found one.
+function toolReuseRows(u) {
+  if (!u || !(u.runs || u.lists || u.hinted)) return [];
+  const stat = (k, v) => h('div', { class: 'us-stat' }, h('b', {}, String(v)), h('span', {}, k));
+  const rows = (u.byTool || []).slice(0, 6);
+  return [h('div', { class: 'wk-section' }, 'Tool reuse'),
+    h('div', { class: 'us-stats' }, stat('tool runs', u.runs), stat('searches', `${u.listHits}/${u.lists}`), stat('named in briefs', u.hinted), stat('failed', u.failed)),
+    ...rows.map((t) => h('div', { class: 'wk-row us-row', title: `${t.id}: ${t.runs} run${t.runs === 1 ? '' : 's'}${t.failed ? ` (${t.failed} failed)` : ''}, found by ${t.listed} search${t.listed === 1 ? '' : 'es'}, named in ${t.hinted} brief${t.hinted === 1 ? '' : 's'}` },
+      h('div', { class: 'wk-rtitle' }, t.id, h('b', {}, `${t.runs}×`)),
+      h('div', { class: 'wk-rmeta' }, `listed ${t.listed} · named ${t.hinted}${t.failed ? ` · ${t.failed} failed` : ''}`)))];
+}
+
 /** Mount the Tokens & time panel into `el`. Returns { refresh, setActive }. */
 export function createUsage(el) {
   const meta = h('span', { class: 'wk-meta' }, '');
@@ -49,6 +61,7 @@ export function createUsage(el) {
     nodes.push(...sectionRows('By model', r.groups?.model, (g) => MODEL(g.label)));
     nodes.push(...sectionRows('By project', r.groups?.project, (g) => g.label, 6));
     nodes.push(...sectionRows('By task', r.groups?.task, (g) => g.label, 10));
+    nodes.push(...toolReuseRows(r.toolReuse));
     nodes.push(h('div', { class: 'wk-section' }, 'Latest runs'));
     const recs = (r.records || []).slice(0, 12);
     nodes.push(...(recs.length ? recs.map((x) => h('div', { class: 'wk-row us-row', title: x.outcome || '' },

@@ -161,7 +161,7 @@ const TOOLS = [
     name: 'tool_list', description: 'Search the tool registry across the mesh BEFORE writing a helper script: tools other agents filed (scripts with a JSON-argument interface, run with tool_run) and App Cloud applets (kind "applet", open them in JARVIS) ranked together. query is free text (words of the id, name, tags or description), tag one exact tag, kind "tool" | "applet", node one machine. Without query it lists everything.',
     inputSchema: { type: 'object', properties: { query: { type: 'string' }, tag: { type: 'string' }, kind: { type: 'string', enum: ['tool', 'applet'] }, node: { type: 'string' }, limit: { type: 'number', description: 'default 30' } } },
     run: async (a) => {
-      const r = await api(`/api/tools?${new URLSearchParams({ q: a.query || '', tag: a.tag || '', kind: a.kind || '', node: a.node || '', limit: String(a.limit || 30) })}`, { timeout: 30000 });
+      const r = await api(`/api/tools?${new URLSearchParams({ q: a.query || '', tag: a.tag || '', kind: a.kind || '', node: a.node || '', limit: String(a.limit || 30), track: '1' })}`, { timeout: 30000 });
       return {
         results: r.results.map((x) => (x.kind === 'applet'
           ? { kind: 'applet', id: x.id, name: x.name, node: x.node, description: x.description, status: x.status, path: x.path }
