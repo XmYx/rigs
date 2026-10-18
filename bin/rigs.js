@@ -156,6 +156,14 @@ const commands = {
     for (const g of r.groups[group] || []) console.log(`  ${String(g.label).slice(0, 40).padEnd(40)} ${String(g.count).padStart(5)}  ${k(g.totalTokens).padStart(7)} tok  ${h(g.durationMs).padStart(7)}  ${g.done} done / ${g.failed} failed`);
     for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
   },
+  /** rigs exhibits attach <projectId> — build a project's exhibit document from its current state (it was running before exhibits were on) */
+  async exhibits() {
+    const [sub, id] = argv;
+    if (sub !== 'attach' || !id) { console.error('usage: rigs exhibits attach <projectId>   — backfill the project\'s exhibit document (idempotent; run on the machine that owns the project)'); process.exit(1); }
+    const r = await daemonFetch('/api/local/exhibits/attach', { method: 'POST', body: JSON.stringify({ projectId: id }), timeout: 60000 }).catch((e) => ({ error: e.message }));
+    if (r?.error || !r?.docId) { console.error(r?.error || (typeof r === 'string' ? r : 'RIGS daemon is not running (rigs start).')); process.exit(1); }
+    console.log(`${r.docId}: ${r.added} entr${r.added === 1 ? 'y' : 'ies'} added, ${r.entries} in the document${r.final ? ' (final)' : ''}`);
+  },
   /** rigs tools [list [query] [--tag t] [--kind tool|applet]] · rigs tools show <id> [--node n] · rigs tools run <id> ['{json}'] [--node n] [--allow-mutating] */
   async tools() {
     const [sub = 'list', ...rest] = argv;
@@ -295,6 +303,7 @@ const commands = {
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
+  rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh
   rigs tools show <id> | run <id> ['{json args}'] [--node n] [--allow-mutating]
                        read or run a filed tool (mutating tools need --allow-mutating)

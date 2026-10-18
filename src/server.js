@@ -779,6 +779,14 @@ export async function startServer() {
     }
     // exhibit documents kept on this machine (src/exhibits.js)
     if (sub === 'exhibits' && method === 'GET') return exhibitSvc.list();
+    if (sub === 'exhibits/attach' && method === 'POST') {
+      const b = await body();
+      const pid = String(b?.projectId || '').replace(/^pr-/, '');
+      if (!/^[\w-]+$/.test(pid)) throw new HttpError(400, 'projectId required');
+      const pr = await planner.getProject(pid);
+      if (!pr) throw new HttpError(404, 'project not found on this machine (attach on the machine that owns it)');
+      try { return await exhibitSvc.attach(pr); } catch (e) { throw new HttpError(/off/.test(e.message) ? 409 : 400, e.message); }
+    }
     if (sub === 'exhibits/config' && method === 'GET') return exhibits.settings();
     if (sub === 'exhibits/config' && method === 'POST') { try { return exhibits.saveSettings(await body()); } catch (e) { throw new HttpError(400, e.message); } }
     if ((mm = m(/^exhibits\/([\w-]+)$/)) && method === 'GET') {

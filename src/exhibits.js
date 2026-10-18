@@ -241,6 +241,64 @@ export function projectToExhibits(prev, next) {
   return out;
 }
 
+/**
+ * A project's whole story from its current saved state → entry drafts, for a project that was already running when
+ * exhibits came on (live saves only grow a document from diffs, so it has none). The same drafts the live path makes
+ * where it can — task outcomes and project done come from projectToExhibits(empty → current), with the same ids — plus
+ * an intake and a plan entry from the request and goal, and a step per task that has started (or still waits). Ids are
+ * fixed per project, so mergeIntoDocument drops repeats: attaching twice adds nothing, and later live saves append.
+ * Times come from the project's log where it names them. Order: intake, plan, the rest by time, the final summary last. Pure.
+ */
+export function projectBackfill(project) {
+  if (!project?.id || project.main) return [];
+  const tasks = project.tasks || [];
+  const log = Array.isArray(project.log) ? project.log : [];
+  const created = project.createdAt || project.updatedAt || Date.now();
+  const logAt = (re) => { const l = [...log].reverse().find((x) => re.test(String(x?.text || ''))); return Number(l?.ts) || 0; };
+  const esc1 = (id) => String(id).replace(/[^\w-]/g, '\\$&');
+  const out = [];
+  const request = project.request || project.goal || '';
+  out.push({
+    id: 'backfill:intake', kind: 'intake', at: created, title: safe('Request received', 90),
+    caption: safe(`Sir asked: “${clip(request, 160)}”`, 240),
+    visual: redactValue({ kind: 'steps', title: 'Request', items: [{ text: 'Received', done: true }, { text: 'Plan', done: tasks.length > 0 }, { text: 'Work', ...(project.status === 'done' ? { done: true } : { status: 'running' }) }, { text: 'Reply', done: project.status === 'done' }] }),
+  });
+  out.push({
+    id: 'backfill:plan', kind: 'plan', at: logAt(/^planned \d+ tasks?/) || created + 1,
+    title: safe(`Plan: ${tasks.length} task${tasks.length === 1 ? '' : 's'}`, 90),
+    caption: safe(project.summary ? clip(project.summary, 220) : `The work was broken into ${tasks.length} task${tasks.length === 1 ? '' : 's'}.`, 240),
+    visual: redactValue({ kind: 'steps', title: project.name || 'Plan', items: tasks.slice(0, 12).map((t) => ({ text: `${t.id}: ${clip(t.title, 80)}` })) }),
+  });
+  const mid = [];
+  for (const t of tasks) {
+    const started = t.run?.startedAt || logAt(new RegExp(`^${esc1(t.id)} started`));
+    const where = t.run?.seat || t.assign?.model || t.assign?.provider || 'An agent';
+    if (started || t.status !== 'todo') {
+      const at = started || project.updatedAt || created;
+      mid.push({
+        id: `backfill:${t.id}:start`, kind: 'step', at, title: safe(`${t.id} started`, 90),
+        caption: safe(`${where} began “${clip(t.title, 110)}”${t.assign?.node ? ` on ${t.assign.node}` : ''}.`, 240),
+        visual: redactValue({ kind: 'steps', title: t.id, items: [{ text: 'Started', done: true }, { text: clip(t.title, 70), ...(t.status === 'running' ? { status: 'running' } : { done: true }) }, { text: 'Report', done: ['done', 'failed', 'blocked'].includes(t.status) }] }),
+      });
+    } else {
+      const deps = Array.isArray(t.deps) ? t.deps : [];
+      mid.push({
+        id: `backfill:${t.id}:queued`, kind: 'step', at: project.updatedAt || created, title: safe(`${t.id} waiting`, 90),
+        caption: safe(`“${clip(t.title, 110)}” had not started yet${deps.length ? `; it waits for ${deps.join(', ')}` : ''}.`, 240),
+        visual: redactValue({ kind: 'status', title: t.id, items: [{ name: t.id, value: 'queued', state: 'warn' }, ...(deps.length ? [{ name: 'after', value: deps.join(', ') }] : [])] }),
+      });
+    }
+  }
+  let final = null;
+  for (const d of projectToExhibits({ tasks: [], status: 'planning' }, project)) {
+    const m = /^task:([\w-]+):(done|failed|blocked):/.exec(d.id);
+    const at = m ? logAt(new RegExp(`^${esc1(m[1])} → ${m[2]}`)) || d.at : d.at;
+    if (d.final) final = { ...d, at }; else mid.push({ ...d, at });
+  }
+  mid.sort((a, b) => a.at - b.at); // stable: equal times keep task order
+  return [...out, ...mid, ...(final ? [final] : [])];
+}
+
 // ---------------------------------------------------------------- documents (pure)
 
 export const emptyDoc = (docId) => ({ docId, scope: isTraceId(docId) ? 'request' : 'project', title: '', traceId: isTraceId(docId) ? docId : undefined, projectId: isTraceId(docId) ? undefined : docId.slice(3), entries: [], final: false, finalAt: null, created: null, updated: null, dropped: 0 });
@@ -480,17 +538,23 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
   const queue = (fn) => { chain = chain.then(fn).catch((e) => log('exhibits: ' + e.message)); return chain; };
   const trim = (m, n = 2000) => { if (m.size > n) for (const k of [...m.keys()].slice(0, m.size - n)) m.delete(k); };
 
+  const sizes = new Map(); // docId → file size when this service last read or wrote it (a different size = written by someone else)
+  const sizeOf = async (docId) => (await fsp.stat(file(docId)).catch(() => null))?.size ?? null;
+
   async function load(docId) {
-    if (docs.has(docId)) return docs.get(docId);
+    const size = await sizeOf(docId);
+    if (docs.has(docId) && (size == null || sizes.get(docId) === size)) return docs.get(docId);
+    // Not cached, or the file changed behind our back (a backfill script, another process): read it again.
     const text = await fsp.readFile(file(docId), 'utf8').catch(() => null);
     const doc = text == null ? null : parseDocument(docId, text);
-    if (doc) { docs.set(docId, doc); trim(docs, 200); }
+    if (doc) { docs.set(docId, doc); sizes.set(docId, Buffer.byteLength(text)); trim(docs, 200); trim(sizes, 200); }
     return doc;
   }
 
   async function append(docId, rec) {
     await fsp.mkdir(dir, { recursive: true });
     await fsp.appendFile(file(docId), JSON.stringify(rec) + '\n');
+    sizes.set(docId, await sizeOf(docId));
   }
 
   /** Retention: past maxDocs documents, the least recently written go (with their images). Never the one being written. */
@@ -638,6 +702,29 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
       if (!p?.id || p.main || !getSettings().enabled) return;
       const snap = snapshot(p);
       queue(() => onProject(snap));
+    },
+    /**
+     * Backfill a project's document from its saved state (projectBackfill) — idempotent, safe next to live saves.
+     * Needs exhibits switched on (the opt-in holds). Returns { docId, added, entries, final }; throws when off or not a project.
+     */
+    async attach(project) {
+      if (!getSettings().enabled) throw new Error('exhibits are off (Experimental › Exhibits, or POST /api/local/exhibits/config {"enabled":true})');
+      if (!project?.id || project.main) throw new Error('not a project that has exhibits');
+      const docId = projectDocId(project.id);
+      const snap = snapshot(project);
+      let result; let failure;
+      await queue(async () => {
+        try {
+          let added = 0;
+          for (const d of projectBackfill(project)) if (await put(docId, { t: 'entry', ...d }, { projectId: project.id, title: project.name || '' })) added++;
+          // The next live save diffs against this state instead of being taken as a first-sight baseline.
+          if (!projects.has(project.id)) { projects.set(project.id, snap); trim(projects, 500); }
+          const doc = await load(docId);
+          result = { docId, added, entries: doc?.entries.length || 0, final: !!doc?.final };
+        } catch (e) { failure = e; throw e; }
+      });
+      if (failure || !result) throw failure || new Error('attach failed');
+      return result;
     },
     /** Resolves when queued work is on disk (tests, export after a run). */
     flush: () => chain,
