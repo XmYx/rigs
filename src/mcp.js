@@ -358,6 +358,53 @@ const TOOLS = [
       return { ...d, entries: (d.entries || []).map((e) => ({ ...e, image: e.image ? { source: e.image.source, alt: e.image.alt } : null })) };
     },
   },
+  // ---- Linear (src/linear.js): reads are free to use; the three writes only on Sir's explicit request.
+  {
+    name: 'linear_status', description: 'Is Linear connected? Says whether an API key is set on that machine (config or LINEAR_API_KEY — never the key itself) and, when it is, whether Linear answers, as whom, the workspace and its teams (keys for linear_create_issue). Omit node for this machine.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine whose Linear key to use; "self" (default) for this one' } } },
+    run: (a) => api(`/api/nodes/${n(a.node)}/linear/status`, { timeout: 30000 }),
+  },
+  {
+    name: 'linear_issues', description: 'List or search Linear issues (read-only). With query: full-text search, best match first. Without: issues by filter, most recently updated first. Filters: team (key like ENG, or name), state (a state name like "In Review", a type backlog | unstarted | started | completed | canceled | triage, or open (the default when listing) | closed | all), assignee ("me", "none", a name or email), priority (0-4 or none | urgent | high | medium | low), label, project (part of its name). limit 1-100 (default 25); pass the returned next as after for the next page.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'words to search for' }, team: { type: 'string' }, state: { type: 'string' }, assignee: { type: 'string' },
+      priority: { type: 'string' }, label: { type: 'string' }, project: { type: 'string' }, limit: { type: 'number' }, after: { type: 'string' },
+      node: { type: 'string', description: 'machine whose Linear key to use; default this one' },
+    } },
+    run: (a) => {
+      const qs = new URLSearchParams();
+      for (const k of ['query', 'team', 'state', 'assignee', 'priority', 'label', 'project', 'limit', 'after']) if (a[k] !== undefined && a[k] !== '') qs.set(k, String(a[k]));
+      return api(`/api/nodes/${n(a.node)}/linear/${a.query ? 'search' : 'issues'}?${qs}`, { timeout: 30000 });
+    },
+  },
+  {
+    name: 'linear_issue', description: 'Read one Linear issue in full (read-only): title, state, assignee, priority, labels, project, description, parent and sub-issues, and its latest comments. id is its identifier (ENG-123) or UUID.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'ENG-123 or the issue UUID' }, comments: { type: 'number', description: 'how many comments, 0-100 (default 20)' }, node: { type: 'string' } }, required: ['id'] },
+    run: (a) => api(`/api/nodes/${n(a.node)}/linear/issues/${encodeURIComponent(a.id)}${a.comments !== undefined ? `?comments=${encodeURIComponent(a.comments)}` : ''}`, { timeout: 30000 }),
+  },
+  {
+    name: 'linear_create_issue', description: 'CREATE a Linear issue. This changes Sir\'s Linear workspace: call it only when Sir asked for this issue to be filed (or a task brief from him says so) — never on your own initiative, as a side effect or to log your own progress. team is required (key like ENG; linear_status lists them). state, assignee ("me" or a name/email), labels and project are given by name; priority 0-4 or none | urgent | high | medium | low; dueDate YYYY-MM-DD; parent an issue id for a sub-issue. Returns the new issue with its identifier and URL.',
+    inputSchema: { type: 'object', properties: {
+      team: { type: 'string' }, title: { type: 'string' }, description: { type: 'string', description: 'markdown' }, state: { type: 'string' }, assignee: { type: 'string' },
+      priority: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } }, project: { type: 'string' }, dueDate: { type: 'string' }, estimate: { type: 'number' }, parent: { type: 'string' },
+      node: { type: 'string' },
+    }, required: ['team', 'title'] },
+    run: ({ node, ...a }) => api(`/api/nodes/${n(node)}/linear/issues`, { method: 'POST', body: a, timeout: 60000 }),
+  },
+  {
+    name: 'linear_update_issue', description: 'CHANGE an existing Linear issue (title, description, state, assignee, priority, labels, project, dueDate, estimate, parent, team). This changes Sir\'s Linear workspace: call it only when Sir asked for this change — never on your own initiative or as a side effect. Only the fields you pass change; labels replaces the whole label set; assignee "none" unassigns. id is its identifier (ENG-123) or UUID.',
+    inputSchema: { type: 'object', properties: {
+      id: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, state: { type: 'string' }, assignee: { type: 'string' }, priority: { type: 'string' },
+      labels: { type: 'array', items: { type: 'string' } }, project: { type: 'string' }, dueDate: { type: 'string' }, estimate: { type: 'number' }, parent: { type: 'string' }, team: { type: 'string' },
+      node: { type: 'string' },
+    }, required: ['id'] },
+    run: ({ node, id, ...a }) => api(`/api/nodes/${n(node)}/linear/issues/${encodeURIComponent(id)}`, { method: 'POST', body: a, timeout: 60000 }),
+  },
+  {
+    name: 'linear_comment', description: 'ADD a comment to a Linear issue (markdown body). This posts in Sir\'s Linear workspace under his account: call it only when Sir asked for this comment — never on your own initiative or to report your own progress. id is the issue identifier (ENG-123) or UUID.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, body: { type: 'string' }, node: { type: 'string' } }, required: ['id', 'body'] },
+    run: (a) => api(`/api/nodes/${n(a.node)}/linear/issues/${encodeURIComponent(a.id)}/comments`, { method: 'POST', body: { body: a.body }, timeout: 60000 }),
+  },
   {
     name: 'project_list', description: 'List RIGS projects on every machine with their tasks, routing (machine/provider/model/effort) and status.',
     inputSchema: { type: 'object', properties: {} },
