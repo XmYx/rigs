@@ -98,6 +98,49 @@ Reference for the compositor distinction: [Mutter ScreenCast interface](https://
 describes stream parameters in compositor coordinates. Input/capture effects above were measured locally;
 the private Mutter API can differ between versions.
 
+## Wayland service mode (project 8eb2687046, task t2)
+
+The daemon normally runs as `rigs.service` (systemd --user), and agents often reach the machine over SSH, where
+`XDG_SESSION_TYPE=tty`. Two QA defects are fixed and covered by tests in `test/control.test.js`. First,
+`control-linux.js` trusts only `wayland`/`x11` from `XDG_SESSION_TYPE`, then `WAYLAND_DISPLAY`, then `DISPLAY`
+(38cd719, af16f7a). Second, `parseCombo('ctrl++')` is ctrl plus the `+` key (38cd719).
+
+Live on `magix-system` (GNOME Shell 50.1, Wayland, DP-1 3840×2160 @1.5), 2026-10-18 03:0xZ, scratch clone
+`/tmp/rigs-t2` of this branch, dev daemon as a transient unit:
+
+```bash
+systemd-run --user --unit=rigs-t2-dev --working-directory=/tmp/rigs-t2 -E RIGS_HOME=/tmp/rigs-t2-home \
+  -E RIGS_PORT=4793 -E RIGS_BIND=127.0.0.1 -E RIGS_NO_MIGRATIONS=1 -E RIGS_NO_AUTOUPDATE=1 -E RIGS_NO_OPENRIG=1 \
+  -E RIGS_NAME=rigs-t2-dev /usr/bin/node bin/rigs.js start     # control + input on in /tmp/rigs-t2-home only
+node scripts/control/linux/live-check.js http://127.0.0.1:4793
+```
+
+| Check | Result |
+| --- | --- |
+| Session env in service mode | status: `session wayland`, `desktop gnome`, backends `mutter`/`mutter`/`atspi`. The helper's `/proc/<pid>/environ` has `WAYLAND_DISPLAY=wayland-0` and `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus` |
+| Same with the unit's own env stripped | a second unit (port 4794) with `XDG_SESSION_TYPE=tty WAYLAND_DISPLAY= DISPLAY= DBUS_SESSION_BUS_ADDRESS=` still reports `session wayland` with the same backends and helper env. `refreshSessionEnv` reads them from `systemctl --user show-environment` |
+| Locked screen | `GET screenshot`, `POST type`, `POST key {ctrl++}`, `GET windows` → HTTP 423 `locked` "The screen is locked" in 11–80 ms |
+| No backend / no session | the lock check answers first while locked, so this is covered by the unit test "no backend or no graphical session…": a forced backend with no tool → `unsupported` "No capture/input backend is available", session `none` → `no-session`, both before any input reaches the helper. A hung helper → `timeout` at the 10 s deadline (existing test). |
+| Unicode | refused with `unsupported` before any key is sent (no `SetKeymap`, see below); the live check asserts this in the scratch window |
+| Screenshot + typing into a scratch window | **pending**: the screen had been locked for ~7 h (`LockedHint=yes`). It was not unlocked from a script: that would bypass the owner's lock screen. Asked through JARVIS at 03:1xZ. Run the command above once the screen is unlocked |
+
+`scripts/control/linux/live-check.js` runs both cases. When locked, it checks the 423s and exits 2. When unlocked, it
+writes `/tmp/rigs-wayland-service-shot.png`, then opens its own GTK4 scratch window as a transient unit
+(`rigs-live-check-scratch`). It waits until AT-SPI reports that window as the active one, and types nothing
+otherwise. It then checks that Unicode is refused, types a timestamped ASCII line, and reads the line back from the
+scratch window's own output file. Finally it writes `/tmp/rigs-wayland-service-typed.png`. Logs: `journalctl --user -u rigs-t2-dev`.
+
+**Portal restore token.** GNOME uses Mutter's ScreenCast/RemoteDesktop. There is no dialog and no token, so a second
+session needs no prompt by design (verified: every unit above captured the backends with no prompt). The token
+matters only for the portal backend (KDE, or `config.control.backend = "portal"`). There the helper asks for
+`persist_mode=2`, emits `restore-token`, and the daemon stores it in `control-state.json` and passes it back on
+`configure`. The new unit test "a portal restore token is persisted and handed back to the helper after a daemon
+restart" verifies the daemon side. "No second prompt" itself is **not verified live**: the first portal session
+needs a person to approve the dialog at the machine, which an agent must not do on the owner's behalf. Without a
+person, that first action ends with `timeout` at the 10 s deadline and the helper is stopped. To verify, with Sir at
+the machine, set `backend: "portal"` in the scratch config, take a screenshot and approve once, then
+`systemctl --user restart rigs-t2-dev` and take another: no dialog should appear.
+
 ## macOS helper (project 8eb2687046, task t1)
 
 RIGS Control.app: `scripts/control/macos/RigsControl.swift` (+ `Info.plist`, `build.sh`), installed by

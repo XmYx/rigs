@@ -158,6 +158,28 @@ test('only confirmed human enable clears persistent kill; agents may disable', a
   assert.equal(f.config().control.input, false);
 });
 
+test('no backend or no graphical session refuses with a clear code before any input', async () => {
+  // GNOME without grim/wtype/uinput: forcing wlroots leaves no capture and no input backend.
+  const f = fixture({ backend: 'wlroots' });
+  await assert.rejects(f.c.screenshot({}, alice), { code: 'unsupported', message: /No capture backend/ });
+  await assert.rejects(f.c.typeText('x', {}, alice), { code: 'unsupported', message: /No input backend/ });
+  const g = fixture();
+  g.adapter.inspect = async () => ({ ...structuredClone(facts), session: 'none' });
+  await assert.rejects(g.c.typeText('x', {}, alice), { code: 'no-session' });
+  assert.ok(![...f.calls, ...g.calls].some(([op]) => ['shot', 'type', 'key'].includes(op)));
+});
+
+test('a portal restore token is persisted and handed back to the helper after a daemon restart', async () => {
+  const f = fixture({ backend: 'portal' });
+  f.events.emit('event', { event: 'restore-token', token: 'tok-1' });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'control-state.json'), 'utf8')).restoreToken, 'tok-1');
+  const restarted = createControl({ platform: 'linux', home: f.home, getConfig: f.config, persistConfig: () => {}, adapter: f.adapter, now: () => 10000, permissions: async () => ({}), timeoutMs: 100 });
+  cleanups.push(() => restarted.kill());
+  f.calls.length = 0;
+  await restarted.listWindows(alice);
+  assert.equal(f.calls.find(([op]) => op === 'configure')[1].restoreToken, 'tok-1');
+});
+
 test('timeout aborts helper and late completion cannot send subsequent input', async () => {
   let finish;
   const f = fixture({}, { move: () => new Promise((r) => { finish = r; }) });
