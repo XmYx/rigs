@@ -67,6 +67,14 @@ treat `main` as production.
   not add a route or MCP tool that bypasses the gate, the lease, the audit log or the kill switch. Every refusal is
   audited too, and a kill persists across restarts. Never migrate a machine back on after a person switched it off
   or the kill switch fired (`2026-10-17-control-default-on` leaves those as they are).
+- Control safety rules (all of them, in every control change): every call goes through the gate, which checks
+  enabled → allowFrom → lease → lock → rate limit → backend. Every action, refusal and switch is written to
+  `logs/control.jsonl` (the audit log); the audit must be writable before a call touches the desktop. The kill
+  switch (`rigs control off`, `POST /api/local/control/kill`, the ⌃⌥⌘⎋ hotkey on macOS) stops the backends at
+  once and persists across restarts. Typing never uses Unicode `SetKeymap`: Wayland types keysyms and answers
+  `unsupported` (501) for characters it cannot type.
+- Agent-facing control tools (`mesh_screen`, `mesh_windows`, `mesh_control`, `mesh_access`) must ask Sir before
+  use unless the task brief allows it for that machine. Nothing a tool or agent does may turn control back on.
 - Changing default routing rules? Bump `RULES_VERSION` in `src/config.js` so non-customized machines pick them up.
 
 ## Local multi-machine test

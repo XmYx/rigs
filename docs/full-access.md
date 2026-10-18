@@ -538,6 +538,14 @@ below says to turn on **Screen access** or **Full control**, that applies only t
    `~/.local/share/gnome-shell/extensions/` and runs `gnome-extensions enable rigs-control@rigs.dev`. No root.
 4. Log out once (the **relogin** step), so GNOME Shell loads the extension.
 5. Turn on **Full control** if you want input. Input uses Mutter RemoteDesktop. `uinput` is only a fallback.
+6. Check it live (service mode, from a checkout on the machine, with a dev daemon on a scratch `RIGS_HOME`, control on
+   in that scratch config only): `node scripts/control/linux/live-check.js http://127.0.0.1:<port>`. It checks the session
+   env, that a locked screen answers 423, a screenshot, the window list, and typing into its own scratch window
+   (read back from the window). Unicode text must answer 501 `unsupported`.
+   GNOME uses Mutter, which shows no dialog and issues no restore token, so there is no second prompt by design.
+   On the portal path (KDE, wlroots with a portal) the first session needs one approval at the machine; the restore
+   token in `~/.rigs/control-state.json` is handed back after a restart, so the prompt does not come back.
+   If `/dev/uinput` is used as the fallback, its rule is `TAG+="uaccess"` (see wlroots below), never the `input` group.
 
 ### Linux · KDE Plasma on Wayland
 
@@ -580,6 +588,14 @@ grants record are in docs/control-implementation.md ("macOS helper").
 4. The kill switch and switching control off unload the LaunchAgent (`launchctl bootout`); switching it on again
    re-runs setup, which bootstraps it. The grants stay with the app across stops, reboots and RIGS updates that do not
    change the helper's sources.
+5. Remove or reset by hand: `rigs control helper stop`, then `rigs control helper install` (or `remove`). A dev home
+   (`RIGS_HOME=<worktree>/.rigs-dev/mac`) gets the LaunchAgent `dev.rigs.control.<hash8>` and the app "RIGS Control (dev)";
+   remove it with `RIGS_HOME=<worktree>/.rigs-dev/mac node bin/rigs.js control helper remove`. A stale plain
+   "RIGS Control" entry from an older dev build stays in System Settings until the first real install's Grant clears it.
+6. Live check, after a human has switched on Screen Recording and Accessibility for the dev build and the Mac is unlocked:
+   start the dev daemon with the scratch env, then `node scripts/control/macos/live-check.js http://127.0.0.1:<port>`.
+   It writes a screenshot, the window list and a TextEdit screenshot, and checks that the typed text was saved.
+   Without Accessibility the window list, focus, pointer and typing cannot be checked.
 
 ### Windows (unverified)
 
