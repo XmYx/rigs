@@ -40,6 +40,7 @@ import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
 import * as ts from './tailscale.js';
+import * as toolbox from './toolbox.js';
 import * as tts from './tts.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
@@ -294,6 +295,24 @@ export async function startServer() {
     return trace.parseContext(b?.trace) || trace.parseContext(req?.headers?.['x-rigs-trace']);
   }
 
+  /** The OpenRig seat (or session) behind an API call: the rigs MCP's x-rigs-caller header. */
+  function callerSeat(req) {
+    try { const c = JSON.parse(req?.headers?.['x-rigs-caller'] || '{}'); return c.seat || c.session || ''; } catch { return ''; }
+  }
+
+  /**
+   * A tool_run is tool reuse: one event in the usage log and, when the call carries a request trace (x-rigs-trace),
+   * an event span under it. Only the argument names are kept, never their values. Never throws.
+   */
+  function recordToolRun(req, b, id, t0, r, error = '') {
+    try {
+      const ok = !error && r?.ok !== false;
+      const tc = traceOf(req, b);
+      usage.recordToolEvent({ event: 'run', toolId: id, ok, durationMs: Date.now() - t0, trace: tc?.traceId, seat: callerSeat(req), error: error || (ok ? '' : r?.error || r?.stderr || '') });
+      if (tc) trace.recordSpan({ traceId: tc.traceId, parentId: tc.parentId || '', kind: 'event', name: `tool_run ${id}`, start: t0, input: { args: Object.keys(b.args || {}) }, output: ok ? { ok: true, durationMs: Date.now() - t0 } : error || r?.error || 'failed', status: ok ? 'ok' : 'error', meta: { toolId: id, reuse: true, seat: callerSeat(req) } });
+    } catch (e) { log('tool reuse log: ' + e.message); }
+  }
+
   /** Which agent harness made this API call (the rigs MCP's x-rigs-caller header): claude | codex | agent | ''. */
   function callerAgent(req) {
     try { return JSON.parse(req?.headers?.['x-rigs-caller'] || '{}').agent || ''; } catch { return ''; }
@@ -378,6 +397,49 @@ export async function startServer() {
     return out;
   }
 
+  /** Every online node's registered tools plus the App Cloud apps as kind "applet": { entries, errors }. */
+  async function toolEntries() {
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const [results, apps] = await Promise.all([
+      Promise.all(nodes.map((n) => (n.self ? toolbox.listLocal() : peerJson(n, 'tools', { timeout: 7000 }))
+        .then((r) => ({ node: n, tools: r.tools })).catch((e) => ({ node: n, error: e.message })))),
+      meshApps().catch((e) => ({ apps: [], errors: [{ node: config().name, error: e.message }] })),
+    ]);
+    const { tools, errors } = toolbox.aggregateTools(results);
+    const meta = toolbox.appletMeta(); // descriptions and tags for applets that registered without their own
+    return { entries: [...tools, ...apps.apps.map((a) => toolbox.appletEntry(a, meta))], errors: [...errors, ...apps.errors.map((e) => ({ ...e, error: `apps: ${e.error}` }))] };
+  }
+
+  /**
+   * The catalog the planner and task briefs match tasks against. Cached for a minute and never slow: a dispatch waits
+   * at most 4 s for it and goes ahead without hints when the mesh does not answer.
+   */
+  let catalogCache = { at: 0, entries: [] };
+  async function toolCatalog() {
+    if (Date.now() - catalogCache.at < 60000) return catalogCache.entries;
+    try {
+      const { entries } = await Promise.race([toolEntries(), new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 4000))]);
+      catalogCache = { at: Date.now(), entries };
+    } catch { catalogCache = { at: Date.now() - 45000, entries: catalogCache.entries }; }
+    return catalogCache.entries;
+  }
+
+  /**
+   * Mesh-wide tool search: every online node's registered tools plus the App Cloud apps as kind "applet", ranked
+   * together by toolbox.searchCatalog (q, tag, kind, node, limit). `track=1` (set by the rigs MCP's tool_list) also
+   * logs the search as tool reuse (usage.recordToolEvent) with the ids it returned.
+   */
+  async function meshTools(searchParams, req) {
+    const { entries: all, errors } = await toolEntries();
+    const want = (searchParams.get('node') || '').toLowerCase();
+    const entries = all.filter((e) => !want || e.node.toLowerCase() === want);
+    const limit = searchParams.has('limit') ? Math.max(0, Number(searchParams.get('limit')) || 0) : 50;
+    const results = toolbox.searchCatalog(entries, { q: searchParams.get('q') || '', tag: searchParams.get('tag') || '', kind: searchParams.get('kind') || '', limit });
+    if (searchParams.get('track') === '1') usage.recordToolEvent({ event: 'list', query: searchParams.get('q') || searchParams.get('tag') || '', toolIds: results.map((r) => r.id), trace: traceOf(req)?.traceId, seat: callerSeat(req) });
+    return { results, errors };
+  }
+
   /** Call any node's local API by id or name (direct function call for this node). */
   async function callNode(nodeRef, p, { method = 'GET', body, timeout = 30000 } = {}) {
     const node = discovery.get(nodeRef);
@@ -441,6 +503,7 @@ export async function startServer() {
 
   const plannerCtx = {
     snapshot: meshSnapshot,
+    tools: toolCatalog,
     call: callNode,
     ask: askNode,
     notify: (text, level = 'info') => broadcastNotify({ text, level, speak: true, from: config().name }),
@@ -508,7 +571,20 @@ export async function startServer() {
 
     if (sub === 'info') return selfInfo();
     if (sub === 'stats') return stats();
-    if (sub === 'tools') return detectTools(q.get('force') === '1');
+    if (sub === 'bins') return detectTools(q.get('force') === '1');
+    // tool registry (src/toolbox.js): scripts filed by agents, listed, read, registered and run here
+    if (sub === 'tools' && method === 'GET') return toolbox.listLocal();
+    if (sub === 'tools/register' && method === 'POST') return toolbox.registerTool(await body());
+    if ((mm = m(/^tools\/([^/]+)$/)) && method === 'GET') return toolbox.getTool(decodeURIComponent(mm[1]));
+    if ((mm = m(/^tools\/([^/]+)\/run$/)) && method === 'POST') {
+      const b = await body();
+      const id = decodeURIComponent(mm[1]);
+      const t0 = Date.now();
+      let r;
+      try { r = await toolbox.runTool(id, { args: b.args ?? {}, allowMutating: b.allowMutating === true, timeoutSec: b.timeoutSec, cwd: b.cwd }); } catch (e) { if (e.code !== 'not-found' && e.code !== 'bad-id') recordToolRun(req, b, id, t0, null, e.message); throw e; }
+      recordToolRun(req, b, id, t0, r);
+      return r;
+    }
     if (sub === 'config' && method === 'GET') return publicConfig();
     if (sub === 'config' && method === 'POST') { patchConfig(await body()); return publicConfig(); }
 
@@ -998,6 +1074,7 @@ export async function startServer() {
     if (p === '/api/self') return { id: config().nodeId, name: config().name, via: req.rigsAuth };
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
+    if (p === '/api/tools') return meshTools(url.searchParams, req);
     if (p === '/api/usage') return meshUsage(url.searchParams);
     if (p === '/api/preroute/stats') return meshPrerouteStats(url.searchParams);
     if (p === '/api/traces') return meshTraces(url.searchParams);
@@ -1109,7 +1186,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ToolError' ? { code: e.code } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }

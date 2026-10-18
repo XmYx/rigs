@@ -12,6 +12,8 @@ import { CONFIG_FILE, config } from './config.js';
  *     "host": "100.82.152.1",             // optional, with "port" only; default 127.0.0.1
  *     "healthPath": "/healthz",           // optional, default "/"
  *     "launch": { "systemd": "szuf.service" }  // or { "command": "…" }; used to start the app (see LAUNCH below)
+ *     "description": "what it does, for whom",  // optional, ≤ 500 chars; tool_list / GET /api/tools search it
+ *     "tags": ["cars", "dashboard"],      // optional short words (a-z, 0-9, . + - _), searched and filterable (tool_list tag)
  *     "rewrite": { "rootRelative": true, "basePath": "/ui", "cookies": true, "websocket": true } }  // proxy hints
  * The node name is never declared; it always comes from config().name.
  *
@@ -64,6 +66,18 @@ export function validateApp(raw, node = config().name) {
   let launch = null;
   if (raw.launch !== undefined && raw.launch !== null) launch = validateLaunch(raw.launch, errors);
 
+  let description = '';
+  if (raw.description !== undefined && raw.description !== null) {
+    if (typeof raw.description !== 'string') errors.push('description must be text');
+    else if (raw.description.trim().length > 500) errors.push('description must be at most 500 characters');
+    else description = raw.description.trim();
+  }
+  let tags = [];
+  if (raw.tags !== undefined && raw.tags !== null) {
+    if (!Array.isArray(raw.tags) || !raw.tags.every((t) => typeof t === 'string' && /^[\w.+-]{1,32}$/.test(t.trim()))) errors.push('tags must be an array of short words (a-z, 0-9, . + - _)');
+    else tags = [...new Set(raw.tags.map((t) => t.trim().toLowerCase()))].slice(0, 20);
+  }
+
   let rewrite = {};
   if (raw.rewrite !== undefined && raw.rewrite !== null) {
     if (typeof raw.rewrite !== 'object' || Array.isArray(raw.rewrite)) errors.push('rewrite must be an object');
@@ -78,7 +92,7 @@ export function validateApp(raw, node = config().name) {
   }
   if (errors.length) return { app: null, errors: errors.map((e) => `${id || '?'}: ${e}`) };
   return {
-    app: { id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite },
+    app: { id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite, ...(description ? { description } : {}), ...(tags.length ? { tags } : {}) },
     errors: [],
   };
 }

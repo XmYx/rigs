@@ -1,0 +1,38 @@
+{
+  "id": "app-publish",
+  "name": "Publish a web app to the App Cloud",
+  "description": "Publish a web app so it opens inside JARVIS on every machine: write and enable a systemctl --user unit (Linux) or a launch command (macOS, Windows), wait for the app's /healthz, and register it in the App Cloud with a description and tags. This is the standing rule for anything with a web UI. Refuses to take over another app's id or a unit file it did not write unless force is set.",
+  "tags": ["app", "applet", "publish", "register", "app-cloud", "systemd", "deploy", "healthz", "launch", "web"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "required": ["id", "port", "command"],
+    "properties": {
+      "id": { "type": "string", "description": "App Cloud id, a-z0-9_-" },
+      "name": { "type": "string" },
+      "icon": { "type": "string", "description": "one emoji" },
+      "port": { "type": "number", "description": "the port the app listens on (127.0.0.1)" },
+      "command": { "type": "string", "description": "the command line that starts the server, e.g. node server.js" },
+      "cwd": { "type": "string", "description": "working directory, default home" },
+      "env": { "type": "object", "description": "environment variables for the server: NAME: \"value\"" },
+      "healthPath": { "type": "string", "description": "default /healthz" },
+      "description": { "type": "string", "description": "what the applet does, so tool_list finds it" },
+      "tags": { "type": "array", "items": { "type": "string" } },
+      "unit": { "type": "string", "description": "systemd unit name, default rigs-<id>.service" },
+      "systemd": { "type": "boolean", "description": "false to skip the unit and register a launch command only" },
+      "waitSec": { "type": "number", "description": "how long to wait for the health check, default 30" },
+      "daemon": { "type": "string", "description": "RIGS daemon URL, default http://127.0.0.1:4719" },
+      "force": { "type": "boolean", "description": "repoint an existing id or replace a unit this tool did not write" },
+      "dryRun": { "type": "boolean", "description": "show the unit file and registration without writing anything" }
+    }
+  },
+  "outputs": "{ ok, steps[], healthStatus, unit, unitPath, path: /api/nodes/<node>/apps/<id>/ } or { ok: false, error }",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 400,
+  "smoke": { "args": { "id": "smoke-app", "name": "Smoke app", "port": 59999, "command": "node server.js", "description": "dry run only", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

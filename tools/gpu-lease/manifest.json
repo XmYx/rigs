@@ -1,0 +1,27 @@
+{
+  "id": "gpu-lease",
+  "name": "GPU overseer VRAM lease",
+  "description": "Acquire or release a VRAM lease from the GPU overseer (127.0.0.1:8195) before and after loading a model or running a ComfyUI job, or check that the overseer is up. Acquiring unloads other apps' idle models to make room, so always release afterwards; if the overseer is not running it answers unreachable and the job can proceed without a lease.",
+  "tags": ["gpu", "vram", "lease", "overseer", "comfyui", "cuda", "model", "memory"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string", "enum": ["acquire", "release", "status"], "description": "default status" },
+      "needMb": { "type": "number", "description": "acquire: VRAM needed in MB" },
+      "client": { "type": "string", "description": "holder name known to the overseer, default comfyui" },
+      "timeoutSec": { "type": "number", "description": "acquire: how long the overseer may wait for room, default 90" },
+      "url": { "type": "string", "description": "overseer base URL, default http://127.0.0.1:8195" },
+      "dryRun": { "type": "boolean", "description": "show the request that would be sent" }
+    }
+  },
+  "outputs": "acquire: { ok, freeMb, unloaded[] }; release: { ok, released }; status: { ok, overseer }; { ok: false, unreachable: true } when no overseer answers",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 120,
+  "smoke": { "args": { "action": "acquire", "needMb": 1000, "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

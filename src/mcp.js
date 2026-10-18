@@ -72,6 +72,19 @@ async function askBrain(node, prompt, brain, model) {
   return err ? `${text}\n[error: ${err}]` : text;
 }
 
+// ---- tool registry (src/toolbox.js): find a filed tool, preferring this machine.
+async function locateTool(id) {
+  try { return await api(`/api/nodes/self/tools/${encodeURIComponent(id)}`); } catch (e) { if (e.code !== 'not-found') throw e; }
+  const { results } = await api(`/api/tools?${new URLSearchParams({ q: id, kind: 'tool', limit: '0' })}`, { timeout: 30000 });
+  const hit = results.find((x) => x.id === String(id).toLowerCase());
+  if (!hit) { const e = new Error(`no tool "${id}" on any machine (tool_list shows what is filed)`); e.code = 'not-found'; throw e; }
+  return api(`/api/nodes/${n(hit.node)}/tools/${encodeURIComponent(hit.id)}`);
+}
+const toolOrigin = (a) => {
+  const c = JSON.parse(CALLER);
+  return { session: c.seat || c.session || undefined, trace: traceOf(a), ...(a.origin || {}) };
+};
+
 const TOOLS = [
   {
     name: 'mesh_status', description: 'List every machine in the RIGS mesh (Tailscale network): OS, online state, installed agents (Claude Code, Codex, Ollama, OpenRig, REA), CPU/memory.',
@@ -99,8 +112,8 @@ const TOOLS = [
     },
   },
   {
-    name: 'mesh_app_register', description: 'Publish a web app running on a machine to the App Cloud so JARVIS can open it in a floating window (served at /api/nodes/<node>/apps/<id>/). Give exactly one of port (+ optional host, default 127.0.0.1) or url. remove:true unregisters. The app should use relative URLs; it is served under a path prefix. launch is how JARVIS starts it when it is down, per OS: systemd (a systemctl --user unit, Linux only) and/or command (any OS), plus optional linux / darwin / windows recipes that replace the top-level one on that OS, e.g. { "systemd": "x.service", "windows": { "command": "x.cmd --port 8080", "cwd": "~\\\\x" } }. A Windows command runs without a POSIX shell (its program is found on PATH, .exe/.cmd/.bat/.ps1); cmd.exe syntax (&&, |, %VAR%) runs through cmd.exe.',
-    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine hosting the app; "self" for this one' }, id: { type: 'string', description: 'a-z0-9_- id' }, name: { type: 'string' }, icon: { type: 'string', description: 'one emoji' }, port: { type: 'number' }, host: { type: 'string' }, url: { type: 'string' }, healthPath: { type: 'string' }, launch: { type: 'object', description: '{ systemd: "unit.service" } or { command: "…" }, and/or per-OS { linux | darwin | windows: { command, cwd, env } } (linux may give { systemd })', properties: { systemd: { type: 'string', description: 'systemctl --user unit (Linux only)' }, command: { type: 'string', description: 'command line, any OS (on Linux only without a systemd unit)' }, cwd: { type: 'string', description: 'for command; default ~' }, env: { type: 'object', description: 'for command: NAME: "value"' }, linux: { type: 'object', properties: { systemd: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, darwin: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, windows: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } } } }, remove: { type: 'boolean' } }, required: ['node', 'id'] },
+    name: 'mesh_app_register', description: 'Publish a web app running on a machine to the App Cloud so JARVIS can open it in a floating window (served at /api/nodes/<node>/apps/<id>/). Give exactly one of port (+ optional host, default 127.0.0.1) or url. remove:true unregisters. The app should use relative URLs; it is served under a path prefix. launch is how JARVIS starts it when it is down, per OS: systemd (a systemctl --user unit, Linux only) and/or command (any OS), plus optional linux / darwin / windows recipes that replace the top-level one on that OS, e.g. { "systemd": "x.service", "windows": { "command": "x.cmd --port 8080", "cwd": "~\\\\x" } }. A Windows command runs without a POSIX shell (its program is found on PATH, .exe/.cmd/.bat/.ps1); cmd.exe syntax (&&, |, %VAR%) runs through cmd.exe. Give a description (what it does) and tags: tool_list searches them, so other agents find and open the applet instead of building another. Registering an id again replaces its whole entry, so repeat every field you want to keep (launch, rewrite, description, tags).',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine hosting the app; "self" for this one' }, id: { type: 'string', description: 'a-z0-9_- id' }, name: { type: 'string' }, icon: { type: 'string', description: 'one emoji' }, description: { type: 'string', description: 'what the app does, up to 500 characters; searched by tool_list' }, tags: { type: 'array', items: { type: 'string' }, description: 'short words (a-z, 0-9, . + - _) for tool_list search and its tag filter' }, rewrite: { type: 'object', description: 'proxy hints { rootRelative, basePath, cookies, websocket }', properties: { rootRelative: { type: 'boolean' }, basePath: { type: 'string' }, cookies: { type: 'boolean' }, websocket: { type: 'boolean' } } }, port: { type: 'number' }, host: { type: 'string' }, url: { type: 'string' }, healthPath: { type: 'string' }, launch: { type: 'object', description: '{ systemd: "unit.service" } or { command: "…" }, and/or per-OS { linux | darwin | windows: { command, cwd, env } } (linux may give { systemd })', properties: { systemd: { type: 'string', description: 'systemctl --user unit (Linux only)' }, command: { type: 'string', description: 'command line, any OS (on Linux only without a systemd unit)' }, cwd: { type: 'string', description: 'for command; default ~' }, env: { type: 'object', description: 'for command: NAME: "value"' }, linux: { type: 'object', properties: { systemd: { type: 'string' }, command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, darwin: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } }, windows: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, env: { type: 'object' } } } } }, remove: { type: 'boolean' } }, required: ['node', 'id'] },
     run: async (a) => { const { node, ...app } = a; const r = await api(`/api/nodes/${n(node)}/apps`, { method: 'POST', body: app }); return { apps: r.apps.map((x) => ({ id: x.id, name: x.name, target: x.target })), errors: r.errors }; },
   },
   {
@@ -143,6 +156,63 @@ const TOOLS = [
     name: 'mesh_app_start', description: 'Spin up an App Cloud app on its machine (its launch recipe: systemd unit or command) and wait until it is healthy. Opening an app in JARVIS does this automatically.',
     inputSchema: { type: 'object', properties: { node: { type: 'string' }, id: { type: 'string' } }, required: ['node', 'id'] },
     run: async (a) => { const r = await api(`/api/nodes/${n(a.node)}/app-start/${encodeURIComponent(a.id)}`, { method: 'POST', body: {}, timeout: 90000 }); return { started: r.started, status: r.health?.status, path: `/api/nodes/${encodeURIComponent(a.node)}/apps/${a.id}/` }; },
+  },
+  {
+    name: 'tool_list', description: 'Search the tool registry across the mesh BEFORE writing a helper script: tools other agents filed (scripts with a JSON-argument interface, run with tool_run) and App Cloud applets (kind "applet", open them in JARVIS) ranked together. query is free text (words of the id, name, tags or description), tag one exact tag, kind "tool" | "applet", node one machine. Without query it lists everything.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, tag: { type: 'string' }, kind: { type: 'string', enum: ['tool', 'applet'] }, node: { type: 'string' }, limit: { type: 'number', description: 'default 30' } } },
+    run: async (a) => {
+      const r = await api(`/api/tools?${new URLSearchParams({ q: a.query || '', tag: a.tag || '', kind: a.kind || '', node: a.node || '', limit: String(a.limit || 30), track: '1' })}`, { timeout: 30000 });
+      return {
+        results: r.results.map((x) => (x.kind === 'applet'
+          ? { kind: 'applet', id: x.id, name: x.name, node: x.node, description: x.description, status: x.status, path: x.path }
+          : { kind: 'tool', id: x.id, name: x.name, node: x.node, description: x.description, tags: x.tags, language: x.language, platforms: x.platforms, safety: x.safety, version: x.version, inputs: x.inputs, outputs: x.outputs || undefined, uses: x.uses })),
+        errors: r.errors,
+      };
+    },
+  },
+  {
+    name: 'tool_get', description: 'One filed tool in full: its manifest (inputs schema, outputs, safety, platforms, origin) and the source of its files. Omit node to find it on this machine first, then anywhere on the mesh.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, node: { type: 'string' } }, required: ['id'] },
+    run: (a) => (a.node ? api(`/api/nodes/${n(a.node)}/tools/${encodeURIComponent(a.id)}`) : locateTool(a.id)),
+  },
+  {
+    name: 'tool_register', description: 'File a script you wrote during a task as a reusable tool, so later tasks run it instead of writing it again. Worth it for anything another task could need (a check, a converter, a publisher, a log or transcript parser). The script reads its arguments as JSON from stdin (or the RIGS_TOOL_ARGS env var) and prints its result to stdout (JSON preferred); keep paths, hosts and names as arguments, never secrets. safety: "read-only" or "mutating" (writes files, changes state); mutating tools only run when a caller passes allowMutating. Registering an existing id updates it (bump version). Saved under ~/.rigs/tools/<id>/ on node (default this machine).',
+    inputSchema: { type: 'object', properties: {
+      node: { type: 'string', description: 'machine to file it on; "self" (default)' },
+      id: { type: 'string', description: 'a-z0-9_- id, e.g. "screenshot-check"' }, name: { type: 'string' },
+      description: { type: 'string', description: 'what it does and when to use it: this is what tool_list searches' },
+      tags: { type: 'array', items: { type: 'string' } },
+      language: { type: 'string', enum: ['node', 'python', 'bash', 'sh', 'powershell'] },
+      entry: { type: 'string', description: 'file that runs, e.g. "main.py"' },
+      source: { type: 'string', description: 'text of the entry file' },
+      files: { type: 'object', description: 'more files { "relative/name": "text" } (may include the entry)' },
+      inputs: { type: 'object', description: 'JSON schema of the arguments (type object, properties, required)' },
+      outputs: { description: 'what it prints: a sentence or a JSON schema' },
+      platforms: { type: 'array', items: { type: 'string', enum: ['linux', 'darwin', 'windows'] } },
+      safety: { type: 'string', enum: ['read-only', 'mutating'] }, version: { type: 'string', description: 'default 1.0.0' },
+      timeoutSec: { type: 'number', description: 'default 60, max 600' },
+      origin: { type: 'object', description: '{ project, task } it was written for (session and trace are filled in)' },
+    }, required: ['id', 'name', 'description', 'language', 'entry', 'safety'] },
+    run: async (a) => {
+      const { node, ...tool } = a;
+      return api(`/api/nodes/${n(node)}/tools/register`, { method: 'POST', body: { ...tool, origin: toolOrigin(a) } });
+    },
+  },
+  {
+    name: 'tool_run', description: 'Run a filed tool on a machine with JSON arguments (checked against its inputs schema) and get its result. node defaults to where the tool is (this machine first); a tool filed elsewhere is copied to the chosen node first. Mutating tools are refused unless allowMutating is true: pass it only when the change is what the task wants. The git guard applies (no commit/push/branch switch outside a RIGS dev worktree), stdout/stderr are redacted, and it is killed after timeoutSec (default the tool\'s, else 60; max 600). cwd is the folder it works in (default the tool\'s own folder).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, node: { type: 'string' }, args: { type: 'object' }, allowMutating: { type: 'boolean' }, timeoutSec: { type: 'number' }, cwd: { type: 'string' } }, required: ['id'] },
+    run: async (a) => {
+      const body = { args: a.args || {}, allowMutating: a.allowMutating === true, timeoutSec: a.timeoutSec, cwd: a.cwd };
+      const timeout = (Math.min(600, a.timeoutSec || 600) + 30) * 1000;
+      const runOn = (node) => api(`/api/nodes/${n(node)}/tools/${encodeURIComponent(a.id)}/run`, { method: 'POST', body, timeout });
+      if (!a.node) { const t = await locateTool(a.id); return runOn(t.node); }
+      try { return await runOn(a.node); } catch (e) {
+        if (e.code !== 'not-found' && !/no tool "/.test(e.message)) throw e;
+        const t = await locateTool(a.id);
+        await api(`/api/nodes/${n(a.node)}/tools/register`, { method: 'POST', body: { ...t.manifest, files: t.files, origin: { ...t.manifest.origin, node: t.node } } });
+        return { copiedFrom: t.node, ...(await runOn(a.node)) };
+      }
+    },
   },
   {
     name: 'mesh_processes', description: 'List processes on a machine in the mesh (pid, name, CPU %, memory, age, command line). filter matches the name or command line; sort is cpu | mem | age | name | pid.',

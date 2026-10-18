@@ -1,0 +1,32 @@
+{
+  "id": "ffmpeg-frames",
+  "name": "Video probe, frame extraction and contact sheet",
+  "description": "Inspect a local video with ffprobe (duration, size, codec, resolution, fps), pull frames at a fps or exact timestamps, or build one contact-sheet PNG of evenly spaced frames to look at a clip in a single image. Use it instead of hand-written ffmpeg lines when checking generated or recorded video.",
+  "tags": ["ffmpeg", "ffprobe", "video", "frames", "thumbnail", "contact-sheet", "media", "screenshot"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "required": ["input"],
+    "properties": {
+      "action": { "type": "string", "enum": ["probe", "frames", "sheet"], "description": "default probe" },
+      "input": { "type": "string", "description": "path of a local video file" },
+      "outDir": { "type": "string", "description": "where frames or the sheet go; default <tmp>/rigs-frames/<name>" },
+      "fps": { "type": "number", "description": "frames: frames per second to keep, default 1 (at most 500 frames)" },
+      "timestamps": { "type": "array", "items": { "type": "number" }, "description": "frames: exact seconds instead of fps" },
+      "width": { "type": "number", "description": "scale frames to this width (sheet tiles default 320)" },
+      "count": { "type": "number", "description": "sheet: number of tiles, default 12" },
+      "cols": { "type": "number", "description": "sheet: tiles per row, default 4" },
+      "format": { "type": "string", "enum": ["png", "jpg"] },
+      "dryRun": { "type": "boolean", "description": "print the ffprobe/ffmpeg command lines without running them" }
+    }
+  },
+  "outputs": "probe: { durationSec, sizeBytes, container, video{ codec, width, height, fps, frames }, audio }; frames/sheet: { outDir, count, files[] }",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 600,
+  "smoke": { "args": { "action": "sheet", "input": "clip.mp4", "count": 6, "cols": 3, "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

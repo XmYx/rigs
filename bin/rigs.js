@@ -156,6 +156,56 @@ const commands = {
     for (const g of r.groups[group] || []) console.log(`  ${String(g.label).slice(0, 40).padEnd(40)} ${String(g.count).padStart(5)}  ${k(g.totalTokens).padStart(7)} tok  ${h(g.durationMs).padStart(7)}  ${g.done} done / ${g.failed} failed`);
     for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
   },
+  /** rigs tools [list [query] [--tag t] [--kind tool|applet]] · rigs tools show <id> [--node n] · rigs tools run <id> ['{json}'] [--node n] [--allow-mutating] */
+  async tools() {
+    const [sub = 'list', ...rest] = argv;
+    const flags = new Set(['--tag', '--kind', '--node', '--timeout', '--cwd']);
+    const opt = (k) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
+    const pos = rest.filter((x, i) => !x.startsWith('--') && !flags.has(rest[i - 1]));
+    const fail = (msg) => { console.error(msg); process.exit(1); };
+    const node = encodeURIComponent(opt('--node') || 'self');
+    if (sub === 'list') {
+      const qs = new URLSearchParams({ q: pos.join(' '), tag: opt('--tag') || '', kind: opt('--kind') || '', limit: '0' });
+      const r = await daemonFetch(`/api/tools?${qs}`, { timeout: 60000 }).catch((e) => ({ error: e.message }));
+      if (r.error || !r.results) fail(r.error || 'RIGS daemon is not running (rigs start).');
+      if (!r.results.length) console.log('no tools or applets match');
+      for (const x of r.results) {
+        const what = x.kind === 'applet' ? `applet ${x.status}` : `${x.language} ${x.safety}${x.uses ? ` · ${x.uses} run${x.uses === 1 ? '' : 's'}` : ''}`;
+        console.log(`${x.kind === 'applet' ? '▦' : '⚙'} ${String(x.id).padEnd(28)} ${String(x.node).padEnd(16)} ${what.padEnd(28)} ${String(x.description || '').split('\n')[0].slice(0, 70)}`);
+      }
+      for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
+      return;
+    }
+    if (sub === 'smoke') {
+      // Run each tool's declared smoke call (a dry run) on this machine: `rigs tools smoke [id…]`, every tool without ids.
+      const T = await import('../src/toolbox.js');
+      const ids = pos.length ? pos : (await T.listLocal()).tools.map((t) => t.id);
+      let bad = 0;
+      for (const tid of ids) {
+        const r = await T.smokeTool(tid).catch((e) => ({ ok: false, problem: e.message }));
+        if (!r.ok && !r.skipped) bad++;
+        console.log(`${r.ok ? '✓' : r.skipped ? '·' : '✗'} ${String(tid).padEnd(24)} ${r.durationMs != null ? `${r.durationMs} ms` : ''} ${r.problem || ''}`.trimEnd());
+      }
+      process.exit(bad ? 1 : 0);
+    }
+    const id = pos[0];
+    if (!id || !['show', 'run'].includes(sub)) fail('usage: rigs tools [list [query] [--tag t] [--kind tool|applet]]\n       rigs tools show <id> [--node n]\n       rigs tools smoke [id…]   (run each tool\'s declared dry-run check on this machine)\n       rigs tools run <id> [\'{"arg": 1}\'] [--node n] [--allow-mutating] [--timeout sec] [--cwd dir]');
+    if (sub === 'show') {
+      const r = await daemonFetch(`/api/nodes/${node}/tools/${encodeURIComponent(id)}`).catch((e) => ({ error: e.message }));
+      if (r.error || !r.manifest) fail(r.error || 'RIGS daemon is not running (rigs start).');
+      console.log(JSON.stringify(r.manifest, null, 2));
+      for (const [f, text] of Object.entries(r.files)) console.log(`\n--- ${f}\n${text}`);
+      return;
+    }
+    let args = {};
+    if (pos[1]) { try { args = JSON.parse(pos[1]); } catch { fail('arguments must be a JSON object, e.g. \'{"path": "~/x"}\''); } }
+    const body = { args, allowMutating: rest.includes('--allow-mutating'), timeoutSec: Number(opt('--timeout')) || undefined, cwd: opt('--cwd') ? path.resolve(opt('--cwd')) : process.cwd() };
+    const r = await daemonFetch(`/api/nodes/${node}/tools/${encodeURIComponent(id)}/run`, { method: 'POST', body: JSON.stringify(body), timeout: 11 * 60 * 1000 }).catch((e) => ({ error: e.message }));
+    if (r.ok === undefined) fail(r.error ? `${r.error}${r.code ? ` (${r.code})` : ''}` : String(r));
+    console.log(typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2));
+    if (r.stderr) console.error(r.stderr);
+    if (!r.ok) fail(`${id}: ${r.error || `exit code ${r.code}`}`);
+  },
   async status() {
     const nodes = await daemonFetch('/api/nodes').catch(() => null);
     if (!Array.isArray(nodes)) { console.log('RIGS daemon is not running (rigs start).'); process.exit(1); }
@@ -245,6 +295,9 @@ const commands = {
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
+  rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh
+  rigs tools show <id> | run <id> ['{json args}'] [--node n] [--allow-mutating]
+                       read or run a filed tool (mutating tools need --allow-mutating)
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

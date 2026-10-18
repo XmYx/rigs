@@ -1,0 +1,30 @@
+{
+  "id": "mobile-audit",
+  "name": "Mobile audit of the JARVIS UI",
+  "description": "Capture the JARVIS views at phone sizes (390x844, 360x740, landscape), run axe-core and measure horizontal overflow and touch targets under 44px, then return a short pass/fail summary with the output folder instead of the full log. Wraps scripts/mobile-shots.js of the RIGS checkout; needs playwright and axe-core installed in ~/.cache/rigs-audit. Starts its own server on port 4781, so it is safe to run next to production.",
+  "tags": ["mobile", "audit", "accessibility", "axe", "playwright", "screenshots", "touch-targets", "ui", "jarvis", "responsive"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "out": { "type": "string", "description": "output folder, relative to the RIGS checkout; default docs/mobile-audit/after" },
+      "viewports": { "type": "string", "description": "e.g. 390x844,360x740,844x390" },
+      "views": { "type": "string", "description": "only these views, comma-separated" },
+      "url": { "type": "string", "description": "audit a running JARVIS instead of starting one (never a production daemon)" },
+      "reducedMotion": { "type": "boolean" },
+      "strict": { "type": "boolean", "description": "exit 1 when overflow or small touch targets are found" },
+      "pngPrimary": { "type": "boolean", "description": "save PNGs for 390x844 only" },
+      "appDir": { "type": "string", "description": "RIGS checkout holding scripts/mobile-shots.js; default RIGS_APP_DIR, then this tool's repo, then ~/.rigs/app" },
+      "dryRun": { "type": "boolean", "description": "show the command that would run" }
+    }
+  },
+  "outputs": "{ ok, out, check: the script's CHECK line, report: { count, overflow, smallTargets, pageErrors, captureFailed, axeViolationRules, failing[{ view, viewport, overflow, smallTargets, errors, axe }] } }",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 600,
+  "smoke": { "args": { "viewports": "390x844", "strict": true, "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

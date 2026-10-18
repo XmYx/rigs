@@ -120,6 +120,7 @@ MIGRATIONS.push({
 
 // Every agent learns the screen-control tools and rules (on by default, ask first, never re-enable or bypass).
 MIGRATIONS.push({ id: '2026-10-17-control-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
+MIGRATIONS.push({ id: '2026-10-18-tool-registry-instructions', run: async () => { await (await import('./setup.js')).writeInstructions(); return { ok: true }; } });
 
 // Usage ledger: estimated records for the project task runs and JARVIS chat turns from before it existed. Waits for
 // peer discovery first, since a task's transcript lives on the machine that ran it (`rigs usage backfill` re-runs it).

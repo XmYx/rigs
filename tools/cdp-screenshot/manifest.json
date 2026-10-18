@@ -1,0 +1,33 @@
+{
+  "id": "cdp-screenshot",
+  "name": "Headless Chrome screenshot and page driver",
+  "description": "Open a URL in headless Chrome/Chromium, optionally run JS, wait for a condition, and save PNG screenshots at desktop (1440x900) or phone (390x844, touch) size. Reports console errors, exceptions, failed requests and HTTP 4xx/5xx. Use it to check a UI change by eye instead of writing another CDP script; give steps for a multi-shot walkthrough.",
+  "tags": ["screenshot", "chrome", "browser", "ui", "qa", "mobile", "cdp", "playwright-free"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "required": ["url"],
+    "properties": {
+      "url": { "type": "string", "description": "http(s):// or file:// page to open" },
+      "out": { "type": "string", "description": "PNG path for a one-shot screenshot (not needed with steps)" },
+      "size": { "type": "string", "description": "WIDTHxHEIGHT, default 1440x900; a width under 700 emulates a phone" },
+      "wait": { "type": "number", "description": "seconds to settle before the shot (one-shot), default 1" },
+      "eval": { "type": "string", "description": "JS to run in the page before the shot (one-shot); the value is returned in evals" },
+      "until": { "type": "string", "description": "JS expression to wait for (up to 40 s) before the shot (one-shot)" },
+      "steps": { "type": "array", "description": "[{viewport}, {eval}, {waitFor, timeout}, {sleep}, {shot}] run in order" },
+      "reducedMotion": { "type": "boolean" },
+      "swiftshader": { "type": "boolean", "description": "software WebGL for pages with a map or 3D canvas on a machine without GPU Chrome" },
+      "chrome": { "type": "string", "description": "path to Chrome/Chromium when not on PATH (or set CHROME)" },
+      "dryRun": { "type": "boolean", "description": "show the resolved plan and Chrome path without launching" }
+    }
+  },
+  "outputs": "{ ok, shots: [absolute PNG paths], evals: [values], problems: [console errors, exceptions, failed requests, HTTP >= 400] }",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 180,
+  "smoke": { "args": { "url": "http://127.0.0.1:1/", "out": "smoke.png", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-18T12:00:00Z",
+  "updated": "2026-10-18T12:00:00Z",
+  "origin": { "project": "0010e8a52d", "task": "t3" }
+}

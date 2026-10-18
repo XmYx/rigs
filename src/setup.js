@@ -8,6 +8,7 @@ import * as service from './service.js';
 import * as sshSession from './sshsession.js';
 import * as ssh from './ssh.js';
 import * as ts from './tailscale.js';
+import { AGENT_NOTE } from './toolbox.js';
 import { bin, detectTools } from './tools.js';
 import { APP_DIR, HOME, clearWhichCache, isWin, run, upsertManagedBlock } from './util.js';
 
@@ -49,7 +50,7 @@ async function registerCodexMcp() {
   ok(`Codex: rigs MCP registered in ${file}`);
 }
 
-function agentInstructions() {
+export function agentInstructions() {
   const cfg = config();
   return `## RIGS mesh (managed by rigs setup — edits inside this block are overwritten)
 
@@ -73,6 +74,7 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   \`project_create\` plans and routes a new goal across the mesh.
 - **Tools**: \`mesh_status\` lists each machine's tools (e.g. ComfyUI for image generation). Use the
   machine that has the tool you need.
+- ${AGENT_NOTE}
 - **Screen control**: \`mesh_screen\`, \`mesh_windows\` and \`mesh_control\` see and drive a machine's desktop;
   \`mesh_access\` shows what is allowed there and which OS grants are missing. It is on by default; Sir can
   switch it off per machine or stop it (\`rigs control off\`), and only Sir can switch it back on (from JARVIS).
