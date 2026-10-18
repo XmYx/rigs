@@ -29,7 +29,7 @@ import { log } from './util.js';
 
 export const ENTRY_KINDS = ['intake', 'plan', 'step', 'code', 'result', 'milestone', 'summary'];
 export const IMAGE_MODES = ['auto', 'svg', 'comfyui', 'off'];
-export const DEFAULTS = Object.freeze({ enabled: false, images: 'auto', maxPerDoc: 60 });
+export const DEFAULTS = Object.freeze({ enabled: false, images: 'auto', maxPerDoc: 60, maxDocs: 200 });
 export const events = new EventEmitter();
 events.setMaxListeners(50);
 
@@ -40,6 +40,7 @@ export function settings(cfg = config()) {
     enabled: e.enabled === true,
     images: IMAGE_MODES.includes(e.images) ? e.images : DEFAULTS.images,
     maxPerDoc: Math.min(500, Math.max(5, Math.round(Number(e.maxPerDoc)) || DEFAULTS.maxPerDoc)),
+    maxDocs: Math.min(5000, Math.max(10, Math.round(Number(e.maxDocs)) || DEFAULTS.maxDocs)),
   };
 }
 
@@ -55,6 +56,11 @@ export function applyConfigPatch(cur, patch = {}) {
     const n = Number(patch.maxPerDoc);
     if (!Number.isFinite(n) || n < 5 || n > 500) throw new Error('maxPerDoc must be a number from 5 to 500');
     next.maxPerDoc = Math.round(n);
+  }
+  if (patch.maxDocs !== undefined) {
+    const n = Number(patch.maxDocs);
+    if (!Number.isFinite(n) || n < 10 || n > 5000) throw new Error('maxDocs must be a number from 10 to 5000');
+    next.maxDocs = Math.round(n);
   }
   return next;
 }
@@ -338,7 +344,7 @@ export function svgFor(entry, { docTitle = '' } = {}) {
     orbits += `<circle cx="160" cy="180" r="${r}" fill="none" stroke="${dim}" stroke-opacity="${(0.18 + (seed[i + 11] % 30) / 100).toFixed(2)}" stroke-dasharray="${2 + seed[i + 2] % 8} ${4 + seed[i + 3] % 14}"/>`;
     orbits += `<circle cx="${(160 + r * Math.cos(a)).toFixed(1)}" cy="${(180 + r * Math.sin(a)).toFixed(1)}" r="${2 + seed[i + 4] % 4}" fill="${fg}" opacity="0.8"/>`;
   }
-  const title = wrap(entry.title || kind, 24, 3);
+  const title = wrap(entry.title || kind, 20, 3); // 20 chars at 26px fit the 320px right of the glyph
   const sub = clip(docTitle, 44);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(entry.title || kind)}">`
     + `<defs><radialGradient id="g" cx="25%" cy="50%" r="80%"><stop offset="0" stop-color="hsl(${hue} 70% 18%)"/><stop offset="1" stop-color="#05080d"/></radialGradient></defs>`
@@ -347,7 +353,7 @@ export function svgFor(entry, { docTitle = '' } = {}) {
     + orbits
     + `<g transform="translate(160 180) scale(1.6)" color="${fg}" fill="${fg}">${GLYPH[kind]}</g>`
     + `<text x="300" y="88" fill="${fg}" fill-opacity="0.7" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" letter-spacing="3">${esc(kind.toUpperCase())}${entry.seq ? ` · ${String(entry.seq).padStart(2, '0')}` : ''}</text>`
-    + title.map((l, i) => `<text x="300" y="${140 + i * 38}" fill="#e8f4ff" font-family="system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="30" font-weight="600">${esc(l)}</text>`).join('')
+    + title.map((l, i) => `<text x="300" y="${140 + i * 38}" fill="#e8f4ff" font-family="system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600">${esc(l)}</text>`).join('')
     + (sub ? `<text x="300" y="${H - 40}" fill="${fg}" fill-opacity="0.85" font-family="system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="16">${esc(sub)}</text>` : '')
     + '</svg>';
 }
@@ -487,6 +493,21 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
     await fsp.appendFile(file(docId), JSON.stringify(rec) + '\n');
   }
 
+  /** Retention: past maxDocs documents, the least recently written go (with their images). Never the one being written. */
+  async function prune(keep) {
+    const { maxDocs } = getSettings();
+    const names = (await fsp.readdir(dir).catch(() => [])).filter((f) => f.endsWith('.jsonl') && isDocId(f.slice(0, -6)));
+    if (names.length <= maxDocs) return;
+    const stats = await Promise.all(names.map(async (f) => ({ id: f.slice(0, -6), m: (await fsp.stat(path.join(dir, f)).catch(() => null))?.mtimeMs || 0 })));
+    stats.sort((a, b) => a.m - b.m);
+    for (const { id } of stats.slice(0, names.length - maxDocs)) {
+      if (id === keep) continue;
+      docs.delete(id); comfyCount.delete(id);
+      await fsp.rm(file(id), { force: true });
+      await fsp.rm(path.join(dir, id), { recursive: true, force: true });
+    }
+  }
+
   /** Add one record to a document (created with a meta line when new). Returns the stored entry, if one was added. */
   async function put(docId, rec, metaRec) {
     if (metaRec?.title) metaRec = { ...metaRec, title: safe(metaRec.title, 120) };
@@ -495,6 +516,7 @@ export function createExhibits({ getSettings = () => settings(), home = RIGS_HOM
       const meta = { t: 'meta', at: now(), ...metaRec };
       doc = mergeIntoDocument(emptyDoc(docId), meta).doc;
       await append(docId, meta);
+      await prune(docId);
     } else if (metaRec?.title && !doc.title) {
       const meta = { t: 'meta', at: now(), title: metaRec.title };
       doc = mergeIntoDocument(doc, meta).doc;

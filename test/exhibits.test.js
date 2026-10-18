@@ -38,9 +38,10 @@ const FIXTURE = [
 ];
 
 test('settings: off by default; the config patch is validated', () => {
-  assert.deepEqual(X.settings({}), { enabled: false, images: 'auto', maxPerDoc: 60 });
+  assert.deepEqual(X.settings({}), { enabled: false, images: 'auto', maxPerDoc: 60, maxDocs: 200 });
   assert.equal(X.settings({ exhibits: { enabled: 'yes' } }).enabled, false, 'only a real true switches it on');
-  assert.deepEqual(X.applyConfigPatch({}, { enabled: true, images: 'svg', maxPerDoc: 20 }), { enabled: true, images: 'svg', maxPerDoc: 20 });
+  assert.deepEqual(X.applyConfigPatch({}, { enabled: true, images: 'svg', maxPerDoc: 20 }), { enabled: true, images: 'svg', maxPerDoc: 20, maxDocs: 200 });
+  assert.throws(() => X.applyConfigPatch({}, { maxDocs: 3 }), /maxDocs/);
   assert.throws(() => X.applyConfigPatch({}, { images: 'gif' }), /images must be/);
   assert.throws(() => X.applyConfigPatch({}, { maxPerDoc: 1 }), /maxPerDoc/);
   assert.ok(X.isDocId(TR) && X.isDocId('pr-abc12') && !X.isDocId('../etc') && !X.isDocId('pr-'));
@@ -315,7 +316,7 @@ test('API: off by default (no files); switched on, one JARVIS request → a fina
     let up = false;
     for (let i = 0; i < 100 && !up; i++) { try { up = (await fetch(BASE + '/api/self')).ok; } catch {} if (!up) await new Promise((r) => setTimeout(r, 200)); }
     assert.ok(up, 'server did not start:\n' + log);
-    assert.deepEqual(await (await fetch(BASE + '/api/local/exhibits/config')).json(), { enabled: false, images: 'auto', maxPerDoc: 60 });
+    assert.deepEqual(await (await fetch(BASE + '/api/local/exhibits/config')).json(), { enabled: false, images: 'auto', maxPerDoc: 60, maxDocs: 200 });
 
     await send('say hello in a file');
     await new Promise((r) => setTimeout(r, 300));
@@ -364,4 +365,20 @@ test('API: off by default (no files); switched on, one JARVIS request → a fina
   } finally {
     server.kill();
   }
+});
+
+test('service: retention keeps at most maxDocs documents, oldest go first with their images', async () => {
+  const home = fs.mkdtempSync(path.join(TMP, 'ret-'));
+  const svc = X.createExhibits({ home, getSettings: () => ({ enabled: true, images: 'svg', maxPerDoc: 60, maxDocs: 10 }) });
+  const ids = [];
+  for (let i = 0; i < 13; i++) {
+    const traceId = `tr-20261018-${String(i).padStart(12, '0')}`;
+    ids.push(traceId);
+    svc.handleSpan({ traceId, spanId: `sp-${i}`, kind: 'intake', start: 1000 + i, status: 'running', input: 'hello ' + i });
+    await svc.flush();
+    fs.utimesSync(path.join(svc.dir, `${traceId}.jsonl`), new Date(1e12 + i * 1000), new Date(1e12 + i * 1000));
+  }
+  const left = fs.readdirSync(svc.dir).filter((f) => f.endsWith('.jsonl')).sort();
+  assert.equal(left.length, 10);
+  assert.deepEqual(left, ids.slice(3).map((id) => `${id}.jsonl`));
 });
