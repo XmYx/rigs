@@ -58,13 +58,23 @@ export async function peerJson(node, localPath, { method = 'GET', body, timeout 
 
 const wss = new WebSocketServer({ noServer: true });
 
-/** Bridge a browser WebSocket to the same WebSocket endpoint on a peer. */
+/** Close codes a relay may pass on (1005/1006 are reserved for "no code" and "abnormal"). */
+export const relayCloseCode = (code) => (code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000);
+
+/**
+ * Bridge a browser WebSocket to the same WebSocket endpoint on a peer. The peer sees x-rigs-via (the node the
+ * request entered on, for control.allowFrom and the audit log) and the caller header; close codes and reasons
+ * pass through (a screen stream's 4403 control-off), also when the peer closes before the browser side is up.
+ */
 export function forwardWs(node, req, socket, head, localPath) {
   const base = node.url.replace(/^http/, 'ws').replace(/\/$/, '');
-  const headers = node.viaToken ? { 'x-rigs-token': config().meshToken } : {};
+  const headers = { 'x-rigs-via': config().name };
+  if (node.viaToken) headers['x-rigs-token'] = config().meshToken;
+  if (req.headers['x-rigs-caller']) headers['x-rigs-caller'] = req.headers['x-rigs-caller'];
   const upstream = new WebSocket(base + '/api/local/' + localPath, { headers, handshakeTimeout: 8000 });
   const pending = [];
-  let client = null;
+  let client = null, closed = null;
+  const closeClient = () => client.close(relayCloseCode(closed.code), closed.reason);
   upstream.on('open', () => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       client = ws;
@@ -72,15 +82,19 @@ export function forwardWs(node, req, socket, head, localPath) {
       ws.on('close', () => upstream.close());
       ws.on('error', () => upstream.close());
       for (const [d, b] of pending) ws.send(d, { binary: b });
+      if (closed) closeClient();
     });
   });
   upstream.on('message', (d, isBinary) => {
     if (client?.readyState === 1) client.send(d, { binary: isBinary });
     else pending.push([d, isBinary]);
   });
-  upstream.on('close', () => client?.close());
+  upstream.on('close', (code, reason) => {
+    closed = { code, reason: String(reason || '') };
+    if (client) closeClient();
+  });
   upstream.on('error', () => {
-    if (client) client.close(); else socket.destroy();
+    if (client) client.close(); else if (!closed) socket.destroy();
   });
 }
 

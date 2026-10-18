@@ -237,7 +237,7 @@ All functions are async and take a `caller` that the server builds from `req.rig
 | `not-allowed` | 403 | caller's node not in `control.allowFrom`, or an agent tried `enable` |
 | `busy` | 409 | another caller holds the lease |
 | `locked` | 423 | the screen is locked: never type into a lock screen |
-| `rate` | 429 | over `maxActionsPerMin` / `maxShotsPerMin` |
+| `rate` | 429 | over `maxActionsPerMin` / `maxShotsPerMin` / `maxStreamFramesPerMin` |
 | `needs-permission` | 412 | backend not ready; `fix` says what to do |
 | `unsupported` | 501 | no backend for this op on this desktop |
 | `no-session` | 503 | no graphical session (headless, logged out) |
@@ -343,6 +343,7 @@ Every `down` is paired with an `up`: helpers track what they hold and release it
   "leaseIdleSec": 60,      // a controller's lease ends after this long without an action
   "maxActionsPerMin": 120,
   "maxShotsPerMin": 30,
+  "maxStreamFramesPerMin": 600, // live stream frames (src/screen-stream.js), all streams together; frames take no lease
   "announce": "lease",     // speak at lease start/end ("every" = speak each action); the feed always shows every action
   "killHotkey": "default", // per OS, see below; "" disables
   "auditPreview": 64       // chars of typed text kept in the audit line (0 = none)

@@ -47,6 +47,17 @@ export function permissionFor(op, backendKey, platform) {
   return backendKey === 'windows' ? 'accessibility' : 'input';
 }
 
+/**
+ * The access check every desktop operation shares (screenshots, frames of a live stream, input). Pure: null when
+ * allowed, else { code, message } for a ControlError. Leases, locks and rate limits come after it in gate().
+ */
+export function accessCheck(settings = {}, killed = null, caller = {}, act = false) {
+  if (!settings.enabled || killed) return { code: 'off', message: 'Screen access is off on this machine (switched off or stopped). A person can switch it back on in JARVIS → Access & control.' };
+  if (act && !settings.input) return { code: 'input-off', message: 'Input control is off on this machine.' };
+  if (settings.allowFrom?.length && !settings.allowFrom.includes(caller.from)) return { code: 'not-allowed', message: 'Caller node is not in control.allowFrom' };
+  return null;
+}
+
 const ALIASES = { control: 'ctrl', option: 'alt', cmd: 'super', command: 'super', win: 'super', meta: 'super', return: 'enter', escape: 'esc' };
 const NAMED = new Set('enter tab esc space backspace delete insert up down left right home end pageup pagedown capslock printscreen menu'.split(' '));
 export function parseCombo(combo, platform = platformName()) {
@@ -97,7 +108,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     generation++; cached = null;
     for (const reject of active) reject(new ControlError('off', message));
   }
-  const shots = new Map(), rates = { shots: [], actions: [] };
+  const shots = new Map(), rates = { shots: [], actions: [], frames: [] };
   const settings = () => getConfig().control || {};
   const saveState = () => {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -156,23 +167,26 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     const s = settings(), enabled = !!s.enabled && !state.killed, input = enabled && !!s.input;
     return { node: getConfig().name, platform, session: info.session, desktop: info.desktop, enabled, input, killed: state.killed || null, backend: { ...info.backend, helper: info.helper || null }, permissions: info.permissions, ready: { see: enabled && !!info.backend.capture && info.locked === false && info.permissions?.screenCapture?.ok !== false, act: input && !!info.backend.input && info.locked === false && info.permissions?.input?.ok !== false }, displays: info.displays || [], locked: info.locked, lease: lease ? structuredClone(lease) : null, ...(info.error ? { error: info.error } : {}) };
   }
-  async function gate(caller, act) {
+  async function gate(caller, act, useLease = true) {
     const s = settings();
-    if (!s.enabled || state.killed) throw new ControlError('off', 'Screen access is off on this machine (switched off or stopped). A person can switch it back on in JARVIS → Access & control.');
-    if (act && !s.input) throw new ControlError('input-off', 'Input control is off on this machine.');
-    if (s.allowFrom?.length && !s.allowFrom.includes(caller.from)) throw new ControlError('not-allowed', 'Caller node is not in control.allowFrom');
+    const refused = accessCheck(s, state.killed, caller, act);
+    if (refused) throw new ControlError(refused.code, refused.message);
+    // Frames of a live stream only look: they neither take nor wait for the lease an agent holds.
+    if (!useLease) return;
     if (lease && now() - lease.lastAt >= (s.leaseIdleSec ?? 60) * 1000) { await endLease('idle'); await adapter.stop(); cached = null; }
     if (lease && holderKey(lease.holder) !== holderKey(caller)) throw new ControlError('busy', `Screen lease is held by ${lease.holder.agent || lease.holder.who || 'another caller'} on ${lease.holder.from || 'this machine'}`);
     touchLease(caller);
   }
-  function perform(op, args, caller, act, backendKey, fn) {
+  /** opts: lease (take the screen lease; off for stream frames), bucket + max (rate limit), auditOk (audit successes). */
+  function perform(op, args, caller, act, backendKey, fn, opts = {}) {
+    const { lease: useLease = true, auditOk = true } = opts;
     caller = callerInfo(caller);
     const submitted = generation;
     const task = serial.then(async () => {
       const started = now(); let backend, timer, cancel;
       try {
         if (submitted !== generation) throw new ControlError('off', 'Control was stopped before this action ran');
-        await gate(caller, act);
+        await gate(caller, act, useLease);
         // Fail closed before touching the desktop when the required audit cannot be written.
         fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
         const auditFd = fs.openSync(logFile, 'a', 0o600); fs.closeSync(auditFd);
@@ -195,9 +209,9 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           // Always re-probe lock immediately before acting, even when status was cached.
           const lock = await request('locked');
           if (lock.locked !== false) throw new ControlError('locked', lock.locked ? 'The screen is locked' : 'Cannot verify that the screen is unlocked');
-          const bucket = rates[op === 'screenshot' ? 'shots' : 'actions'];
+          const bucket = rates[opts.bucket || (op === 'screenshot' ? 'shots' : 'actions')];
           while (bucket.length && now() - bucket[0] >= 60000) bucket.shift();
-          const max = op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120;
+          const max = opts.max ?? (op === 'screenshot' ? settings().maxShotsPerMin ?? 30 : settings().maxActionsPerMin ?? 120);
           if (bucket.length >= max) throw new ControlError('rate', 'Control rate limit reached; try again in a minute');
           bucket.push(now());
           const permission = info.permissions[permissionFor(op, backendKey, platform)];
@@ -208,12 +222,11 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
           if (permission?.ok === false) throw new ControlError('needs-permission', `Permission required for ${op}`, permission.fix);
           const result = await fn(info, request);
           if (submitted !== generation) throw new ControlError('off', 'Control was stopped during this action');
-          lease.actions++;
-          touchLease(caller);
+          if (useLease) { lease.actions++; touchLease(caller); }
           return result;
         })();
         const result = await Promise.race([work, deadline, canceled]);
-        audit(op, args, caller, true, started, null, backend);
+        if (auditOk) audit(op, args, caller, true, started, null, backend);
         return result;
       } catch (e) {
         // An error must never leave a pressed key/button behind. Policy refusals do not touch the device.
@@ -225,9 +238,10 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     serial = task.catch(() => {});
     return task;
   }
-  function screenshot(options = {}, caller) {
+  /** One capture through the selected backend. remember: keep the shot for pointer coordinates (screenshots only). */
+  function capture(op, options, caller, remember, opts) {
     const summary = Object.fromEntries(['display', 'window', 'region', 'maxWidth', 'format', 'quality'].filter((k) => options[k] != null).map((k) => [k, options[k]]));
-    return perform('screenshot', summary, caller, false, 'capture', async (info, request) => {
+    return perform(op, summary, caller, false, 'capture', async (info, request) => {
       const { display, window, region, maxWidth, format = 'png', quality = 80 } = options;
       if (window != null && region) throw new ControlError('bad-args', 'Choose a window or a region');
       if (!['png', 'jpeg'].includes(format)) throw new ControlError('bad-args', 'format must be png or jpeg');
@@ -245,11 +259,27 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
         const scale = (actualRegion?.width || r.sourceWidth || size.width) / size.width;
         const meta = { shot, mime: format === 'png' ? 'image/png' : 'image/jpeg', ...size, display: r.display ?? display, scale, region: actualRegion, at: new Date(now()).toISOString() };
         Object.assign(summary, { display: meta.display, width: size.width, height: size.height });
-        shots.set(shot, { ...meta, ts: now() });
-        while (shots.size > 20) shots.delete(shots.keys().next().value);
+        if (remember) {
+          shots.set(shot, { ...meta, ts: now() });
+          while (shots.size > 20) shots.delete(shots.keys().next().value);
+        }
         return { ...meta, data };
       } finally { fs.rmSync(file, { force: true }); }
-    });
+    }, opts);
+  }
+  const screenshot = (options = {}, caller) => capture('screenshot', options, caller, true);
+  /**
+   * One frame of a live stream (src/screen-stream.js): the same gate and capture backend as screenshot, but no
+   * lease, its own rate budget (maxStreamFramesPerMin) and only refusals in the audit log; the stream itself is
+   * audited when it starts and ends (noteStream).
+   */
+  const frame = (options = {}, caller) => capture('frame', { format: 'jpeg', ...options }, caller, false, { lease: false, auditOk: false, bucket: 'frames', max: settings().maxStreamFramesPerMin ?? 600 });
+  /** Cheap synchronous access check for a running stream: null while allowed, else { code, message }. */
+  const accessFor = (caller = {}) => accessCheck(settings(), state.killed, callerInfo(caller));
+  /** Audit and announce a live stream starting or ending (phase 'start' | 'end'). */
+  function noteStream(phase, args = {}, caller = {}) {
+    audit('stream', { phase, ...args }, callerInfo(caller), true, now());
+    events.emit('stream', { phase, ...args, caller: callerInfo(caller) });
   }
   const listWindows = (caller) => perform('windows', {}, caller, false, 'windows', (_, request) => request('windows'));
   const focusWindow = (id, caller) => perform('focus', { windowId: id }, caller, true, 'windows', async (_, request) => {
@@ -364,8 +394,8 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     if (msg.event === 'exit') { revoke('Control helper stopped'); endLease('helper exit'); return; }
     if (['closed', 'hotkey', 'locked'].includes(msg.event) && settings().enabled) kill({ reason: msg.reason || `helper ${msg.event}` }, { who: 'desktop' }).catch((e) => events.emit('fault', e));
   });
-  return { status, screenshot, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
+  return { status, screenshot, frame, accessFor, noteStream, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
 }
 
 const instance = createControl();
-export const { status, screenshot, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;
+export const { status, screenshot, frame, accessFor, noteStream, listWindows, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;

@@ -8,7 +8,8 @@ import { WebSocketServer } from 'ws';
 import { authorize, clientIp, isLoopback } from './auth.js';
 import * as access from './access.js';
 import * as control from './control.js';
-import { createControlApi, wireControlEvents } from './control-api.js';
+import { createControlApi, wireControlEvents, controlCaller } from './control-api.js';
+import { createStreamHub } from './screen-stream.js';
 import { ensureControlSetup } from './control-setup.js';
 import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
@@ -1024,6 +1025,11 @@ export async function startServer() {
     if (sub === 'access/full-disk' && method === 'POST') return access.grantFullDiskAccess();
     if (sub === 'access/grant' && method === 'POST') return access.grant((await body()).permission);
     if (sub === 'control' || sub.startsWith('control/')) return controlApi(sub.slice('control'.length).replace(/^\//, ''), req, res, q, body);
+    // Live desktop stream: the WebSocket upgrade is in onUpgrade; a plain GET reports viewers and whether access is on.
+    if (sub === 'screen/stream' && method === 'GET') {
+      const refused = control.accessFor(controlCaller(req, config().name));
+      return { ...streamHub.status(), access: refused ? { ok: false, status: refused.code === 'off' ? 'control-off' : refused.code, message: refused.message } : { ok: true } };
+    }
 
     // ssh
     if (sub === 'ssh') return { user: ssh.sshUser(), pubKey: ssh.publicKey(), hostKeys: await ssh.hostKeys(), server: await ssh.serverStatus(), alias: config().name };
@@ -1216,6 +1222,7 @@ export async function startServer() {
     const url = new URL(req.url, 'http://localhost');
     const a = await authorize(req);
     if (!a.ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+    req.rigsAuth = a;
     let mm;
     if (url.pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -1223,6 +1230,15 @@ export async function startServer() {
         ws.send(JSON.stringify({ type: 'hello', self: { id: config().nodeId, name: config().name }, nodes: discovery.list().map(stripNode) }));
         ws.on('close', () => uiSockets.delete(ws));
       });
+      return;
+    }
+    const streamViewer = () => wss.handleUpgrade(req, socket, head, (ws) => streamHub.attachWs(ws, url.searchParams, controlCaller(req, config().name)));
+    if (url.pathname === '/api/local/screen/stream') { streamViewer(); return; }
+    if ((mm = url.pathname.match(/^\/api\/nodes\/([^/]+)\/screen\/stream$/))) {
+      const node = discovery.get(decodeURIComponent(mm[1]));
+      if (!node) { socket.destroy(); return; }
+      if (node.self) streamViewer();
+      else forwardWs(node, req, socket, head, 'screen/stream' + url.search);
       return;
     }
     if ((mm = url.pathname.match(/^\/api\/local\/pty\/(\w+)\/ws$/))) {
@@ -1304,6 +1320,7 @@ export async function startServer() {
   // "An agent needs you": watch every agent on this machine; announce new waits mesh-wide.
   // Screen access/control: routes for this machine, plus the announcements that make every action visible.
   const controlApi = createControlApi({ control, access, nodeName: () => config().name });
+  const streamHub = createStreamHub({ control, nodeName: () => config().name, log });
   attention.addSource(wireControlEvents({
     events: control.events, nodeName: () => config().name, settings: () => config().control || {}, broadcast, log,
     notifyAll: (b) => broadcastNotify(b), osNotify,
