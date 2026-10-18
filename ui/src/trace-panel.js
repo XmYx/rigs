@@ -7,6 +7,7 @@ import { isPhone } from './mobile.js';
 import { lowPower, pixelRatio } from './perf.js';
 import { currentTheme } from './themes.js';
 import { openWindow } from './wm.js';
+import { tagCtx } from './ctx-tag.js';
 import {
   CRITICAL_COLOR, ERROR_COLOR, GROUPS, filterList, fmtMs, fmtNum, fmtUsd, isError, kindGroup, layoutTrace, mergeSpans, present,
   replayEvents, selfTimes, spanDur, spanTokens, stateAt, summarize, treeOrder,
@@ -76,10 +77,10 @@ export function createTraces(el) {
   function row(t) {
     const st = t.status || 'ok';
     const open = () => openTrace(t.traceId, t);
-    return h('div', { class: `wk-row tr-item ${st}`, role: 'listitem', tabindex: '0', title: `${t.request}\n${t.traceId}`, onclick: open, onkeydown: (e) => { if (e.key === 'Enter') open(); } },
+    return tagCtx(h('div', { class: `wk-row tr-item ${st}`, role: 'listitem', tabindex: '0', title: `${t.request}\n${t.traceId}`, onclick: open, onkeydown: (e) => { if (e.key === 'Enter') open(); } },
       h('div', { class: 'wk-rtitle' }, h('span', { class: `tr-st ${st}`, title: st, 'aria-label': st }, ICON[st] || '·'), h('span', { class: 'tr-req' }, t.request || '(no text)'), h('b', {}, st === 'running' ? 'live' : fmtMs(t.durationMs))),
       h('div', { class: 'wk-rmeta' }, [t.route || '—', fmtUsd(t.costUsd), `${t.spans} spans`, t.toolCalls ? `${t.toolCalls} tools` : null, ago(t.start)].filter(Boolean).join(' · ')),
-      h('div', { class: 'tr-nodes' }, ...(t.nodes || []).map((n) => h('span', { class: 'tr-node' }, n)), ...(t.models || []).slice(0, 2).map((m) => h('span', { class: 'tr-model' }, MODEL(m)))));
+      h('div', { class: 'tr-nodes' }, ...(t.nodes || []).map((n) => h('span', { class: 'tr-node' }, n)), ...(t.models || []).slice(0, 2).map((m) => h('span', { class: 'tr-model' }, MODEL(m))))), 'trace', t.traceId, { traceId: t.traceId, summary: t });
   }
 
   function draw() {

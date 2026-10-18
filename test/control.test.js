@@ -266,7 +266,9 @@ test('Linux runner receives literal Unicode/text args and X11 window focus valid
 
 test('JSONL transport handles fragmented replies, errors, timeout, and never replays an op', async () => {
   let sent = '', read, write, destroyed = 0;
-  const rpc = new ControlRPC({ timeout: 20, connect: async () => {
+  // A generous timeout while the reply is written in fragments (a loaded machine can take >20 ms to get there),
+  // then a short one for the request that is meant to time out.
+  const rpc = new ControlRPC({ timeout: 5000, connect: async () => {
     read = new PassThrough(); write = new PassThrough(); write.on('data', (d) => { sent += d; });
     return { read, write, destroy: () => { destroyed++; read.destroy(); write.destroy(); }, onClose: () => {} };
   } });
@@ -276,6 +278,7 @@ test('JSONL transport handles fragmented replies, errors, timeout, and never rep
   assert.equal(request.windowId, 'opaque');
   read.write(`{"id":${request.id},"ok":true,`); read.write('"result":{"ok":true}}\n');
   assert.deepEqual(await p, { ok: true });
+  rpc.timeout = 20;
   await assert.rejects(rpc.request('type', { text: 'test' }), { code: 'timeout' });
   assert.equal(destroyed, 1);
   assert.equal(sent.split('\n').filter(Boolean).length, 2);

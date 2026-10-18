@@ -1,5 +1,6 @@
 import readline from 'node:readline';
 import { config } from './config.js';
+import { documentToMarkdown } from './exhibits.js';
 
 /**
  * `rigs mcp` — a stdio MCP server that gives any coding agent (Claude Code, Codex, …) hands on the
@@ -340,6 +341,17 @@ const TOOLS = [
     run: async (a) => {
       const t = await api(`/api/traces/${encodeURIComponent(a.traceId)}`, { timeout: 60000 });
       return a.flat ? { traceId: t.traceId, summary: t.summary, spans: t.spans, errors: t.errors } : { traceId: t.traceId, summary: t.summary, tree: t.tree, errors: t.errors };
+    },
+  },
+  {
+    name: 'exhibit_get', description: 'Exhibits (experimental, config.exhibits): the illustrated running account of a request (docId = its traceId) or a project (docId "pr-<projectId>"). Without docId: every machine\'s documents. With docId (and the machine that holds it as node, default this one): its entries in order (kind, title, caption, visual) and whether it is final; format "md" gives it as Markdown.',
+    inputSchema: { type: 'object', properties: { docId: { type: 'string' }, node: { type: 'string' }, format: { type: 'string', enum: ['json', 'md'] } } },
+    run: async (a) => {
+      if (!a.docId) return api('/api/exhibits', { timeout: 30000 });
+      const d = await api(`/api/nodes/${n(a.node)}/exhibits/${encodeURIComponent(a.docId)}`, { timeout: 30000 });
+      // Images are data URIs or files: name their source instead of sending base64 to the agent.
+      if (a.format === 'md') return documentToMarkdown(d, { image: () => '' });
+      return { ...d, entries: (d.entries || []).map((e) => ({ ...e, image: e.image ? { source: e.image.source, alt: e.image.alt } : null })) };
     },
   },
   {

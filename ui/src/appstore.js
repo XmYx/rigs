@@ -1,6 +1,7 @@
 import { api, h, node, toast } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
+import { tagCtx } from './ctx-tag.js';
 
 // App Store: the catalog of installable apps (src/appstore.js) as cards, per machine. Install runs as a
 // resumable job on that machine; progress comes from the job endpoint (polled while one runs, and pushed
@@ -191,7 +192,8 @@ function card(a) {
     if (st.state === 'installed') actions.push(h('button', { class: 'btn danger', onclick: () => uninstall(a) }, 'Uninstall'));
   } else if (st.state === 'partial') actions.push(h('button', { class: 'btn primary', onclick: () => install(a) }, 'Finish install'), h('button', { class: 'btn danger', onclick: () => uninstall(a) }, 'Uninstall'));
   else actions.push(h('button', { class: 'btn primary', disabled: !fit.ok, title: fit.ok ? '' : fit.reasons.join('; '), onclick: () => install(a) }, 'Install'));
-  return h('article', { class: `store-card ${st.state}${busy ? ' busy' : ''}` },
+  const ctxState = busy ? 'busy' : failed ? 'failed' : st.state;
+  return tagCtx(h('article', { class: `store-card ${st.state}${busy ? ' busy' : ''}` },
     h('header', {}, h('span', { class: 'app-icon' }, a.icon || '▦'),
       h('div', { class: 'store-title' }, h('h3', {}, a.name), h('span', { class: 'muted small' }, `v${a.version || '?'}`)),
       badge ? h('span', { class: `store-badge ${badge[1]}` }, badge[0]) : null),
@@ -200,7 +202,8 @@ function card(a) {
     h('div', { class: `store-fit ${fit.ok ? 'ok' : 'bad'}` }, fit.ok ? '✓ Fits this machine' : `✕ ${fit.reasons.join('; ')}`),
     ...(fit.ok ? fit.warnings : []).map((w) => h('div', { class: 'store-fit warn' }, `⚠ ${w}`)),
     jobView ? progress(jobView, k) : null,
-    h('div', { class: 'store-actions' }, ...actions));
+    h('div', { class: 'store-actions' }, ...actions)), 'storeapp', a.id,
+  { app: a, state: ctxState, fits: fit.ok, updateAvailable: !!st.updateAvailable, actions: { open: openInstalled, install, cancel, uninstall } });
 }
 
 function render() {

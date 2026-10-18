@@ -1,6 +1,7 @@
 import { api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { openControl } from './control.js';
+import { tagCtx } from './ctx-tag.js';
 
 const AGENTS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig'], ['rea', 'REA'], ['sunshine', 'Sunshine'], ['moonlight', 'Moonlight'], ['tmux', 'tmux']];
 
@@ -23,7 +24,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     table.replaceChildren(...data.map(({ node: n, sessions = [], openrig, hubs }) => {
       const up = n.online && n.rigs;
       const mem = n.stats ? Math.round((n.stats.memUsed / n.stats.memTotal) * 100) : 0;
-      return h('div', { class: 'mesh-row' + (up ? '' : ' down') },
+      return tagCtx(h('div', { class: 'mesh-row' + (up ? '' : ' down') },
         h('div', { class: 'mr-name' }, h('b', {}, n.name), n.self ? h('span', { class: 'chip' }, 'this machine') : null,
           h('div', { class: 'muted' }, `${n.distro || n.platform || ''} · ${n.tailscale?.dnsName || n.tailscale?.ip || n.url || ''}`),
           h('div', { class: 'muted' }, up ? `rigs ${n.version || '?'} · ${sessions.length} sessions · ${(n.gpus || []).join(', ')}` : n.rigs ? 'offline' : `no RIGS agent${n.error ? ' (' + n.error + ')' : ''}`)),
@@ -38,7 +39,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
           h('button', { class: 'btn', onclick: () => onDesktop(n) }, '🖥'),
           up ? h('button', { class: 'btn', title: 'Access & control: permissions, full-control switch, stop', onclick: () => openControl({ machine: n }) }, '🛡') : null,
           h('button', { class: 'btn', title: 'SSH in (opens a session visible in JARVIS)', onclick: () => onSsh(n) }, 'ssh'),
-          up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null));
+          up ? h('button', { class: 'btn', onclick: () => updateOne(n) }, '⟳ update') : null)), 'node', n.id, { node: n });
     }));
   }
 

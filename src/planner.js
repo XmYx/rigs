@@ -43,8 +43,13 @@ export async function getProject(id) {
 export async function saveProject(p) {
   p.updatedAt = Date.now();
   await writeJsonAtomic(path.join(DIR, p.id + '.json'), p);
+  for (const fn of savedSinks) try { fn(p); } catch (e) { log('project saved listener: ' + e.message); }
   return p;
 }
+
+// Listeners told after each project save (the exhibit service); they must return at once and never throw.
+const savedSinks = new Set();
+export function onProjectSaved(fn) { savedSinks.add(fn); return () => savedSinks.delete(fn); }
 
 export async function deleteProject(id) {
   if (!/^[\w-]+$/.test(id)) return false;

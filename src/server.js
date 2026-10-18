@@ -35,6 +35,7 @@ import * as pty from './pty.js';
 import * as senses from './senses.js';
 import * as usage from './usage.js';
 import * as trace from './trace.js';
+import * as exhibits from './exhibits.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
@@ -116,6 +117,8 @@ export async function startServer() {
   const discovery = new Discovery(selfInfo);
   // ComfyUI connector (/api/local/comfyui/*): the user's URL wins; the detected ComfyUI is the fallback.
   const comfy = createComfyService({ suggest: async () => { const c = (await caps.capabilities()).comfyui; return c?.url ? { url: c.url, running: c.running !== false } : null; } });
+  // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
+  const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
   const broadcast = (msg) => { const s = JSON.stringify(msg); for (const w of uiSockets) if (w.readyState === 1) w.send(s); };
 
@@ -466,6 +469,15 @@ export async function startServer() {
     return { since: usage.parseTime(searchParams.get('since')) ?? null, ...trace.aggregateTraces(results, Object.fromEntries(searchParams)) };
   }
 
+  /** Mesh-wide exhibit documents (src/exhibits.js): every online node's list, newest first. */
+  async function meshExhibits() {
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? localCall('exhibits') : peerJson(n, 'exhibits', { timeout: 15000 }))
+      .catch((e) => ({ node: n.name, error: e.message }))));
+    return exhibits.aggregateExhibits(results);
+  }
+
   /** One trace across the mesh: the spans every machine holds for it, in one tree. */
   async function meshTrace(id, searchParams) {
     if (!trace.isTraceId(id)) throw new HttpError(400, 'not a trace id');
@@ -764,6 +776,34 @@ export async function startServer() {
       if (!t) throw new HttpError(400, 'not a trace id');
       if (!t.spans.length && !q.get('after')) throw new HttpError(404, 'trace not found on this machine');
       return t;
+    }
+    // exhibit documents kept on this machine (src/exhibits.js)
+    if (sub === 'exhibits' && method === 'GET') return exhibitSvc.list();
+    if (sub === 'exhibits/config' && method === 'GET') return exhibits.settings();
+    if (sub === 'exhibits/config' && method === 'POST') { try { return exhibits.saveSettings(await body()); } catch (e) { throw new HttpError(400, e.message); } }
+    if ((mm = m(/^exhibits\/([\w-]+)$/)) && method === 'GET') {
+      if (!exhibits.isDocId(mm[1])) throw new HttpError(400, 'not an exhibit document id');
+      const d = await exhibitSvc.get(mm[1]);
+      if (!d) throw new HttpError(404, 'no such exhibit document on this machine');
+      return d;
+    }
+    if ((mm = m(/^exhibits\/([\w-]+)\/images\/([\w.-]+)$/)) && method === 'GET') {
+      const img = await exhibitSvc.image(mm[1], mm[2]);
+      if (!img) throw new HttpError(404, 'no such image');
+      if (!res) return { mime: img.mime, base64: img.bytes.toString('base64') };
+      res.writeHead(200, { 'content-type': img.mime, 'cache-control': 'max-age=86400' });
+      res.end(img.bytes);
+      return undefined;
+    }
+    if ((mm = m(/^exhibits\/([\w-]+)\/export$/)) && method === 'GET') {
+      const format = q.get('format') || 'html';
+      if (!['md', 'html'].includes(format)) throw new HttpError(400, 'format must be md or html');
+      const x = await exhibitSvc.exportDoc(mm[1], format);
+      if (!x) throw new HttpError(404, 'no such exhibit document on this machine');
+      if (!res) return x;
+      res.writeHead(200, { 'content-type': x.mime, 'cache-control': 'no-store', ...(q.get('download') === '1' ? { 'content-disposition': `attachment; filename="${mm[1]}.${x.ext}"` } : {}) });
+      res.end(x.body);
+      return undefined;
     }
     // a task run that ran here ended: its transcript slice → spans under its task span (trace.recordRunEnd)
     if (sub === 'traces/run-end' && method === 'POST') return (await trace.recordRunEnd(await body(), { transcripts: usage.runTranscripts })) || { skipped: true };
@@ -1089,6 +1129,7 @@ export async function startServer() {
     if (p === '/api/usage') return meshUsage(url.searchParams);
     if (p === '/api/preroute/stats') return meshPrerouteStats(url.searchParams);
     if (p === '/api/traces') return meshTraces(url.searchParams);
+    if (p === '/api/exhibits') return meshExhibits();
     if ((mm = p.match(/^\/api\/traces\/([\w-]+)$/))) return meshTrace(mm[1], url.searchParams);
     if (p === '/api/mesh/snapshot') return meshSnapshot();
     if (p === '/api/mesh/summary') return { text: meshSummary() };
@@ -1376,6 +1417,13 @@ export async function startServer() {
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
   // Request traces: each span written here goes to the open UIs as it happens (live view); old day files are pruned.
   trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
+  // Exhibits: fed from the same span stream and the planner's saves; each new entry is pushed live ('exhibit').
+  trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
+  planner.onProjectSaved((p) => exhibitSvc.handleProject(p));
+  exhibits.events.on('entry', ({ docId, entry, final }) => broadcast({ type: 'exhibit', docId, entry, final }));
+  exhibits.events.on('live', (l) => broadcast({ type: 'exhibit-live', ...l }));
+  exhibits.events.on('image',({ docId, entry }) => broadcast({ type: 'exhibit-image', docId, entry }));
+  exhibits.events.on('final', ({ docId, at }) => broadcast({ type: 'exhibit-final', docId, at }));
   const pruneTraces = () => trace.prune().then((f) => f.length && log(`traces: pruned ${f.length} day file(s)`)).catch((e) => log('traces prune:', e.message));
   pruneTraces();
   setInterval(pruneTraces, 24 * 3600 * 1000).unref();

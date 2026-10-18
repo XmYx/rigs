@@ -177,8 +177,16 @@ export function setDockTitle(id, title) {
 
 // ---------------------------------------------------------------- geometry
 
+/** Height of the top menu bar (menubar.js sets --mb-h on <html>; 0 when it is hidden or on a phone). */
+function topInset() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--mb-h'));
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** The docked area: the whole window minus a small margin, below the top menu bar. */
 function dockArea() {
-  return { x: PAD, y: PAD, w: Math.max(1, window.innerWidth - 2 * PAD), h: Math.max(1, window.innerHeight - 2 * PAD) };
+  const t = topInset();
+  return { x: PAD, y: PAD + t, w: Math.max(1, window.innerWidth - 2 * PAD), h: Math.max(1, window.innerHeight - 2 * PAD - t) };
 }
 const inset = (r) => ({ x: r.x + GAP / 2, y: r.y + GAP / 2, w: Math.max(0, r.w - GAP), h: Math.max(0, r.h - GAP) });
 
@@ -221,7 +229,8 @@ function computeGeo(L, scale = 1) {
 
 /** Panels: keep at least 80px and the top 28px on screen (as before). */
 export function clampPanel(left, top, w) {
-  return [Math.min(Math.max(0, left), Math.max(0, window.innerWidth - Math.min(w, 80))), Math.min(Math.max(0, top), Math.max(0, window.innerHeight - 28))];
+  const t = topInset(); // never under the top menu bar, where the title bar could not be grabbed
+  return [Math.min(Math.max(0, left), Math.max(0, window.innerWidth - Math.min(w, 80))), Math.min(Math.max(t, top), Math.max(t, window.innerHeight - 28))];
 }
 
 const GEOM = ['left', 'top', 'right', 'bottom', 'transform', 'scale', 'transformOrigin', 'width', 'height'];
@@ -299,7 +308,9 @@ function computeFit(L, docked) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const vp = { w: vw, h: vh };
-  const vpKey = `${vw}x${vh}`;
+  const t = topInset(); // the fit frame starts below the top menu bar: y here = screen y - t
+  const below = (f) => ({ ...f, y: f.y - t, vh: Math.max(1, f.vh - t) });
+  const vpKey = `${vw}x${vh}x${t}`;
   const floating = [];
   const mins = {};
   const bare = [];
@@ -312,7 +323,7 @@ function computeFit(L, docked) {
       // A collapsed panel is only its header tall; a rect smaller than the element's own minimum is that minimum.
       const hh = it.collapsed ? Math.min(f.h, it.el.offsetHeight || f.h) : Math.max(f.h, m.h);
       if (it.collapsed) m.h = Math.min(m.h, hh);
-      floating.push(fitHome({ ...f, w: Math.max(f.w, m.w), h: hh }, vp));
+      floating.push(below(fitHome({ ...f, w: Math.max(f.w, m.w), h: hh }, vp)));
     } else if (it.kind === 'panel') bare.push(it);
   }
   for (const it of bare) {
@@ -324,10 +335,10 @@ function computeFit(L, docked) {
       it.bareL = L;
       it.bareHome = b.width > 0 && b.height > 0 && overflows(home, vw, vh) ? home : null;
     }
-    if (it.bareHome) floating.push({ id: it.id, ...it.bareHome, z: 0, vw, vh });
+    if (it.bareHome) floating.push(below({ id: it.id, ...it.bareHome, z: 0, vw, vh }));
   }
-  const res = solveFit({ viewport: vp, floating, root: docked ? L.root : null, dockRect: dockArea(), mins, mode: 'fit', margin: FIT_MARGIN });
-  return { scale: res.scale, byId: new Map(res.floating.map((f) => [f.id, f])) };
+  const res = solveFit({ viewport: { w: vw, h: Math.max(1, vh - t) }, floating, root: docked ? L.root : null, dockRect: dockArea(), mins, mode: 'fit', margin: FIT_MARGIN });
+  return { scale: res.scale, byId: new Map(res.floating.map((f) => [f.id, { ...f, y: f.y + t }])) };
 }
 
 /** Place a floating panel or window at its fitted rect (drawn scaled when the scale is below 1). */
@@ -836,6 +847,10 @@ export function initDocking({ defaults }) {
   dockManager.setLayout(L);
   dockManager.subscribe(() => render());
   window.addEventListener('resize', onResize);
+  // The top menu bar shows / hides by setting --mb-h on <html>: lay out again below it.
+  let lastInset = topInset();
+  new MutationObserver(() => { const t = topInset(); if (t !== lastInset) { lastInset = t; queueRender(); } })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   window.matchMedia?.('(max-width: 640px), (max-height: 500px) and (pointer: coarse)')?.addEventListener?.('change', queueRender);
   onScalingChange(() => {
     if (scalingActive()) for (const it of items.values()) adoptWindow(it);

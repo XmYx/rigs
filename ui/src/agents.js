@@ -1,5 +1,6 @@
 import { ago, h } from './api.js';
 import { activeAgents } from './agents-data.js';
+import { tagCtx } from './ctx-tag.js';
 
 // The Active agents panel: every live agent session on every online machine (Claude Code, Codex, OpenRig
 // seats, agent terminals) — one click on a row attaches to it. It redraws with each mesh snapshot.
@@ -21,13 +22,13 @@ export function createAgents(el, { snapshot, onAttach, onChat, onCount }) {
     const model = s.model ? ` · ${MODEL(s.model)}` : '';
     const open = () => onAttach(machine, s);
     const chat = h('button', { class: 'ag-chat', title: 'Chat with this agent here', 'aria-label': `Chat with ${where || agent} on ${machine.name}`, onclick: (e) => { e.stopPropagation(); onChat?.(machine, s); } }, '💬');
-    return h('div', { class: `ag-row ${state}`, role: 'listitem', tabindex: '0', title: `Attach to ${s.title || s.id}${s.role ? ` (${s.role})` : ''} on ${machine.name}`,
+    return tagCtx(h('div', { class: `ag-row ${state}`, role: 'listitem', tabindex: '0', title: `Attach to ${s.title || s.id}${s.role ? ` (${s.role})` : ''} on ${machine.name}`,
       onclick: open, onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } } },
       h('span', { class: 'ag-ico', 'aria-hidden': 'true' }, ICON[agent] || '⌨'),
       h('div', { class: 'ag-main' },
         h('div', { class: 'ag-line' }, h('b', {}, where || s.id), h('span', { class: 'ag-kind' }, `${agent}${model}`)),
         h('div', { class: 'ag-sub' }, h('span', { class: 'ag-mach' }, machine.name), ' · ', h('span', { class: `ag-state ${state}` }, STATE_LABEL[state]), s.updatedAt ? ` · ${ago(s.updatedAt)}` : '')),
-      s.kind !== 'chat' && onChat ? chat : null);
+      s.kind !== 'chat' && onChat ? chat : null), 'session', s.id, { node: machine, s });
   }
 
   function update() {

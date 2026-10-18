@@ -2,6 +2,7 @@ import { h } from './api.js';
 import { isPhone } from './mobile.js';
 import { dialogify } from './a11y.js';
 import { registerDockable, unregisterDockable, setDockTitle } from './docking.js';
+import { tagCtx } from './ctx-tag.js';
 
 // Minimal floating window manager: drag by the whole title bar (docking.js; buttons in it still click),
 // double-click the bar to maximise/restore, resize from the corner, click to raise, close. With the
@@ -10,18 +11,18 @@ import { registerDockable, unregisterDockable, setDockTitle } from './docking.js
 
 let z = 100;
 let cascade = 0;
-let seq = 0;
 const windows = new Set();
+let nextId = 1;
 // Phones: windows open full-screen (styles.css, MOBILE LAYOUT) and each owns a history entry, so the
 // browser/OS back gesture closes the top one instead of leaving JARVIS.
 const backStack = []; // close() of phone windows that pushed a history entry, oldest first
 let skipPop = 0;
 window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } backStack.pop()?.({ fromBack: true }); });
 
-export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [] }) {
+export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [], focus = true }) {
   const body = h('div', { class: 'win-body' });
   const titleEl = h('span', { class: 'win-title-text' }, title);
-  const win = h('div', { class: `win ${className}` },
+  const win = h('div', { class: `win ${className}`, 'data-win-id': String(nextId++) },
     h('div', { class: 'win-bar' },
       h('span', { class: 'win-icon' }, icon),
       titleEl,
@@ -39,13 +40,15 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   document.body.append(win);
   requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove('win-enter'))); // fade/scale in
   windows.add(win);
-  const dlg = dialogify(win, { label: title, onClose: () => close() }); // role=dialog, focus in, Tab trap, Esc closes, focus returns on close
+  const dlg = dialogify(win, { label: title, onClose: () => close(), focus }); // role=dialog, focus in (focus:false for a window that opens by itself, so it never takes the cursor from a text field), Tab trap, Esc closes, focus returns on close
 
+  tagCtx(win, 'window', win.dataset.winId, { get title() { return titleEl.textContent; } }); // right-click on the title bar: front, maximize, close…
   const raise = () => { win.style.zIndex = ++z; };
+  win._wm = { title: () => titleEl.textContent, icon, raise, close: () => close() };
   win.addEventListener('pointerdown', raise);
 
   const bar = win.querySelector('.win-bar');
-  const id = `win-${++seq}`;
+  const id = `win-${win.dataset.winId}`; // dock id; the same number tagCtx / listWindows use
   registerDockable(id, {
     el: win, title, kind: 'window', handles: [bar], raise,
     canDrag: () => !win.classList.contains('max') && !isPhone(),
@@ -79,5 +82,32 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   if (isPhone()) { history.pushState({ rigsWin: true }, ''); backStack.push(close); }
   return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }
+
+/** Open windows, topmost first: { id, title, icon, raise(), close(), el }. */
+export function listWindows() {
+  return [...windows].filter((w) => w._wm).sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))
+    .map((w) => ({ id: w.dataset.winId, title: w._wm.title(), icon: w._wm.icon, raise: w._wm.raise, close: w._wm.close, el: w }));
+}
+
+/** Raise a window and put focus in it. */
+export function focusWindow(id) {
+  const w = listWindows().find((x) => x.id === String(id));
+  if (!w) return false;
+  w.raise();
+  (w.el.querySelector('.win-body input, .win-body textarea, .win-body button, .win-body [tabindex="0"]') || w.el.querySelector('.win-btn'))?.focus({ preventScroll: true });
+  return true;
+}
+
+export const windowCount = () => windows.size;
+export const isMaximized = (id) => !!listWindows().find((w) => w.id === String(id))?.el.classList.contains('max');
+export function toggleMaximize(id) {
+  const w = listWindows().find((x) => x.id === String(id));
+  if (!w) return false;
+  w.el.querySelector('.win-btn[aria-pressed]')?.click();
+  w.raise();
+  return true;
+}
+/** Close every window except `id`. */
+export function closeOthers(id) { for (const w of listWindows()) if (w.id !== String(id)) w.close(); }
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }
