@@ -618,47 +618,58 @@ async function jsonlFilesSince(dir, since, depth = 0, maxDepth = 0) {
 export const claudeProjectDir = (cwd) => String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
 
 /**
- * Tokens one task run spent on THIS machine: the Claude Code / Codex transcripts that belong to its seat (by name) or
- * were handed its brief, summed over [since, until] only. Subagent transcripts of a matched session count too.
- * → { inputTokens…, models, sessions: [ids], matched: n, provider }.
+ * The transcripts of one task run on THIS machine: the Claude Code sessions that belong to its seat (by name) or were
+ * handed its brief — in the run's own folder first, every other folder only when nothing there matches (a symlinked
+ * cwd) — with their subagent transcripts; else the Codex rollouts that match. Each comes with its slice over
+ * [since, until]. → [{ id, provider, records, slice, sub }]. The usage ledger sums the slices (taskUsage); request
+ * traces turn the records into spans (trace.recordRunEnd).
  */
-export async function taskUsage({ since, until = Date.now(), cwd = '', seat = '', brief = '' } = {}) {
+export async function runTranscripts({ since, until = Date.now(), cwd = '', seat = '', brief = '' } = {}) {
   since = Number(since) || 0;
   until = Number(until) || Date.now();
   const markers = { since, until, seat, brief };
+  const out = [];
+  if (!seat && !brief) return out;
+  const root = path.join(CLAUDE_DIR, 'projects');
+  const own = cwd ? path.join(root, claudeProjectDir(cwd)) : '';
+  const all = (await fsp.readdir(root).catch(() => [])).map((d) => path.join(root, d));
+  for (const dirs of [own && fs.existsSync(own) ? [own] : [], all.filter((d) => d !== own)]) {
+    for (const dir of dirs) {
+      for (const file of await jsonlFilesSince(dir, since)) {
+        const records = await readJsonl(file);
+        const s = claudeSlice(records, markers);
+        if (!s.matched) continue;
+        const id = path.basename(file, '.jsonl');
+        out.push({ id, provider: 'claude', records, slice: s, sub: false });
+        for (const sub of await jsonlFilesSince(path.join(dir, id, 'subagents'), since)) {
+          const subRecords = await readJsonl(sub);
+          out.push({ id: `${id}/${path.basename(sub, '.jsonl')}`, provider: 'claude', records: subRecords, slice: claudeSlice(subRecords, { since, until }), sub: true });
+        }
+      }
+    }
+    if (out.length) return out;
+  }
+  for (const file of await jsonlFilesSince(path.join(CODEX_DIR, 'sessions'), since, 0, 3)) {
+    const records = await readJsonl(file);
+    const s = codexSlice(records, markers);
+    if (s.matched) out.push({ id: path.basename(file, '.jsonl'), provider: 'codex', records, slice: s, sub: false });
+  }
+  return out;
+}
+
+/**
+ * Tokens one task run spent on THIS machine: the slices of its transcripts (runTranscripts), summed over [since, until]
+ * only. Subagent transcripts of a matched session count too.
+ * → { inputTokens…, models, sessions: [ids], matched: n, provider }.
+ */
+export async function taskUsage(q = {}) {
   let total = emptyTokens();
-  let models = {};
+  const models = {};
   const sessions = [];
-  const take = (s, id) => {
+  for (const { id, slice: s } of await runTranscripts(q)) {
     total = addTokens(total, s);
     for (const [m, t] of Object.entries(s.models)) models[m] = addTokens(models[m], t);
     sessions.push(id);
-  };
-  if (seat || brief) {
-    const root = path.join(CLAUDE_DIR, 'projects');
-    const own = cwd ? path.join(root, claudeProjectDir(cwd)) : '';
-    const all = (await fsp.readdir(root).catch(() => [])).map((d) => path.join(root, d));
-    // The run's own folder first; every other folder only when nothing there belongs to it (a symlinked cwd).
-    for (const dirs of [own && fs.existsSync(own) ? [own] : [], all.filter((d) => d !== own)]) {
-      for (const dir of dirs) {
-        for (const file of await jsonlFilesSince(dir, since)) {
-          const s = claudeSlice(await readJsonl(file), markers);
-          if (!s.matched) continue;
-          const id = path.basename(file, '.jsonl');
-          take(s, id);
-          for (const sub of await jsonlFilesSince(path.join(dir, id, 'subagents'), since)) {
-            take(claudeSlice(await readJsonl(sub), { since, until }), `${id}/${path.basename(sub, '.jsonl')}`);
-          }
-        }
-      }
-      if (sessions.length) break;
-    }
-    if (!sessions.length) {
-      for (const file of await jsonlFilesSince(path.join(CODEX_DIR, 'sessions'), since, 0, 3)) {
-        const s = codexSlice(await readJsonl(file), markers);
-        if (s.matched) take(s, path.basename(file, '.jsonl'));
-      }
-    }
   }
   return { ...total, models, sessions, matched: sessions.length };
 }

@@ -6,6 +6,8 @@ import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { PROVIDERS, coreBrain } from './models.js';
+import * as trace from './trace.js';
+import { parseContext } from './trace.js';
 import { log, readJson, truncate, writeJsonAtomic } from './util.js';
 import { slug } from './work.js';
 
@@ -63,6 +65,31 @@ export async function createProject({ name, goal, repoNode, repoPath, gitUrl, di
 function event(p, text) {
   p.log.push({ ts: Date.now(), text });
   if (p.log.length > 300) p.log = p.log.slice(-300);
+}
+
+// ------------------------------------------------------------------ request traces (src/trace.js)
+
+/** The request trace a task's work belongs to — the task's own, else its project's — as { traceId, parentId }, or null. */
+const traceOf = (p, t) => parseContext(t?.trace || p?.trace);
+
+/** Where each task went and why: the routing decisions a plan span records. */
+const routingOf = (p) => p.tasks.map((t) => ({ task: t.id, title: t.title, kind: t.kind, size: t.size, deps: t.deps, node: t.assign?.node || '', provider: t.assign?.provider || '', model: t.assign?.model || '', effort: t.assign?.effort || '', why: t.reason || '' }));
+
+/**
+ * Something that happened to a task (a retry, a step up the model ladder, an automatic answer…) as an "event" span of
+ * its request trace: under the run it happened to (`run`, a run.traceRun) or else under the task's handoff.
+ */
+function traceEvent(p, t, name, { run = t.run?.traceRun, input, output, status = 'ok', meta = {} } = {}) {
+  const c = traceOf(p, t);
+  if (!c) return;
+  const parentId = run?.traceId === c.traceId && run.spanId ? run.spanId : c.parentId;
+  trace.recordSpan({ traceId: c.traceId, parentId, kind: 'event', name, input, output, status, meta: { projectId: p.id, taskId: t.id, ...meta } });
+}
+
+/** A planning step that made no brain call (a playbook, a workspace flow): its plan span, written whole. */
+function tracePlan(p, via, input) {
+  const c = parseContext(p.trace);
+  if (c) trace.recordSpan({ ...c, kind: 'plan', name: `plan ${p.name}`, input, output: { summary: p.summary || '', tasks: p.tasks.map((t) => ({ id: t.id, title: t.title, kind: t.kind, size: t.size, deps: t.deps })) }, meta: { via, routing: routingOf(p) } });
 }
 
 // ------------------------------------------------------------------ planning (core brain)
@@ -254,6 +281,7 @@ export async function planProject(id, ctx, { brain } = {}) {
     routeProject(p, snapshot);
     p.status = 'planned';
     event(p, `follows playbook ${pb.file}: ${p.tasks.length} tasks, no planning call`);
+    tracePlan(p, 'playbook', { goal: p.goal, playbook: pb.file });
     return saveProject(p);
   }
   const guide = await readGuide(p, ctx);
@@ -261,15 +289,22 @@ export async function planProject(id, ctx, { brain } = {}) {
   p.status = 'planning';
   event(p, `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
   await saveProject(p);
-  const out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}`, usage: { kind: 'plan', projectId: p.id, projectName: p.name } });
-  if (out.error && !out.text) { p.status = 'draft'; event(p, 'planning failed: ' + out.error); await saveProject(p); throw new Error(out.error); }
+  // The planning call is a span of Sir's request; the brain turn it makes (on any machine) is its child.
+  const tc = parseContext(p.trace);
+  const ps = tc ? trace.startSpan({ ...tc, kind: 'plan', name: `plan ${p.name}`, input: { goal: p.goal, prompt }, meta: { provider: b.provider, model: b.model || '', effort: b.effort || '', node: b.node || p.owner, via: 'brain' } }) : null;
+  let out;
+  try {
+    out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}`, usage: { kind: 'plan', projectId: p.id, projectName: p.name }, ...(ps ? { trace: ps.ctx } : {}) });
+  } catch (e) { ps?.end({ status: 'error', output: e.message }); throw e; }
+  if (out.error && !out.text) { ps?.end({ status: 'error', output: out.error }); p.status = 'draft'; event(p, 'planning failed: ' + out.error); await saveProject(p); throw new Error(out.error); }
   let parsed;
-  try { parsed = extractJson(out.text); } catch (e) { p.status = 'draft'; event(p, 'planning failed: ' + e.message); await saveProject(p); throw new Error(`${e.message}: ${truncate(out.text, 300)}`); }
+  try { parsed = extractJson(out.text); } catch (e) { ps?.end({ status: 'error', output: out.text, meta: { error: e.message } }); p.status = 'draft'; event(p, 'planning failed: ' + e.message); await saveProject(p); throw new Error(`${e.message}: ${truncate(out.text, 300)}`); }
   p.tasks = ensureFinalReview(normalizeTasks(parsed), p.goal);
   p.summary = parsed.summary || '';
   routeProject(p, snapshot);
   p.status = 'planned';
   event(p, `planned ${p.tasks.length} tasks`);
+  ps?.end({ output: parsed, meta: { tasks: p.tasks.length, routing: routingOf(p) } });
   return saveProject(p);
 }
 
@@ -290,6 +325,7 @@ export async function planFlow(id, ctx) {
   routeProject(p, await ctx.snapshot());
   p.status = 'planned';
   event(p, `runs the ${f.name} flow: ${p.tasks.length} tasks`);
+  tracePlan(p, 'flow', { goal: p.goal, flow: f.name });
   return saveProject(p);
 }
 
@@ -437,6 +473,12 @@ ${p.selfDev ? '- Commits: this is RIGS itself — commit in your dev worktree; R
 `;
 }
 
+/** The brief's pointer to Sir's request trace (src/trace.js), or nothing for untraced work. */
+export function traceLine(c) {
+  const ctx = parseContext(c);
+  return ctx ? `- Request trace: \`${ctx.traceId}\`${ctx.parentId ? ` (parent span \`${ctx.parentId}\`)` : ''} — what is done for this task is recorded under Sir's original request; pass it on as \`trace\` when you file follow-up work.\n` : '';
+}
+
 function taskPrompt(p, t) {
   const done = t.deps.map((d) => p.tasks.find((x) => x.id === d)).filter(Boolean);
   const others = p.tasks.filter((x) => x.id !== t.id && x.status === 'running').map((x) => `- ${x.id} ${x.title} (${x.assign?.provider} on ${x.assign?.node})`);
@@ -448,7 +490,7 @@ You are one agent in a RIGS project run across the user's machines.
 - Project goal: ${p.goal}
 - Your task id: \`${t.id}\` · kind: ${t.kind} · size: ${t.size}
 - You run on \`${t.assign.node}\` as ${t.assign.provider}${t.assign.model ? ' ' + t.assign.model : ''}${t.assign.effort ? ' (effort ' + t.assign.effort + ')' : ''}
-${p.workspace ? `
+${traceLine(t.trace || p.trace)}${p.workspace ? `
 ## Workspace
 ${workspaceBrief(p)}
 - Read the project's ${p.workspace.guides?.length ? p.workspace.guides.join(' / ') : 'README'} first and follow it — it overrides the generic notes below.
@@ -562,9 +604,17 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
     const workdir = t0.assign.node === p0.repo.node && p0.repo.path ? p0.repo.path : `~/rigs-work/${p0.slug}`;
     let r = null;
     let err = null;
+    // The start is a "dispatch" span of the request trace; the run's own span (written by the machine that runs it)
+    // hangs under it.
+    const tc = traceOf(p0, t0);
+    const attempt = (t0.attempts || 0) + 1;
+    const ds = tc ? trace.startSpan({ ...tc, kind: 'dispatch', name: `${t0.id} → ${t0.assign.node}`,
+      input: { task: { id: t0.id, title: t0.title, kind: t0.kind, size: t0.size }, node: t0.assign.node, provider: t0.assign.provider, model: t0.assign.model, effort: t0.assign.effort, why: t0.reason, workdir, mode: p0.dispatch, attempt, ...(t0.escalate ? { escalated: t0.escalate } : {}) },
+      meta: { projectId: p0.id, taskId: t0.id, attempt, target: t0.assign.node } }) : null;
     try {
-      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl, selfDev: p0.selfDev ? { branch: p0.selfDev.branch } : null }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined }, timeout: 10 * 60 * 1000 });
+      r = await ctx.call(t0.assign.node, 'work/start', { method: 'POST', body: { project: { id: p0.id, slug: p0.slug, name: p0.name, gitUrl: p0.gitUrl, selfDev: p0.selfDev ? { branch: p0.selfDev.branch } : null }, task: t0, prompt: taskPrompt(p0, t0), workdir, mode: p0.dispatch, policy: p0.policy, source: t0.source || undefined, trace: ds ? ds.ctx : t0.trace || p0.trace || undefined }, timeout: 10 * 60 * 1000 });
     } catch (e) { err = e; }
+    ds?.end(r ? { output: { mode: r.mode, seat: r.seat || '', rig: r.rig || '', qitem: r.qitem || '', session: r.session?.id || '', run: r.traceRun?.spanId || '' } } : { status: 'error', output: err?.message || 'no answer' });
     await withProject(id, async () => {
       const p = await getProject(id);
       const t = p?.tasks.find((x) => x.id === t0.id);
@@ -632,6 +682,8 @@ export function retryOrFail(p, t, why, { escalate = true, delayMs = 0, now = Dat
   const A = autonomy.settings(p);
   const max = A.enabled ? A.maxAttempts : MAX_ATTEMPTS;
   runEnded(p, t, 'failed', why);
+  const run = t.run?.traceRun;
+  const from = t.assign ? { node: t.assign.node, provider: t.assign.provider, model: t.assign.model, effort: t.assign.effort } : null;
   t.attempts = (t.attempts || 0) + 1;
   t.lastFailure = truncate(String(why || ''), 1500);
   (t.history ||= []).push({ attempt: t.attempts, at: now, node: t.assign?.node || '', provider: t.assign?.provider || '', model: t.assign?.model || '', effort: t.assign?.effort || '', why: truncate(String(why || ''), 300) });
@@ -656,12 +708,15 @@ export function retryOrFail(p, t, why, { escalate = true, delayMs = 0, now = Dat
     }
     if (delayMs > 0) t.retryAt = now + delayMs; else delete t.retryAt;
     event(p, `${t.id} will be retried (attempt ${t.attempts + 1}/${max}${how}${delayMs > 0 ? `, in ${Math.round(delayMs / 1000)} s` : ''}): ${truncate(why, 160)}`);
+    traceEvent(p, t, how ? 'escalate' : 'retry', { run, input: why, output: `attempt ${t.attempts + 1}/${max}${how}`,
+      meta: { attempt: t.attempts, nextAttempt: t.attempts + 1, maxAttempts: max, from, to: how ? { ...t.escalate, rung: nx.rung } : null, escalate, delayMs } });
     return 'retry';
   }
   t.status = 'failed';
   delete t.retryAt;
   t.summary = truncate(String(why || ''), 4000);
   event(p, `${t.id} failed after ${t.attempts} attempt${t.attempts > 1 ? 's' : ''}: ${truncate(why, 160)}`);
+  traceEvent(p, t, 'failed', { run, input: why, output: `gave up after ${t.attempts} attempt${t.attempts > 1 ? 's' : ''}`, status: 'error', meta: { attempt: t.attempts, maxAttempts: max, from } });
   return 'failed';
 }
 
@@ -858,6 +913,7 @@ function selfAnswer(p, t, question, ctx, { dismiss = false, now = Date.now() } =
   if (t.questions.length > 20) t.questions = t.questions.slice(-20);
   t.status = 'running';
   event(p, `${t.id} asked: “${truncate(q, 140)}” — answered automatically with the safe default (${t.answers}/${autonomy.settings(p).maxAnswers})`);
+  traceEvent(p, t, 'question', { input: q, output: autonomy.selfAnswerText(p, t, q), meta: { attempt: (t.attempts || 0) + 1, answer: 'safe default (automatic)', answers: t.answers, maxAnswers: autonomy.settings(p).maxAnswers, dismiss } });
   // Not awaited: the agent may be waiting on this very report (project_task_update) to return.
   if (!ctx?.call) return;
   Promise.resolve(ctx.call(t.assign.node, 'work/nudge', { method: 'POST', body: { ...t.run, dismiss, text: autonomy.selfAnswerText(p, t, q) }, timeout: 30000 }))
@@ -1193,6 +1249,9 @@ export async function addTask(id, spec, snapshot) {
   // Who handed it out (JARVIS's overseer seat) and a seat that already holds the context (a follow-up).
   if (spec.source) t.source = String(spec.source);
   if (spec.followUp) t.followUp = String(spec.followUp);
+  // The request trace this task belongs to (src/trace.js): its brief names it so later spans attach there.
+  const tctx = parseContext(spec.trace);
+  if (tctx) t.trace = tctx;
   p.tasks.push(t);
   if (!spec.assign) routeProject(p, snapshot, { onlyUnassigned: true });
   if (p.status === 'draft') p.status = 'planned';
@@ -1222,7 +1281,7 @@ export async function intake(body, ctx) {
   const title = truncate(String(body.title || body.instruction).replace(/\s+/g, ' '), 100);
   const { task } = await addTask(p.id, {
     title, description: String(body.instruction || title), kind: body.kind, size: body.size, needs: body.needs, deps: body.deps,
-    source: body.source, followUp: body.followUp,
+    source: body.source, followUp: body.followUp, trace: body.trace,
   }, await ctx.snapshot());
   if (!task.assign) return { project: brief(p), task, started: false, why: task.reason };
   // The main project and projects already running stay "running" (the planner tick tracks them); a project

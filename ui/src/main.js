@@ -12,6 +12,7 @@ import { activity, freshIds } from './os.js';
 import { meshVisualText, showOnStage } from './stage.js';
 import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
+import { createTraces, onTraceSpan } from './trace-panel.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { openMesh } from './mesh.js';
@@ -255,6 +256,7 @@ function connectEvents() {
     if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.session) popups.handle(m);
     if (m.type === 'control') controlEvent(m);
+    if (m.type === 'trace-span') onTraceSpan(m.span);
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
     if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
     else if (m.type === 'notify' && m.level === 'attention') {
@@ -1173,6 +1175,9 @@ function wire() {
   const usagePanel = createUsage($('#usage'));
   makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => usagePanel.setActive(!closed && !collapsed) });
   { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.collapsed); }
+  const tracesPanel = createTraces($('#traces'));
+  makeFloating($('#traces'), { id: 'traces', title: 'Request traces', into: $('#traces .wk-head'), keep: [$('#traces .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => tracesPanel.setActive(!closed && !collapsed) });
+  { const st = panelState('traces'); tracesPanel.setActive(!st.closed && !st.collapsed); }
   agentsPanel = createAgents($('#agents'), {
     snapshot: () => snap, onAttach: attachSession, onChat: attachChat,
     onCount: (n, waiting) => { const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
@@ -1187,6 +1192,7 @@ function wire() {
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
   $('#btn-agents').onclick = () => togglePanel('agents');
   $('#btn-usage').onclick = () => togglePanel('usage');
+  $('#btn-traces').onclick = () => togglePanel('traces');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();

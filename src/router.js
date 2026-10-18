@@ -174,8 +174,12 @@ export async function modelRoute(text, ctx, { timeoutMs = 25000 } = {}) {
   if (!claude) return null;
   const env = { ...process.env, PATH: augmentedPath() };
   for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
-  const r = await run(claude, ['-p', routerPrompt(text, ctx), '--output-format', 'text', ...claudeFlags({ model: ROUTER_MODEL, effort: 'low', permissionMode: 'plan' })],
+  const prompt = routerPrompt(text, ctx);
+  // ctx.capture (optional) receives what the model was asked and said, for the request trace (src/trace.js).
+  if (ctx.capture) Object.assign(ctx.capture, { model: ROUTER_MODEL, prompt });
+  const r = await run(claude, ['-p', prompt, '--output-format', 'text', ...claudeFlags({ model: ROUTER_MODEL, effort: 'low', permissionMode: 'plan' })],
     { cwd: HOME, env, timeout: timeoutMs });
+  if (ctx.capture) Object.assign(ctx.capture, { reply: r.stdout, code: r.code, ...(r.code !== 0 ? { error: String(r.stderr || '').trim().slice(-500) } : {}) });
   if (r.code !== 0) return null;
   return parseDecision(r.stdout, ctx.threads, ctx.projects);
 }
