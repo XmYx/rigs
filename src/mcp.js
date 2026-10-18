@@ -246,6 +246,14 @@ const TOOLS = [
     },
   },
   {
+    name: 'preroute_stats', description: 'Time saved by pre-routing (JARVIS deciding answer / implement / plan / continue with a fast router — LocalJev or Claude — before any brain sees a request, and filing bound work itself). Per route class (answer, work): median latency with pre-routing off (the baseline) and on, the router\'s own cost, saved per request and in total; estimated: true when there are no requests with pre-routing off yet and the baseline is estimated (baselineSource says from what). Savings can be negative. since takes ms, an ISO date or "24h" / "30d" (default 30d).',
+    inputSchema: { type: 'object', properties: { since: { type: 'string' }, until: { type: 'string' }, node: { type: 'string', description: 'one machine only; omit for the whole mesh' } } },
+    run: (a) => {
+      const qs = new URLSearchParams({ since: a.since || '30d', ...(a.until ? { until: a.until } : {}) });
+      return api(a.node ? `/api/nodes/${n(a.node)}/preroute/stats?${qs}` : `/api/preroute/stats?${qs}`, { timeout: 60000 });
+    },
+  },
+  {
     name: 'trace_list', description: 'Request traces across the mesh: one per request Sir made (JARVIS intake), newest first, with its route, status, duration, models, tokens, tool calls and the projects/tasks it handed off. Filters: since (ms, ISO date or "24h" / "7d"; default 7d), route (answer | implement | plan | continue), status (running | ok | error | stopped), q (text in the request), node (one machine only).',
     inputSchema: { type: 'object', properties: {
       since: { type: 'string' }, until: { type: 'string' }, route: { type: 'string', enum: ['answer', 'implement', 'plan', 'continue'] },

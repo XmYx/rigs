@@ -34,6 +34,8 @@ import * as pty from './pty.js';
 import * as senses from './senses.js';
 import * as usage from './usage.js';
 import * as trace from './trace.js';
+import * as prerouteStats from './preroute-stats.js';
+import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
 import { stats, systemInfo } from './system.js';
@@ -306,10 +308,13 @@ export async function startServer() {
   function intakeWatcher() {
     let done = null;
     let error = '';
+    let timing = null;
     return {
-      see(e) { if (e.type === 'done') done = e; else if (e.type === 'error') error = e.message; },
+      see(e) { if (e.type === 'done') done = e; else if (e.type === 'error') error = e.message; else if (e.type === 'timing') timing = e; },
       result: (aborted) => ({
         status: aborted ? 'stopped' : error && !done?.text ? 'error' : 'ok',
+        // jarvisSend's measurement (pre-routing on/off, routerMs, timeToFiledMs, timeToReplyMs) on the root span too.
+        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy } } } : {}),
         output: done ? { text: done.text, chatId: done.chatId, brain: done.brain, model: done.model, ...(error ? { error } : {}) } : { error: error || 'no reply' },
       }),
     };
@@ -421,6 +426,17 @@ export async function startServer() {
     const results = await Promise.all(nodes.map((n) => (n.self ? localCall('usage?' + qs) : peerJson(n, 'usage?' + qs, { timeout: 15000 }))
       .then((report) => ({ node: n, report })).catch((e) => ({ node: n, error: e.message }))));
     try { return usage.aggregateUsage(results, Object.fromEntries(searchParams)); } catch (e) { throw new HttpError(400, e.message); }
+  }
+
+  /** Mesh-wide time saved by pre-routing: every online node's request records, merged, then one set of medians. */
+  async function meshPrerouteStats(searchParams) {
+    const qs = new URLSearchParams(searchParams);
+    qs.set('records', '1');
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs);
+    const results = await Promise.all(nodes.map((n) => (n.self ? localCall('preroute/stats?' + qs) : peerJson(n, 'preroute/stats?' + qs, { timeout: 15000 }))
+      .then((report) => ({ node: n, report })).catch((e) => ({ node: n, error: e.message }))));
+    return { since: usage.parseTime(searchParams.get('since') || '30d'), ...prerouteStats.aggregateStats(results, { baselineMs: config().router?.baselineMs || {} }) };
   }
 
   const plannerCtx = {
@@ -568,7 +584,7 @@ export async function startServer() {
       res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -708,6 +724,17 @@ export async function startServer() {
         if (op === 'cancel' && method === 'POST') return appstore.cancel(id);
       } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
+    // Pre-routing (src/router.js): on/off, engine (LocalJev · Claude · rules) and the time it saves (src/preroute-stats.js).
+    if (sub === 'router' && method === 'GET') return routerView();
+    if (sub === 'router' && method === 'POST') {
+      let next;
+      try { next = applyRouterPatch(config().router, await body()); } catch (e) { throw new HttpError(400, e.message); }
+      const cfg = config();
+      cfg.router = next;
+      saveConfig(cfg);
+      return routerView();
+    }
+    if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {
       const b = await body();
@@ -972,6 +999,7 @@ export async function startServer() {
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
     if (p === '/api/usage') return meshUsage(url.searchParams);
+    if (p === '/api/preroute/stats') return meshPrerouteStats(url.searchParams);
     if (p === '/api/traces') return meshTraces(url.searchParams);
     if ((mm = p.match(/^\/api\/traces\/([\w-]+)$/))) return meshTrace(mm[1], url.searchParams);
     if (p === '/api/mesh/snapshot') return meshSnapshot();

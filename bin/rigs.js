@@ -119,6 +119,24 @@ const commands = {
     const r = argv[0] === 'status' ? await d.status() : await d.ensure({ force: argv.includes('--force') });
     console.log(JSON.stringify(r, null, 2));
   },
+  /** rigs preroute [on|off|engine <jev|claude|rules>|stats [--since 30d]] — pre-routing toggle and the time it saves */
+  async preroute() {
+    const [sub = 'status', val] = argv;
+    const fail = (e) => { console.error(e || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    if (sub === 'stats') {
+      const i = argv.indexOf('--since');
+      const r = await daemonFetch(`/api/preroute/stats?since=${encodeURIComponent(i >= 0 ? argv[i + 1] : '30d')}`, { timeout: 60000 }).catch((e) => ({ error: e.message }));
+      if (r.error || !r.classes) fail(r.error);
+      const s = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)}s`);
+      console.log(`${r.requests} requests (${r.preroute.on} pre-routed, ${r.preroute.off} not) · saved ${s(r.total.savedMs)} in total, ${s(r.total.savedPerRequestMs)} per request${r.estimated ? ' (estimated)' : ''}`);
+      for (const [c, x] of Object.entries(r.classes)) console.log(`  ${c.padEnd(7)} off ${s(x.off.medianMs).padStart(7)} (${x.off.n})  on ${s(x.on.medianMs).padStart(7)} (${x.on.n}, router ${s(x.on.routerMedianMs)})  baseline ${s(x.baselineMs)} [${x.baselineSource}]  saved ${s(x.savedPerRequestMs)}/req`);
+      return;
+    }
+    const patch = sub === 'on' ? { preroute: true } : sub === 'off' ? { preroute: false } : sub === 'engine' ? { engine: val } : null;
+    const r = await daemonFetch('/api/local/router', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
+    if (r.error || r.preroute === undefined) fail(r.error);
+    console.log(`pre-routing ${r.preroute ? 'on' : 'off'} · engine ${r.engine} (fallback ${r.fallback})${r.engine === 'jev' ? ` · Jev API ${r.jevUrl || 'not found'}` : ''}`);
+  },
   /** rigs usage [--since 7d] [--group model|project|task|node|day] · rigs usage backfill */
   async usage() {
     if (argv[0] === 'backfill') {
@@ -225,6 +243,7 @@ const commands = {
   rigs control helper [status|install|stop|remove]
                        macOS: build/start RIGS Control.app (holds Screen Recording + Accessibility)
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
+  rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },

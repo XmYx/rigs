@@ -6,9 +6,9 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { claudeFlags, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { parseProjects, route as routeRequest } from './router.js';
+import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as trace from './trace.js';
-import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn } from './usage.js';
+import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn, recordRequest } from './usage.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
@@ -352,21 +352,68 @@ export async function ongoingThreads({ days = 3, limit = 8 } = {}) {
   return [...main, ...ongoing].slice(0, limit);
 }
 
+// A brain's own handoff tool (claude "mcp__rigs__jarvis_task", codex "rigs.project_create"): the moment work was filed.
+const HANDOFF_TOOL = /(?:^|[_.])(?:jarvis_task|project_create)$/;
+
 /**
- * Send a request through the router. Answers go to the JARVIS thread (see mainChat); implement and plan
- * work opens its own thread, unless the router finds it belongs to an ongoing thread, which is then continued. The chosen route
- * is emitted first ({ type: 'route' }) so the screen can show it, and it is handed to the brain as a hint.
+ * Send a request from Sir. With pre-routing on (config.router.preroute, or opts.preroute for this request) it goes
+ * through the router first: answers go to the JARVIS thread (see mainChat); implement and plan work opens its own
+ * thread, unless the router finds it belongs to an ongoing thread, which is then continued; work bound to a folder is
+ * filed by RIGS itself. The chosen route is emitted first ({ type: 'route' }) so the screen can show it, and it is
+ * handed to the brain as a hint. With pre-routing off the request goes straight to the JARVIS thread without a hint
+ * and the brain decides and files work itself (jarvis_task / project_create).
+ *
+ * Either way the request is measured — router time, time from intake to the first work filed (by the router or by the
+ * brain's handoff tool), time to the brain's reply — emitted as { type: 'timing' } and written to the usage ledger as
+ * one "request" record (src/preroute-stats.js turns those into time saved). opts.router / opts.send replace the
+ * router and the brain turn (tests).
  */
 export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts = {}) {
+  const t0 = opts.startedAt || Date.now();
+  const m = { preroute: prerouteOn(opts.preroute), route: '', via: '', routerMs: 0, filedAt: 0, filedBy: '', chatId: '', model: '' };
+  const send = opts.send || sendMessage;
+  let out;
+  let failed = false;
+  try {
+    const { chatId, hint } = m.preroute ? await preroutedTurn(text, { brain, model, effort }, emit, opts, m) : await directTurn(text, emit, opts);
+    m.chatId = chatId;
+    const onTool = (name, r) => { if (!m.filedAt && r.status === 'ok' && HANDOFF_TOOL.test(name || '')) Object.assign(m, { filedAt: r.end || Date.now(), filedBy: 'brain' }); };
+    out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint, onTool });
+    return out;
+  } catch (e) { failed = true; throw e; } finally {
+    const end = Date.now();
+    const timing = {
+      preroute: m.preroute, route: m.route, via: m.via, routerMs: m.routerMs,
+      timeToFiledMs: m.filedAt ? Math.max(0, m.filedAt - t0) : null, filedBy: m.filedBy,
+      timeToReplyMs: !failed && !opts.signal?.aborted && out && !out.error ? end - t0 : null,
+    };
+    emit({ type: 'timing', ...timing });
+    await recordRequest({ tsStart: t0, tsEnd: end, chatId: m.chatId, model: m.model, traceId: opts.trace?.traceId || '', status: opts.signal?.aborted ? 'stopped' : failed || out?.error ? 'failed' : 'done', ...timing });
+  }
+}
+
+/** Pre-routing off: straight to the JARVIS thread. The trace keeps a router span, marked skipped. */
+async function directTurn(text, emit, opts) {
+  const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text }, meta: { preroute: false } }) : null;
+  const chat = await mainChat();
+  rspan?.end({ status: 'skipped', output: { route: '', reason: 'pre-routing is off: the brain decides and files work itself' }, meta: { preroute: false, chatId: chat.id, routerMs: 0 } });
+  emit({ type: 'route', route: 'direct', reason: 'pre-routing is off', via: 'off', preroute: false, chatId: chat.id, title: chat.title, projectId: '', continued: false, work: [], unclear: [] });
+  return { chatId: chat.id, hint: '' };
+}
+
+/** Pre-routing on: the router decides, RIGS files bound work, and the brain gets the decision as a hint. */
+async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
   const threads = await ongoingThreads();
   const projects = parseProjects(opts.projects || '');
   const catalog = opts.workspaces ? await opts.workspaces().catch(() => []) : [];
   // The router's span hangs off the request's intake span (opts.trace); capture gets the router model's prompt + reply.
   const capture = {};
-  const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) } }) : null;
+  const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) }, meta: { preroute: true } }) : null;
   let decision;
-  try { decision = await routeRequest(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name, capture }); }
-  catch (e) { rspan?.end({ status: 'error', output: { error: e.message, prompt: capture.prompt, reply: capture.reply } }); throw e; }
+  const r0 = Date.now();
+  try { decision = await (opts.router || routeRequest)(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name, capture }); }
+  catch (e) { m.routerMs = Date.now() - r0; rspan?.end({ status: 'error', output: { error: e.message, prompt: capture.prompt, reply: capture.reply } }); throw e; }
+  Object.assign(m, { routerMs: Date.now() - r0, route: decision.route, via: decision.via || '', model: decision.via && decision.via !== 'rules' ? capture.model || '' : '' });
   // Work the router bound to real folders is filed by RIGS itself (one planned project + agent team each);
   // the brain only tells Sir what was set in motion. Parts it couldn't bind are left to the brain to ask about.
   const bound = (decision.work || []).filter((w) => !w.unresolved);
@@ -385,11 +432,12 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
     status: chat ? 'ok' : 'error',
     input: { text, prompt: capture.prompt || null, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) },
     output: { route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', title: decision.title || '', reason: decision.reason || '', reply: capture.reply ?? null, work: (decision.work || []).map((w) => ({ title: w.title, goal: w.goal, node: w.node || '', workspace: w.workspace?.name || '', unresolved: !!w.unresolved })) },
-    meta: { route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', chatId: chat?.id || '', via: decision.via || '', reason: decision.reason || '', model: decision.via === 'model' ? capture.model : '', ...(capture.error ? { modelError: capture.error } : {}) },
+    meta: { preroute: true, route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', chatId: chat?.id || '', via: decision.via || '', reason: decision.reason || '', model: m.model, routerMs: m.routerMs, ...(capture.tried ? { tried: capture.tried } : {}), ...(capture.error ? { modelError: capture.error } : {}) },
   });
   if (!chat) throw new Error('thread not found');
   if (bound.length && opts.onWork) {
     try { filed = await opts.onWork(bound, { chatId: chat.id, trace: rspan?.ctx || null }); } catch (e) { emit({ type: 'error', message: 'filing the work failed: ' + e.message }); }
+    if (filed.length) Object.assign(m, { filedAt: Date.now(), filedBy: 'router' });
   }
   let hint = isContinue ? '' : `[routed: ${decision.route}${decision.projectId ? ` · project ${decision.projectId}` : ''} · ${decision.reason || decision.via}]`;
   if (filed.length) {
@@ -398,16 +446,16 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   if (unclear.length) {
     hint += `\n[Could not tell which project ${unclear.length > 1 ? 'these parts mean' : 'this part means'}: ${unclear.map((u) => `"${u.goal}"${u.candidates?.length ? ` — candidates: ${u.candidates.map((c) => `${c.name} on ${c.node} (${c.path})`).join(', ')}` : ' — no matching folder found'}`).join('; ')}. Ask Sir which one before filing it.]`;
   }
-  emit({ type: 'route', route: decision.route, reason: decision.reason, via: decision.via, chatId: chat.id, title: chat.title, projectId: decision.projectId || '', continued: !!isContinue,
+  emit({ type: 'route', route: decision.route, reason: decision.reason, via: decision.via, preroute: true, chatId: chat.id, title: chat.title, projectId: decision.projectId || '', continued: !!isContinue,
     work: filed, unclear: unclear.map((u) => ({ goal: u.goal, candidates: u.candidates })) });
-  return sendMessage(chat.id, { text, brain, model, effort }, emit, { ...opts, hint });
+  return { chatId: chat.id, hint };
 }
 
 /**
  * `usage` tags the turn in the usage ledger: { kind: 'plan', projectId, projectName } for a planning call (the
  * planner asks through a chat); plain chat turns are "chat-turn" under the chat's own project.
  */
-async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null } = {}) {
+async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -429,9 +477,11 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
     meta: { provider: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, ...(usage?.kind ? { purpose: usage.kind } : {}), ...(usage?.projectId ? { projectId: usage.projectId } : {}) } }) : null;
   const toolSpans = new Map();
-  const tools = span ? trace.toolCollector({
-    onStart: (key, c) => toolSpans.set(key, span.child({ kind: 'tool-call', name: c.name, input: c.input, meta: c.meta, start: c.start })),
-    onEnd: (key, r) => { toolSpans.get(key)?.end(r); toolSpans.delete(key); },
+  const toolNames = new Map();
+  // onTool (jarvisSend's measurement) hears every finished tool call, traced or not.
+  const tools = span || onTool ? trace.toolCollector({
+    onStart: (key, c) => { toolNames.set(key, c.name); if (span) toolSpans.set(key, span.child({ kind: 'tool-call', name: c.name, input: c.input, meta: c.meta, start: c.start })); },
+    onEnd: (key, r) => { toolSpans.get(key)?.end(r); toolSpans.delete(key); try { onTool?.(toolNames.get(key), r); } catch {} toolNames.delete(key); },
   }) : null;
   if (span) tracedTurns.set(chat.id, { provider: resolved.brain, ctx: span.ctx });
   let out;
@@ -442,8 +492,8 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
     span?.end({ status: 'error', output: { error: e.message } });
     throw e;
   } finally { if (span) tracedTurns.delete(chat.id); }
+  tools?.close('stopped');
   if (span) {
-    tools.close('stopped');
     const u = out.usage || null;
     span.end({
       status: signal?.aborted ? 'stopped' : out.error ? 'error' : 'ok',
