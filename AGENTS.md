@@ -41,6 +41,7 @@ treat `main` as production.
 | `src/updater.js` | git fast-forward + reinstall + restart; skips machines with uncommitted edits |
 | `src/setup.js`, `src/service.js` | `rigs setup`: MCP registration, agent instructions, REA, OpenRig, autostart |
 | `ui/src/*` | The JARVIS UI (3d-force-graph galaxy, orb, voice, window manager); bundled by esbuild to `ui/dist`. `usage-panel.js` is the ⏱ "Tokens & time" panel (mesh `/api/usage`: totals, by model/project/task, latest runs) |
+| `ui/src/trace-panel.js`, `ui/src/trace-layout.js` | The 🧭 "Request traces" panel (mesh `/api/traces`: recent requests with filters) and the trace explorer window: a 3D DAG of one request's spans (3d-force-graph; time along x, a lane per machine or seat, colour = stage kind, size = duration or tokens), a timeline view, replay scrubber, critical path, summary strip and a span drawer (bottom sheet on phones). "All activity · live" shows the latest requests together. Live from the `trace-span` WebSocket push plus `?after=` polling for other machines. The layout/analysis is pure (`trace-layout.js`, tested in `test/trace-panel.test.js`); fixtures: `node test/fixtures/trace-fixtures.js <RIGS_HOME>` |
 | `ui/src/control.js` | Access & control panel per machine: permissions + guided grants, the access/full-control switches, live "in control" banner, Stop / Stop on every machine |
 | `scripts/install.sh`, `scripts/install.ps1` | One-line installers per OS |
 
