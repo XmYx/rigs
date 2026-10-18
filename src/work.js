@@ -11,6 +11,7 @@ import * as openrig from './openrig.js';
 import { devRoot } from './merge.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
+import { startRun } from './trace.js';
 import { APP_DIR, HOME, expandHome, isWin, run, sleep } from './util.js';
 
 /**
@@ -43,14 +44,25 @@ async function prepareWorkdir(workdir, gitUrl) {
   return dir;
 }
 
-export async function startTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto', source }) {
+export async function startTask({ trace, ...b }) {
+  const r = await launchTask(b);
+  // Request trace (src/trace.js): this run is a "task" span written here, on the machine that runs it; the run handle
+  // keeps it (traceRun) so the end of the run — reported to the owner — comes back here to finish it.
+  const traceRun = startRun(trace, { project: b.project, task: b.task, prompt: b.prompt, run: r, gitGuard: r.guard });
+  const { guard, ...run } = r;
+  return traceRun ? { ...run, traceRun } : run;
+}
+
+async function launchTask({ project, task, prompt, workdir, mode = 'auto', policy = config().agents?.rigPolicy || 'builtin:auto', source }) {
   const dir = await prepareWorkdir(workdir, project.gitUrl);
   // The installed checkout is production: agents change RIGS in a dev worktree (rigs_dev_start), never here.
   if (isInstall(dir)) throw new Error(`refusing to run an agent in the installed RIGS checkout (${dir}) — RIGS changes go through a dev worktree`);
   // Git guard: commits only inside a RIGS dev worktree, pushes and branch switches never (see autonomy.js).
   const devWorktree = isDevWorktree(dir);
   if (project.selfDev && !devWorktree) throw new Error(`refusing to run a RIGS change outside a dev worktree (${dir} is not under ${devRoot()}) — start one with rigs_dev_start`);
-  prompt = guardBrief(prompt, { devWorktree, branch: project.selfDev?.branch || '' }).prompt;
+  const guarded = guardBrief(prompt, { devWorktree, branch: project.selfDev?.branch || '' });
+  prompt = guarded.prompt;
+  const guard = { devWorktree, branch: project.selfDev?.branch || '', stripped: guarded.stripped };
   // The full brief lives on disk — under ~/.rigs, never inside the user's project folder; agents get a short
   // pointer to it (robust quoting on every OS), OpenRig seats get it as their queue item.
   const briefDir = path.join(RIGS_HOME, 'briefs', project.slug);
@@ -65,9 +77,9 @@ export async function startTask({ project, task, prompt, workdir, mode = 'auto',
   const useRig = mode === 'openrig' ? rigOk : mode === 'direct' ? false : rigOk;
   if (mode === 'openrig' && !rigOk) throw new Error(st.health || 'OpenRig is not available on this machine (needs `rig` + a running daemon, Claude Code or Codex)');
   const pin = hubs.hubSettings().enabled ? hubs.pinFor(dir) : null;
-  if (useRig && pin) return { ...(await hubs.dispatchTask({ pin, project, task, dir, brief, pointer, policy, source })), brief };
-  if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy, source })), brief };
-  return { ...(await startDirect({ project, task, dir, pointer, devWorktree })), brief };
+  if (useRig && pin) return { ...(await hubs.dispatchTask({ pin, project, task, dir, brief, pointer, policy, source })), brief, guard };
+  if (useRig || a.provider === 'stub') return { ...(await startOpenRig({ project, task, dir, brief, policy, source })), brief, guard };
+  return { ...(await startDirect({ project, task, dir, pointer, devWorktree })), brief, guard };
 }
 
 const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };

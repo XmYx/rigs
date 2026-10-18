@@ -404,8 +404,10 @@ export async function startServer() {
     if (!discovery.list().some((n) => n.self)) await discovery.tick();
     const qs = new URLSearchParams(searchParams);
     const nodes = discovery.list().filter((n) => n.online && n.rigs);
-    const results = await Promise.all(nodes.map((n) => (n.self ? localCall(`traces/${id}?${qs}`) : peerJson(n, `traces/${id}?${qs}`, { timeout: 15000 }))
-      .then((report) => ({ node: n, report })).catch((e) => (/not found/.test(e.message) ? { node: n, report: { spans: [] } } : { node: n, error: e.message }))));
+    // RIGS machines that are down now still count: a trace that sent work there shows the hole (trace.mergeTrace gaps).
+    const down = discovery.list().filter((n) => n.rigs && !n.online).map((n) => ({ node: n, error: n.error || 'offline' }));
+    const results = [...await Promise.all(nodes.map((n) => (n.self ? localCall(`traces/${id}?${qs}`) : peerJson(n, `traces/${id}?${qs}`, { timeout: 15000 }))
+      .then((report) => ({ node: n, report })).catch((e) => (/not found/.test(e.message) ? { node: n, report: { spans: [] } } : { node: n, error: e.message })))), ...down];
     const t = trace.mergeTrace(id, results);
     if (!t.spans.length && !searchParams.get('after')) throw new HttpError(404, 'trace not found on any machine');
     return t;
@@ -667,6 +669,8 @@ export async function startServer() {
       if (!t.spans.length && !q.get('after')) throw new HttpError(404, 'trace not found on this machine');
       return t;
     }
+    // a task run that ran here ended: its transcript slice → spans under its task span (trace.recordRunEnd)
+    if (sub === 'traces/run-end' && method === 'POST') return (await trace.recordRunEnd(await body(), { transcripts: usage.runTranscripts })) || { skipped: true };
     if (sub === 'usage/backfill' && method === 'POST') return usage.backfill();
 
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
@@ -1248,7 +1252,12 @@ export async function startServer() {
   const pruneTraces = () => trace.prune().then((f) => f.length && log(`traces: pruned ${f.length} day file(s)`)).catch((e) => log('traces prune:', e.message));
   pruneTraces();
   setInterval(pruneTraces, 24 * 3600 * 1000).unref();
-  planner.onRunEnd((e) => usage.recordTaskRun(e));
+  planner.onRunEnd((e) => {
+    // The ledger record is filed here; the run's spans are written by the machine that ran it, from its transcript.
+    const tb = trace.runEndBody(e);
+    if (tb) callNode(e.node, 'traces/run-end', { method: 'POST', body: tb, timeout: 120000 }).catch((err) => log(`traces: run end on ${e.node}: ${err.message}`));
+    return usage.recordTaskRun(e);
+  });
 
   // Project tracker: finished seats/sessions → start what became ready.
   setInterval(() => planner.tick(plannerCtx).catch((e) => log('planner tick:', e.message)), 20000).unref();

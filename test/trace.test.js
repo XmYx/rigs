@@ -173,7 +173,11 @@ test('briefs: a task filed under a traced request names the trace, and work/star
   const r = await P.intake({ title: 'Traced', instruction: 'do the traced thing', trace: tctx }, ctx);
   assert.equal(r.started, true);
   const body = calls.at(-1);
-  assert.deepEqual(body.trace, tctx);
+  // work/start carries the trace with the dispatch span (a child of the handoff) as parent: the run hangs under it
+  assert.equal(body.trace.traceId, tctx.traceId);
+  await T.flush();
+  const dispatch = (await T.readSpans({ traceId: tctx.traceId })).find((s) => s.spanId === body.trace.parentId);
+  assert.deepEqual([dispatch.kind, dispatch.parentId], ['dispatch', tctx.parentId]);
   assert.ok(body.prompt.includes(`Request trace: \`${tctx.traceId}\``), body.prompt.slice(0, 600));
   assert.deepEqual((await P.getProject(r.project.id)).tasks.find((t) => t.id === r.task.id).trace, tctx);
   await P.intake({ title: 'Untraced', instruction: 'no trace here' }, ctx);
