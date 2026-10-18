@@ -137,6 +137,17 @@ const commands = {
     if (r.error || r.preroute === undefined) fail(r.error);
     console.log(`pre-routing ${r.preroute ? 'on' : 'off'} · engine ${r.engine} (fallback ${r.fallback})${r.engine === 'jev' ? ` · Jev API ${r.jevUrl || 'not found'}` : ''}`);
   },
+  /** rigs connectors slack status|channels|history|search|post — the Slack connector through the local daemon */
+  async connectors() {
+    const [name, ...rest] = argv;
+    const { parseSlackArgs, SLACK_USAGE } = await import('../src/connectors/slack-cli.js');
+    if (name !== 'slack') { console.error(`usage: rigs connectors slack …\n${SLACK_USAGE}`); process.exit(1); }
+    const req = parseSlackArgs(rest);
+    if (req.error) { console.error(req.error); process.exit(1); }
+    const r = await daemonFetch(req.path, { method: req.method, body: req.body ? JSON.stringify(req.body) : undefined }).catch((e) => ({ error: e.message }));
+    if (typeof r === 'string' || r?.error) { console.error(typeof r === 'string' ? r : `${r.error}${r.code ? ` (${r.code})` : ''}`); process.exit(1); }
+    console.log(JSON.stringify(r, null, 2));
+  },
   /** rigs quick [on|off|status] — the quick-task fast path (answers on Haiku / Sonnet instead of the full brain) */
   async quick() {
     const [sub = 'status'] = argv;
@@ -313,6 +324,7 @@ const commands = {
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
+  rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh

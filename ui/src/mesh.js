@@ -131,6 +131,21 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
       } }, 'Save'), h('button', { class: 'btn', onclick: () => voice.say(`Good evening, ${address.value}. All systems nominal.`) }, '▶ Test voice')));
   }
 
+  /** Compact Slack connector status (src/connectors/slack.js): configured, workspace, last checked. Fills in after the check. */
+  function slackCard() {
+    const state = h('span', { class: 'chip' }, 'checking…');
+    const meta = h('span', { class: 'muted small' });
+    const card = h('div', { class: 'slack-card', 'data-slack-card': '' }, h('b', {}, 'Slack'), state, meta);
+    api('/api/local/connectors/slack/status').then((r) => {
+      const ok = r.configured && r.ok;
+      state.className = `chip ${ok ? 'st-ok' : r.configured ? 'st-bad' : 'st-warn'}`;
+      state.textContent = ok ? 'connected' : r.configured ? 'check failed' : 'not configured';
+      meta.textContent = ok ? `${r.team || 'workspace'} · as ${r.user || 'bot'} · checked ${new Date(r.checkedAt).toLocaleTimeString()}`
+        : r.configured ? `${r.message || r.error || 'auth.test failed'}` : 'set connectors.slack.token or SLACK_BOT_TOKEN';
+    }).catch((e) => { state.className = 'chip st-bad'; state.textContent = 'unavailable'; meta.textContent = e.message; });
+    return card;
+  }
+
   async function renderTools() {
     const ms = snapshot().filter((e) => e.node.online && e.node.rigs);
     const known = await api('/api/local/capabilities').then((r) => r.known).catch(() => []);
@@ -147,6 +162,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     const notes = h('textarea', { class: 'path-input', rows: 2, placeholder: 'How agents should use it (shown in their task brief)' });
     id.onchange = () => { const k = known.find((x) => x.id === id.value); if (k) { label.value ||= k.label; kinds.value ||= k.kinds.join(', '); notes.value ||= k.notes; } };
     toolsEl.replaceChildren(
+      slackCard(),
       h('div', { class: 'pv-title' }, 'Tools on each machine'),
       h('p', { class: 'muted small' }, 'Tasks that need a tool (e.g. media → ComfyUI) are routed only to machines that have it. Tools are auto-detected where possible (ComfyUI on :8188 or the comfy CLI); declare anything else here, one tool at a time.'),
       ...rows,
