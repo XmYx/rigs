@@ -167,3 +167,29 @@ Implemented behind `config.experimental.starnet.enabled` (default `false`); see 
 - Verified with `npm test` (`test/starnet.test.js`: model, flag, subset, route, and a scratch node end to end) and `node scripts/starnet-check.js --dir <install>`
   (23 browser checks: flag off = no `#station`, no `/starnet/` request, no view chunk; on through the settings API, off through the CLI, on/off from the menu;
   one floor body per modelled worker; clicks on JARVIS, a worker and a room name select the matching inspector entry; phone keeps the galaxy; zero console errors).
+
+## 11. Two-way control (project `9b07477a3b`, gap list `docs/starnet-view-gaps.md`)
+
+The station now does what the galaxy does: create agents, reach them, and act on every node, through the galaxy's own menus
+and inspector handlers. No new daemon route; the "read-only" line of §6 is replaced by "the frame only asks, the host acts".
+
+- **Bridge** (rigs-boot.js §3, view.js): frame → host also `{type:'select', id, x, y}` (a click: select + the node's action
+  menu at the pointer, camera kept), `{type:'context', id|null, x, y}` (right-click; empty floor → the station menu),
+  `{type:'action', action, id}` (host whitelist `newAgent`, `sessions`), `{type:'pointer'}` (closes the host's menu); host →
+  frame `{type:'fit'}`. The menus are `ctx-providers.js` (`installContextMenu().openFor`): node, session, app, project, task
+  and gnode menus as on the galaxy, plus a **Station** group — what the room or desk holds that the floor does not draw
+  (agents, models, apps, tools, rigs, sessions, plans, skills), each selecting it in the inspector — and Show the whole station.
+- **Picking**: StarNet routes only body and desk clicks. Props (server carts → apps, studio → a tool, workbench → plan,
+  intel cabinet → machine, comms dish → mesh) and room floors are hit-tested in the frame with the room-tag camera mapping;
+  a right-click on a body asks StarNet's own hit test through a synthetic click the frame keeps to itself.
+- **Room tags**: name (select + menu), ✳ New agent on an online machine, +N for agent sessions past the 8 desks or idle for
+  over 12 h (opens Sessions on that machine).
+- **Created agents walk in**: `agents/start` runs the agent in tmux (`claude-<folder>-<id>`); `tmuxAgent` in
+  `src/sessions.js` now names it by that prefix when the pane command does not (Claude Code's native binary titles its
+  process with its version), and `model.js` `workerKind` counts tmux / terminal sessions running an agent as workers.
+- **Fit / focus**: ◎ Fit and Esc frame the whole station; selecting any node from the side panel frames its room
+  (`rooms` covers every node on a machine, plans and tasks on the bridge, a project's first room).
+- Still not done, deliberately: phones keep the galaxy; StarNet's own hire / chat / build harness stays fenced off (it
+  would not create a RIGS agent).
+- Verified: `node scripts/starnet-check.js` — 36 checks, including ✳ → New agent → a real Claude Code in tmux → its worker
+  on the floor → a click on its desk → Send message… → `/help` typed through the dock shows in its transcript.

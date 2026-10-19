@@ -7,9 +7,12 @@ import { stationFromGraph } from './model.js';
 // and then follows {type:'station'} messages built by model.js from the same buildGraph(visibleSnap()) the galaxy
 // draws. Until the frame says 'ready' the galaxy stays on screen; once it does, the galaxy is hidden and paused.
 // A frame that errors or stays silent for BOOT_MS calls onFail (index.js puts the galaxy back). destroy() leaves
-// the page exactly as it was before mount.
+// the page exactly as it was before mount. What the frame asks for (rigs-boot.js §3) comes back here: a select or
+// right-click at a point (onSelect / onContext, with page coordinates), a whitelisted room action (ACTIONS) and a
+// press inside the frame (onPointer, so the host's open menu closes). Nothing else the frame sends does anything.
 
 const BOOT_MS = 60000;
+const ACTIONS = new Set(['newAgent', 'sessions']); // the room tags' buttons: ✳ New agent, +N more sessions
 const CSS = `
 #station { position: fixed; inset: 0; z-index: 0; background: #04060a; opacity: 0; transition: opacity .6s ease; pointer-events: none; }
 #station iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #04060a; }
@@ -20,7 +23,10 @@ body.starnet #station { opacity: 1; pointer-events: auto; }
 body.starnet #graph { visibility: hidden; }
 `;
 
-/** deps: { graphEl, data() → buildGraph(…), attention() → Set, hidden() → [types], onSelect(id), pauseGraph(), resumeGraph(), credit, onFail(msg) } */
+/**
+ * deps: { graphEl, data() → buildGraph(…), attention() → Set, hidden() → [types], onSelect(id, at?), onContext(id|null, at),
+ * onAction(action, id), onPointer(), pauseGraph(), resumeGraph(), credit, onFail(msg) } — `at` = { x, y } in page px.
+ */
 export function mountStation(deps) {
   const style = h('style', { id: 'starnet-style' }, CSS);
   document.head.append(style);
@@ -37,6 +43,13 @@ export function mountStation(deps) {
   const timer = setTimeout(() => { if (!ready) deps.onFail('the station did not start'); }, BOOT_MS);
 
   function send(msg) { try { frame.contentWindow?.postMessage(msg, location.origin); } catch { /* frame gone */ } }
+  /** Frame client px → page px (null without a finite point). */
+  function pageAt(m) {
+    if (!Number.isFinite(m.x) || !Number.isFinite(m.y)) return null;
+    const r = frame.getBoundingClientRect();
+    return { x: r.left + m.x, y: r.top + m.y };
+  }
+  const nodeId = (id) => typeof id === 'string' && id.length < 400;
   function onMessage(e) {
     if (e.origin !== location.origin || e.source !== frame.contentWindow || !e.data || typeof e.data !== 'object') return;
     const m = e.data;
@@ -47,8 +60,12 @@ export function mountStation(deps) {
       document.body.classList.add('starnet');
       deps.pauseGraph();
       update();
-    } else if (m.type === 'select' && typeof m.id === 'string') deps.onSelect(m.id);
-    else if (m.type === 'error' && !ready) deps.onFail(String(m.message || 'error'));
+    } else if (!ready) {
+      if (m.type === 'error') deps.onFail(String(m.message || 'error'));
+    } else if (m.type === 'select' && nodeId(m.id)) deps.onSelect(m.id, pageAt(m));
+    else if (m.type === 'context' && (m.id == null || nodeId(m.id))) { const at = pageAt(m); if (at) deps.onContext?.(m.id || null, at); }
+    else if (m.type === 'action' && ACTIONS.has(m.action) && nodeId(m.id)) deps.onAction?.(m.action, m.id);
+    else if (m.type === 'pointer') deps.onPointer?.();
   }
   window.addEventListener('message', onMessage);
   frame.addEventListener('error', () => { if (!ready) deps.onFail('the station files did not load'); });
@@ -61,6 +78,8 @@ export function mountStation(deps) {
   return {
     update,
     focus(id) { if (ready) send({ type: 'focus', id }); },
+    /** Frame the whole station (◎ Fit, Esc). */
+    fit() { if (ready) send({ type: 'fit' }); return ready; },
     destroy() {
       if (gone) return;
       gone = true;

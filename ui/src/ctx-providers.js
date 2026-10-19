@@ -9,16 +9,18 @@
 //
 // deps (all optional; main.js wires them): copy(text, what), layout{toggleCollapse,isCollapsed,resetPanel,canDock,
 // isDocked,dock,float,removed}, window{toggleMax,isMax,closeOthers,closeAll,count}, app{key,isOpen,status,url,open,
-// openTab,reload}, session{transcript,attach,chat,galaxy}, project{open,act,galaxy}, task{openSession,mark},
-// node{get,status,terminal,files,screen,sessions,control,ssh,sshCommand}, trace{open}, galaxy{select,fit,hideType,
-// typeLabel,talkToModel,useAsBrain}.
+// openTab,reload}, session{transcript,attach,chat,galaxy,newHere}, project{open,act,galaxy}, task{openSession,mark},
+// node{get,status,terminal,files,screen,sessions,control,ssh,sshCommand,newAgent}, trace{open}, galaxy{select,fit,
+// hideType,typeLabel,talkToModel,useAsBrain,newSession,newInProject}, station{select,fit}.
 
 const MAX_GROUPS = 2; // the surface under the pointer plus the container it sits in (a session row in its window)
 
 const TITLES = {
   panel: 'Panel', window: 'Window', app: 'App', session: 'Session', project: 'Project', task: 'Task', node: 'Machine',
-  file: 'File', folder: 'Folder', trace: 'Request', storeapp: 'App Store', gnode: 'Galaxy',
+  file: 'File', folder: 'Folder', trace: 'Request', storeapp: 'App Store', gnode: 'Galaxy', station: 'Station',
 };
+/** The agents a machine can start (agents/start), in the order the New agent dialog lists them. */
+const AGENT_KINDS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig']];
 
 export function createProviders() {
   const map = new Map(); // kind → { fn, title }
@@ -141,11 +143,30 @@ export function registerJarvisProviders(reg, deps = {}) {
     const label = G.typeLabel?.(n.type) || n.type;
     return [
       it('Focus', bind(G, 'select', n.id), { icon: '◎' }),
+      n.type === 'agent' ? it(`New ${n.name} session…`, bind(G, 'newSession', n), { icon: '▶' }) : null,
+      n.type === 'project' ? it('New agent in this project…', bind(G, 'newInProject', n), { icon: '✳' }) : null,
       n.type === 'model' ? it('Talk to this model', bind(G, 'talkToModel', n), { icon: '◆' }) : null,
       n.type === 'agent' && n.agent !== 'rig' ? it('Use as brain', bind(G, 'useAsBrain', n), { icon: '◆' }) : null,
       it(`Hide all “${label}” nodes`, bind(G, 'hideType', n.type)),
       SEP,
       it('Copy name', copy(n.name, 'Name'), { icon: '⧉' }),
+    ];
+  });
+
+  // The space-station view's own group (ui/src/starnet/): what a room or desk holds that the floor does not draw, by
+  // type (each selects it in the inspector, where its actions are), and framing the whole station. On empty floor
+  // (no node) it stands in for the galaxy background menu.
+  reg.register('station', (t) => {
+    const S = d('station');
+    const { node: n, more = [] } = t.data || {};
+    const fit = it('Show the whole station', bind(S, 'fit'), { icon: '⤢' });
+    if (!n) return [fit, SEP, ...desktopItems()];
+    return [
+      ...(typeof S.select === 'function' ? more : []).filter((g) => g.items?.length).map((g) => ({
+        label: `${g.label} (${g.items.length})`, icon: '☰',
+        submenu: () => g.items.map((x) => it(x.name || x.id, bind(S, 'select', x.id))),
+      })),
+      fit,
     ];
   });
 
@@ -229,6 +250,7 @@ export function registerJarvisProviders(reg, deps = {}) {
       it(attach, bind(S, 'attach', n, s), { icon: '⌨' }),
       s.kind === 'chat' ? null : it('Send message…', bind(S, 'chat', n, s), { icon: '💬' }),
       it('Show in galaxy', bind(S, 'galaxy', n, s), { icon: '◎' }),
+      s.kind !== 'chat' && s.cwd ? it('New agent in this folder…', bind(S, 'newHere', n, s), { icon: '✳', disabled: n.online === false }) : null,
       SEP,
       it('Copy session id', copy(s.id, 'Session id'), { icon: '⧉' }),
       it('Copy ssh resume command', resume),
@@ -274,8 +296,12 @@ export function registerJarvisProviders(reg, deps = {}) {
     const m = N.get?.(raw) || raw;
     const up = m.online !== false && m.rigs !== false;
     const ssh = N.sshCommand?.(m) || `ssh ${m.sshAlias || m.name}`;
+    const kinds = AGENT_KINDS.filter(([k]) => m.tools?.[k]);
     return [
       it('Show status', bind(N, 'status', m), { icon: '◎' }),
+      it('New agent…', bind(N, 'newAgent', m), { icon: '✳', disabled: !up }),
+      typeof N.newAgent === 'function' && up && kinds.length > 1
+        ? { label: 'New agent of kind', submenu: () => kinds.map(([k, label]) => it(`${label}…`, () => N.newAgent(m, k))) } : null,
       it('Open terminal', bind(N, 'terminal', m), { icon: '⌨', disabled: !up }),
       it('Files', bind(N, 'files', m), { icon: '📁', disabled: !up }),
       it('Screen (live desktop)', bind(N, 'screen', m), { icon: '🖼', disabled: !up }),

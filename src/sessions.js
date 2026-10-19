@@ -207,6 +207,17 @@ async function codexTranscript(id, max = 400) {
 }
 
 // ---------- tmux (incl. OpenRig seats) ----------
+/** The agent a tmux session runs: from its command, else from startAgent's `<agent>-<folder>-<id>` name (Claude Code's
+ *  native binary titles its process with its version, e.g. "2.1.303", so the command alone misses it). Pure. */
+export function tmuxAgent(name, cmd) {
+  if (/claude/i.test(cmd)) return 'claude';
+  if (/codex/i.test(cmd)) return 'codex';
+  if (/ollama/i.test(cmd)) return 'ollama';
+  if (/^ssh-/.test(name)) return 'ssh';
+  const started = /^(claude|codex|ollama)-/.exec(name || '');
+  return started && !/^(-?bash|-?zsh|-?fish|sh|login)$/.test(cmd || '') ? started[1] : 'shell';
+}
+
 async function tmuxSessions() {
   const t = bin('tmux');
   if (!t || isWin) return [];
@@ -217,7 +228,7 @@ async function tmuxSessions() {
     // Newer tmux rewrites tabs in -F output, so fields are split on a printable marker.
     const [name, created, activity, attached, cwd, cmd, windows] = l.split('|~|');
     const ssh = /^ssh-/.test(name);
-    const agent = /claude/i.test(cmd) ? 'claude' : /codex/i.test(cmd) ? 'codex' : /ollama/i.test(cmd) ? 'ollama' : ssh ? 'ssh' : 'shell';
+    const agent = tmuxAgent(name, cmd);
     const sshFrom = ssh ? name.replace(/^ssh-/, '').replace(/--\d+$/, '') : undefined;
     return {
       kind: 'tmux', agent, id: name, title: ssh ? `SSH from ${sshFrom}${cmd && !/^(-?bash|-?zsh|sh)$/.test(cmd) ? ' · ' + cmd : ''}` : name, sshFrom, cwd, project: ssh ? '' : cwd ? path.basename(cwd) : '', command: cmd,

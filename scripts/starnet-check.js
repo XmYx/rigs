@@ -3,10 +3,18 @@
 // (Playwright from RIGS_AUDIT_TOOLS or ~/.cache/rigs-audit, as scripts/graphify-check.js) and checks, saving screenshots:
 //   flag off → the galaxy exactly as before: no #station, no /starnet/ request, no view chunk, /starnet/ is a 404;
 //   flag on (settings API) → the station replaces the galaxy, its frame asks for nothing outside /starnet/, the
-//     workers on the floor match the mesh model, a click on a worker's desk / JARVIS selects that node in the inspector;
+//     workers on the floor match the mesh model, a click on a worker's desk / JARVIS selects that node in the inspector
+//     and opens its action menu there; a right-click opens the same menu (empty floor: the station's own); ◎ Fit
+//     frames the whole station; every online machine room has ✳ New agent; a room with more agent sessions than
+//     desks shows +N, which opens Sessions;
+//   create and reach (unless --no-create): ✳ on this machine's room → the New agent dialog → a real `--agent` (default
+//     claude, idle, in --agent-dir = this checkout, which must be a folder the agent already trusts) in tmux → it
+//     walks onto the floor as a worker → a click on its desk → Send message… → the chat dock types "/help" into it
+//     (a local command, no model call) and its transcript shows it → its tmux session is killed at the end;
 //   flag off (rigs CLI) → the station is gone and the galaxy is back; on again from Experimental › Space station view;
 //   a phone (390x844) keeps the galaxy; no console errors anywhere.
 //   node scripts/starnet-check.js --dir <installed StarNet dir> [--url http://127.0.0.1:4719/] [--out docs/screenshots/starnet]
+//     [--agent claude|codex] [--agent-dir <folder>] [--no-create]
 // --dir: a `rigs starnet install` result (default: ~/.rigs/starnet/<pinned ref>). Without --url it starts a throwaway
 // `rigs serve` (scratch RIGS_HOME pointing experimental.starnet.dir at --dir; no OpenRig, migrations or autoupdate).
 // Exit code 1 when a check fails.
@@ -70,6 +78,70 @@ async function menuItem(page, top, label) {
   await sleep(500);
 }
 
+/** ✳ on this machine's room → New agent → a worker on the floor → its menu → Send message… → the dock types into it. */
+async function createAndReach(page, frame, { inspector, pickDesk, open, menuLabels, closeMenu }) {
+  const self = await fetch(new globalThis.URL('/api/self', URL)).then((r) => r.json());
+  const rid = await page.evaluate((id) => window.__rigsStarnet?.initial().rooms[`m:${id}`] || null, self.id);
+  if (!rid) { check('create: this machine has a room on the station', false, self.name); return; }
+  await frame.evaluate((r) => World.frameReviewRoom(r), rid);
+  await sleep(1200);
+  await frame.locator(`.rigs-tag[data-room="${rid}"] .rigs-act:not(.rigs-more)`).click();
+  const dialog = page.locator('.win', { hasText: `New agent on ${self.name}` }).last();
+  const shown = await dialog.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+  check('✳ on this machine\'s room opens New agent for it', shown, self.name);
+  if (!shown) return;
+  const kinds = await dialog.locator('select.mini option').evaluateAll((os) => os.map((o) => o.value));
+  if (!kinds.includes(AGENT)) { check(`create: ${AGENT} is not installed on ${self.name} — skipped`, true, kinds.join(', ')); return; }
+  await dialog.locator('select.mini').selectOption(AGENT);
+  await dialog.locator('input.path-input').first().fill(AGENT_DIR);
+  const started = page.waitForResponse((r) => r.url().includes('/agents/start'), { timeout: 20000 });
+  await dialog.locator('button', { hasText: 'Start' }).click();
+  const res = await started.then((r) => r.json(), (e) => ({ error: e.message }));
+  if (res.kind === 'tmux') created = res.id;
+  check(`Start runs ${AGENT} in tmux on ${self.name} (agents/start)`, res.kind === 'tmux' && !!res.id, JSON.stringify(res));
+  if (res.kind !== 'tmux') return;
+  const node = `s:${self.id}:tmux:${res.id}`;
+  const t1 = Date.now();
+  let worker = null;
+  while (!worker && Date.now() - t1 < 60000) {
+    await sleep(1500);
+    worker = await page.evaluate((n) => window.__rigsStarnet?.initial().workers.find((w) => w.node === n) || null, node);
+  }
+  const onFloor = worker && await frame.evaluate((id) => (World.crewFrames() || []).some((b) => b.agentId === id), worker.id);
+  check('the new agent walks onto the floor as a worker in its machine\'s room', !!worker && worker.room === rid && onFloor, `${node} after ${((Date.now() - t1) / 1000).toFixed(1)} s`);
+  if (!worker) return;
+  await page.screenshot({ path: path.join(OUT, 'create-agent-on-floor@1440x900.png') });
+  await page.evaluate(() => document.querySelectorAll('.win .win-btn.close').forEach((b) => b.click())); // its terminal window covers the floor
+  await frame.evaluate((r) => World.frameReviewRoom(r), rid);
+  await sleep(1500);
+  const pt = await pickDesk(worker.id);
+  if (!(await open(pt))) { check('reach: the new agent\'s desk is on screen', false, JSON.stringify(pt)); return; }
+  await page.mouse.click(pt.clientX, pt.clientY);
+  await sleep(800);
+  const items = await menuLabels();
+  check('reach: a click on its desk selects it and opens its session menu', /tmux|claude|codex/i.test(await inspector()) && items.some((l) => /Send message/.test(l)) && items.some((l) => /Attach terminal/.test(l)), items.slice(0, 5).join(' · '));
+  await page.screenshot({ path: path.join(OUT, 'create-agent-menu@1440x900.png') });
+  const send = page.locator('.mb-menu.mb-ctx .mb-item', { hasText: 'Send message' }).first();
+  if (!(await send.count())) { await closeMenu(); return; }
+  await send.click();
+  await sleep(800);
+  const dock = await page.evaluate(() => document.getElementById('dock-target')?.textContent || '');
+  check('reach: Send message… attaches the chat dock to it', dock.includes(res.id), dock);
+  await sleep(8000); // the agent's own start-up screen
+  const sent = page.waitForResponse((r) => r.url().includes('/sessions/send'), { timeout: 15000 });
+  await page.fill('#ask', '/help');
+  await page.press('#ask', 'Enter');
+  const sr = await sent.then((r) => r.json(), (e) => ({ error: e.message }));
+  let shot = '';
+  for (let i = 0; i < 10 && !/help/i.test(shot); i++) {
+    await sleep(1000);
+    shot = await fetch(new globalThis.URL(`/api/local/sessions/transcript?kind=tmux&id=${encodeURIComponent(res.id)}`, URL)).then((r) => r.json()).then((t) => t.map((x) => x.text).join('\n'), () => '');
+  }
+  check('reach: the dock types into it (sessions/send) and its transcript shows it', sr.ok === true && /help/i.test(shot), `${JSON.stringify(sr)} · ${shot.split('\n').filter((l) => /help/i.test(l)).slice(0, 2).join(' / ').slice(0, 140)}`);
+  await page.screenshot({ path: path.join(OUT, 'create-agent-reached@1440x900.png') });
+  await page.evaluate(() => document.querySelectorAll('.win .win-btn.close').forEach((b) => b.click()));
+}
+
 const browser = await chromium.launch({ args: GL });
 const errors = [];
 const requests = [];
@@ -78,6 +150,10 @@ const watch = (page) => {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()} @ ${m.location()?.url || ''}`); });
   page.on('request', (r) => requests.push({ url: r.url(), main: r.frame() === page.mainFrame() }));
 };
+const AGENT = opt('agent', 'claude');
+const AGENT_DIR = path.resolve(opt('agent-dir', ROOT));
+const CREATE = !args.includes('--no-create');
+let created = null; // the tmux session this check started (killed in finally)
 const station = (page) => page.evaluate(() => ({ el: !!document.getElementById('station'), on: document.body.classList.contains('starnet'), bridge: !!window.__rigsStarnet, graphHidden: getComputedStyle(document.getElementById('graph')).visibility === 'hidden' }));
 const frameOf = (page) => page.frames().find((f) => new globalThis.URL(f.url()).pathname.startsWith('/starnet/'));
 
@@ -117,6 +193,8 @@ try {
   check('StarNet keeps its save in the frame (no starnet.* keys on the RIGS origin)', sameStorage === 0, `${sameStorage} key(s)`);
   const pickDesk = async (aid) => frame.evaluate((a) => World._dbgDeskClientPoint(a), aid);
   const inspector = () => page.evaluate(() => document.getElementById('inspector')?.innerText || '');
+  const menuLabels = () => page.evaluate(() => [...document.querySelectorAll('.mb-menu.mb-ctx .mb-item')].map((e) => e.textContent.trim()));
+  const closeMenu = async () => { await page.keyboard.press('Escape'); await sleep(300); };
   const before = await inspector();
   // the first worker whose desk is on screen and not under a JARVIS panel
   const open = (pt) => pt && page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.tagName === 'IFRAME', [pt.clientX, pt.clientY]);
@@ -129,6 +207,7 @@ try {
     check('a click on a worker\'s desk selects its session', !!pt && (await inspector()) !== was, `${w.node} → ${(await inspector()).slice(0, 80).replace(/\n/g, ' | ')}`);
     await sleep(1200);
     await page.screenshot({ path: path.join(OUT, 'flag-on-worker-selected@1440x900.png') });
+    await closeMenu();
   } else check('a click on a worker\'s desk selects its session (no worker desk on screen — skipped)', true, `${model.workers.length} workers`);
   await frame.evaluate(() => World.frameReviewRoom(''));
   await sleep(1500);
@@ -140,12 +219,64 @@ try {
   const was = await inspector();
   if (spot) { await page.mouse.click(spot.clientX, spot.clientY); await sleep(800); }
   check('a click on a room name selects that machine', !!spot && (await inspector()) !== was, `${spot?.name} → ${(await inspector()).slice(0, 60).replace(/\n/g, ' | ')}`);
+  const roomMenu = await menuLabels();
+  check('…and opens its action menu with New agent', roomMenu.some((l) => /New agent/.test(l)) && roomMenu.some((l) => /Open terminal/.test(l)), roomMenu.slice(0, 6).join(' · '));
+  await closeMenu();
+  const tags = await frame.evaluate(() => [...document.querySelectorAll('.rigs-tag')].map((t) => ({ room: t.dataset.room, act: !!t.querySelector('.rigs-act:not(.rigs-more)'), more: t.querySelector('.rigs-more:not([hidden])')?.textContent || '' })));
+  const onlineRooms = await page.evaluate(() => { const m = window.__rigsStarnet.initial(); return Object.entries(m.ids).filter(([rid, j]) => m.doc.rooms[rid] && j.startsWith('m:') && m.doc.rooms[rid].kind !== 'storage').map(([rid]) => rid); });
+  check('every online machine room has ✳ New agent, no other room does', tags.filter((t) => t.act).map((t) => t.room).sort().join() === onlineRooms.sort().join(), `${onlineRooms.length} online room(s)`);
+  const overflow = await page.evaluate(() => window.__rigsStarnet.initial().overflow);
+  const moreOk = tags.every((t) => { const o = overflow[t.room]; const n = o ? o.desks + o.older : 0; return n ? t.more === `+${n}` : !t.more; });
+  check('+N on exactly the rooms with agent sessions past the desks or idle for over 12 h', moreOk, tags.filter((t) => t.more).map((t) => `${t.room} ${t.more}`).join(', ') || 'none');
+  const moreTag = tags.find((t) => t.more);
+  if (moreTag) {
+    const wins = await page.evaluate(() => document.querySelectorAll('.win').length);
+    await frame.locator(`.rigs-tag[data-room="${moreTag.room}"] .rigs-more`).click();
+    await sleep(1200);
+    const title = await page.evaluate(() => [...document.querySelectorAll('.win .win-title-text')].map((e) => e.textContent).join(' | '));
+    check('+N opens the machine\'s Sessions window', (await page.evaluate(() => document.querySelectorAll('.win').length)) > wins && /Sessions/i.test(title), title.slice(0, 120));
+    await page.evaluate(() => document.querySelectorAll('.win .win-btn.close').forEach((b) => b.click()));
+    await sleep(500);
+  }
+
+  // right-click: a worker's menu, and the station's own on empty floor
+  await frame.evaluate(() => World.frameReviewRoom(''));
+  await sleep(1500);
+  let rw = null;
+  for (const c of model.workers) { const p = await pickDesk(c.id); if (await open(p)) { rw = { ...c, pt: p }; break; } }
+  if (rw) {
+    await page.mouse.click(rw.pt.clientX, rw.pt.clientY, { button: 'right' });
+    await sleep(600);
+    const items = await menuLabels();
+    check('a right-click on a worker opens its session menu', items.some((l) => /Open transcript/.test(l)) && items.some((l) => /Send message/.test(l)), items.slice(0, 6).join(' · '));
+    await page.screenshot({ path: path.join(OUT, 'flag-on-worker-menu@1440x900.png') });
+    await closeMenu();
+  } else check('a right-click on a worker opens its session menu (no worker desk on screen — skipped)', true);
+  const vp = page.viewportSize();
+  await page.mouse.click(vp.width / 2, 40, { button: 'right' }); // the void above the station
+  await sleep(600);
+  const bg = await menuLabels();
+  check('a right-click on empty floor opens the station menu', bg.some((l) => /Show the whole station/.test(l)), bg.slice(0, 4).join(' · '));
+  await closeMenu();
+  // ◎ Fit frames the station (it used to fit the hidden galaxy)
+  await frame.evaluate((rid) => World.frameReviewRoom(rid), onlineRooms[0] || '');
+  await sleep(1200);
+  const zoomed = await frame.evaluate(() => World.cameraState().scale);
+  await page.click('#fit');
+  await sleep(1500);
+  const fitted = await frame.evaluate(() => World.cameraState().scale);
+  check('◎ Fit frames the whole station', fitted < zoomed, `scale ${zoomed.toFixed(2)} → ${fitted.toFixed(2)}`);
 
   await frame.evaluate(() => World.frameReviewRoom('')); // a selection framed its room: back to the whole station
   await sleep(1500);
   const hero = await pickDesk('jarvis');
   if (hero) { await page.mouse.click(hero.clientX, hero.clientY); await sleep(800); }
   check('a click on JARVIS\'s desk selects the mesh in the inspector', !!hero && (await inspector()) !== before && /TAILNET|tailnet/i.test(await inspector()), (await inspector()).slice(0, 80).replace(/\n/g, ' | '));
+  await closeMenu();
+  // ---------------------------------------------------------------- create an agent from the station and reach it
+  if (CREATE) await createAndReach(page, frame, { inspector, pickDesk, open, menuLabels, closeMenu });
+  else check('create and reach an agent (--no-create — skipped)', true);
+
   // ---------------------------------------------------------------- off through the CLI: the galaxy is back
   const off = await cli('off');
   check('rigs starnet off', off.code === 0 && /off/.test(off.out), off.out.split('\n')[0]);
@@ -183,6 +314,7 @@ try {
 
   check('no console errors (main page and station frame)', errors.length === 0, errors.slice(0, 8).join(' || '));
 } finally {
+  if (created) await new Promise((r) => spawn('tmux', ['kill-session', '-t', created]).on('close', r).on('error', r));
   await browser.close();
   server.stop();
 }

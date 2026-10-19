@@ -170,7 +170,7 @@ export function createJobs({ cfg, engine, now = Date.now }) {
     language: j.language, probability: j.probability, duration: j.duration, elapsed: j.elapsed, device: j.device, error: j.error || null, createdAt: j.createdAt });
   const finish = (j, status) => {
     j.status = status;
-    if (j.file) { fs.rm(j.file, { force: true }, () => {}); j.file = null; }
+    if (j.file) { try { fs.rmSync(j.file, { force: true }); } catch { /* gone or locked: nothing to keep */ } j.file = null; } // before the job reads as finished
     jobs.delete(j.id);
     if (status === 'cancelled') return;
     const v = view(j);
@@ -253,7 +253,9 @@ function saveBody(req, file, limit) {
     const out = fs.createWriteStream(file);
     let size = 0;
     let failed = false;
-    const abort = (err) => { if (failed) return; failed = true; req.unpipe(out); out.destroy(); fs.rm(file, { force: true }, () => {}); req.resume(); reject(err); };
+    // Remove the partial file only once the stream has closed (an early destroy still opens, and so creates, the file),
+    // and answer after that, so a rejected upload leaves nothing behind by the time the client hears about it.
+    const abort = (err) => { if (failed) return; failed = true; req.unpipe(out); req.resume(); const drop = () => fs.rm(file, { force: true }, () => reject(err)); if (out.closed) drop(); else { out.once('close', drop); out.destroy(); } };
     req.on('data', (c) => { size += c.length; if (size > limit) abort(Object.assign(new Error(`file is larger than ${Math.round(limit / 1048576)} MB`), { status: 413 })); });
     req.on('error', abort);
     req.pipe(out);
@@ -293,7 +295,7 @@ export function createTranscriberServer({ cfg = loadConfig().cfg, engine = creat
       const file = jobs.uploadPath(id, ext);
       let size;
       try { size = await saveBody(req, file, cfg.maxMb * 1048576); } catch (e) { return send(res, e.status || 500, { error: e.message }); }
-      if (!size) { fs.rm(file, { force: true }, () => {}); return send(res, 400, { error: 'empty audio' }); }
+      if (!size) { await fs.promises.rm(file, { force: true }).catch(() => {}); return send(res, 400, { error: 'empty audio' }); }
       jobs.add({ id, file, name, lang, source: url.searchParams.get('source') });
       return send(res, 202, { id });
     }

@@ -216,6 +216,54 @@ test('machine: actions need it online; a partial desktops-tile node is completed
   assert.equal(find(resolveMenu(tile.reg, [{ kind: 'node', id: 'n1', data: { node: { id: 'n1', name: 'ubuntu' } } }]), 'Open terminal').disabled, true);
 });
 
+test('creating agents: a machine offers New agent (and by kind), a session its folder, an agent node its kind, a project its folder', async () => {
+  const { reg, calls } = setup({
+    node: { get: (n) => n, status() {}, newAgent: (m, k) => calls.push(['newAgent', m.id, k]) },
+    session: { transcript() {}, newHere: (n, s) => calls.push(['newHere', n.id, s.cwd]) },
+    galaxy: { select() {}, newSession: (n) => calls.push(['newSession', n.agent]), newInProject: (n) => calls.push(['newInProject', n.id]) },
+  });
+  const m = { id: 'n1', name: 'mac', online: true, rigs: true, tools: { claude: '2.1', codex: '0.9' } };
+  const menu = resolveMenu(reg, [{ kind: 'node', id: 'n1', data: { node: m } }]);
+  assert.equal(find(menu, 'New agent…').disabled, false);
+  await find(menu, 'New agent…').run();
+  assert.deepEqual(calls.at(-1), ['newAgent', 'n1', undefined]);
+  const kinds = find(menu, 'New agent of kind').submenu();
+  assert.deepEqual(labels(kinds), ['Claude Code…', 'Codex…'], 'only the agents the machine has');
+  await kinds[1].run();
+  assert.deepEqual(calls.at(-1), ['newAgent', 'n1', 'codex']);
+  const down = resolveMenu(reg, [{ kind: 'node', id: 'n1', data: { node: { ...m, online: false } } }]);
+  assert.equal(find(down, 'New agent…').disabled, true);
+  assert.equal(find(down, 'New agent of kind'), undefined);
+  assert.equal(find(resolveMenu(setup().reg, [{ kind: 'node', id: 'n1', data: { node: m } }]), 'New agent…'), undefined, 'left out without the dep');
+
+  const sm = resolveMenu(reg, [{ kind: 'session', id: 'x', data: { node: m, s: { kind: 'tmux', id: 'x', cwd: '/w/app' } } }]);
+  await find(sm, 'New agent in this folder…').run();
+  assert.deepEqual(calls.at(-1), ['newHere', 'n1', '/w/app']);
+  assert.equal(find(resolveMenu(reg, [{ kind: 'session', id: 'c', data: { node: m, s: { kind: 'chat', id: 'c' } } }]), 'New agent in this folder…'), undefined, 'a JARVIS chat has no folder');
+
+  await find(resolveMenu(reg, [{ kind: 'gnode', id: 'a:n1:codex', data: { id: 'a:n1:codex', type: 'agent', agent: 'codex', name: 'Codex' } }]), 'New Codex session…').run();
+  assert.deepEqual(calls.at(-1), ['newSession', 'codex']);
+  await find(resolveMenu(reg, [{ kind: 'gnode', id: 'p:app', data: { id: 'p:app', type: 'project', name: 'app' } }]), 'New agent in this project…').run();
+  assert.deepEqual(calls.at(-1), ['newInProject', 'p:app']);
+});
+
+test('station: a node gets its off-floor things by type and Show the whole station; empty floor gets the background menu', async () => {
+  const { reg, calls } = setup({ station: { select: (id) => calls.push(['st.select', id]), fit: () => calls.push(['st.fit']) } });
+  const more = [{ label: 'Models', items: [{ id: 'o:n1:llama', name: 'llama' }] }, { label: 'Apps', items: [] }];
+  const m = { id: 'n1', name: 'mac', online: true, rigs: true };
+  const menu = resolveMenu(reg, [{ kind: 'node', id: 'n1', data: { node: m } }, { kind: 'station', id: 'm:n1', data: { node: { id: 'm:n1' }, more } }]);
+  assert.ok(menu.some((e) => e.header === 'Machine') && menu.some((e) => e.header === 'Station'), 'two titled groups');
+  assert.equal(find(menu, 'Apps (0)'), undefined, 'an empty group is left out');
+  const models = find(menu, 'Models (1)').submenu();
+  await models[0].run();
+  assert.deepEqual(calls.at(-1), ['st.select', 'o:n1:llama']);
+  await find(menu, 'Show the whole station').run();
+  assert.deepEqual(calls.at(-1), ['st.fit']);
+  const bg = resolveMenu(reg, [{ kind: 'station', id: null, data: { node: null } }]);
+  assert.equal(labels(bg)[0], 'Show the whole station');
+  assert.ok(cmds(bg).includes('window.showAll'), 'then the usual background items');
+});
+
 // ------------------------------------------------------------------ files and traces
 
 test('file: a folder opens, a file previews and downloads; trash is flagged dangerous; Copy to machine is a submenu', () => {

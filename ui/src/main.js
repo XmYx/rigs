@@ -5,7 +5,7 @@ import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
 import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, resetPanel, toggleCollapse } from './layout-actions.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
-import { initMenubar } from './menubar.js';
+import { closeMenus, initMenubar } from './menubar.js';
 import { copyText, installContextMenu } from './contextmenu.js';
 import { createProviders, galaxyTarget, registerJarvisProviders } from './ctx-providers.js';
 import { tagCtx } from './ctx-tag.js';
@@ -21,7 +21,7 @@ import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
-import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFocus, starnetUpdate } from './starnet/index.js';
+import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { createGraphify } from './graphify.js';
@@ -424,18 +424,18 @@ function renderFilters() {
 }
 
 // ------------------------------------------------------------------ inspector
-function select(id) {
+function select(id, { keepView = false } = {}) {
   const n = graph.get(id);
   if (!n) return;
   graph.focus(id, graph.depth || 1);
-  starnetFocus(id);
+  if (!keepView) starnetFocus(id); // a click in the station keeps its camera (the menu opens where the pointer is)
   renderInspector(id);
   $('#back').style.visibility = 'visible';
 }
 
 function clearSelection() {
   graph.clearFocus();
-  graph.fit();
+  if (!starnetFit()) graph.fit(); // the space-station view frames the whole station instead
   renderInspector(null);
   $('#back').style.visibility = 'hidden';
 }
@@ -589,6 +589,7 @@ let agentsPanel = null;
 let graphifyPanel = null;
 
 let sessWin = null;
+let ctxMenu = null; // installContextMenu()'s handle (wireContextMenus); the station frame opens menus through it
 function sessionsWindow(filter = '', show = null) {
   sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat, onAttached: popups.mark });
   if (filter) { const i = sessWin.window.body.querySelector('input'); i.value = filter; i.dispatchEvent(new Event('input')); }
@@ -619,12 +620,12 @@ async function startAgent(m, agent, cwd, prompt = '', model = '') {
   } catch (e) { toast(e.message, 'error'); return null; }
 }
 
-function newAgent(m, preset) {
+function newAgent(m, preset, dir = '~') {
   const tools = m.tools || {};
   const agents = ['claude', 'codex', 'ollama', 'rig'].filter((a) => tools[a]);
   const w = openWindow({ title: `New agent on ${m.name}`, icon: '✳', width: 520, height: 330 });
   const agentSel = h('select', { class: 'mini' }, ...agents.map((a) => h('option', { value: a, selected: a === preset }, a)));
-  const cwd = h('input', { class: 'path-input', value: '~', placeholder: 'working directory on ' + m.name });
+  const cwd = h('input', { class: 'path-input', value: dir || '~', placeholder: 'working directory on ' + m.name });
   const prompt = h('textarea', { class: 'path-input', rows: 4, placeholder: 'Optional first task, e.g. “fix the failing tests”' });
   const model = h('input', { class: 'path-input', placeholder: 'model (optional)' });
   w.body.append(h('div', { class: 'pad settings' }, h('label', {}, 'Agent', agentSel), h('label', {}, 'Directory', cwd), h('label', {}, 'Task', prompt), h('label', {}, 'Model', model),
@@ -1307,7 +1308,14 @@ await refresh();
 graph.fit();
 connectEvents();
 initExhibits();
-initStarnet({ graphEl: $('#graph'), data: () => buildGraph(visibleSnap()), attention: attentionGraphIds, hidden: () => [...hiddenTypes], onSelect: (id) => { select(id); revealInspector(); }, pauseGraph: () => graph.pause(), resumeGraph: () => graph.resume() });
+initStarnet({
+  graphEl: $('#graph'), data: () => buildGraph(visibleSnap()), attention: attentionGraphIds, hidden: () => [...hiddenTypes],
+  onSelect: (id, at) => { select(id, { keepView: !!at }); revealInspector(); if (at) stationMenu(id, at); },
+  onContext: (id, at) => stationMenu(id, at),
+  onAction: stationAction,
+  onPointer: () => closeMenus({ restore: false }),
+  pauseGraph: () => graph.pause(), resumeGraph: () => graph.resume(),
+});
 setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
@@ -1408,6 +1416,7 @@ function wireContextMenus() {
       attach: (n, s) => (s.kind === 'chat' ? continueChat(n, s) : attachSession(n, s)),
       chat: (n, s) => attachChat(n, s),
       galaxy: (n, s) => { select(`s:${n.id}:${s.kind}:${s.id}`); revealInspector(); },
+      newHere: (n, s) => newAgent(machineById(n.id) || n, s.agent || s.kind, s.cwd),
     },
     project: { open: (p) => projectsWindow({ owner: p.ownerId, id: p.id }), act: projectAct, galaxy: (p) => { select(`pj:${p.id}`); revealInspector(); } },
     task: { openSession: taskSession, mark: taskMark },
@@ -1421,22 +1430,61 @@ function wireContextMenus() {
       control: (m) => openControl({ machine: m }),
       ssh: sshTo,
       sshCommand: (m) => `ssh ${m.sshAlias || m.name}`,
+      newAgent: (m, kind) => newAgent(m, kind),
     },
     trace: { open: (id, summary) => openTrace(id, summary) },
     galaxy: {
       select: (id) => { select(id); revealInspector(); },
-      fit: () => graph.fit(),
+      fit: () => { if (!starnetFit()) graph.fit(); },
       hideType,
       typeLabel: (t) => TYPES[t]?.label,
       talkToModel: (n) => { const m = machineById(n.machine); if (m) setBrain({ nodeId: m.id, nodeName: m.name, brain: 'ollama', model: n.model }); },
       useAsBrain: (n) => { const m = machineById(n.machine); if (m) setBrain({ nodeId: m.id, nodeName: m.name, brain: n.agent, model: '' }); },
+      newSession: (n) => { const m = machineById(n.machine); if (m) newAgent(m, n.agent); },
+      newInProject: (n) => { const s = graph.neighbors(n.id, 1).find((x) => x.session?.cwd); const m = s && machineById(s.machine); if (m) newAgent(m, 'claude', s.session.cwd); else toast('No session of this project is on an online machine.', 'info'); },
     },
+    station: { select: (id) => { select(id); revealInspector(); }, fit: () => starnetFit() },
   });
   // The galaxy is a canvas: ask the graph which node is under the pointer.
   const galaxyEl = $('#graph');
   tagCtx(galaxyEl, 'galaxy', null, null);
   galaxyEl._ctxAt = (x, y) => galaxyTarget(graph.nodeAt(x, y), { machineById });
-  installContextMenu({ providers });
+  ctxMenu = installContextMenu({ providers });
+}
+
+// ------------------------------------------------------------------ space-station view (experimental, starnet/)
+// The station frame asks; these answer with the same menus and handlers as the galaxy (no route of its own).
+const OFF_FLOOR = ['agent', 'live', 'session', 'chat', 'model', 'app', 'tool', 'rig', 'project', 'plan', 'task', 'skill'];
+
+/** What a room or desk holds that the station floor does not draw, grouped by type for its menu. */
+function offFloor(n) {
+  if (!n) return [];
+  const all = graph.nodes();
+  const picked = n.type === 'machine' || n.type === 'offline' ? all.filter((x) => x.machine === n.machine && x.id !== n.id)
+    : n.type === 'mesh' ? all.filter((x) => x.type === 'plan' || x.type === 'task' || x.type === 'skill')
+      : n.session ? graph.neighbors(n.id, 1).filter((x) => x.type === 'project')
+        : [];
+  return OFF_FLOOR.map((type) => ({
+    label: TYPES[type]?.label || type,
+    items: picked.filter((x) => x.type === type).sort((a, b) => String(a.name).localeCompare(String(b.name))).slice(0, 40).map((x) => ({ id: x.id, name: x.name })),
+  })).filter((g) => g.items.length);
+}
+
+/** A click or right-click in the station: the node's menu (as on the galaxy) plus the station's own group. */
+function stationMenu(id, at) {
+  const n = id ? graph.get(id) : null;
+  const targets = [];
+  if (n) targets.push(galaxyTarget(n, { machineById }));
+  targets.push({ kind: 'station', id: id || null, data: { node: n, more: offFloor(n) } });
+  ctxMenu?.openFor(at.x, at.y, targets.filter(Boolean));
+}
+
+/** The room tags' buttons (the station view whitelists them): ✳ New agent, +N more sessions. */
+function stationAction(action, id) {
+  const m = machineById(graph.get(id)?.machine);
+  if (!m) { toast('That machine is offline.', 'info'); return; }
+  if (action === 'newAgent') newAgent(m);
+  else if (action === 'sessions') sessionsWindow(m.name);
 }
 
 function greeting() {
