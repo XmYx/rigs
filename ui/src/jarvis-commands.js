@@ -86,6 +86,7 @@ export function registerJarvisCommands(deps) {
     // ------------------------------------------------------------ Tools
     { id: 'tools.appStore', label: 'App Store', icon: '🛍', run: () => deps.openAppStore() },
     { id: 'tools.registry', label: 'Tool registry…', icon: '🧰', run: () => openToolRegistry() },
+    { id: 'tools.graphify', label: 'Graphify — mesh graph', icon: '🕸', run: () => focusPanel('graphify') },
     { id: 'tools.traces', label: 'Request traces', icon: '🧭', run: () => focusPanel('traces') },
     { id: 'tools.usage', label: 'Tokens & time', icon: '⏱', run: () => focusPanel('usage') },
     { id: 'tools.preroute', label: 'Pre-routing & brain…', icon: '◆', run: () => deps.brainMenu() },
@@ -148,7 +149,7 @@ export function menuModel() {
       { sep: true }, { cmd: 'view.menubar' },
     ] },
     { id: 'tools', label: 'Tools', items: () => [
-      { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
+      { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.graphify' }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
       { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' },
     ] },
     { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }] },

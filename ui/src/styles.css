@@ -993,6 +993,15 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .bm-pre-note { margin-top: 2px; line-height: 1.35; }
 .bm-pre:has(input:disabled) { cursor: default; opacity: .7; }
 
+/* Graphify window: the mesh graph in a panel (graphify.js) */
+#graphify { position: fixed; left: 330px; top: 130px; width: 560px; height: 420px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; padding: 10px 12px; overflow: hidden; z-index: 10; }
+#graphify > .wk-head > .pctl { order: 2; }
+.gfy-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex: none; }
+.gfy-stage { position: relative; flex: 1; min-height: 160px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #04060a; }
+.gfy-canvas { position: absolute; inset: 0; touch-action: none; }
+.gfy-empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.gfy-empty[hidden] { display: none; }
+
 /* Request traces: list panel + explorer window (trace-panel.js) */
 #traces { position: fixed; left: 294px; top: 120px; width: 320px; max-height: max(220px, calc(100dvh - 300px)); padding: 10px 12px; overflow-y: auto; z-index: 10; scrollbar-width: thin; overscroll-behavior: contain; }
 #traces > .wk-head > .pctl { order: 2; }
@@ -1098,6 +1107,9 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   #traces { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
   #traces .pctl > :not(.pclose:last-child) { display: none; }
+  #graphify { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: var(--room) !important; transform: none !important; max-height: var(--room); z-index: 20; }
+  #graphify .pctl > :not(.pclose:last-child) { display: none; }
+  .gfy-bar .tb, .gfy-orbit { min-height: 44px; }
   .tr-sel, .tr-search, .tr-allbtn { min-height: 44px; font-size: 14px; }
   .tr-item { padding: 9px 10px; }
   .tr-strip { flex-direction: column; gap: 4px; padding: 6px 10px; max-height: 24dvh; overflow-y: auto; flex: none; }

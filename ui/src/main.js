@@ -23,6 +23,7 @@ import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
+import { createGraphify } from './graphify.js';
 import { openMesh } from './mesh.js';
 import { controlEvent, openControl } from './control.js';
 import { openProjects } from './projects.js';
@@ -244,6 +245,7 @@ async function refresh() {
     if (self) selfId = self.node.id;
     graph.setData(buildGraph(visibleSnap()));
     graph.setAttention(attentionGraphIds());
+    graphifyPanel?.update();
     renderCounts();
     agentsPanel?.update();
     renderHubs();
@@ -408,6 +410,7 @@ function renderFilters() {
       if (hiddenTypes.has(k)) hiddenTypes.delete(k); else hiddenTypes.add(k);
       store.set('hidden', [...hiddenTypes]);
       graph.setHidden([...hiddenTypes]);
+      graphifyPanel?.update();
       renderFilters();
     };
     return el;
@@ -577,6 +580,7 @@ function filesOn(m, path = '~') {
 
 // Active agents panel (agents.js): live agent sessions, one click to attach
 let agentsPanel = null;
+let graphifyPanel = null;
 
 let sessWin = null;
 function sessionsWindow(filter = '', show = null) {
@@ -1201,6 +1205,9 @@ function wire() {
   });
   makeFloating($('#agents'), { id: 'agents', title: 'Active agents', into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
   agentsPanel.update();
+  graphifyPanel = createGraphify($('#graphify'), { createGraph, data: () => buildGraph(visibleSnap()), hidden: () => [...hiddenTypes], attention: attentionGraphIds, onSelect: (n) => { select(n.id); revealInspector(); } });
+  makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
+  { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
@@ -1212,6 +1219,7 @@ function wire() {
   $('#btn-usage').onclick = () => togglePanel('usage');
   $('#btn-desktops').onclick = () => togglePanel('desktops');
   $('#btn-traces').onclick = () => togglePanel('traces');
+  $('#btn-graphify').onclick = () => togglePanel('graphify');
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();
@@ -1312,7 +1320,7 @@ function wireMenus() {
       list: meshApps,
       open: (a) => openApp(a),
       close: (a) => closeApp(a),
-      changed: () => { graph.setData(buildGraph(visibleSnap())); renderAppList(); renderFilters(); rerenderApps(); },
+      changed: () => { graph.setData(buildGraph(visibleSnap())); graphifyPanel?.update(); renderAppList(); renderFilters(); rerenderApps(); },
     },
   });
   let bar = null;
