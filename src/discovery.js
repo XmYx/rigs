@@ -4,6 +4,13 @@ import { status as tsStatus } from './tailscale.js';
 import { log } from './util.js';
 
 /**
+ * A peer that answered recently stays online through this many ms of failed probes. One slow answer (a busy
+ * machine, a RIGS restart after an update, a Tailscale path change) must not drop it from every view.
+ */
+export const GRACE_MS = 75000;
+const PROBE_TIMEOUT_MS = 6000;
+
+/**
  * Finds every other RIGS node: all online Tailscale devices (probed on the mesh port) plus any
  * static peers from config. Tailnet devices that don't run RIGS yet still appear, so you can see
  * the whole tailnet and SSH/remote-desktop into them.
@@ -15,11 +22,12 @@ export class Discovery extends EventEmitter {
     this.nodes = new Map();
     this.timer = null;
     this.lastSig = '';
+    this.ticking = null;
   }
 
   start() {
-    this.tick();
-    this.timer = setInterval(() => this.tick(), 15000);
+    this.tick().catch(() => {});
+    this.timer = setInterval(() => this.tick().catch(() => {}), 15000);
     this.timer.unref?.();
   }
 
@@ -32,7 +40,7 @@ export class Discovery extends EventEmitter {
   async probe(url, viaToken) {
     const headers = viaToken ? { 'x-rigs-token': config().meshToken } : {};
     try {
-      const r = await fetch(url.replace(/\/$/, '') + '/api/local/info?brief=1', { headers, signal: AbortSignal.timeout(3000) });
+      const r = await fetch(url.replace(/\/$/, '') + '/api/local/info?brief=1', { headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
       if (!r.ok) return { error: `HTTP ${r.status}` };
       return { info: await r.json() };
     } catch (e) {
@@ -40,7 +48,23 @@ export class Discovery extends EventEmitter {
     }
   }
 
-  async tick() {
+  /**
+   * One discovery round. Rounds never overlap (on a loaded machine they would only pile up and slow each other):
+   * a call during a round waits for that round.
+   */
+  tick() {
+    if (!this.ticking) this.ticking = this.round().finally(() => { this.ticking = null; });
+    return this.ticking;
+  }
+
+  /** The previous entry for this candidate, if it was a RIGS node seen within the grace window. */
+  recent(url) {
+    if (!url) return null;
+    const prev = [...this.nodes.values()].find((n) => !n.self && n.rigs && n.url === url);
+    return prev && prev.lastSeen && Date.now() - prev.lastSeen < GRACE_MS ? prev : null;
+  }
+
+  async round() {
     const cfg = config();
     const self = await this.selfInfo();
     const next = new Map();
@@ -57,10 +81,14 @@ export class Discovery extends EventEmitter {
     for (const url of cfg.peers || []) candidates.push({ url, ts: null, viaToken: true });
 
     await Promise.all(candidates.map(async (c) => {
-      const res = c.url && (c.ts ? c.ts.online : true) ? await this.probe(c.url, c.viaToken) : { error: c.ts && !c.ts.online ? 'offline' : 'no address' };
-      if (res.info && res.info.id && res.info.id !== self.id) {
+      const recent = this.recent(c.url);
+      // Tailscale's Online flag is control-plane presence and blips; still probe a node that answered recently.
+      const res = c.url && (c.ts ? c.ts.online || recent : true) ? await this.probe(c.url, c.viaToken) : { error: c.ts && !c.ts.online ? 'offline' : 'no address' };
+      if (!res.info && recent) {
+        next.set(recent.id, { ...recent, online: true, stale: true, error: res.error });
+      } else if (res.info && res.info.id && res.info.id !== self.id) {
         next.set(res.info.id, {
-          ...res.info, url: c.url, address: new URL(c.url).hostname, self: false, online: true, rigs: true, viaToken: c.viaToken, lastSeen: Date.now(),
+          ...res.info, url: c.url, address: new URL(c.url).hostname, self: false, online: true, rigs: true, stale: false, error: undefined, viaToken: c.viaToken, lastSeen: Date.now(),
           tailscale: c.ts ? { ip: c.ts.ips[0], ips: c.ts.ips, dnsName: c.ts.dnsName, os: c.ts.os, online: c.ts.online, login: c.ts.login } : res.info.tailscale,
         });
       } else if (c.ts) {

@@ -1365,6 +1365,7 @@ export async function startServer() {
 
   discovery.start();
   if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
+    if (!r.restart) return;
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });

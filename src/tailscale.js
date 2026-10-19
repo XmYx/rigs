@@ -11,6 +11,9 @@ export function tailscaleBin() {
 }
 
 let statusCache = { at: 0, value: null };
+let lastGood = { at: 0, value: null };
+/** How long a good status stands in for a failed or timed-out `tailscale status` (a busy machine, a tailscaled hiccup). */
+const STALE_OK_MS = 180000;
 
 /** Parsed `tailscale status --json`, cached for a few seconds. Null when Tailscale isn't available. */
 export async function status(maxAgeMs = 5000) {
@@ -18,7 +21,7 @@ export async function status(maxAgeMs = 5000) {
   const bin = tailscaleBin();
   let value = null;
   if (bin) {
-    const r = await run(bin, ['status', '--json'], { timeout: 6000 });
+    const r = await run(bin, ['status', '--json'], { timeout: 10000 });
     if (r.code === 0) {
       try {
         const j = JSON.parse(r.stdout);
@@ -50,6 +53,8 @@ export async function status(maxAgeMs = 5000) {
       } catch {}
     }
   }
+  if (value) lastGood = { at: Date.now(), value };
+  else if (bin && lastGood.value && Date.now() - lastGood.at < STALE_OK_MS) value = lastGood.value;
   statusCache = { at: Date.now(), value };
   return value;
 }
