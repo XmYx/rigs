@@ -107,6 +107,50 @@ test('model: workers are capped per room, needs-you and live first; stale idle s
   assert.equal(new Set(s.doc.props.filter((p) => p.t === 'desk').map((p) => `${p.x},${p.y}`)).size, M.MAX_WORKERS + 1, 'one desk each (+ JARVIS), none stacked');
 });
 
+test('model: an agent in tmux or a terminal (as agents/start runs it) is a worker; a shell is not', () => {
+  assert.equal(M.workerKind({ kind: 'tmux', agent: 'claude' }), 'claude');
+  assert.equal(M.workerKind({ kind: 'pty', agent: 'codex' }), 'codex');
+  assert.equal(M.workerKind({ kind: 'rig', agent: 'claude' }), 'rig');
+  for (const s of [{ kind: 'tmux', agent: 'shell' }, { kind: 'tmux', agent: 'ssh' }, { kind: 'pty', agent: 'shell' }, { kind: 'chat', agent: 'claude' }, null]) assert.equal(M.workerKind(s), null, JSON.stringify(s));
+  const g = graph({ machines: 1, perMachine: 0, offline: 0 });
+  g.nodes.push({ id: 's:n0:tmux:claude-x-1a2b', type: 'live', machine: 'n0', session: { kind: 'tmux', agent: 'claude', id: 'claude-x-1a2b', title: 'claude-x-1a2b', project: 'x', live: true, updatedAt: NOW } });
+  const s = M.stationFromGraph(g, { now: NOW });
+  assert.deepEqual(s.workers.map((w) => [s.ids[w.id], w.color, w.working]), [['s:n0:tmux:claude-x-1a2b', '#f5a65b', true]], 'one worker, coloured as Claude, at its desk');
+});
+
+test('model: apps and tools are clickable props; everything on a machine frames its room; plans and tasks the bridge', () => {
+  const g = graph({ machines: 2, perMachine: 1, offline: 0 });
+  g.nodes.push(
+    { id: 'app:n0:b', type: 'app', machine: 'n0', name: 'B' }, { id: 'app:n0:a', type: 'app', machine: 'n0', name: 'A' }, { id: 'app:n0:c', type: 'app', machine: 'n0', name: 'C' },
+    { id: 'tool:n0:z', type: 'tool', machine: 'n0', name: 'Z' }, { id: 'tool:n0:y', type: 'tool', machine: 'n0', name: 'Y' },
+    { id: 'a:n1:codex', type: 'agent', machine: 'n1', agent: 'codex' }, { id: 'o:n1:llama', type: 'model', machine: 'n1' },
+    { id: 'tk:p1:t1', type: 'task', name: 't1' }, { id: 'p:proj0', type: 'project', name: 'proj0', machines: ['n1', 'n0'] });
+  const s = M.stationFromGraph(g, { now: NOW });
+  const target = (t) => s.doc.props.filter((p) => p.t === t).map((p) => s.ids[p.id]);
+  assert.deepEqual(target('gigs_servercart'), ['app:n0:a', 'app:n0:b'], 'two carts, the first apps by id');
+  assert.deepEqual(target('studio'), ['tool:n0:y']);
+  assert.ok(target('workbench').every(Boolean) && target('war_intelcab').length === 2, 'workbenches and intel cabinets select too');
+  const r0 = s.rooms['m:n0'];
+  const r1 = s.rooms['m:n1'];
+  assert.equal(s.rooms['app:n0:c'], r0, 'an app without a cart still frames its room');
+  assert.equal(s.rooms['a:n1:codex'], r1);
+  assert.equal(s.rooms['o:n1:llama'], r1);
+  assert.equal(s.rooms['pj:p1'], 'bridge');
+  assert.equal(s.rooms['tk:p1:t1'], 'bridge');
+  assert.equal(s.rooms['p:proj0'], [r0, r1].sort()[0], 'a project frames the first of its rooms');
+  assert.deepEqual(M.stationFromGraph({ nodes: [...g.nodes].reverse(), links: [] }, { now: NOW }), s, 'still deterministic');
+});
+
+test('model: sessions with no desk are counted per room, never dropped silently', () => {
+  const g = graph({ machines: 2, perMachine: 0, offline: 0 });
+  for (let j = 0; j < 11; j++) g.nodes.push(sess('n0', 'claude', `x${j}`, { updatedAt: NOW - j * 60000 }));
+  for (let j = 0; j < 4; j++) g.nodes.push(sess('n0', 'codex', `old${j}`, { updatedAt: NOW - 13 * 3600000 }));
+  g.nodes.push(sess('n1', 'claude', 'one'));
+  const s = M.stationFromGraph(g, { now: NOW });
+  assert.deepEqual(s.overflow, { [s.rooms['m:n0']]: { desks: 3, older: 4 } }, 'n0: 3 past the 8 desks, 4 idle for over 12 h; n1 has room for all');
+  assert.equal(s.workers.length, M.MAX_WORKERS + 1);
+});
+
 test('model: Filters apply — hidden session types leave the floor, hidden offline machines leave the station', () => {
   const s = M.stationFromGraph(graph(), { now: NOW, hidden: ['session', 'live', 'offline'] });
   assert.equal(s.workers.length, 0);
@@ -117,6 +161,16 @@ test('model: diffWorkers says what to spawn, rename, light, dim and despawn', ()
   const a = [{ id: 'w1', name: 'a', working: false }, { id: 'w2', name: 'b', working: true, attention: false }];
   const b = [{ id: 'w2', name: 'B', working: false, attention: true }, { id: 'w3', name: 'c', working: true }];
   assert.deepEqual(M.diffWorkers(a, b), { spawn: [b[1]], despawn: ['w1'], rename: [b[0]], work: ['w3'], idle: ['w2'], wait: ['w2'], release: [] });
+});
+
+test('sessions: a tmux session started by agents/start is that agent, even when the command does not say so', async () => {
+  const { tmuxAgent } = await import('../src/sessions.js');
+  assert.equal(tmuxAgent('claude-app-1a2b', '2.1.303'), 'claude', 'Claude Code\'s native binary titles its process with its version');
+  assert.equal(tmuxAgent('codex-app-1a2b', 'node'), 'codex');
+  assert.equal(tmuxAgent('claude-app-1a2b', 'zsh'), 'shell', 'the agent exited back to its shell');
+  assert.equal(tmuxAgent('work', 'claude'), 'claude');
+  assert.equal(tmuxAgent('work', 'bash'), 'shell');
+  assert.equal(tmuxAgent('ssh-mac--2', 'ssh'), 'ssh');
 });
 
 // ------------------------------------------------------------------ flag, subset, route

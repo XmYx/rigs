@@ -13,7 +13,7 @@ const st = { status: null, view: null, mounting: null, deps: null, failed: '', w
 
 export const starnetEnabled = () => !!st.status?.enabled;
 
-/** Read the flag once at start. deps: { graphEl, data, attention, hidden, onSelect, pauseGraph, resumeGraph }. */
+/** Read the flag once at start. deps: { graphEl, data, attention, hidden, onSelect, onContext, onAction, onPointer, pauseGraph, resumeGraph }. */
 export async function initStarnet(deps) {
   st.deps = deps;
   try { st.status = await api('/api/local/starnet/config'); } catch { return; } // an older daemon: stays off
@@ -41,6 +41,8 @@ export async function setStarnetEnabled(on) {
 export function starnetUpdate() { st.view?.update(); }
 /** A node was selected in the side panel: frame its room. */
 export function starnetFocus(id) { st.view?.focus(id); }
+/** ◎ Fit / Esc: frame the whole station. True when the station is showing (the galaxy is hidden then). */
+export function starnetFit() { return !!st.view?.fit(); }
 
 async function install() {
   toast('Installing StarNet on this machine (a few hundred MB, pinned commit)…', 'ok');

@@ -8,9 +8,15 @@
         API) answer "offline" locally without a request.
      2. Seeded save. The station document, JARVIS as the station's hero and the settings come from the host page
         (parent.__rigsStarnet.initial(), same origin, built by ui/src/starnet/model.js from the galaxy's data).
-     3. Bridge (postMessage, same origin only). host → frame: {type:'station', state} (rooms, workers, work state),
-        {type:'focus', id}; frame → host: {type:'ready'}, {type:'select', id} (a JARVIS node id), {type:'error', message}.
-   The frame never changes JARVIS state: a click only asks the host to select a node in its inspector. */
+     3. Bridge (postMessage, same origin only). host → frame: {type:'station', state} (rooms, workers, work state,
+        overflow), {type:'focus', id}, {type:'fit'}; frame → host: {type:'ready'}, {type:'error', message},
+        {type:'select', id, x, y} (a click on a body, desk, prop or room name: the host selects that JARVIS node and
+        opens its action menu at x, y — frame client px), {type:'context', id|null, x, y} (a right-click: the same
+        menu, or the station's own on empty floor), {type:'action', action, id} (a room tag's ✳ New agent / +N more
+        sessions button; the host runs only the actions it whitelists), {type:'pointer'} (a press in here, so the
+        host closes its open menu — its document never sees events inside this frame).
+   The frame never changes JARVIS state itself: everything it can do is ask the host, which acts through its own
+   inspector handlers and the existing daemon routes. */
 (function () {
   'use strict';
   var ORIGIN = location.origin;
@@ -114,7 +120,7 @@
   window.__STARNET_DEV__ = { model: 'rigs/jarvis', prov: 'rigs' };
 
   // ---------------------------------------------------------------- 3. bridge
-  var cur = { key: initial.key, ids: initial.ids || {}, rooms: initial.rooms || {}, workers: [], hero: { working: false }, station: null, doc: initial.doc };
+  var cur = { key: initial.key, ids: initial.ids || {}, rooms: initial.rooms || {}, overflow: initial.overflow || {}, workers: [], hero: { working: false }, station: null, doc: initial.doc };
   var ready = false;
   var pending = null;
   function toJarvis(id) { return id && Object.prototype.hasOwnProperty.call(cur.ids, id) ? cur.ids[id] : null; }
@@ -142,6 +148,7 @@
     }
     cur.ids = s.ids || {};
     cur.rooms = s.rooms || {};
+    cur.overflow = s.overflow || {};
     var before = new Map(cur.workers.map(function (w) { return [w.id, w]; }));
     var after = new Map((s.workers || []).map(function (w) { return [w.id, w]; }));
     before.forEach(function (w, id) { if (!after.has(id)) World.despawnAgent(id); });
@@ -156,6 +163,7 @@
     cur.workers = s.workers || [];
     var heroWorking = !!(s.hero && s.hero.working);
     if (heroWorking !== cur.hero.working) { World.setActivityFor(hero.id, heroWorking ? 'task' : 'idle'); cur.hero.working = heroWorking; }
+    labels.refresh();
   }
 
   function focus(jarvisId) {
@@ -170,12 +178,15 @@
     try {
       if (e.data.type === 'station') applyState(e.data.state || {});
       else if (e.data.type === 'focus') focus(e.data.id);
+      else if (e.data.type === 'fit' && ready) World.frameReviewRoom('');
     } catch (err) { post({ type: 'error', message: String(err && err.message || err) }); }
   });
 
-  // Room names: StarNet draws none on its live floor, so a light DOM layer follows the camera and names each
-  // machine's room (a click selects that machine). Positions come from the camera (World.cameraState) and the
-  // floor's tile origin, calibrated each frame against World._dbgDeskClientPoint(hero) for the CRT curve.
+  // Room tags: StarNet draws no names on its live floor, so a light DOM layer follows the camera and tags each room:
+  // its name (a click selects it and opens its menu in JARVIS), on an online machine ✳ (New agent there) and, when
+  // the room has more agent sessions than desks (or idle ones that went home), "+N" (they open in Sessions).
+  // Positions come from the camera (World.cameraState) and the floor's tile origin, calibrated each frame against
+  // World._dbgDeskClientPoint(hero) for the CRT curve; the same mapping hit-tests props and rooms (pickAt).
   var labels = (function () {
     var layer = null, items = [], origin = null, tile = 12, raf = 0;
     function el() {
@@ -185,6 +196,15 @@
       (document.getElementById('stage-wrap') || document.body).appendChild(layer); // inside the game's stacking context
       return layer;
     }
+    function button(cls, text, title, onclick) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = cls;
+      b.textContent = text;
+      if (title) { b.title = title; b.setAttribute('aria-label', title); }
+      b.addEventListener('click', function (e) { e.stopPropagation(); onclick(b); });
+      return b;
+    }
     function layout() {
       el().textContent = '';
       items = [];
@@ -193,26 +213,45 @@
       Object.keys(rooms).forEach(function (rid) {
         var rm = rooms[rid];
         if (rm.kind === 'corridor' || !rm.rects || !rm.rects[0]) return;
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'rigs-room' + (rm.kind === 'storage' ? ' off' : '');
-        b.textContent = rm.name;
-        b.addEventListener('click', function () { var j = toJarvis(rid); if (j) post({ type: 'select', id: j }); });
-        layer.appendChild(b);
+        var tag = document.createElement('div');
+        tag.className = 'rigs-tag' + (rm.kind === 'storage' ? ' off' : '');
+        tag.dataset.room = rid;
+        tag.appendChild(button('rigs-room', rm.name, '', function (b) { var j = toJarvis(rid); if (j) post(at({ type: 'select', id: j }, b)); }));
+        var machine = toJarvis(rid);
+        if (rm.kind !== 'storage' && rm.kind !== 'bridge' && machine && machine.indexOf('m:') === 0) {
+          tag.appendChild(button('rigs-act', '✳', 'New agent on ' + rm.name, function () { post({ type: 'action', action: 'newAgent', id: machine }); }));
+        }
+        var more = button('rigs-act rigs-more', '', '', function () { var j = toJarvis(rid); if (j) post({ type: 'action', action: 'sessions', id: j }); });
+        more.hidden = true;
+        tag.appendChild(more);
+        layer.appendChild(tag);
         var r = rm.rects[0];
-        items.push({ b: b, x: (r.x1 + r.x2 + 1) / 2, y: r.y2 + 1 });
+        items.push({ el: tag, rid: rid, more: more, x: (r.x1 + r.x2 + 1) / 2, y: r.y2 + 1 });
       });
+      refresh();
       if (!raf) raf = requestAnimationFrame(tick);
+    }
+    /** The "+N" chips follow the overflow counts, which change without a re-bake. */
+    function refresh() {
+      for (var i = 0; i < items.length; i++) {
+        var o = cur.overflow[items[i].rid], n = o ? (o.desks || 0) + (o.older || 0) : 0, b = items[i].more;
+        b.hidden = !n;
+        if (!n) continue;
+        b.textContent = '+' + n;
+        var t = n + ' more agent session' + (n === 1 ? '' : 's') + ' (' + [o.desks ? o.desks + ' past the desks' : '', o.older ? o.older + ' idle for over 12 h' : ''].filter(Boolean).join(', ') + ') — open them in Sessions';
+        b.title = t;
+        b.setAttribute('aria-label', t);
+      }
     }
     function deskTile() {
       var props = (cur.doc && cur.doc.props) || [];
       for (var i = 0; i < props.length; i++) if (props[i].agentId === hero.id) return props[i];
       return null;
     }
-    function tick() {
-      raf = requestAnimationFrame(tick);
+    /** Station tile → client px (null before the floor is up). */
+    function mapper() {
       var cv = document.getElementById('stage');
-      if (!cv || !origin || !items.length || !cv.width) return;
+      if (!cv || !origin || !cv.width) return null;
       var cam = World.cameraState();
       var rect = cv.getBoundingClientRect();
       var sx = rect.width / cv.width, sy = rect.height / cv.height;
@@ -228,24 +267,102 @@
       var dx = 0, dy = 0, d = deskTile(), real = null;
       try { real = d && World._dbgDeskClientPoint && World._dbgDeskClientPoint(hero.id); } catch (e) { real = null; }
       if (d && real) { var mine = client(d.x + d.w / 2, d.y + d.h / 2); dx = real.clientX - mine.x; dy = real.clientY - mine.y; }
+      return function (tx, ty) { var p = client(tx, ty); return { x: p.x + dx, y: p.y + dy }; };
+    }
+    function tick() {
+      raf = requestAnimationFrame(tick);
+      if (!items.length) return;
+      var to = mapper();
+      if (!to) return;
       // client px → the layer's own px: StarNet's TEXT SIZE is a CSS zoom on <body>
       var box = layer.getBoundingClientRect(), z = parseFloat(getComputedStyle(document.body).zoom) || 1;
-      for (var i = 0; i < items.length; i++) { var p = client(items[i].x, items[i].y); items[i].b.style.transform = 'translate(' + Math.round((p.x + dx - box.left) / z) + 'px,' + Math.round((p.y + dy - box.top) / z) + 'px) translate(-50%, 4px)'; }
+      for (var i = 0; i < items.length; i++) { var p = to(items[i].x, items[i].y); items[i].el.style.transform = 'translate(' + Math.round((p.x - box.left) / z) + 'px,' + Math.round((p.y - box.top) / z) + 'px) translate(-50%, 4px)'; }
     }
-    return { layout: layout };
+    /** The JARVIS node under client (x, y): a prop StarNet's own click ignores (server cart, studio, workbench, intel
+     *  cabinet, comms dish) — with `desks`, also a desk — and with `floor`, else the room it is in. */
+    function pickAt(x, y, o) {
+      var to = mapper();
+      if (!to || !cur.doc) return null;
+      function inside(x1, y1, x2, y2) { var a = to(x1, y1), b = to(x2, y2); return x >= Math.min(a.x, b.x) && x <= Math.max(a.x, b.x) && y >= Math.min(a.y, b.y) && y <= Math.max(a.y, b.y); }
+      var props = cur.doc.props || [];
+      for (var i = 0; i < props.length; i++) {
+        var p = props[i], j = toJarvis(p.agentId || p.id);
+        if (!j || (p.agentId && !(o && o.desks))) continue;
+        if (inside(p.x, p.y, p.x + (p.w || 1), p.y + (p.h || 1))) return j;
+      }
+      if (!(o && o.floor)) return null;
+      var rooms = cur.doc.rooms || {};
+      for (var rid in rooms) {
+        var r = rooms[rid].rects && rooms[rid].rects[0];
+        if (r && rooms[rid].kind !== 'corridor' && inside(r.x1, r.y1, r.x2 + 1, r.y2 + 1)) return toJarvis(rid);
+      }
+      return null;
+    }
+    return { layout: layout, refresh: refresh, pickAt: pickAt };
   })();
+
+  /** A message anchored on an element's centre (keyboard clicks carry no pointer position). */
+  function at(msg, elm) { var r = elm.getBoundingClientRect(); msg.x = Math.round(r.left + r.width / 2); msg.y = Math.round(r.bottom); return msg; }
+
+  // Pointer: StarNet only routes clicks on bodies and desks (World.setOnClick / setOnDesk). Everything else the
+  // station shows for JARVIS — props, room names, right-clicks — is picked here and asked of the host.
+  var press = null, last = { x: 0, y: 0 }, handled = false, probing = false, probe = null;
+  function picked(id, x, y) {
+    var j = toJarvis(id);
+    if (!j) return;
+    handled = true;
+    if (probing) { probe = j; return; }
+    post({ type: 'select', id: j, x: Math.round(x), y: Math.round(y) });
+  }
+  function wirePointer() {
+    window.addEventListener('mousedown', function (e) {
+      post({ type: 'pointer' });
+      if (e.button === 2) { e.stopPropagation(); return; } // the right button opens a menu: no pan, no click
+      press = { x: e.clientX, y: e.clientY };
+      handled = false;
+    }, true);
+    window.addEventListener('mouseup', function (e) {
+      if (e.button === 2) { e.stopPropagation(); return; }
+      last = { x: e.clientX, y: e.clientY };
+    }, true);
+    // bubbling, so after World's own canvas handler: a plain click it did not take may be on a prop
+    window.addEventListener('mouseup', function (e) {
+      var p = press;
+      press = null;
+      if (e.button !== 0 || !p || handled || !e.target || e.target.id !== 'stage' || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;
+      var j = labels.pickAt(e.clientX, e.clientY);
+      if (j) post({ type: 'select', id: j, x: e.clientX, y: e.clientY });
+    });
+    document.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+      var x = e.clientX, y = e.clientY, j = null;
+      var tag = e.target && e.target.closest ? e.target.closest('.rigs-tag') : null;
+      if (tag) {
+        j = toJarvis(tag.dataset.room);
+        if (!x && !y) { var m = at({}, tag); x = m.x; y = m.y; } // Menu key / Shift+F10 on a focused tag
+      } else if (e.target && e.target.id === 'stage') {
+        // a body under the pointer: ask StarNet's own hit test, with a click it handles but we keep (probing)
+        probing = true; probe = null;
+        try { e.target.dispatchEvent(new MouseEvent('mouseup', { clientX: x, clientY: y, button: 0, bubbles: false })); } catch (err) { /* older renderer */ }
+        probing = false;
+        j = probe || labels.pickAt(x, y, { desks: true, floor: true });
+      }
+      post({ type: 'context', id: j, x: Math.round(x), y: Math.round(y) });
+    });
+  }
 
   function onReady() {
     // A static host has no sidecar: pause the bridge so the floor doesn't flag LINK DOWN (StarNet's own API for this),
     // keep the camera on the whole station (no idle follow-cam), and route clicks to the JARVIS inspector.
     try { World.pauseBridge(); } catch (e) {}
     try { World.setCinecamIdle(1e15); } catch (e) {}
-    World.setOnClick(function (id) { var j = toJarvis(id); if (j) post({ type: 'select', id: j }); });
-    if (World.setOnDesk) World.setOnDesk(function (o) { var j = toJarvis(o && o.agentId); if (j) post({ type: 'select', id: j }); });
+    World.setOnClick(function (id) { picked(id, last.x, last.y); });
+    if (World.setOnDesk) World.setOnDesk(function (o) { picked(o && o.agentId, o ? o.clientX : last.x, o ? o.clientY : last.y); });
+    wirePointer();
     ready = true;
     load(initial.doc);
     try { World.frameReviewRoom(''); } catch (e) {} // the whole station
-    applyState(pending || { key: initial.key, ids: initial.ids, rooms: initial.rooms, workers: initial.workers, hero: initial.hero });
+    applyState(pending || { key: initial.key, ids: initial.ids, rooms: initial.rooms, overflow: initial.overflow, workers: initial.workers, hero: initial.hero });
     pending = null;
     post({ type: 'ready' });
   }

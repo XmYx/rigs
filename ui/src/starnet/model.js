@@ -3,11 +3,16 @@
 // per-worker state rigs-boot.js applies inside the station iframe (ui/starnet/rigs-boot.js):
 //   TAILNET → the BRIDGE room where JARVIS (the station's hero) sits, with a workbench per active plan
 //   machine → a room off the central corridor (kind by platform; offline = an unlit STORAGE room with nobody in it)
-//   agent session (Claude Code, Codex, OpenRig seat, Ollama) → a worker body with its own desk in its machine's room;
+//   agent session (Claude Code, Codex, OpenRig seat, Ollama — also one running in tmux or a terminal, as an agent
+//     started from the station does) → a worker body with its own desk in its machine's room;
 //     live = sits down and works, needs-you (attention) = walks to its wait anchor, otherwise it idles in its room
+//   apps / tools → the server carts and the studio prop in the room (clickable: they select that app / tool)
+// Sessions that get no desk (past MAX_WORKERS, or idle for over 12 h) are counted per room (`overflow`), so the room's
+// floor label can offer them ("+N") instead of dropping them silently.
 // The layout is a pure function of the sorted machine / worker ids, so the station only re-bakes when that set
 // changes (`key`); everything else is a cheap state update. Every StarNet id maps back to the JARVIS node id
-// (`ids`), so a click on a worker selects the same inspector entry as the galaxy.
+// (`ids`), so a click on a worker selects the same inspector entry as the galaxy; `rooms` maps every JARVIS node the
+// station can frame (machines, their sessions, agents, apps, tools…, plans and tasks on the bridge) to its room.
 
 const W = 14; // machine / bridge room floor, in tiles
 const H = 9;
@@ -19,6 +24,7 @@ const DESK_X = [2, 5, 8, 11];
 const DESK_Y = [1, 5];
 const RECENT_MS = 12 * 3600000; // an idle session older than this has gone home
 const WORKER_KINDS = new Set(['claude', 'codex', 'rig', 'ollama']);
+const HOSTED_AGENTS = new Set(['claude', 'codex', 'ollama']); // an agent inside a tmux session or a terminal (agents/start)
 const KIND_BY_PLATFORM = { darwin: 'lab', linux: 'factory', win32: 'quarters' };
 const FLOOR = { hab: 'hull', bridge: 'cobalt', lab: 'sterile', factory: 'rust', quarters: 'verdant', storage: 'rust', corridor: 'corridor' };
 const COLOR = { claude: '#f5a65b', codex: '#60a5fa', rig: '#f87171', ollama: '#a3e635' };
@@ -37,25 +43,35 @@ function room(id, kind, name, x, y, w, h) {
   return { id, kind, name: clip(name, 22).toUpperCase(), rects: [{ x1: x, y1: y, x2: x + w - 1, y2: y + h - 1 }], floorStyle: FLOOR[kind] || 'hull', floorMat: null, wallStyle: null, wallMat: null, hullStyle: null, hullMat: null, tier: 0, floorPaint: {} };
 }
 
-/** The sessions a machine room shows as workers: agent sessions that are live, need you, or ran in the last 12 h. Pure. */
-export function workersFor(nodes, machineId, attention = new Set(), now = Date.now()) {
-  const out = [];
+/** The agent kind a session node works as, or null (a shell, a chat, an SSH login). Pure. */
+export function workerKind(s) {
+  if (!s) return null;
+  if (WORKER_KINDS.has(s.kind)) return s.kind;
+  return (s.kind === 'tmux' || s.kind === 'pty') && HOSTED_AGENTS.has(s.agent) ? s.agent : null;
+}
+
+/** A machine's agent sessions: `crew` (live, need you, or ran in the last 12 h; best first) and `older` (the rest). Pure. */
+export function crewFor(nodes, machineId, attention = new Set(), now = Date.now()) {
+  const crew = [];
+  let older = 0;
   for (const n of nodes) {
     if (n.machine !== machineId || !n.session || (n.type !== 'live' && n.type !== 'session')) continue;
     const s = n.session;
-    if (!WORKER_KINDS.has(s.kind)) continue;
+    const kind = workerKind(s);
+    if (!kind) continue;
     const attn = attention.has(n.id);
     const working = !!s.live;
-    if (!working && !attn && !(now - (s.updatedAt || 0) < RECENT_MS)) continue;
-    out.push({ node: n.id, kind: s.kind, name: clip(s.project || s.title || s.kind, 18), working, attention: attn, updatedAt: s.updatedAt || 0 });
+    if (!working && !attn && !(now - (s.updatedAt || 0) < RECENT_MS)) { older++; continue; }
+    crew.push({ node: n.id, kind, name: clip(s.project || s.title || kind, 18), working, attention: attn, updatedAt: s.updatedAt || 0 });
   }
   // needs-you first, then working, then most recent; ties on the node id so the order never flickers
-  out.sort((a, b) => (b.attention - a.attention) || (b.working - a.working) || (b.updatedAt - a.updatedAt) || (a.node < b.node ? -1 : 1));
-  return out;
+  crew.sort((a, b) => (b.attention - a.attention) || (b.working - a.working) || (b.updatedAt - a.updatedAt) || (a.node < b.node ? -1 : 1));
+  return { crew, older };
 }
 
 /**
- * buildGraph() output → { key, doc, hero, workers, rooms, ids }. Pure and deterministic.
+ * buildGraph() output → { key, doc, hero, workers, rooms, ids, overflow }. Pure and deterministic.
+ * overflow: StarNet room id → { desks, older } — agent sessions past the desks, and idle for over 12 h.
  * opts.attention: Set of JARVIS node ids that need you · opts.hidden: node types switched off in Filters · opts.now
  */
 export function stationFromGraph(graph, opts = {}) {
@@ -79,6 +95,8 @@ export function stationFromGraph(graph, opts = {}) {
   const doc = { schema: 'starnet.station', version: 2, _nid: 1, meta: { name: 'RIGS MESH', createdAt: 0, tier: 0, spawnRoomId: 'bridge', trunkRoomId: 'corridor' }, rooms: {}, order: [], props: [], belts: {}, edges: [] };
   const ids = {}; // StarNet id (prop / body / room) → JARVIS node id
   const roomOf = {}; // JARVIS node id (machine / mesh) → StarNet room id
+  const overflow = {};
+  const byId = (a, b) => (a.id < b.id ? -1 : 1);
   const prop = (t, x, y, w, h, extra = {}) => { const p = { id: 'p' + doc._nid++, t, x, y, w, h, block: t !== 'plant', ...extra }; doc.props.push(p); return p; };
   const addRoom = (r) => { doc.rooms[r.id] = r; doc.order.push(r.id); };
 
@@ -107,20 +125,31 @@ export function stationFromGraph(graph, opts = {}) {
     ids[rid] = m.id;
     ids[prop('war_intelcab', x, y, 1, 2).id] = m.id;
     if (!online) continue;
-    const apps = nodes.filter((n) => n.type === 'app' && n.machine === m.machine).length;
-    for (let i = 0; i < Math.min(2, apps); i++) prop('gigs_servercart', x + i, y + H - 1, 1, 1);
-    if (nodes.some((n) => n.type === 'tool' && n.machine === m.machine)) prop('studio', x + W - 2, y + H - 2, 2, 2);
+    const apps = nodes.filter((n) => n.type === 'app' && n.machine === m.machine).sort(byId);
+    for (const [i, a] of apps.slice(0, 2).entries()) ids[prop('gigs_servercart', x + i, y + H - 1, 1, 1).id] = a.id;
+    const tools = nodes.filter((n) => n.type === 'tool' && n.machine === m.machine).sort(byId);
+    if (tools.length) ids[prop('studio', x + W - 2, y + H - 2, 2, 2).id] = tools[0].id;
     prop('plant', x + W - 1, y, 1, 1);
-    for (const [i, w] of workersFor(nodes, m.machine, attention, now).slice(0, MAX_WORKERS).entries()) {
+    const { crew, older } = crewFor(nodes, m.machine, attention, now);
+    if (crew.length > MAX_WORKERS || older) overflow[rid] = { desks: Math.max(0, crew.length - MAX_WORKERS), older };
+    for (const [i, w] of crew.slice(0, MAX_WORKERS).entries()) {
       const id = 'w' + shortHash(w.node);
       prop('desk', x + DESK_X[i % 4], y + DESK_Y[Math.floor(i / 4)], 2, 1, { agentId: id });
       ids[id] = w.node;
       workers.push({ id, node: w.node, name: w.name, color: COLOR[w.kind] || '#5ad0ff', room: rid, working: w.working, attention: w.attention });
     }
   }
+  // Everything else the station can frame: a machine's nodes in its room, plans and tasks on the bridge, a project
+  // in the first room it has sessions in.
+  for (const n of nodes) {
+    if (roomOf[n.id]) continue;
+    if (n.machine && roomOf['m:' + n.machine]) roomOf[n.id] = roomOf['m:' + n.machine];
+    else if ((n.type === 'plan' || n.type === 'task') && roomOf.mesh) roomOf[n.id] = roomOf.mesh;
+    else if (n.type === 'project') { const r = (n.machines || []).map((id) => roomOf['m:' + id]).filter(Boolean).sort()[0]; if (r) roomOf[n.id] = r; }
+  }
   // The layout key: rooms + desks only. Names, colours and work state change without a re-bake.
   const key = shortHash(JSON.stringify([doc.order, doc.props.map((p) => [p.t, p.x, p.y, p.agentId || ''])]));
-  return { key, doc, hero, workers, rooms: roomOf, ids };
+  return { key, doc, hero, workers, rooms: roomOf, ids, overflow };
 }
 
 /** What changed between two station states → the calls rigs-boot.js makes. Pure. */

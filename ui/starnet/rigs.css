@@ -8,8 +8,13 @@ body #screen-game.active { display: block; padding: 0; }
 #screen-game #stage-wrap { position: absolute; inset: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 #stage-wrap::before, .cam-hud, .cam-label, .cam-rec, .cam-feed, .cam-cine { display: none !important; }
 #stage { image-rendering: auto; }
-/* machine names under each room (rigs-boot.js positions them over the floor; a click selects the machine in JARVIS) */
+/* room tags under each room (rigs-boot.js positions them over the floor): the name selects the room in JARVIS and
+   opens its menu, ✳ starts a new agent on that machine, +N opens the agent sessions that have no desk */
 #rigs-rooms { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
-.rigs-room { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; font: 18px/1 'VT323', ui-monospace, monospace; letter-spacing: .08em; color: #ffcf7a; background: rgba(4, 6, 10, .72); border: 1px solid rgba(255, 207, 122, .35); border-radius: 3px; padding: 2px 8px; text-shadow: 0 0 6px rgba(255, 170, 60, .6); white-space: nowrap; }
-.rigs-room:hover, .rigs-room:focus-visible { color: #fff2d4; border-color: rgba(255, 207, 122, .8); outline: none; }
-.rigs-room.off { color: #7c8796; border-color: rgba(124, 135, 150, .35); text-shadow: none; }
+.rigs-tag { position: absolute; left: 0; top: 0; display: flex; gap: 4px; align-items: stretch; white-space: nowrap; pointer-events: none; }
+.rigs-room, .rigs-act { pointer-events: auto; cursor: pointer; font: 18px/1 'VT323', ui-monospace, monospace; letter-spacing: .08em; color: #ffcf7a; background: rgba(4, 6, 10, .72); border: 1px solid rgba(255, 207, 122, .35); border-radius: 3px; padding: 2px 8px; text-shadow: 0 0 6px rgba(255, 170, 60, .6); white-space: nowrap; }
+.rigs-act { padding: 2px 6px; min-width: 24px; }
+.rigs-act[hidden] { display: none; }
+.rigs-more { color: #9fe7ff; border-color: rgba(159, 231, 255, .35); text-shadow: 0 0 6px rgba(90, 208, 255, .5); }
+.rigs-room:hover, .rigs-room:focus-visible, .rigs-act:hover, .rigs-act:focus-visible { color: #fff2d4; border-color: rgba(255, 207, 122, .8); outline: none; }
+.rigs-tag.off .rigs-room { color: #7c8796; border-color: rgba(124, 135, 150, .35); text-shadow: none; }

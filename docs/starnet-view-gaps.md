@@ -1,6 +1,8 @@
 # StarNet view — gap list
 
 Task t1 of project `9b07477a3b` ("Deliver starnet view functions"). Audit only: no behaviour changed.
+**Status after t2:** see section 7 at the end — every row below marked partial or missing is wired, except the phone
+(row 16) and StarNet's own harness (section 4), which stay out on purpose.
 Read-only against `work/macbookpro/deliver-starnet-view-functions-4e52` (base `bbefe12`). Facts come from the code
 cited; anything not run is marked *(inferred)*. The station view was **not** launched in this task.
 
@@ -90,3 +92,19 @@ dead, or hidden, was **not run** *(inferred: visible, failing quietly offline)*.
 - Reuse the inspector handlers (`newAgent`, `startAgent`, `attachChat`, `sessionsWindow`, `openTerminal`) — no new daemon routes needed.
 - Map `studio`/`servercart` props to ids; show a "+N" prop for overflow; make Fit frame the station.
 - Extend `scripts/starnet-check.js` (23 checks today) with: create an agent from the station, send to a worker, right-click menu on a worker.
+
+## 7. Status after t2
+
+| Row(s) | Now | Where |
+| --- | --- | --- |
+| 1, 2, 3 create | ✳ on each online machine's room tag; a click or right-click on a room, desk or body opens the node's menu with New agent… / New agent of kind ▸ / New agent in this folder… (sessions) / New <kind> session… (agents) / New agent in this project… (projects) | `rigs-boot.js` room tags, `ctx-providers.js` |
+| 4–6 reach | the session menu (transcript, attach, send message) at the pointer, plus the inspector as before | `main.js` `stationMenu` |
+| 7 overflow | +N on the room tag (desks full, or idle over 12 h) → Sessions on that machine | `model.js` `overflow`, `rigs-boot.js` |
+| 8 non-session nodes | server carts / studio select their app / tool; the Station group lists everything a room or desk holds off the floor | `model.js` `ids`, `main.js` `offFloor` |
+| 11 right-click | `{type:'context'}` bridge message → the galaxy's menus | `rigs-boot.js`, `view.js`, `contextmenu.js` `openFor` |
+| 14, 15 focus / Fit | every node frames its room; ◎ Fit and Esc frame the whole station | `model.js` `rooms`, `starnet/index.js` `starnetFit` |
+| (found in t2) created agent invisible | an agent started in tmux reported `agent: 'shell'` and tmux sessions were never workers | `sessions.js` `tmuxAgent`, `model.js` `workerKind` |
+| 16 phone, §4 harness | unchanged on purpose | — |
+
+The audit's claim that a click on the `war_intelcab` prop selected the machine (row 1) was inferred and wrong: StarNet only
+routes body and desk clicks. Props are now hit-tested in the frame.

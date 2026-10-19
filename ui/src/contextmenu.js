@@ -49,7 +49,8 @@ function selectionAt(target) {
 
 /**
  * Install the listener. `providers` is the registry from createProviders() (filled by registerJarvisProviders).
- * `ctx()` adds to what providers see. Returns { openAt(x, y, target), dispose }.
+ * `ctx()` adds to what providers see. Returns { openAt(x, y, target), openFor(x, y, targets), dispose } — openFor is
+ * for a surface whose events this document never sees (the space-station frame): it names its targets itself.
  */
 export function installContextMenu({ providers, ctx = () => ({}) }) {
   let press = null; // a touch that may become a long press
@@ -61,7 +62,12 @@ export function installContextMenu({ providers, ctx = () => ({}) }) {
   function openAt(x, y, target, { touch = false } = {}) {
     const { native, targets } = ctxTargets(target, x, y);
     if (native) return false;
-    const entries = resolveMenu(providers, targets, { ...ctx(), phone: isPhone(), selection: selectionAt(target), copy: copyText });
+    return openFor(x, y, targets, { touch, selection: selectionAt(target) });
+  }
+
+  /** Open the menu for these targets ({ kind, id, data }, innermost first) at (x, y). False when nothing applies. */
+  function openFor(x, y, targets, { touch = false, selection = '' } = {}) {
+    const entries = resolveMenu(providers, targets, { ...ctx(), phone: isPhone(), selection, copy: copyText });
     if (!entries.length) return false;
     // 2px off the pointer (like the OS menus): the button release must land on the page, not on the first item (and OrbitControls on the galaxy still gets its pointerup).
     openMenuAt(x + 2, y + (touch ? 8 : 2), entries, { label: targets[0] ? `${targets[0].kind} menu` : 'Context menu' });
@@ -102,5 +108,5 @@ export function installContextMenu({ providers, ctx = () => ({}) }) {
   for (const type of ['pointerup', 'pointercancel']) on(document, type, cancel, true);
   on(document, 'scroll', (ev) => { cancel(); if (contextMenuOpen() && !ev.target?.closest?.('.mb-menu')) closeMenus({ restore: false }); }, true);
 
-  return { openAt, dispose() { cancel(); for (const d of disposers.splice(0)) d(); } };
+  return { openAt, openFor, dispose() { cancel(); for (const d of disposers.splice(0)) d(); } };
 }
