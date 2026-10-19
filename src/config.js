@@ -128,6 +128,8 @@ function defaults() {
       avoid: [],
     },
     update: { auto: true, intervalMin: 10, remote: 'origin', branch: 'main' },
+    // Hold a sleep inhibitor while RIGS runs so this node stays on the mesh 24/7 (src/keepawake.js).
+    keepAwake: true,
     ssh: { autoAuthorize: true, manageConfig: true, authorizeStaticPeers: false },
     // hubs: a persistent rig per pinned project (lead seat + on-demand workers, idle workers stopped after
     // idleMinutes) and JARVIS's own "jarvis" rig with an overseer seat on the core-brain machine (src/hubs.js).

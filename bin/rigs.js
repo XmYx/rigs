@@ -60,7 +60,7 @@ async function supervise() {
     const started = Date.now();
     await ensureDependencies().catch(() => {});
     const code = await new Promise((resolve) => {
-      child = spawn(process.execPath, [path.join(HERE, 'rigs.js'), 'serve'], { stdio: 'inherit', env: process.env });
+      child = spawn(process.execPath, [path.join(HERE, 'rigs.js'), 'serve'], { stdio: 'inherit', env: { ...process.env, RIGS_SUPERVISOR_PID: String(process.pid) } });
       child.on('exit', (c, sig) => { child = null; resolve(sig ? `signal ${sig}` : c); });
     });
     // Only a stop of the supervisor itself ends the loop; a child killed from outside is restarted.
@@ -85,11 +85,30 @@ async function supervise() {
   }
 }
 
+/**
+ * A `serve` whose supervisor is gone, or a throwaway one (own RIGS_HOME) whose launching shell is gone, has nobody
+ * left to stop it: it would keep discovering, probing and answering on the tailnet forever. Leave instead.
+ */
+function exitWhenOrphaned() {
+  const sup = Number(process.env.RIGS_SUPERVISOR_PID) || 0;
+  const throwaway = !sup && !!process.env.RIGS_HOME;
+  if (!sup && !throwaway) return;
+  const parent = process.ppid;
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  setInterval(() => {
+    const gone = sup ? !alive(sup) : process.ppid !== parent && !alive(parent);
+    if (gone) { console.error(`[rigs] ${sup ? 'supervisor' : 'launching process'} is gone — stopping this orphaned server`); process.exit(0); }
+  }, 30000).unref();
+}
+
 const commands = {
   async serve() {
     const { startServer } = await import('../src/server.js');
     const { config } = await import('../src/config.js');
     await startServer();
+    exitWhenOrphaned();
+    // The installed node (no throwaway RIGS_HOME) holds a sleep inhibitor while it serves.
+    if (!process.env.RIGS_HOME) (await import('../src/keepawake.js')).startKeepAwake().catch(() => {});
     console.log(`\n  RIGS OS — node "${config().name}" ready at http://localhost:${config().port}\n`);
   },
   start: supervise,

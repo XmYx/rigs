@@ -13,6 +13,11 @@ import { APP_DIR, log, readJsonSync, run, writeJsonAtomic } from './util.js';
  */
 
 export const RESTART_CODE = 75;
+
+/** Files the running daemon never loads: an update touching only these does not restart it (and the mesh). */
+export function needsRestart(changed) {
+  return changed.filter(Boolean).some((f) => !/^(docs|test|\.github)\//.test(f) && !/\.md$/i.test(f));
+}
 const STATE = path.join(RIGS_HOME, 'update.json');
 let lastCheck = { at: 0, behind: 0, error: null };
 let busy = false;
@@ -105,8 +110,9 @@ export async function apply({ force = false } = {}) {
     }
     const after = await version();
     await writeJsonAtomic(STATE, { previous: before.sha, current: after.sha, at: Date.now() });
-    log(`updated ${before.short} → ${after.short}`);
-    return { updated: true, restart: true, from: before.short, to: after.short };
+    const restart = needsRestart(changed);
+    log(`updated ${before.short} → ${after.short}${restart ? '' : ' (docs/tests only — no restart)'}`);
+    return { updated: true, restart, from: before.short, to: after.short };
   } finally {
     busy = false;
   }
