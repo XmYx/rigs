@@ -20,8 +20,11 @@ after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 const T = await import('../src/trace.js');
 const P = await import('../src/planner.js');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FIXTURE = fs.readFileSync(path.join(ROOT, 'test/fixtures/claude-run-transcript.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-const at = (iso) => Date.parse(iso);
+// The fixture is dated 2026-10-18; spans are stored (and read back) by day, starting at the day in the trace id, which is
+// today's. So every date in this file is rebased onto today's UTC day, or the test breaks the day after it was written.
+const DAY = new Date().toISOString().slice(0, 10);
+const FIXTURE = fs.readFileSync(path.join(ROOT, 'test/fixtures/claude-run-transcript.jsonl'), 'utf8').replaceAll('2026-10-18', DAY).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const at = (iso) => Date.parse(iso.replace('2026-10-18', DAY));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** An indented one-line-per-span print of a tree (the evidence the task summary quotes). */
@@ -72,7 +75,7 @@ test('transcriptSpans: a Claude Code slice → assistant spans with tokens, and 
 });
 
 test('transcriptSpans: a Codex rollout → assistant spans with token counts and function-call spans', () => {
-  const ts = (s) => `2026-10-18T11:00:${String(s).padStart(2, '0')}.000Z`;
+  const ts = (s) => `${DAY}T11:00:${String(s).padStart(2, '0')}.000Z`;
   const recs = [
     { type: 'turn_context', timestamp: ts(0), payload: { model: 'gpt-6.1-sol' } },
     { type: 'response_item', timestamp: ts(1), payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Read the brief' }] } },

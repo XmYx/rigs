@@ -439,6 +439,9 @@ export function createGraph(el, { onSelect, onBackground }) {
       refreshStyles();
     },
     setHidden(types) { state.hidden = new Set(types); Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility()); for (const n of state.data.nodes) styleLabel(n); },
+    /** Stop / restart the render loop and layout simulation (a graph in a closed window draws nothing). */
+    pause() { Graph.pauseAnimation(); },
+    resume() { asleep = false; lastActive = performance.now(); if (!document.hidden) Graph.resumeAnimation(); },
     resize() { Graph.width(el.clientWidth).height(el.clientHeight); bloom.setSize(el.clientWidth, el.clientHeight); },
     /** The visible node under a point in client pixels (right-click / long-press), or null: nearest centre within the node's drawn radius. */
     nodeAt(clientX, clientY) {
@@ -463,7 +466,7 @@ export function createGraph(el, { onSelect, onBackground }) {
   };
   window.addEventListener('resize', () => api.resize());
   // Anything that changes the scene (every API method) or touches the galaxy wakes the idle sleep below.
-  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['get', 'nodes', 'neighbors', 'setAttention', 'setData', 'nodeAt'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
+  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['Graph', 'get', 'nodes', 'neighbors', 'setAttention', 'setData', 'nodeAt', 'pause', 'resume'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
   return api;
 }
 
