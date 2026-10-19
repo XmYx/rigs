@@ -1205,7 +1205,7 @@ function wire() {
   });
   makeFloating($('#agents'), { id: 'agents', title: 'Active agents', into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
   agentsPanel.update();
-  graphifyPanel = createGraphify($('#graphify'), { createGraph, data: () => buildGraph(visibleSnap()), hidden: () => [...hiddenTypes], attention: attentionGraphIds, onSelect: (n) => { select(n.id); revealInspector(); } });
+  graphifyPanel = createGraphify($('#graphify'), { createGraph, types: TYPES, data: () => buildGraph(visibleSnap()), hidden: () => [...hiddenTypes], attention: attentionGraphIds, onSelect: (n) => { select(n.id); revealInspector(); } });
   makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
   { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
