@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Transcriber</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon.svg" alt=""><span>Transcriber</span></div>
+  <label class="lang">
+    <span class="muted">Language</span>
+    <select id="lang" aria-label="Spoken language"></select>
+  </label>
+  <div id="engine" class="engine warn" title="Speech engine"><i class="dot"></i><span id="engineText">Connecting…</span></div>
+</header>
+
+<main class="layout">
+  <section class="input" aria-label="Audio input">
+    <nav class="tabs" role="tablist" aria-label="Input source">
+      <button role="tab" id="tabMic" data-tab="mic" aria-selected="true">Microphone</button>
+      <button role="tab" id="tabFile" data-tab="file" aria-selected="false">Audio file</button>
+    </nav>
+
+    <div id="paneMic" class="pane" role="tabpanel" aria-labelledby="tabMic">
+      <button id="rec" class="rec" type="button" aria-pressed="false">
+        <span class="rec-dot"></span><span id="recLabel">Start recording</span>
+      </button>
+      <div class="meter" aria-hidden="true"><i id="level"></i></div>
+      <div class="rec-row"><span id="recTime" class="mono">0:00</span><span id="recHint" class="muted">Speak, then press stop: the recording is transcribed right away.</span></div>
+      <audio id="recPlayer" controls hidden></audio>
+    </div>
+
+    <div id="paneFile" class="pane" role="tabpanel" aria-labelledby="tabFile" hidden>
+      <label id="drop" class="drop" tabindex="0">
+        <input id="file" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.flac,.webm,.mp4,.mkv" hidden>
+        <strong>Choose an audio or video file</strong>
+        <span class="muted">or drop it here · wav, mp3, m4a, ogg, flac, webm, mp4…</span>
+      </label>
+      <audio id="filePlayer" controls hidden></audio>
+    </div>
+
+    <p id="notice" class="notice" role="alert" hidden></p>
+  </section>
+
+  <section class="result" aria-label="Transcript">
+    <div class="result-head">
+      <div>
+        <h2 id="title">Transcript</h2>
+        <div id="meta" class="muted"></div>
+      </div>
+      <div class="actions" id="actions" hidden>
+        <button id="copy" class="ghost" type="button">Copy</button>
+        <select id="exportFmt" aria-label="Export format"></select>
+        <button id="download" class="ghost" type="button">Download</button>
+      </div>
+    </div>
+    <div id="progress" class="progress" hidden>
+      <div class="bar"><i id="bar"></i></div>
+      <div class="progress-row"><span id="stage">Queued</span><button id="cancel" class="link" type="button">Cancel</button></div>
+    </div>
+    <div id="transcript" class="transcript" aria-live="polite">
+      <p class="empty muted">Record from the microphone or choose a file. Hungarian is the default language.</p>
+    </div>
+  </section>
+
+  <section class="history" aria-label="History">
+    <h3>History</h3>
+    <ul id="history" class="history-list"></ul>
+    <p id="historyEmpty" class="muted">Nothing yet.</p>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
