@@ -1,0 +1,15 @@
+/* RIGS · StarNet station frame (src/starnet.js injects this into StarNet's index.html): only the station floor shows.
+   StarNet's own panels, rails, chat and HUD are hidden — JARVIS's side panel is the inspector for this view. */
+html, body { background: #04060a !important; overflow: hidden !important; }
+body::before, body::after { display: none !important; }
+body #app, body #screen-game.active { animation: none !important; }
+body #screen-game.active { display: block; padding: 0; }
+#screen-game > :not(#stage-wrap), #logo, #nav-coach, #titlebar { display: none !important; }
+#screen-game #stage-wrap { position: absolute; inset: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+#stage-wrap::before, .cam-hud, .cam-label, .cam-rec, .cam-feed, .cam-cine { display: none !important; }
+#stage { image-rendering: auto; }
+/* machine names under each room (rigs-boot.js positions them over the floor; a click selects the machine in JARVIS) */
+#rigs-rooms { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+.rigs-room { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; font: 18px/1 'VT323', ui-monospace, monospace; letter-spacing: .08em; color: #ffcf7a; background: rgba(4, 6, 10, .72); border: 1px solid rgba(255, 207, 122, .35); border-radius: 3px; padding: 2px 8px; text-shadow: 0 0 6px rgba(255, 170, 60, .6); white-space: nowrap; }
+.rigs-room:hover, .rigs-room:focus-visible { color: #fff2d4; border-color: rgba(255, 207, 122, .8); outline: none; }
+.rigs-room.off { color: #7c8796; border-color: rgba(124, 135, 150, .35); text-shadow: none; }

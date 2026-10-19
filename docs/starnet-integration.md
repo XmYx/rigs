@@ -145,3 +145,25 @@ Alternatives considered:
 3. **Upstream drift**: pinned to `d540d503`; StarNet ships often (0.13.5), so never auto-update; bumping `ref` is a deliberate change.
 4. **localStorage namespace**: StarNet `starnet.*` keys live on RIGS's origin inside the iframe (same-origin); use a dedicated sub-path/`sandbox` or prefix them in `rigs-boot.js` to avoid touching `rigs.*` keys.
 5. Sprite/prop licence provenance (§3).
+
+## 10. As built (task t2)
+
+Implemented behind `config.experimental.starnet.enabled` (default `false`); see the `src/starnet.js` and `ui/src/starnet/…` rows in `AGENTS.md`.
+
+- **Asset subset measured** (§9.1): StarNet's renderer requests ~708 files / 252 MB on boot. The install takes the cone
+  `shared/`, `frontend/{app,js,css,agent-demo}`, `frontend/assets/{fonts,sprites,brand,furniture,agent-demo,agent-animation-0914,skin-study-0914}`
+  and `frontend/assets/industrial/{remaster,projection-correction,calibration}` (+ files directly in those folders' parents): **14,952 files, 376 MB**, no
+  `assets/sfx`. Network install (shallow sparse fetch of `d540d503…`) took ~17 s here; `--from <checkout>` copies a local clone. Install on demand, not vendored (§5).
+- **Renderer coupling** (§9.2): no need to feed `syncCrewFromPlan`. Workers are summoned bodies (`World.spawnAgent`, placed in their machine's room by
+  pointing the station's spawn room at it for the call), each bound to its own desk (`prop.agentId`), lit with `World.setActivityFor`, and put in the
+  waiting pose through StarNet's own `permission.prompt` bus event. A new machine or worker set re-bakes the floor (`World.loadStation`); everything
+  else is a state update.
+- **localStorage namespace** (§9.4): the frame's `localStorage`/`sessionStorage` are in-memory (rigs-boot.js), so StarNet never touches `rigs.*` keys and leaves none behind.
+- StarNet draws no room names on its live floor; rigs-boot.js adds clickable machine names that follow the camera.
+- **Switching** needs no restart: the settings API (`/api/local/starnet/config` or `/api/local/config`) and `rigs starnet on|off` apply at once and every
+  open JARVIS on that machine switches through the `starnet-config` push. Editing `~/.rigs/config.json` by hand applies at the next daemon start.
+- Not done (still out of scope): the phone keeps the galaxy; the station's camera starts on StarNet's own framing (scroll/drag to see every room on a large mesh);
+  the JARVIS **Fit** button still fits the (hidden) galaxy.
+- Verified with `npm test` (`test/starnet.test.js`: model, flag, subset, route, and a scratch node end to end) and `node scripts/starnet-check.js --dir <install>`
+  (23 browser checks: flag off = no `#station`, no `/starnet/` request, no view chunk; on through the settings API, off through the CLI, on/off from the menu;
+  one floor body per modelled worker; clicks on JARVIS, a worker and a room name select the matching inspector entry; phone keeps the galaxy; zero console errors).

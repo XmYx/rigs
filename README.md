@@ -12,6 +12,11 @@ can act on all of them.
 - **The mesh as a galaxy.** Machines, agents (Claude Code, Codex, Ollama, OpenRig), models,
   projects and live sessions are nodes in a 3D force graph. Click one to focus it, then trace its
   connections 1–3 levels deep.
+- **Experimental: the mesh as a space station.** `rigs starnet install && rigs starnet on` (or
+  **Experimental › Space station view**) swaps the galaxy for [StarNet](https://github.com/androoAGI/starnet)'s
+  pixel-art station: machines are rooms, agent sessions are workers at their desks, live work and
+  "needs you" show on the floor. Off by default; off is the galaxy exactly as before. Station view by
+  StarNet (MIT, © Andrew Sims), installed on demand at a pinned commit, never bundled.
 - **J.A.R.V.I.S.** You can talk to it (push-to-talk, or hands-free with the wake word "Jarvis" and
   barge-in) or type. Answers are spoken. You can switch the brain mid-conversation between Claude
   Code, Codex and any Ollama model on any machine, and the conversation carries over.

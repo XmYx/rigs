@@ -21,6 +21,7 @@ import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
+import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { createGraphify } from './graphify.js';
@@ -148,6 +149,7 @@ function attentionGraphIds() {
 async function refreshAttention() {
   try { attention = await api('/api/mesh/attention'); } catch { return; }
   graph.setAttention(attentionGraphIds());
+  starnetUpdate(); // experimental station view (no-op while off)
   renderAttention();
   work?.rerender();
 }
@@ -245,6 +247,7 @@ async function refresh() {
     if (self) selfId = self.node.id;
     graph.setData(buildGraph(visibleSnap()));
     graph.setAttention(attentionGraphIds());
+    starnetUpdate();
     graphifyPanel?.update();
     renderCounts();
     agentsPanel?.update();
@@ -272,6 +275,7 @@ function connectEvents() {
     if (m.type === 'control') controlEvent(m);
     if (m.type === 'trace-span') onTraceSpan(m.span);
     if (m.type?.startsWith('exhibit')) onExhibitEvent(m); // experimental Exhibit window (exhibits.js)
+    if (m.type === 'starnet-config') onStarnetConfig(m); // experimental space-station view switched (starnet/index.js)
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
     if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
     else if (m.type === 'notify' && m.level === 'attention') {
@@ -416,6 +420,7 @@ function renderFilters() {
     return el;
   }));
   graph.setHidden([...hiddenTypes]);
+  starnetUpdate();
 }
 
 // ------------------------------------------------------------------ inspector
@@ -423,6 +428,7 @@ function select(id) {
   const n = graph.get(id);
   if (!n) return;
   graph.focus(id, graph.depth || 1);
+  starnetFocus(id);
   renderInspector(id);
   $('#back').style.visibility = 'visible';
 }
@@ -1301,6 +1307,7 @@ await refresh();
 graph.fit();
 connectEvents();
 initExhibits();
+initStarnet({ graphEl: $('#graph'), data: () => buildGraph(visibleSnap()), attention: attentionGraphIds, hidden: () => [...hiddenTypes], onSelect: (id) => { select(id); revealInspector(); }, pauseGraph: () => graph.pause(), resumeGraph: () => graph.resume() });
 setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
@@ -1345,6 +1352,7 @@ function wireMenus() {
     machines,
     menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
     exhibits: { enabled: exhibitsEnabled, toggle: () => setExhibitsEnabled(!exhibitsEnabled()), open: () => openExhibits() },
+    starnet: { enabled: starnetEnabled, toggle: () => setStarnetEnabled(!starnetEnabled()) },
   });
   bar = initMenubar({
     menus: menuModel,

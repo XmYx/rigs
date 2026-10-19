@@ -39,6 +39,7 @@ import * as senses from './senses.js';
 import * as usage from './usage.js';
 import * as trace from './trace.js';
 import * as exhibits from './exhibits.js';
+import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyQuickPatch, quickSettings } from './quick.js';
 import { applyRouterPatch, routerView } from './router.js';
@@ -609,7 +610,12 @@ export async function startServer() {
       return r;
     }
     if (sub === 'config' && method === 'GET') return publicConfig();
-    if (sub === 'config' && method === 'POST') { patchConfig(await body()); return publicConfig(); }
+    if (sub === 'config' && method === 'POST') {
+      const b = await body();
+      patchConfig(b);
+      if (b?.experimental?.starnet) starnet.events.emit('config', starnet.status()); // open UIs switch views at once
+      return publicConfig();
+    }
 
     // files
     if (sub === 'files' && method === 'GET') return files.list(q.get('path') || '~', { showHidden: q.get('hidden') === '1' || config().files.showHidden });
@@ -802,6 +808,10 @@ export async function startServer() {
     }
     if (sub === 'exhibits/config' && method === 'GET') return exhibits.settings();
     if (sub === 'exhibits/config' && method === 'POST') { try { return exhibits.saveSettings(await body()); } catch (e) { throw new HttpError(400, e.message); } }
+    // experimental StarNet space-station view (src/starnet.js): the flag and the pinned install on this machine
+    if (sub === 'starnet/config' && method === 'GET') return starnet.status();
+    if (sub === 'starnet/config' && method === 'POST') { try { return starnet.saveSettings(await body()); } catch (e) { throw new HttpError(400, e.message); } }
+    if (sub === 'starnet/install' && method === 'POST') { const b = await body(); try { return await starnet.install({ from: b?.from || '', force: !!b?.force }); } catch (e) { throw new HttpError(/already running/.test(e.message) ? 409 : 500, e.message); } }
     if ((mm = m(/^exhibits\/([\w-]+)$/)) && method === 'GET') {
       if (!exhibits.isDocId(mm[1])) throw new HttpError(400, 'not an exhibit document id');
       const d = await exhibitSvc.get(mm[1]);
@@ -1259,7 +1269,9 @@ export async function startServer() {
     try {
       const back = appRefererRedirect(req);
       if (back) { res.writeHead(307, { location: back, 'cache-control': 'no-store' }); res.end(); return; }
+      if (url.pathname === '/starnet' || url.pathname.startsWith('/starnet/')) return await starnet.serve(req, res, url.pathname); // 404 unless experimental.starnet is on
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
+      if (starnet.blockedApiCall(req)) throw new HttpError(403, 'the StarNet station frame has no RIGS API access');
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
       req.rigsAuth = a;
@@ -1456,6 +1468,7 @@ export async function startServer() {
   exhibits.events.on('live', (l) => broadcast({ type: 'exhibit-live', ...l }));
   exhibits.events.on('image',({ docId, entry }) => broadcast({ type: 'exhibit-image', docId, entry }));
   exhibits.events.on('final', ({ docId, at }) => broadcast({ type: 'exhibit-final', docId, at }));
+  starnet.events.on('config', (st) => broadcast({ type: 'starnet-config', ...st }));
   const pruneTraces = () => trace.prune().then((f) => f.length && log(`traces: pruned ${f.length} day file(s)`)).catch((e) => log('traces prune:', e.message));
   pruneTraces();
   setInterval(pruneTraces, 24 * 3600 * 1000).unref();
