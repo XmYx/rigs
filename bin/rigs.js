@@ -252,6 +252,39 @@ const commands = {
     if (r?.error || !r?.docId) { console.error(r?.error || (typeof r === 'string' ? r : 'RIGS daemon is not running (rigs start).')); process.exit(1); }
     console.log(`${r.docId}: ${r.added} entr${r.added === 1 ? 'y' : 'ies'} added, ${r.entries} in the document${r.final ? ' (final)' : ''}`);
   },
+  /** rigs starnet [status|on|off|install [--from <checkout>] [--force]|remove] — experimental StarNet space-station view (src/starnet.js) */
+  async starnet() {
+    const [sub = 'status'] = argv;
+    const sn = await import('../src/starnet.js');
+    const fail = (m) => { console.error(m); process.exit(1); };
+    const show = (r, note = '') => {
+      console.log(`StarNet space-station view ${r.enabled ? 'on' : 'off'} · ${r.installed ? `installed (${r.pinned ? 'pinned ' : ''}${r.ref.slice(0, 12)}${r.bytes ? `, ${Math.round(r.bytes / 1e6)} MB` : ''})` : 'not installed'} · ${r.dir}${note}`);
+      if (r.enabled && !r.installed) console.log('  the galaxy stays on screen until the station files are here: rigs starnet install');
+    };
+    if (sub === 'status' || sub === 'on' || sub === 'off') {
+      const patch = sub === 'status' ? null : { enabled: sub === 'on' };
+      const r = await daemonFetch('/api/local/starnet/config', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch(() => null);
+      if (r && r.enabled !== undefined) return show(r, patch ? ' — open JARVIS windows switch now' : '');
+      if (r?.error) fail(r.error);
+      // daemon not running: change the config file; the daemon reads it when it starts
+      return show(patch ? sn.saveSettings(patch) : sn.status(), patch ? ' — saved; applies when the RIGS daemon starts' : ' (daemon not running)');
+    }
+    if (sub === 'install') {
+      const i = argv.indexOf('--from');
+      const from = i >= 0 ? argv[i + 1] : '';
+      if (i >= 0 && !from) fail('usage: rigs starnet install [--from <StarNet checkout at the pinned commit>] [--force]');
+      try {
+        const r = await sn.install({ from, force: argv.includes('--force'), onProgress: (m) => console.log(`  ${m}`) });
+        return show(r, r.already ? ' — already installed (--force reinstalls)' : '');
+      } catch (e) { fail(`StarNet install failed: ${e.message}`); }
+    }
+    if (sub === 'remove') {
+      const r = await sn.remove();
+      console.log(`removed ${r.removed}${r.kept ? ` (left the custom dir ${r.kept} alone)` : ''}${r.enabled ? ' — the flag is still on: JARVIS shows the galaxy until it is reinstalled (rigs starnet off to switch it off)' : ''}`);
+      return;
+    }
+    fail('usage: rigs starnet [status|on|off|install [--from <checkout>] [--force]|remove]');
+  },
   /** rigs tools [list [query] [--tag t] [--kind tool|applet]] · rigs tools show <id> [--node n] · rigs tools run <id> ['{json}'] [--node n] [--allow-mutating] */
   async tools() {
     const [sub = 'list', ...rest] = argv;
@@ -396,6 +429,8 @@ const commands = {
   rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)
+  rigs starnet [status|on|off]  experimental: StarNet space station in place of the galaxy (this machine's UI)
+  rigs starnet install [--from <checkout>] | remove  fetch StarNet's renderer at the pinned commit into ~/.rigs/starnet, or delete it
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh
   rigs tools show <id> | run <id> ['{json args}'] [--node n] [--allow-mutating]
                        read or run a filed tool (mutating tools need --allow-mutating)

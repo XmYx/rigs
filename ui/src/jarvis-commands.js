@@ -101,6 +101,10 @@ export function registerJarvisCommands(deps) {
       checked: () => !!deps.exhibits?.enabled(), run: () => deps.exhibits.toggle(),
     },
     { id: 'experimental.exhibitWindow', label: 'Open the Exhibit window', icon: '🎞', when: () => !!deps.exhibits, run: () => deps.exhibits.open() },
+    {
+      id: 'experimental.starnet', label: 'Space station view — StarNet in place of the galaxy', icon: '🛰', when: () => !!deps.starnet,
+      checked: () => !!deps.starnet?.enabled(), run: () => deps.starnet.toggle(),
+    },
 
     // ------------------------------------------------------------ Help
     { id: 'help.shortcuts', label: 'Keyboard shortcuts', icon: '⌨', shortcut: '?', run: (ctx) => openShortcuts(ctx) },
@@ -152,7 +156,7 @@ export function menuModel() {
       { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.graphify' }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
       { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' },
     ] },
-    { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }] },
+    { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }, { sep: true }, { cmd: 'experimental.starnet' }] },
     { id: 'help', label: 'Help', items: () => [
       { cmd: 'help.shortcuts' }, { cmd: 'help.docs' }, { sep: true }, { cmd: 'help.about' }, { cmd: 'help.issue' },
     ] },

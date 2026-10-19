@@ -85,6 +85,9 @@ function defaults() {
     // Exhibits (src/exhibits.js, experimental): illustrated documents of each request / project, built from the traces.
     // images: 'auto' (SVG, ComfyUI pictures when this machine's ComfyUI answers) | 'svg' | 'comfyui' | 'off'.
     exhibits: { enabled: false, images: 'auto', maxPerDoc: 60, maxDocs: 200 },
+    // Experimental: StarNet space-station view (src/starnet.js) in place of the galaxy. ref '' = the pinned commit,
+    // dir '' = RIGS_HOME/starnet/<ref> (filled by `rigs starnet install`).
+    experimental: { starnet: { enabled: false, ref: '', dir: '' } },
     // Tools this machine offers to the mesh (ComfyUI is auto-detected): { "<id>": { label, kinds, url, command, notes } }.
     capabilities: {},
     // Web apps this machine shares with the mesh (App Cloud), see src/apps.js: [{ id, name, icon, port | url, healthPath, launch, rewrite }].
@@ -211,7 +214,7 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, experimental: c.experimental,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },
   };
