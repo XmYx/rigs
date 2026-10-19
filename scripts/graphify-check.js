@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Graphify window check: drives JARVIS in headless Chromium (Playwright from RIGS_AUDIT_TOOLS or ~/.cache/rigs-audit,
 // as scripts/dock-check.js) and checks the Graphify window end to end, saving screenshots: it opens from the Window
-// menu, draws the graph with no console errors, closes and reopens from Tools, docks beside a panel and undocks by
+// menu on the Structure view (legend, jump list, detail card, Mesh toggle, remembered choice), draws the graph with no console errors, closes and reopens from Tools, docks beside a panel and undocks by
 // dragging, keeps its place across a reload, and is usable on a phone (390x844, nothing clipped).
 //   node scripts/graphify-check.js [--url http://127.0.0.1:4719/] [--out docs/screenshots/graphify]
 // Without --url it starts a throwaway `rigs serve` (scratch RIGS_HOME, no OpenRig, no migrations, no autoupdate).
@@ -105,6 +105,42 @@ const watch = (page) => {
   check('graph draws (canvas has pixels)', await page.evaluate(() => { const c = document.querySelector('#graphify .gfy-canvas canvas'); return !!c && c.width > 0 && c.height > 0; }));
   await page.screenshot({ path: path.join(OUT, 'graphify-open@1440x900.png') });
 
+  // Structure view (the default): how JARVIS is built — legend, jump list, detail card, Mesh toggle, remembered choice.
+  const view = () => page.evaluate(() => document.querySelector('#graphify').dataset.view);
+  const shown = (sel) => page.evaluate((q) => { const e = document.querySelector(q); return !!e && !e.hidden && getComputedStyle(e).display !== 'none'; }, sel);
+  const meta = () => page.textContent('#graphify .wk-meta');
+  check('opens on the Structure view', (await view()) === 'structure' && /decisions/.test(await meta()), await meta());
+  check('Structure toggle is pressed', (await page.getAttribute('#graphify .gfy-view >> nth=0', 'aria-pressed')) === 'true');
+  check('legend is shown for the structure', await shown('#graphify .gfy-legend'));
+  check('no detail card until a node is chosen', !(await shown('#graphify .gfy-detail')));
+  await page.selectOption('#graphify .gfy-jump', 'd-route');
+  await sleep(2500);
+  const card = await page.evaluate(() => document.querySelector('#graphify .gfy-detail')?.innerText || '');
+  check('Jump to a node opens its detail card', (await shown('#graphify .gfy-detail')) && /Which route\?/.test(card) && /src\/router\.js/.test(card) && /ROUTES/.test(card) && /implement/.test(card), card.slice(0, 120).replace(/\n/g, ' | '));
+  await page.screenshot({ path: path.join(OUT, 'graphify-structure-detail@1440x900.png') });
+  await page.locator('#graphify .gfy-conn', { hasText: 'implement' }).first().click();
+  await sleep(2000);
+  check('a connection in the card moves to that node', /^implement/.test((await page.textContent('#graphify .gfy-d-head b')) || ''), await page.textContent('#graphify .gfy-d-head b'));
+  await page.click('#graphify .gfy-d-x');
+  await sleep(300);
+  check('× closes the detail card', !(await shown('#graphify .gfy-detail')));
+  await page.selectOption('#graphify .gfy-jump', 'mcp-projects');
+  await sleep(1800);
+  check('a tool family lists its MCP tools', /project_task_update/.test(await page.evaluate(() => document.querySelector('#graphify .gfy-d-tools')?.innerText || '')));
+  await page.click('#graphify .gfy-d-x');
+  await page.click('#graphify .gfy-view >> nth=1');
+  await sleep(7000); // the galaxy frames itself as its layout settles
+  check('Mesh toggle switches to the mesh graph', (await view()) === 'mesh' && !(await shown('#graphify .gfy-legend')) && !/decisions/.test(await meta()), await meta());
+  await page.screenshot({ path: path.join(OUT, 'graphify-mesh@1440x900.png') });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#panels-btn');
+  await sleep(2500);
+  check('the chosen view is remembered across a reload', (await view()) === 'mesh');
+  await page.click('#graphify .gfy-view >> nth=0');
+  await sleep(3500);
+  check('Structure toggle brings the diagram back', (await view()) === 'structure' && /decisions/.test(await meta()));
+  await page.screenshot({ path: path.join(OUT, 'graphify-structure@1440x900.png') });
+
   // Close with ✕, reopen from Tools.
   await page.click('#graphify .pclose:not(.pcollapse)');
   await sleep(500);
@@ -179,14 +215,19 @@ const watch = (page) => {
   const fit = await page.evaluate(() => {
     const vw = innerWidth;
     const vh = innerHeight;
-    const clipped = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button, #graphify .gfy-bar input, #graphify .gfy-bar label')].filter((e) => e.offsetParent).map((e) => ({ e, r: e.getBoundingClientRect() }))
+    const clipped = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button, #graphify .gfy-bar input, #graphify .gfy-bar label, #graphify .gfy-bar select')].filter((e) => e.offsetParent).map((e) => ({ e, r: e.getBoundingClientRect() }))
       .filter(({ r }) => r.left < 0 || r.right > vw + 0.5 || r.top < 0 || r.bottom > vh + 0.5).map(({ e }) => e.className || e.tagName);
-    const small = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button')].filter((e) => e.offsetParent && (e.getBoundingClientRect().height < 40 || e.getBoundingClientRect().width < 40)).map((e) => e.className);
+    const small = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button, #graphify .gfy-bar select')].filter((e) => e.offsetParent && (e.getBoundingClientRect().height < 40 || e.getBoundingClientRect().width < 40)).map((e) => e.className);
     return { clipped, small, hscroll: document.documentElement.scrollWidth > vw, box: document.querySelector('#graphify').getBoundingClientRect().toJSON() };
   });
   check('phone: no clipped controls, no sideways scroll', !fit.clipped.length && !fit.hscroll, JSON.stringify(fit));
   check('phone: controls are touch-sized', !fit.small.length, JSON.stringify(fit.small));
   check('phone: window spans the width', fit.box.width >= 360, JSON.stringify(fit.box));
+  check('phone: Structure is the view and its legend gives way to the graph', await page.evaluate(() => document.querySelector('#graphify').dataset.view === 'structure' && getComputedStyle(document.querySelector('#graphify .gfy-legend')).display === 'none'));
+  await page.selectOption('#graphify .gfy-jump', 'checks');
+  await sleep(2500);
+  const pc = await page.evaluate(() => { const d = document.querySelector('#graphify .gfy-detail'); const r = d.getBoundingClientRect(); const st = document.querySelector('#graphify .gfy-stage').getBoundingClientRect(); return { shown: !d.hidden, inside: r.left >= st.left - 1 && r.right <= st.right + 1 && r.bottom <= st.bottom + 1 && r.top >= st.top - 1, text: d.innerText.slice(0, 80) }; });
+  check('phone: the jump list opens a detail card inside the window', pc.shown && pc.inside, JSON.stringify(pc));
   await page.screenshot({ path: path.join(OUT, 'graphify-open@390x844.png') });
   await ctx.close();
 }

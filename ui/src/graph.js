@@ -131,7 +131,7 @@ function labelFor(n) {
 
 export function createGraph(el, { onSelect, onBackground }) {
   const state = {
-    byId: new Map(), focus: null, depth: 1, highlight: new Set(), hidden: new Set(), labels: true, particles: true, rotate: true,
+    byId: new Map(), focus: null, depth: 1, highlight: new Set(), hidden: new Set(), labels: true, particles: true, rotate: true, types: TYPES,
     data: { nodes: [], links: [] }, hover: null, attention: new Set(),
   };
 
@@ -149,14 +149,18 @@ export function createGraph(el, { onSelect, onBackground }) {
     .nodeVisibility((n) => !state.hidden.has(n.type))
     .linkVisibility((l) => !state.hidden.has(l.source.type ?? '') && !state.hidden.has(l.target.type ?? ''))
     .nodeColor((n) => colorFor(n))
-    .nodeLabel((n) => `<div class="tip"><b>${escapeHtml(n.name)}</b><span>${TYPES[n.type]?.label || n.type}${n.session ? ' · ' + escapeHtml(n.session.kind) : ''}</span></div>`)
+    .nodeLabel((n) => `<div class="tip"><b>${escapeHtml(n.name)}</b><span>${state.types[n.type]?.label || n.type}${n.session ? ' · ' + escapeHtml(n.session.kind) : ''}</span></div>`)
     .linkColor((l) => linkColor(l))
+    .linkLabel((l) => (l.label ? `<div class="tip"><b>${escapeHtml(l.label)}</b></div>` : ''))
+    .linkDirectionalArrowLength((l) => (l.arrow ? 4 : 0))
+    .linkDirectionalArrowRelPos(0.94)
+    .linkDirectionalArrowColor((l) => linkColor(l))
     .linkOpacity(0.32)
-    .linkWidth((l) => (isLit(l) ? 0.9 : l.kind === 'mesh' ? 0.6 : 0.15))
-    .linkDirectionalParticles((l) => (state.particles && !calm() && !lowPower() && (l.kind === 'live' || l.kind === 'mesh') ? (l.kind === 'live' ? 3 : 2) : 0))
+    .linkWidth((l) => (isLit(l) ? 0.9 : l.kind === 'mesh' ? 0.6 : l.arrow ? 0.45 : 0.15))
+    .linkDirectionalParticles((l) => (state.particles && !calm() && !lowPower() && (l.kind === 'live' || l.kind === 'mesh' || l.kind === 'flow') ? (l.kind === 'live' ? 3 : 2) : 0))
     .linkDirectionalParticleWidth((l) => (l.kind === 'mesh' ? 1.4 : 1.1))
     .linkDirectionalParticleSpeed((l) => (l.kind === 'mesh' ? 0.004 : 0.01))
-    .linkDirectionalParticleColor((l) => (l.kind === 'mesh' ? '#5eead4' : '#f9a8d4'))
+    .linkDirectionalParticleColor((l) => (l.kind === 'mesh' ? '#5eead4' : l.kind === 'flow' ? '#bae6fd' : '#f9a8d4'))
     .nodeThreeObjectExtend(true)
     .nodeThreeObject((n) => decorate(n))
     .onNodeClick((n) => { onSelect?.(n); })
@@ -215,7 +219,7 @@ export function createGraph(el, { onSelect, onBackground }) {
   onPowerChange(applyBudget);
 
   function colorFor(n) {
-    const base = TYPES[n.type]?.color || '#94a3b8';
+    const base = state.types[n.type]?.color || '#94a3b8';
     if (state.focus && !state.highlight.has(n.id)) return '#1e293b';
     return base;
   }
@@ -233,6 +237,9 @@ export function createGraph(el, { onSelect, onBackground }) {
     if (l.kind === 'delegate') return '#a3e635';
     if (l.kind === 'plan') return '#a16207';
     if (l.kind === 'tool') return '#22d3ee';
+    if (l.kind === 'flow') return '#38bdf8'; // Graphify's structure view: next step · decision outcome · retry / fallback
+    if (l.kind === 'branch') return '#fbbf24';
+    if (l.kind === 'loop') return '#f87171';
     return '#3b5568';
   }
 
@@ -368,7 +375,7 @@ export function createGraph(el, { onSelect, onBackground }) {
 
   // Restyle in place (no object rebuilds, so no leaked label elements).
   function refreshStyles() {
-    Graph.nodeColor(Graph.nodeColor()).linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth());
+    Graph.nodeColor(Graph.nodeColor()).linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth()).linkDirectionalArrowColor(Graph.linkDirectionalArrowColor());
     for (const n of state.data.nodes) styleLabel(n);
   }
 
@@ -403,7 +410,7 @@ export function createGraph(el, { onSelect, onBackground }) {
     },
     nodes() { return state.data.nodes; },
     neighbors(id, depth = 1) { return [...neighbors(id, depth)].map((x) => state.byId.get(x)).filter(Boolean); },
-    focus(id, depth = state.depth) {
+    focus(id, depth = state.depth, distance = 0, lift = 0) {
       const n = state.byId.get(id);
       if (!n) return;
       state.focus = id;
@@ -411,13 +418,13 @@ export function createGraph(el, { onSelect, onBackground }) {
       state.highlight = neighbors(id, depth);
       refreshStyles();
       // Keep the current viewing direction and slide in until the node sits at a fixed distance.
-      const dist = n.type === 'machine' || n.type === 'offline' ? 260 : n.type === 'mesh' ? 320 : 150;
+      const dist = distance || (n.type === 'machine' || n.type === 'offline' ? 260 : n.type === 'mesh' ? 320 : 150);
       const cam = Graph.camera().position;
       const dx = cam.x - (n.x || 0);
       const dy = cam.y - (n.y || 0);
       const dz = cam.z - (n.z || 0);
       const len = Math.hypot(dx, dy, dz) || 1;
-      Graph.cameraPosition({ x: (n.x || 0) + (dx / len) * dist, y: (n.y || 0) + (dy / len) * dist, z: (n.z || 0) + (dz / len) * dist }, { x: n.x || 0, y: n.y || 0, z: n.z || 0 }, 1400);
+      Graph.cameraPosition({ x: (n.x || 0) + (dx / len) * dist, y: (n.y || 0) + (dy / len) * dist - lift, z: (n.z || 0) + (dz / len) * dist }, { x: n.x || 0, y: (n.y || 0) - lift, z: n.z || 0 }, 1400); // lift: look below the node so it sits above a card laid over the bottom of the view
     },
     setDepth(d) { if (state.focus) api.focus(state.focus, d); },
     clearFocus() {
@@ -431,7 +438,8 @@ export function createGraph(el, { onSelect, onBackground }) {
       if (linkLength != null) Graph.d3Force('link').distance((l) => (l.kind === 'mesh' ? linkLength * 4 : l.kind === 'agent' ? linkLength * 1.4 : l.kind === 'project' ? linkLength * 2.4 : linkLength));
       Graph.d3ReheatSimulation();
     },
-    setDisplay({ labels, particles, rotate }) {
+    setDisplay({ labels, particles, rotate, linkOpacity }) {
+      if (linkOpacity != null) Graph.linkOpacity(linkOpacity);
       if (labels != null) state.labels = labels;
       if (particles != null) state.particles = particles;
       if (rotate != null) state.rotate = rotate;
@@ -439,6 +447,8 @@ export function createGraph(el, { onSelect, onBackground }) {
       refreshStyles();
     },
     setHidden(types) { state.hidden = new Set(types); Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility()); for (const n of state.data.nodes) styleLabel(n); },
+    /** The palette (type → { label, color }) nodes are drawn with: the mesh's TYPES by default, the structure view's own in Graphify. */
+    setTypes(types) { state.types = types || TYPES; Graph.nodeColor(Graph.nodeColor()).nodeLabel(Graph.nodeLabel()); },
     /** Stop / restart the render loop and layout simulation (a graph in a closed window draws nothing). */
     pause() { Graph.pauseAnimation(); },
     resume() { asleep = false; lastActive = performance.now(); if (!document.hidden) Graph.resumeAnimation(); },

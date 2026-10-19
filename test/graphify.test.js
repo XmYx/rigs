@@ -45,7 +45,7 @@ test('the Graphify panel is registered: page element, panel, toolbar button, pho
   assert.match(css, /#graphify \{ top: var\(--hdr\) !important;[^}]*height: var\(--room\)/, 'full width under the header on a phone');
   const src = read('ui/src/graphify.js');
   assert.match(src, /setActive\(on\)/);
-  assert.match(src, /graph\.pause\(\)/, 'the render loop sleeps while the window is closed');
+  assert.match(src, /graph\??\.pause\(\)/, 'the render loop sleeps while the window is closed');
   assert.match(read('ui/src/graph.js'), /pause\(\) \{ Graph\.pauseAnimation\(\); \}/);
 });
 
@@ -123,4 +123,140 @@ test('layout survives a reload: a second manager on the same storage sees the op
   copy.setItem(D.STORAGE_KEY, D.serialize(floating.getLayout()));
   const f = manager(copy).getLayout().floating.find((x) => x.id === 'graphify');
   assert.deepEqual([f.x, f.y, f.w, f.h], [12, 34, 500, 400], 'a floating position and size persist');
+});
+
+// ── Structure view: the diagram of how JARVIS is built must match the code it describes ──────────────────────────────
+const S = await import('../ui/src/graphify-structure.js');
+
+test('structure: every node is anchored to a real file and a symbol that is still in it', () => {
+  const nodes = S.buildStructure().nodes.filter(S.isComponent);
+  assert.ok(nodes.length >= 50, 'a real diagram, not a stub');
+  const stale = [];
+  for (const n of nodes) {
+    const file = path.join(ROOT, n.src);
+    if (!fs.existsSync(file)) { stale.push(`${n.id}: ${n.src} is gone`); continue; }
+    if (!fs.readFileSync(file, 'utf8').includes(n.sym)) stale.push(`${n.id}: "${n.sym}" is no longer in ${n.src} — change the code first, then graphify-structure.js`);
+  }
+  assert.deepEqual(stale, []);
+});
+
+test('structure: ids unique, links join existing nodes, every node is wired in, types and kinds are known', () => {
+  const { links } = S.buildStructure();
+  const nodes = S.buildStructure().nodes.filter(S.isComponent);
+  const ids = new Set(nodes.map((n) => n.id));
+  assert.equal(ids.size, nodes.length, 'unique ids');
+  for (const l of links) {
+    assert.ok(ids.has(l.source), `link from unknown node ${l.source}`);
+    assert.ok(ids.has(l.target), `link to unknown node ${l.target}`);
+    assert.ok(S.S_LINKS[l.kind], `unknown link kind ${l.kind}`);
+    assert.notEqual(l.source, l.target);
+  }
+  assert.equal(new Set(links.map((l) => `${l.source}>${l.target}`)).size, links.length, 'no duplicate links');
+  const wired = new Set(links.flatMap((l) => [l.source, l.target]));
+  assert.deepEqual(nodes.filter((n) => !wired.has(n.id)).map((n) => n.id), [], 'no orphan nodes');
+  for (const n of nodes) {
+    assert.ok(S.S_TYPES[n.type], `${n.id}: unknown type ${n.type}`);
+    assert.ok(S.LANES.some((l) => l.id === n.lane), `${n.id}: unknown lane ${n.lane}`);
+    assert.ok(n.desc && n.desc.length > 20, `${n.id}: says what it is`);
+    assert.ok(Number.isFinite(n.fx) && Number.isFinite(n.fy), `${n.id}: pinned on the grid`);
+    assert.ok(n.name.length <= 30, `${n.id}: the label must fit (${n.name.length} chars)`);
+  }
+  const at = nodes.map((n) => `${n.fx},${n.fy}`);
+  assert.equal(new Set(at).size, at.length, 'no two nodes on the same spot');
+  for (const t of Object.keys(S.S_TYPES).filter((k) => !S.S_TYPES[k].hidden)) assert.ok(nodes.some((n) => n.type === t), `type ${t} is used`);
+  // The graph is mutated by 3d-force-graph: every call hands out fresh objects.
+  assert.notEqual(S.buildStructure().nodes[0], nodes[0]);
+  assert.notEqual(S.buildStructure().links[0], links[0]);
+});
+
+test('structure: each lane has a title to the left of its rows, and it is a label, not a component', () => {
+  const all = S.buildStructure().nodes;
+  const titles = all.filter((n) => n.type === 's-lane');
+  assert.deepEqual(titles.map((n) => n.id), S.LANES.map((l) => `lane:${l.id}`));
+  const left = Math.min(...all.filter(S.isComponent).map((n) => n.fx));
+  for (const t of titles) assert.ok(t.fx < left, `${t.id} sits left of the diagram`);
+  const ys = titles.map((t) => t.fy);
+  assert.deepEqual([...ys].sort((a, b) => b - a), ys, 'lanes read top to bottom');
+  assert.equal(M.summarizeStructure({ nodes: all, links: [] }).nodes, all.length - titles.length, 'titles are not counted as nodes');
+  assert.equal(S.S_TYPES['s-lane'].hidden, true, 'and are not in the legend');
+});
+
+test('structure: the routing algorithm shown is the one in router.js, the tool families are real MCP tools', () => {
+  const { links } = S.buildStructure();
+  const nodes = S.buildStructure().nodes.filter(S.isComponent);
+  const router = read('src/router.js');
+  const routes = JSON.parse(router.match(/export const ROUTES = (\[[^\]]*\])/)[1].replace(/'/g, '"'));
+  assert.deepEqual(routes, ['answer', 'implement', 'plan', 'continue']);
+  const shown = nodes.filter((n) => n.type === 's-route').map((n) => n.name).sort();
+  assert.deepEqual(shown, [...routes].sort(), 'one route node per router route');
+  const out = links.filter((l) => l.source === 'd-route').map((l) => l.target).sort();
+  assert.deepEqual(out, nodes.filter((n) => n.type === 's-route').map((n) => n.id).sort(), 'the decision leads to each route');
+  const engines = router.match(/export const ENGINES = (\[[^\]]*\])/)[1];
+  for (const e of ['jev', 'claude', 'rules']) assert.match(engines, new RegExp(`'${e}'`));
+  assert.deepEqual(nodes.filter((n) => n.id.startsWith('eng-')).map((n) => n.id), ['eng-jev', 'eng-claude', 'eng-rules'], 'engines in fallback order');
+
+  const mcp = read('src/mcp.js');
+  const claimed = nodes.flatMap((n) => n.tools || []);
+  assert.ok(claimed.length >= 40);
+  assert.deepEqual(claimed.filter((t) => !new RegExp(`name: '${t}'`).test(mcp)), [], 'every tool listed under a family exists in src/mcp.js');
+  assert.equal(new Set(claimed).size, claimed.length, 'a tool belongs to one family');
+
+  // The loop and the steward are what planner.js / merge.js say they are.
+  const planner = read('src/planner.js');
+  for (const [k, re] of [['attempts per task', /export const MAX_ATTEMPTS = \d+/], ['nudges', /export const MAX_NUDGES = \d+/], ['revives', /export const MAX_REVIVES = \d+/]]) assert.match(planner, re, k);
+  const ladder = read('src/autonomy.js').match(/DEFAULT_LADDER = \[([\s\S]*?)\];/)[1];
+  assert.deepEqual([...ladder.matchAll(/model: '([^']+)', effort: '([^']+)'/g)].map((m) => `${m[1]} ${m[2]}`),
+    ['claude-sonnet-5-5 medium', 'claude-opus-5-5 high', 'claude-opus-5-5 xhigh'], 'the ladder drawn (Sonnet medium → Opus high → Opus xhigh) is the configured one');
+  const merge = read('src/merge.js');
+  assert.ok(merge.indexOf("run(npm, ['run', 'build']") > 0 && merge.indexOf("run(npm, ['run', 'build']") < merge.indexOf("run(npm, ['test']"), 'build runs before tests');
+  assert.match(merge, /merges ONE request at a time/, 'serial merging');
+  assert.match(merge, /FORBIDDEN = \/\^\(node_modules\|ui\\\/dist\)/, 'the policy gate drawn is the forbidden-paths rule');
+});
+
+test('structure: connections() lists what is wired to a node, in and out', () => {
+  const data = S.buildStructure();
+  const c = S.connections(data, 'd-retry');
+  assert.deepEqual(c.filter((x) => x.dir === 'out').map((x) => x.id).sort(), ['blocked', 'ladder']);
+  assert.deepEqual(c.filter((x) => x.dir === 'in').map((x) => x.id).sort(), ['d-status', 'self-answer']);
+  assert.equal(c.find((x) => x.id === 'ladder').label, 'yes');
+  assert.deepEqual(S.connections(data, 'nope'), []);
+  const live = { nodes: data.nodes, links: data.links.map((l) => ({ ...l, source: { id: l.source }, target: { id: l.target } })) };
+  assert.equal(S.connections(live, 'd-retry').length, c.length, 'also after 3d-force-graph replaced the ids by node objects');
+});
+
+test('views: structure is the default, the choice is validated, the header says what is on screen', () => {
+  assert.equal(M.DEFAULT_VIEW, 'structure');
+  assert.deepEqual(M.VIEWS, ['structure', 'mesh']);
+  assert.equal(M.normalizeView('mesh'), 'mesh');
+  assert.equal(M.normalizeView('galaxy'), 'structure');
+  assert.equal(M.normalizeView(null), 'structure');
+  const s = M.summarizeStructure(S.buildStructure());
+  assert.equal(s.lanes, 5);
+  assert.ok(s.decisions >= 8);
+  assert.match(s.text, /^\d+ nodes · \d+ links · 5 lanes · \d+ decisions$/);
+  assert.equal(M.summarizeStructure(null).text, '0 nodes · 0 links');
+  assert.deepEqual([S.STRUCTURE_FACTS.nodes, S.STRUCTURE_FACTS.links], [s.nodes, s.links]);
+});
+
+test('the window wires both views on the one graph module: palette switch, arrows, link labels, toggle, detail card', () => {
+  const g = read('ui/src/graphify.js');
+  assert.match(g, /graph\.setTypes\(view === 'structure' \? S_TYPES : deps\.types\)/, 'the palette follows the view');
+  assert.match(g, /aria-pressed/, 'the toggle is a pressed-state button group');
+  assert.match(g, /'aria-label': 'Jump to a node'/, 'every node can be opened without the canvas (keyboard, phone)');
+  assert.match(g, /update\(\) \{ if \(active && view === 'mesh'\) draw\(\); \}/, 'the structure does not redraw with the mesh');
+  assert.match(g, /localStorage/, 'the chosen view is remembered');
+  assert.match(read('ui/src/main.js'), /createGraphify\(\$\('#graphify'\), \{ createGraph, types: TYPES,/);
+  const gr = read('ui/src/graph.js');
+  assert.match(gr, /setTypes\(types\)/);
+  assert.match(gr, /linkDirectionalArrowLength\(\(l\) => \(l\.arrow \? 4 : 0\)\)/, 'directed links get arrowheads');
+  assert.match(gr, /linkLabel\(/);
+  assert.match(gr, /state\.types\[n\.type\]/, 'the galaxy keeps TYPES as the default palette');
+  const css = read('ui/src/styles.css');
+  assert.match(css, /\.gfy-detail\[hidden\] \{ display: none; \}/);
+  assert.match(css, /#graphify\[data-view=mesh\] \.gfy-legend/);
+  assert.match(g, /canvas\.dataset\.lod = px >= 85 \? 'near' : px >= 44 \? 'mid' : 'far'/, 'labels thin out with the zoom');
+  assert.match(css, /\.gfy-canvas\[data-lod=far\] \.nlabel:not\(\.t-s-lane\)/, 'zoomed out only the lane titles stay');
+  assert.match(g, /\.filter\(Boolean\)\); \/\/ replaceChildren turns a null/, 'no "null" text in the card');
+  assert.match(css, /\.gfy-detail \{ z-index: 5;/, 'the card sits above the node labels');
+  assert.match(css, /\.gfy-canvas \{ position: absolute; inset: 0; z-index: 0;/, 'whose labels are confined to the canvas stacking context');
 });
