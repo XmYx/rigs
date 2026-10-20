@@ -206,7 +206,7 @@ test('startApp: command recipe spawns detached and times out if the app never an
     sleep: () => new Promise((ok) => setTimeout(ok, 5)),
     platform: 'linux',
   };
-  await assert.rejects(A.startApp('cmd', { deps, pollMs: 5, waitMs: 40 }), /did not answer \/ within/);
+  await assert.rejects(A.startApp('cmd', { deps, pollMs: 5, waitMs: 40 }), /did not answer \/ within 0s \(last try: ECONNREFUSED\)/, 'the error says how the last probe failed');
   assert.deepEqual(spawned, [['python3 -m http.server 9', true]]);
 });
 

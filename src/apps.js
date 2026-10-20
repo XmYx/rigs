@@ -442,5 +442,5 @@ async function doStart(id, { waitMs, pollMs, deps }) {
     if (last.ok) return { started: true, health: record(last) };
   }
   record(last);
-  throw Object.assign(new Error(`${app.name} was started but did not answer ${app.healthPath} within ${Math.round(waitMs / 1000)}s`), { status: 504 });
+  throw Object.assign(new Error(`${app.name} was started but did not answer ${app.healthPath} within ${Math.round(waitMs / 1000)}s (last try: ${last.error || 'no answer'})`), { status: 504 });
 }

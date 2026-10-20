@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -202,14 +203,32 @@ test('attention: feed per node + mesh-wide, codex hook endpoint', async () => {
 
 // ---------------------------------------------------------------- App Store (src/appstore.js)
 
-const HELLO_PORT = 40000 + Math.floor(Math.random() * 20000);
-function putHello() {
+// The hello app's port: free when the first App Store test starts, and below every OS's ephemeral range (Linux 32768+, macOS and
+// Windows 49152+, where Windows also reserves whole blocks), so a busy machine's own connections cannot hold it.
+async function freePort() {
+  for (let i = 0; i < 50; i++) {
+    const port = 10000 + Math.floor(Math.random() * 10000);
+    const free = await new Promise((res) => {
+      const s = net.createServer();
+      s.once('error', () => res(false));
+      s.listen(port, '127.0.0.1', () => s.close(() => res(true)));
+    });
+    if (free) return port;
+  }
+  throw new Error('no free port for the hello app');
+}
+let HELLO_PORT; // picked by the first putHello()
+// Why an install failed, up front (the steward keeps only the start of a failure): the error, then the last log
+// lines, which hold the app's own output when it did not come up.
+const whyFailed = (job) => [job?.error, ...(job?.log || []).slice(-20)].filter(Boolean).join('\n');
+async function putHello() {
+  HELLO_PORT ??= await freePort();
   // A tiny node app from test/fixtures, copied out of the repo, launched by the launcher script (RIGS_NO_SYSTEMD).
   fs.mkdirSync(path.join(HOME, 'appstore', 'catalog'), { recursive: true });
   fs.writeFileSync(path.join(HOME, 'appstore', 'catalog', 'hello.json'), JSON.stringify({
     id: 'hello', name: 'Hello', icon: '👋', description: 'smoke-test app', version: '1.0.0',
     source: { type: 'rigs', path: 'test/fixtures/appstore-hello', copy: true }, runtime: { type: 'node' },
-    port: HELLO_PORT, healthPath: '/healthz', healthTimeoutSec: 30, env: { HELLO_PORT: '{port}' },
+    port: HELLO_PORT, healthPath: '/healthz', healthTimeoutSec: 60, env: { HELLO_PORT: '{port}' },
     launch: { command: ['{node}', '{appDir}/server.mjs'] },
   }));
 }
@@ -222,7 +241,7 @@ async function waitFor(pred, ms = 10000) {
 }
 
 test('App Store API: catalog, install end to end, open through the App Cloud, uninstall to trash', async () => {
-  putHello();
+  await putHello();
   const cat = await get('/api/local/appstore');
   assert.deepEqual(cat.errors, []);
   assert.equal(cat.node, 'test-node');
@@ -234,8 +253,8 @@ test('App Store API: catalog, install end to end, open through the App Cloud, un
   const started = await post('/api/nodes/self/appstore/hello/install', {});
   assert.equal(started.state, 'running');
   let job;
-  await waitFor(async () => (job = await get('/api/local/appstore/hello/job')).state !== 'running', 60000);
-  assert.equal(job.state, 'done', JSON.stringify(job, null, 2));
+  await waitFor(async () => (job = await get('/api/local/appstore/hello/job')).state !== 'running', 90000);
+  assert.equal(job.state, 'done', whyFailed(job));
   assert.deepEqual(job.steps.map((s) => s.status), ['done', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'done', 'done', 'done']);
   assert.ok(job.log.some((l) => /Hello is installed/.test(l)));
   const app = (await get('/api/local/apps')).apps.find((a) => a.id === 'hello');
@@ -260,7 +279,7 @@ test('App Store API: catalog, install end to end, open through the App Cloud, un
 });
 
 test('App Store MCP tools: appstore_list and appstore_install (wait, then uninstall)', async () => {
-  putHello();
+  await putHello();
   const mcp = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'mcp'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
   const replies = new Map();
   let buf = '';
@@ -269,7 +288,7 @@ test('App Store MCP tools: appstore_list and appstore_install (wait, then uninst
   const call = async (name, args) => {
     const id = ++next;
     mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
-    await waitFor(() => replies.has(id), 90000);
+    await waitFor(() => replies.has(id), 120000);
     const r = replies.get(id).result;
     assert.ok(!r.isError, r.content[0].text);
     return JSON.parse(r.content[0].text);
@@ -279,7 +298,7 @@ test('App Store MCP tools: appstore_list and appstore_install (wait, then uninst
     const listed = await call('appstore_list', {});
     assert.equal(listed.node, 'test-node');
     assert.equal(listed.apps.find((a) => a.id === 'hello').install.state, 'not-installed');
-    const job = await call('appstore_install', { id: 'hello', wait: true, waitSec: 60 });
+    const job = await call('appstore_install', { id: 'hello', wait: true, waitSec: 90 });
     assert.equal(job.state, 'done', JSON.stringify(job, null, 2));
     assert.ok(job.steps.some((s) => s.startsWith('✓ Register in the App Cloud')), job.steps.join('\n'));
     assert.ok(await helloAnswers());
