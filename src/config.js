@@ -25,6 +25,10 @@ function defaults() {
     allowedUsers: [],
     allowTaggedDevices: true,
     files: { showHidden: false },
+    // The shared folder (src/shared.js, docs/shared-folder.md): synced with every online RIGS node, the default place
+    // for ad-hoc apps (apps/<id>), files made for Sir (files/) and reports (reports/). path '' = ~/RIGS-Shared
+    // (a throwaway node with its own RIGS_HOME: <RIGS_HOME>/RIGS-Shared). A new path applies after a restart.
+    shared: { enabled: true, path: '', intervalSec: 60, maxFileMb: 256, ignore: [] },
     brain: {
       // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
@@ -57,7 +61,9 @@ function defaults() {
     autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60 },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
-    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
+    // thinkingPhrases: the UI says a short pre-rendered line ("One moment, sir.") the moment a request is sent
+    // (src/thinking-phrases.js); false = nothing is said before the reply.
+    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto', thinkingPhrases: true },
     // Pre-routing (src/router.js): each JARVIS request is classified (answer · implement · plan · continue) before any brain
     // sees it, and work bound to a folder is filed by RIGS itself. preroute: false = no router; the brain decides and files
     // work itself (jarvis_task / project_create). engine: 'jev' = a Jev-compatible typed-decision API (LocalJev,
@@ -248,7 +254,7 @@ export function publicConfig() {
   const c = config();
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
-    persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
+    persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files, shared: c.shared,
     models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, experimental: c.experimental,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },

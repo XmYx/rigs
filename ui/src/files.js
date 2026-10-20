@@ -1,16 +1,23 @@
 import { ago, api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { nativeCtx, tagCtx } from './ctx-tag.js';
+import { openFileTool } from './file-tools.js';
+import { TOOLS, actionTargets, clickSelect, isZip, toolFor, toolsFor } from './file-tools-model.js';
 
 const ICON = { dir: '📁', file: '📄', link: '🔗' };
 const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
 const TEXT = /\.(txt|md|json|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|c|h|cpp|cs|sh|zsh|ps1|yml|yaml|toml|ini|cfg|conf|log|csv|html|css|xml|sql|env|gitignore|dockerfile)$/i;
 
-/** File browser for any machine, with upload, download, rename, trash, and copy-to-another-machine. */
+/**
+ * File browser for any machine, with upload, download, rename, trash, copy-to-another-machine, zip/unzip and the
+ * built-in file tools (file-tools.js: double-click opens a file in the tool for its type, "Open with" picks one).
+ * Ctrl/⌘-click and Shift-click select several rows (zip takes the whole selection).
+ */
 export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidden: hidden = false, machines = () => [], onTerminalHere } = {}) {
   let cur = { path, entries: [], parent: null, sep: '/' };
   let showHidden = !!hidden;
-  let selected = null;
+  let picked = []; // selected rows' paths (Ctrl/⌘ / Shift-click add); the preview shows the last one clicked
+  let anchor = null;
   let closed = false;
 
   const pathInput = h('input', { class: 'path-input', 'aria-label': 'Folder path', value: path, spellcheck: 'false' });
@@ -38,7 +45,10 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   // Right-click / long-press (contextmenu.js): a row is a file or folder, the empty list is the current folder.
   const fileActions = {
-    open: (e) => { if (e.type === 'dir') load(e.path); else { selected = e.path; render(); showPreview(e); } },
+    open: (e) => { if (e.type === 'dir') load(e.path); else { picked = [e.path]; anchor = e.path; render(); showPreview(e); } },
+    openWith: (e, tool) => openTool(e, tool),
+    zip: (e) => zipItems(actionTargets(picked, e.path)),
+    unzip: (e) => unzipItem(e),
     download: (e) => download(e),
     rename: (e) => renameItem(e),
     trash: (e) => trashItem(e),
@@ -98,8 +108,9 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     if (hid && !showHidden) { showHidden = true; hiddenBox.checked = true; }
     if (!(await load(p))) return false;
     const e = sel && cur.entries.find((x) => x.path === sel);
-    if (!e) { selected = null; render(); return true; }
-    selected = e.path;
+    if (!e) { picked = []; anchor = null; render(); return true; }
+    picked = [e.path];
+    anchor = e.path;
     render();
     list.querySelector('.file-row.sel')?.scrollIntoView?.({ block: 'nearest' });
     if (e.type === 'dir') showDirActions(e); else showPreview(e);
@@ -108,15 +119,28 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   function render() {
     list.replaceChildren(...cur.entries.map((e) => {
-      const row = h('div', { class: 'file-row' + (selected === e.path ? ' sel' : ''), draggable: 'true', title: e.path },
+      const row = h('div', { class: 'file-row' + (picked.includes(e.path) ? ' sel' : ''), draggable: 'true', title: e.path },
         h('span', { class: 'fi' }, ICON[e.type] || '📄'),
         h('span', { class: 'fn' }, e.name),
         h('span', { class: 'fs' }, e.type === 'dir' ? '' : fmtBytes(e.size)),
         h('span', { class: 'fm' }, ago(e.mtime)));
-      row.addEventListener('click', () => { selected = e.path; render(); if (e.type !== 'dir') showPreview(e); else showDirActions(e); });
-      row.addEventListener('dblclick', () => (e.type === 'dir' ? load(e.path) : download(e)));
+      row.addEventListener('click', (ev) => {
+        ({ picked, anchor } = clickSelect({ picked, anchor }, cur.entries.map((x) => x.path), e.path, { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey }));
+        render();
+        if (picked.length > 1) showMulti();
+        else if (!picked.includes(e.path)) preview.replaceChildren(h('div', { class: 'muted pad' }, 'Select a file to preview it.'));
+        else if (e.type !== 'dir') showPreview(e);
+        else showDirActions(e);
+      });
+      // Double-click: a folder opens, a file opens in the built-in tool for its type (else downloads).
+      row.addEventListener('dblclick', () => (e.type === 'dir' ? load(e.path) : toolFor(e.name) ? openTool(e) : download(e)));
       row.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('application/x-rigs-file', JSON.stringify({ nodeId, nodeName, path: e.path, name: e.name })));
-      return tagCtx(row, 'file', e.path, { entry: e, actions: fileActions, get machines() { return machines().filter((m) => m.id !== nodeId); } });
+      return tagCtx(row, 'file', e.path, {
+        entry: e, actions: fileActions, zip: isZip(e.name),
+        get machines() { return machines().filter((m) => m.id !== nodeId); },
+        get tools() { return e.type === 'dir' ? [] : toolsFor(e.name).map((id) => TOOLS[id]); },
+        get count() { return actionTargets(picked, e.path).length; },
+      });
     }));
     if (!cur.entries.length) list.append(h('div', { class: 'muted pad' }, 'Empty folder'));
   }
@@ -129,8 +153,12 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       if (m) copyBetween(nodeId, nodeName, e.path, m.id, m.name, `~/Downloads/${e.name}`);
       send.value = '';
     });
+    const tools = e.type === 'dir' ? [] : toolsFor(e.name);
     return h('div', { class: 'actions' },
+      ...tools.map((id, i) => h('button', { class: 'btn' + (i ? '' : ' primary'), onclick: () => openTool(e, id) }, `${TOOLS[id].icon} ${i ? TOOLS[id].label : 'Open'}`)),
       e.type !== 'dir' && h('button', { class: 'btn', onclick: () => download(e) }, '⇩ Download'),
+      h('button', { class: 'btn', onclick: () => zipItems([e.path]) }, '🗜 Zip'),
+      isZip(e.name) && h('button', { class: 'btn', onclick: () => unzipItem(e) }, '📦 Extract'),
       h('button', { class: 'btn', onclick: () => renameItem(e) }, '✎ Rename'),
       h('button', { class: 'btn danger', onclick: () => trashItem(e) }, '🗑 Trash'),
       e.type !== 'dir' && others.length ? send : null);
@@ -153,6 +181,40 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       } catch (err) { preview.append(h('div', { class: 'muted pad' }, err.message)); }
     } else if (/\.(mp4|webm|mov)$/i.test(e.name)) preview.append(h('video', { class: 'pv-img', src: raw, controls: true }));
     else if (/\.pdf$/i.test(e.name)) preview.append(h('iframe', { class: 'pv-frame', src: raw }));
+  }
+
+  function openTool(e, tool) {
+    return openFileTool({ nodeId, nodeName, path: e.path, name: e.name, tool, entries: cur.entries, onSaved: () => { if (dirOf(e.path) === cur.path) load(cur.path); } });
+  }
+
+  function showMulti() {
+    const items = cur.entries.filter((x) => picked.includes(x.path));
+    const bytes = items.reduce((n, x) => n + (x.type === 'dir' ? 0 : x.size || 0), 0);
+    preview.replaceChildren(h('div', { class: 'pad' },
+      h('div', { class: 'pv-title' }, `${items.length} items selected`),
+      h('div', { class: 'muted' }, `${fmtBytes(bytes)} in files · Ctrl/⌘-click to add or remove, Shift-click for a range`),
+      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => zipItems(picked) }, `🗜 Compress ${items.length} items to zip`))));
+  }
+
+  /** Zip the given paths into one archive next to them (a " (2)" suffix when the name is taken). */
+  async function zipItems(paths) {
+    if (!paths.length) return;
+    toast(`Compressing ${paths.length === 1 ? paths[0].split(/[\\/]/).pop() : paths.length + ' items'}…`);
+    try {
+      const r = await api(`${node(nodeId)}/files/zip`, { method: 'POST', body: { paths } });
+      toast(`Created ${r.path.split(/[\\/]/).pop()} (${r.files} file${r.files === 1 ? '' : 's'}, ${fmtBytes(r.size)})`, 'ok');
+      if (dirOf(r.path) === cur.path) await navigate(cur.path, { select: r.path }); else load(cur.path);
+    } catch (err) { toast(`Zip failed: ${err.message}`, 'error'); }
+  }
+
+  /** Extract an archive into a new folder beside it (named after it, suffixed when taken). */
+  async function unzipItem(e) {
+    toast(`Extracting ${e.name}…`);
+    try {
+      const r = await api(`${node(nodeId)}/files/unzip`, { method: 'POST', body: { path: e.path } });
+      toast(`Extracted ${r.files} file${r.files === 1 ? '' : 's'} into ${r.path.split(/[\\/]/).pop()}${r.renamed.length ? ` (${r.renamed.length} renamed to avoid overwriting)` : ''}`, 'ok', 7000);
+      if (dirOf(r.path) === cur.path) await navigate(cur.path, { select: r.path }); else load(cur.path);
+    } catch (err) { toast(`Unzip failed: ${err.message}`, 'error', 9000); }
   }
 
   function download(e) {
@@ -188,6 +250,8 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   Object.defineProperties(w, { closed: { get: () => closed }, path: { get: () => cur.path } });
   return w;
 }
+
+const dirOf = (p) => String(p).replace(/[\\/][^\\/]*$/, '') || '/';
 
 /** Stream a file from one machine to another through this gateway. */
 export async function copyBetween(fromId, fromName, path, toId, toName, dest) {

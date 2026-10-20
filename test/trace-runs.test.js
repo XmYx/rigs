@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
@@ -282,7 +283,8 @@ test('API: mesh GET /api/traces/<id> gathers a trace from a mocked peer and mark
     span('sp-000000000003', 'sp-000000000001', 'dispatch', 'test-node', { target: 'peer-c', taskId: 't2' }),
     span('sp-000000000004', 'sp-000000000001', 'dispatch', 'test-node', { target: 'ghost', taskId: 't3' })];
   fs.writeFileSync(path.join(RHOME, 'traces', new Date(now).toISOString().slice(0, 10) + '.jsonl'), own.map((x) => JSON.stringify(x)).join('\n') + '\n');
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  // a port the OS says is free: a random one in 20000-40000 can collide with another run's server or an ephemeral port
+  const PORT = await new Promise((resolve) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
   const BASE = `http://127.0.0.1:${PORT}`;
   const env = {
     ...process.env, HOME, RIGS_HOME: RHOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_CLAUDE_DIR: path.join(HOME, 'claude'), RIGS_CODEX_DIR: path.join(HOME, 'codex'),

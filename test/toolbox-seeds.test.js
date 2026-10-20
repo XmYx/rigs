@@ -142,7 +142,7 @@ test('usage-transcript-parse: totals, dedup, no message text; ledger grouping', 
 test('healthz-wait: waits for a late server, honours strict, and gives up with the last error', async () => {
   const port = await closed();
   const late = http.createServer((q, r) => { r.statusCode = q.url === '/login' ? 401 : 200; r.end('ok'); });
-  setTimeout(() => late.listen(port, '127.0.0.1'), 700);
+  setTimeout(() => late.listen(port, '127.0.0.1'), 2500); // longer than a node start on a loaded machine, or the first attempt already succeeds
   try {
     const up = await run('healthz-wait', { url: `http://127.0.0.1:${port}/healthz`, timeoutSec: 10, intervalMs: 200 });
     assert.equal(up.ok, true);

@@ -1,0 +1,5 @@
+# Keep LF on every OS, including Windows checkouts with core.autocrlf=true (the GitHub windows runner).
+# Seed tools must be byte-identical everywhere: toolbox.seedProblems refuses CRLF, and promotion hashes the files.
+tools/** text=auto eol=lf
+# test/toolbox-seeds.test.js parses the JSON block at the end of this survey with \n-anchored patterns.
+docs/tool-registry-survey.md text eol=lf

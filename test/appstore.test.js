@@ -86,7 +86,7 @@ function world({ uv = true, systemd = true, platform = 'linux', gpus = [{ name: 
   let failures = pipFailures;
   const ok = (stdout = '') => ({ code: 0, stdout, stderr: '' });
   const exec = async (cmd, args, opts = {}) => {
-    const name = path.basename(cmd).replace(/\.exe$/, '');
+    const name = path.win32.basename(cmd).replace(/\.exe$/, ''); // win32 basename splits on / and \ alike
     calls.push({ name, args: [...args] });
     if (name === 'git') {
       if (args[0] === 'init') { fs.mkdirSync(path.join(args[2], '.git'), { recursive: true }); return ok(); }
@@ -108,7 +108,8 @@ function world({ uv = true, systemd = true, platform = 'linux', gpus = [{ name: 
       opts.onLine?.('Installed 3 packages in 12ms');
       return ok('Installed 3 packages');
     }
-    if (/^python/.test(name)) {
+    if (/^py(thon[\d.]*)?$/.test(name)) {
+      if (name === 'py' && /^-\d/.test(args[0])) args = args.slice(1); // the Windows launcher: py -3.11 …
       if (args[0] === '-m' && args[1] === 'venv') { const py = S.venvPython(args[2]); fs.mkdirSync(path.dirname(py), { recursive: true }); fs.writeFileSync(py, ''); return ok(); }
       const code = args[1] || '';
       if (code.includes('[:2]')) return ok('3.11\n');
@@ -635,6 +636,33 @@ test('runtime.pipArgs: placeholders are rendered (e.g. a constraints file shippe
   const pip = w.calls.find((c) => c.name === 'uv' && c.args[0] === 'pip');
   const i = pip.args.indexOf('--constraint');
   assert.equal(pip.args[i + 1], path.join(path.resolve(S.CATALOG_DIR, '..', '..'), 'appstore', 'sources', 'acestep-studio', 'constraints.txt'));
+});
+
+test('nativeArg: absolute Windows paths built from a template get native separators; flags, URLs and POSIX paths stay', () => {
+  assert.equal(S.nativeArg('D:\\a\\rigs\\rigs/appstore/sources/acestep-studio/constraints.txt', 'win32'), 'D:\\a\\rigs\\rigs\\appstore\\sources\\acestep-studio\\constraints.txt');
+  assert.equal(S.nativeArg('C:\\Users\\sam\\apps\\hello\\app/server.mjs', 'win32'), 'C:\\Users\\sam\\apps\\hello\\app\\server.mjs');
+  assert.equal(S.nativeArg('\\\\nas\\share/app/x.py', 'win32'), '\\\\nas\\share\\app\\x.py');
+  for (const a of ['--constraint', '-c', 'http://127.0.0.1:8188/free', 'print("a/b")', '/opt/x/y']) assert.equal(S.nativeArg(a, 'win32'), a);
+  for (const a of ['/opt/rigs/app/appstore/c.txt', 'C:\\x/y']) assert.equal(S.nativeArg(a, 'linux'), a, 'never rewritten off Windows');
+});
+
+test('pythonCandidates: py -3.x then python on Windows (python3 is often the Store stub), python3.x / python3 / python elsewhere', () => {
+  assert.deepEqual(S.pythonCandidates('3.11', 'windows'), [['py', ['-3.11']], ['python', []]]);
+  assert.deepEqual(S.pythonCandidates('', 'windows'), [['py', ['-3']], ['python', []]]);
+  assert.deepEqual(S.pythonCandidates('3.11', 'linux'), [['python3.11', []], ['python3', []], ['python', []]]);
+  assert.deepEqual(S.pythonCandidates(undefined, 'mac'), [['python3', []], ['python', []]]);
+});
+
+test('without uv on Windows: py -3.11 -m venv, then the venv python runs pip', async () => {
+  putManifest(studio({ id: 'winpy', port: 18225, platforms: ['linux', 'windows'], gpuOverseer: undefined, models: [], launch: { command: ['{python}', '{appDir}/server.py'] } }));
+  const w = world({ uv: false, systemd: false, platform: 'windows' });
+  w.deps.which = (n) => ({ git: 'C:\\git\\git.exe', py: 'C:\\Windows\\py.exe', python: 'C:\\Python311\\python.exe' }[n] ?? null);
+  const job = await installAndWait('winpy', { until: 'deps' }, w);
+  assert.equal(job.state, 'done', job.error);
+  const venvCall = w.calls.find((c) => c.args.includes('-m') && c.args.includes('venv'));
+  assert.equal(venvCall.name, 'py');
+  assert.deepEqual(venvCall.args.slice(0, 3), ['-3.11', '-m', 'venv']);
+  assert.ok(w.calls.some((c) => c.name === 'python' && c.args.slice(0, 3).join(' ') === '-m pip install'), w.names().join('\n'));
 });
 
 // ---------------------------------------------------------------- uninstall, status, list

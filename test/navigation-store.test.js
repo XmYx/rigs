@@ -96,6 +96,14 @@ test('registration payload passes the apps.js validation on every platform', () 
   }
 });
 
+/** A command line → argv: "double-quoted" words keep their spaces, other words split on whitespace. */
+const splitCommand = (line) => [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]);
+
+test('splitCommand: the darwin and win32 launch lines of the plan split into node + server.js', () => {
+  assert.deepEqual(splitCommand(planFor('darwin').launch.command), ['/usr/local/bin/node', '/opt/rigs/app/applets/navigation/server.js']);
+  assert.deepEqual(splitCommand(planFor('win32').launch.command), ['C:\\node\\node.exe', 'C:\\Users\\sam\\.rigs\\app\\applets\\navigation\\server.js']);
+});
+
 const freePort = () => new Promise((res, rej) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); });
   s.on('error', rej);
@@ -104,9 +112,11 @@ const freePort = () => new Promise((res, rej) => {
 test('scratch install: generated command starts the applet, /healthz answers {ok:true}', async () => {
   const port = await freePort();
   const rigsHome = process.env.RIGS_HOME;
-  const plan = installPlan(manifest, { platform: 'darwin', installDir: ROOT, rigsHome, nodePath: process.execPath, port });
+  // The plan for the OS this runs on (win32 quotes its paths; macOS stands in for Linux, whose plan is a systemd unit).
+  const platform = process.platform === 'win32' ? 'win32' : 'darwin';
+  const plan = installPlan(manifest, { platform, installDir: ROOT, rigsHome, nodePath: process.execPath, port });
   fs.mkdirSync(plan.dirs[0], { recursive: true });
-  const [cmd, ...args] = plan.launch.command.split(' ');
+  const [cmd, ...args] = splitCommand(plan.launch.command);
   assert.equal(cmd, process.execPath);
   const child = spawn(cmd, args, { cwd: plan.launch.cwd, env: { ...process.env, ...plan.env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';

@@ -54,6 +54,9 @@ test('placePath / isPathLike: named places become ~ paths, names that are no pat
   assert.equal(U.placePath('my home'), '~');
   assert.equal(U.placePath('Desktop'), '~/Desktop');
   assert.equal(U.placePath('MadMikeUnity'), null);
+  assert.equal(U.placePath('shared'), '@shared');
+  assert.equal(U.placePath('the shared folder'), '@shared');
+  assert.equal(U.placePath('shared reports'), '@shared/reports');
   assert.equal(U.placePath('constructor'), null, 'no prototype keys');
   for (const p of ['~', '~/x', '/etc', '.', '../up', 'C:\\Users', 'a/b', 'a\\b']) assert.equal(U.isPathLike(p), true, p);
   for (const p of ['rigs-dev', 'MadMikeUnity', 'downloads']) assert.equal(U.isPathLike(p), false, p);

@@ -1,8 +1,7 @@
 import { h } from './api.js';
 import { isPhone } from './mobile.js';
 import { dockManager, panelStatus, setCollapsed as setCollapsedOp, setActiveTab, emptyLayout } from './dock-layout.js';
-import { initDocking, registerDockable, render, isDocking, toggleDocking, onDockingChange, clampPanel, STAGE } from './docking.js';
-import { isScaling, toggleScaling, onScalingChange } from './scaling.js';
+import { initDocking, registerDockable, render, clampPanel, STAGE } from './docking.js';
 import { tagCtx } from './ctx-tag.js';
 
 // Every fixed panel of the JARVIS screen (side panel, filters, top bar, face, chat dock, work dashboard,
@@ -10,16 +9,15 @@ import { tagCtx } from './ctx-tag.js';
 // ▾ collapses it to its header (elements marked .keep or the `keep` option stay) and ✕ hides it — all
 // animated. The layout lives in the dock layout engine (dock-layout.js, storage 'rigs.dock', migrated from
 // the old 'rigs.panels') and is drawn by docking.js: floating rects, the optional docked tree with tabs,
-// hidden panels with the exact place they were hidden from, collapsed panels. The ☰ corner button (never
-// closable) switches the docking layout and Smart scaling (scaling.js: keeps every panel on screen as the window
-// resizes), lists hidden panels to bring them back, and resets the layout.
+// hidden panels with the exact place they were hidden from, collapsed panels. The Panels item in the top menu bar
+// (jarvis-commands.js) switches the docking layout and Smart scaling (scaling.js: keeps every panel on screen as the
+// window resizes), shows or hides each panel, and resets the layout.
 
 const panels = new Map(); // id → { el, title, collapseBtn, onToggle, listed }
 const startHidden = new Set(); // panels closed by default (also after Reset layout)
 const inherited = new Set(); // inheritPanel: start closed because the panel it was split from is closed
-const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of ☰
+const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of the Panels menu
 let topZ = 12; // focusPanel raises a floating panel above the others, still under windows (z 100+)
-let menu = null;
 
 const NO_RECT = { x: null, y: null, w: null, h: null, vw: null, vh: null };
 
@@ -108,7 +106,7 @@ function animateClosed(el, closed) {
 export function setClosed(id, closed) {
   const p = panels.get(id);
   if (!p) return;
-  if (closed && p.el.contains(document.activeElement)) document.getElementById('panels-btn')?.focus({ preventScroll: true }); // don't strand focus on a hidden panel
+  if (closed && p.el.contains(document.activeElement)) document.activeElement.blur(); // don't strand focus on a hidden panel
   if (closed) dockManager.hidePanel(id);
   else dockManager.restorePanel(id);
 }
@@ -122,13 +120,13 @@ const isCollapsed = (id) => dockManager.getLayout().collapsed.includes(id);
 /**
  * Make a fixed element a movable, closable, dockable panel. The grip goes at the start of `into` (default: el).
  * `handle` is the title bar that drags it (default: `into` when that is a header, else the element itself).
- * `listed() === false` leaves it out of ☰, the Window menu and Show all / Hide others for now (Ask JARVIS in the top bar).
+ * `listed() === false` leaves it out of the Panels menu, the Window menu and Show all / Hide others for now (Ask JARVIS in the top bar).
  */
 export function makeFloating(el, { id, title, into = el, handle, keep = [], onToggle, closedOnPhone = false, closedByDefault = false, listed = () => true }) {
   if (!el) return;
   for (const k of keep) k?.classList.add('keep');
   const grip = h('span', { class: 'pgrip', 'aria-hidden': 'true', title: `Drag to move ${title} (or drag its title bar) · double-click to reset` }, '⠿');
-  const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from ☰)`, 'aria-label': `Close ${title}`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
+  const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from the Panels menu)`, 'aria-label': `Close ${title}`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
   const collapseBtn = h('button', { class: 'pclose pcollapse', title: `Collapse ${title}`, 'aria-label': `Collapse ${title}`, 'aria-expanded': 'true', onclick: (e) => { e.stopPropagation(); setCollapsed(id, !el.classList.contains('panel-collapsed')); } }, '▾');
   const p = { el, title, collapseBtn, onToggle, listed };
   panels.set(id, p);
@@ -148,7 +146,6 @@ export function makeFloating(el, { id, title, into = el, handle, keep = [], onTo
     onClosed: (closed, initial) => {
       if (initial) el.classList.toggle('panel-closed', closed);
       else { animateClosed(el, closed); p.onToggle?.({ closed, collapsed: isCollapsed(id) }); }
-      renderMenu();
     },
     onCollapsed: (collapsed, initial) => {
       el.classList.toggle('panel-collapsed', collapsed);
@@ -202,11 +199,10 @@ export function focusPanel(id) {
   requestAnimationFrame(() => target.focus?.({ preventScroll: true }));
 }
 
-/** Removed panels stay closed and leave the ☰ lists until restored. */
+/** Removed panels stay closed and leave the Panels menu until restored. */
 export function setRemoved(id, removed) {
   if (removed) { removedIds.add(id); if (panels.has(id) && !isClosed(id)) setClosed(id, true); }
   else removedIds.delete(id);
-  renderMenu();
 }
 
 /** Every panel back to its default place (Reset layout); removed ones stay removed. */
@@ -214,50 +210,4 @@ export function resetLayout() {
   dockManager.resetLayout();
   for (const id of removedIds) if (panels.has(id) && !isClosed(id)) dockManager.hidePanel(id);
   render();
-}
-
-function renderMenu() {
-  if (!menu) return;
-  const list = dockManager.listPanels().filter((x) => panels.has(x.id) && panels.get(x.id).listed() && !removedIds.has(x.id));
-  const hidden = list.filter((x) => x.status === 'hidden');
-  menu.dockToggle.checked = isDocking();
-  menu.dockRow.hidden = isPhone(); // phones never dock
-  menu.scaleToggle.checked = isScaling();
-  menu.scaleRow.hidden = isPhone(); // phones keep the mobile layout
-  menu.list.replaceChildren(...list.filter((x) => x.status !== 'hidden').map((x) => h('label', { class: 'check' },
-    h('input', { type: 'checkbox', checked: true, onchange: (e) => setClosed(x.id, !e.target.checked) }), ' ', x.title,
-    x.status === 'docked' && isDocking() ? h('span', { class: 'pm-where' }, 'docked') : '')));
-  menu.hiddenHead.hidden = !hidden.length;
-  menu.hidden.replaceChildren(...hidden.map((x) => h('button', { class: 'ibtn pm-restore', title: `Bring ${x.title} back where it was`, onclick: () => showPanel(x.id) }, `↩ ${x.title}`)));
-}
-
-/** The ☰ corner button: the docking layout switch, show/hide and restore each panel, reset the layout. Call after the makeFloating()s. */
-export function panelMenu() {
-  const btn = h('button', { id: 'panels-btn', class: 'round', title: 'Panels — docking, show, hide, reset layout', 'aria-label': 'Panels', 'aria-haspopup': 'dialog' }, '☰');
-  const list = h('div', {});
-  const hiddenList = h('div', { class: 'pm-hidden' });
-  const hiddenHead = h('h5', { class: 'pm-sub' }, 'Hidden — restore to their last place');
-  const dockToggle = h('input', { type: 'checkbox', role: 'switch', onchange: (e) => { toggleDocking(); e.target.checked = isDocking(); } });
-  const dockRow = h('label', { class: 'check pm-dock', title: 'Drag a panel or window by its title bar onto another to dock it beside it or as a tab' }, dockToggle, ' Docking layout');
-  const scaleToggle = h('input', { type: 'checkbox', role: 'switch', onchange: (e) => { toggleScaling(); e.target.checked = isScaling(); } });
-  const scaleRow = h('label', { class: 'check pm-dock pm-scale', title: 'Keep every panel and window fully on screen as the window resizes: they glide to fit and drift back to where you put them when it grows' }, scaleToggle, ' Smart scaling');
-  const box = h('div', { id: 'panels-menu', class: 'panel hidden' }, h('h4', {}, 'Panels'), dockRow, scaleRow, list, hiddenHead, hiddenList,
-    h('button', { class: 'ibtn', onclick: () => resetLayout() }, '↺ Reset layout'));
-  menu = { box, list, hidden: hiddenList, hiddenHead, dockToggle, dockRow, scaleToggle, scaleRow };
-  const setOpen = (open) => { box.classList.toggle('hidden', !open); btn.setAttribute('aria-expanded', String(open)); };
-  btn.setAttribute('aria-expanded', 'false');
-  btn.onclick = () => { renderMenu(); setOpen(box.classList.contains('hidden')); };
-  document.addEventListener('pointerdown', (e) => { if (!box.contains(e.target) && e.target !== btn) setOpen(false); });
-  // Esc closes the menu; focus goes back to ☰ when it was inside the menu.
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || box.classList.contains('hidden')) return;
-    const inside = box.contains(document.activeElement);
-    setOpen(false);
-    if (inside || document.activeElement === btn) btn.focus({ preventScroll: true });
-  });
-  document.body.append(btn, box);
-  dockManager.subscribe(() => renderMenu());
-  onDockingChange(() => renderMenu());
-  onScalingChange(() => renderMenu());
-  renderMenu();
 }

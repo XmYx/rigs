@@ -18,7 +18,7 @@ import { tagCtx } from './ctx-tag.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { registerJarvisTray } from './tray-jarvis.js';
-import { listPanels, makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
+import { listPanels, makeFloating, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
 import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
@@ -34,6 +34,7 @@ import { openFiles } from './files.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
+import { createDesktopMode } from './desktop.js';
 import { createGraphify } from './graphify.js';
 import { openMesh } from './mesh.js';
 import { controlEvent, openControl } from './control.js';
@@ -49,6 +50,8 @@ import { focusTerminal, openTerminal } from './terminal-lazy.js';
 import { bindDock, keepTransient, openBus, reconcileOnLoad, trackPanels, withoutTransient } from './open-events.js';
 import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
+import { SEPARATOR, spokenText } from './sentences.js';
+import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
 import { closeAll as closeAllWindows, closeOthers, isMaximized, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
 
@@ -101,9 +104,20 @@ const graph = createCloud($('#graph'), {
   onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {},
   onChange: (on) => { store.set('cloud', on); syncCloud(); },
 });
+// Desktop mode (desktop.js): the shared folder as desktop icons in the cloud's place — mounted only while the cloud is
+// hidden, and removed with all its listeners and timers when it comes back.
+let desktopMode = null;
 function syncCloud() {
   const on = graph.visible;
   document.body.classList.toggle('cloud-off', !on);
+  desktopMode ||= createDesktopMode({
+    store, confirm: (t) => window.confirm(t),
+    self: () => ({ id: selfId || 'self', name: machineById(selfId)?.name || 'this machine' }),
+    apps: () => meshApps(), openApp: (a) => openApp(a), machines: () => machines(),
+    showInFiles: (p, select = '') => showInFiles(p, select),
+  });
+  desktopMode.setActive(!on);
+  window.__rigsDesktop = desktopMode; // checks (scripts/desktop-mode-check.js) read stats() from here
   const box = document.getElementById('d-cloud');
   if (box) box.checked = on;
   const pill = document.getElementById('cloud-toggle');
@@ -115,7 +129,7 @@ const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 /** The launch recipe an app's host runs on its own OS (launchHere); older peers send only launch. */
 const launchOf = (a) => (a.launchHere !== undefined ? a.launchHere : a.launch);
 
-// The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
+// The face lip-syncs to every spoken sentence (viseme timeline when the voice sends one, else the audio itself)
 let face = null;
 // The face is the heaviest WebGL scene after the galaxy, so it is created lazily: on low-power devices only once
 // the user asks for it ("show your face"), elsewhere unless they hid it.
@@ -143,8 +157,17 @@ function feel(text) {
   }).catch(() => {});
 }
 
+// Voice timing per JARVIS request, in ms after the request was sent (thinkingAudio, firstDelta, firstSentenceAudio,
+// replyDone): window.rigsVoiceTimings, newest last, and one console line per reply.
+let timing = null;
+const voiceTimings = (window.rigsVoiceTimings = []);
+function markTiming(key) { if (timing && timing[key] == null) timing[key] = Math.round(performance.now() - timing.t0); }
+let lastPhrase = '';
+
 const voice = createVoice({
   onSpeech: (s) => { if (!face) return; if (s) face.speak(s); else face.stop(); },
+  onAudio: ({ kind }) => markTiming(kind === 'thinking' ? 'thinkingAudio' : 'firstSentenceAudio'),
+  onSkip: () => { if (timing) timing.thinkingSkipped = true; },
   onTranscript: (t) => { $('#ask').value = ''; ask(t, { spoken: true }); },
   onInterim: (t) => { if (t) showSubtitle(t, 'user interim'); },
   onState: (s) => setOrb(s),
@@ -667,6 +690,13 @@ function filesOn(m, path = '~', { select = '', showHidden = false } = {}) {
   return w;
 }
 
+/** Open the file browser on this machine at a folder (a file in it selected): the window a ui_open push would use. */
+function showInFiles(path, select = '') {
+  const self = { id: selfId || 'self', name: machineById(selfId)?.name || 'this machine' };
+  const w = filesTarget(filesWins, self.id);
+  if (w) { w.navigate(path, { select }); w.raise(); } else filesOn(self, path, { select });
+}
+
 /** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — today the file browser at a folder. */
 const uiOpenSeen = new Set();
 function onUiOpen(m) {
@@ -909,18 +939,7 @@ function toggleBrainMenu(onlyNode) {
 
 // ------------------------------------------------------------------ JARVIS conversation
 // A reply is a short spoken line, optionally followed by a "---" line and a written description that
-// is shown but never read out. spokenText() is what the voice says; the subtitle shows everything.
-const SEPARATOR = /(^|\n)[ \t]*-{3,}[ \t]*(\n|$)/;
-const SPOKEN_MAX = 420; // safety cap when a brain ignores the format: say the opening, show the rest
-function spokenText(text, final = false) {
-  const m = text.match(SEPARATOR);
-  let s = m ? text.slice(0, m.index) : final ? text : text.replace(/\n[ \t]*-{1,2}[ \t]*$/, ''); // hold back a half-typed "---"
-  if (s.length > SPOKEN_MAX) {
-    const cut = s.slice(0, SPOKEN_MAX).search(/[.!?](?=[^.!?]*$)/);
-    s = s.slice(0, cut > 80 ? cut + 1 : SPOKEN_MAX);
-  }
-  return s;
-}
+// is shown but never read out. spokenText() (sentences.js) is what the voice says; the subtitle shows everything.
 
 function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
@@ -1084,6 +1103,14 @@ async function ask(text, { spoken = false } = {}) {
   const ac = new AbortController();
   busy = ac;
   setOrb('thinking');
+  timing = { text: text.slice(0, 80), t0: performance.now() };
+  voiceTimings.push(timing);
+  if (voiceTimings.length > 20) voiceTimings.shift();
+  // Answer at once: a pre-rendered thinking phrase while the router and the brain work (persona.thinkingPhrases).
+  if (thinkingEnabled(persona) && !voice.muted) {
+    const phrase = pickPhrase({ last: lastPhrase, address: persona.address });
+    if (voice.think(phrase)) { lastPhrase = phrase; timing.thinkingPhrase = phrase; }
+  }
   let reply = '';
   let fed = 0; // characters of the spoken part already handed to the voice
   let felt = false;
@@ -1113,6 +1140,7 @@ async function ask(text, { spoken = false } = {}) {
           tierTag.classList.remove('hidden');
         }
       } else if (e.type === 'delta') {
+        markTiming('firstDelta');
         if (!reply) setOrb('speaking');
         reply += e.text;
         showSubtitle(reply, 'jarvis');
@@ -1124,7 +1152,7 @@ async function ask(text, { spoken = false } = {}) {
         chips.push(activity(e.name, e.input));
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
       } else if (e.type === 'status') {
-        if (e.reset) { reply = ''; fed = 0; felt = false; } // the fast path handed over: the full brain's reply starts afresh
+        if (e.reset) { reply = ''; fed = 0; felt = false; voice.reset(); } // the fast path handed over: the full brain's reply starts afresh, its queued speech is dropped
         showSubtitle(`${reply}\n… ${e.text}`, 'jarvis');
       } else if (e.type === 'error') {
         toast(e.message, 'error', 10000);
@@ -1132,10 +1160,12 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     for (const c of chips) c.done(true);
+    markTiming('replyDone');
+    console.info('[voice] timing', JSON.stringify(timing));
     const say = spokenText(reply, true);
     if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
-    voice.feed('', true);
+    voice.feed('', true, say.length >= fed); // the final spoken line is shorter than what was fed: it hit the cap, drop the half sentence
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
@@ -1337,7 +1367,7 @@ function processesWindow(m) {
 
 // ------------------------------------------------------------------ wiring
 function wire() {
-  // Every panel floats: drag by its title bar (or ⠿), close with ✕, bring back from ☰; ☰ also switches the docking layout (panels.js, docking.js)
+  // Every panel floats: drag by its title bar (or ⠿), close with ✕, bring back from the top menu's Panels item, which also switches the docking layout (panels.js, docking.js, jarvis-commands.js)
   makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
   makeFloating($('#legend'), { id: 'legend', title: 'Filters', handle: $('#legend .sec-h'), keep: [$('#legend .sec-h')] });
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
@@ -1375,7 +1405,6 @@ function wire() {
   makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
   { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
-  panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   // The mesh shares the dock without this page's window / terminal tiles; one arriving from another machine keeps ours.
   prepareKey(APPDOCK_KEY, (v) => { const s = deserializeDock(v); const t = withoutTransient(s); return t === s ? v : JSON.parse(serializeDock(t)); });
@@ -1507,7 +1536,8 @@ setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/global').then((g) => { globalBrain = g; renderBrainBadge(); }).catch(() => {});
-api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
+window.addEventListener('rigs:persona', (e) => { persona = { ...persona, ...e.detail }; if (thinkingEnabled(persona)) voice.prewarm(allPhrases(persona.address)); }); // settings saved
+api('/api/local/config').then((c) => { persona = c.persona; if (thinkingEnabled(persona)) voice.prewarm(allPhrases(persona.address)); $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();
 connectEvents();

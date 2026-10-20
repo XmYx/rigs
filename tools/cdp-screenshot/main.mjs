@@ -56,16 +56,34 @@ if (!chrome) fail('no Chrome/Chromium found: install one or pass chrome (a path)
 const port = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-cdp-'));
 const gl = args.swiftshader ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [];
-const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', ...gl, 'about:blank'], { stdio: 'ignore' });
+const baseFlags = ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--disable-dev-shm-usage', ...gl, 'about:blank'];
+// Chrome exits at once when its sandbox cannot start (Ubuntu 24.04 restricts unprivileged user namespaces, containers, root); it is then retried with --no-sandbox.
+const launch = (extra) => {
+  const c = spawn(chrome, [...extra, ...baseFlags], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const h = { c, err: '', exited: false };
+  c.stderr.on('data', (d) => { h.err = (h.err + d).slice(-2000); });
+  c.on('exit', () => { h.exited = true; });
+  c.on('error', (e) => { h.err += String(e.message); h.exited = true; });
+  return h;
+};
+const waitEndpoint = async (h) => {
+  for (let i = 0; i < 200 && !h.exited; i++) {
+    await sleep(150);
+    try { const t = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((x) => x.type === 'page'); if (t) return t; } catch {}
+  }
+};
+let run = launch([]);
+const procs = [run];
 const out = { ok: true, shots: [], evals: [], problems: [] };
 let ws;
 try {
-  let target;
-  for (let i = 0; i < 100 && !target; i++) {
-    await sleep(150);
-    try { target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === 'page'); } catch {}
+  let target = await waitEndpoint(run);
+  if (!target && run.exited && /sandbox|namespace|zygote/i.test(run.err)) {
+    run = launch(['--no-sandbox']);
+    procs.push(run);
+    target = await waitEndpoint(run);
   }
-  if (!target) throw new Error('Chrome did not open a DevTools endpoint');
+  if (!target) throw new Error(`Chrome did not open a DevTools endpoint${run.exited ? ' (it exited)' : ' within 30 s'}: ${run.err.trim().split('\n').slice(-3).join(' | ') || 'no output'}`);
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error('DevTools socket failed')); });
   let id = 0;
@@ -128,9 +146,9 @@ try {
   out.error = e.message;
 } finally {
   try { ws?.close(); } catch {}
-  proc.kill('SIGTERM');
+  for (const h of procs) h.c.kill('SIGTERM');
   await sleep(500);
-  try { proc.kill('SIGKILL'); } catch {}
+  for (const h of procs) { try { h.c.kill('SIGKILL'); } catch {} }
   fs.rmSync(profile, { recursive: true, force: true });
 }
 console.log(JSON.stringify(out));

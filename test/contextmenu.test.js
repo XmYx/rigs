@@ -282,6 +282,29 @@ test('file: a folder opens, a file previews and downloads; trash is flagged dang
   assert.deepEqual(labels(dir), ['Open folder', 'Copy path', 'Terminal here', 'Rename…', 'Move to trash…']);
 });
 
+test('file: Open with lists the built-in tools, Compress covers the selection, Extract here only for a .zip', () => {
+  const { reg } = setup();
+  const calls = [];
+  const actions = { open() {}, download() {}, openWith: (e, id) => calls.push(['with', e.name, id]), zip: (e) => calls.push(['zip', e.name]), unzip: (e) => calls.push(['unzip', e.name]) };
+  const tools = [{ id: 'csv', label: 'CSV viewer', icon: '▦' }, { id: 'text', label: 'Text editor', icon: '📝' }];
+  const menuOf = (data) => resolveMenu(reg, [{ kind: 'file', id: data.entry.path, data }]);
+  const csv = menuOf({ entry: { type: 'file', name: 'd.csv', path: '/u/d.csv' }, actions, tools });
+  assert.deepEqual(labels(csv), ['Preview', 'Open with', 'Download', 'Compress to zip', 'Copy path']);
+  assert.deepEqual(find(csv, 'Open with').submenu().map((x) => x.label), ['CSV viewer', 'Text editor']);
+  find(csv, 'Open with').submenu()[1].run();
+  assert.deepEqual(calls.at(-1), ['with', 'd.csv', 'text']);
+  const many = menuOf({ entry: { type: 'file', name: 'd.csv', path: '/u/d.csv' }, actions, tools, count: 3 });
+  find(many, 'Compress 3 items to zip').run();
+  assert.deepEqual(calls.at(-1), ['zip', 'd.csv']);
+  const zip = menuOf({ entry: { type: 'file', name: 'a.zip', path: '/u/a.zip' }, actions, zip: true });
+  assert.deepEqual(labels(zip), ['Preview', 'Download', 'Compress to zip', 'Extract here', 'Copy path']);
+  find(zip, 'Extract here').run();
+  assert.deepEqual(calls.at(-1), ['unzip', 'a.zip']);
+  const dir = menuOf({ entry: { type: 'dir', name: 'src', path: '/u/src' }, actions, tools });
+  assert.ok(!labels(dir).includes('Open with'), 'folders have no Open with');
+  assert.ok(labels(dir).includes('Compress to zip'));
+});
+
 test('folder background and traces', () => {
   const { reg, calls } = setup();
   let hidden = false;

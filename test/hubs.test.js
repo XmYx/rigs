@@ -148,7 +148,9 @@ test('tasks enter via rig queue; a follow-up is queued to the seat that holds th
   openrig.invalidate();
   const g = await hubs.dispatchTask({ pin, project, task: task('t4', 'code', 'claude-opus-5-5', { followUp: r.seat }), dir: PROJ, brief, pointer: 'p' });
   assert.equal(g.via, 'queue');
-  // "Send to lead" from the project window types into the lead.
+  // "Send to lead" from the project window types into the lead. OpenRig runs on tmux, so hubs.available() is false
+  // on Windows by design: there the hub refuses clearly instead of bringing a rig up.
+  if (process.platform === 'win32') { await assert.rejects(hubs.sendToHub(PROJ, 'What is the state of the build?'), /OpenRig/); return; }
   const s = await hubs.sendToHub(PROJ, 'What is the state of the build?');
   assert.equal(s.seat, `team-lead@${hubs.hubRigName(pin)}`);
 });
@@ -185,6 +187,8 @@ test('JARVIS gets a persistent rig whose overseer receives the intake and is the
   assert.equal(q.destinationSession, 'team-overseer@jarvis');
   assert.ok(q.tags.includes('intake'));
   // Up/down from the hub UI keeps the record: down stops every seat, up restores them (conversations resume).
+  // OpenRig runs on tmux, so hubs.available() is false on Windows by design and "up" refuses there.
+  if (process.platform === 'win32') { await assert.rejects(hubs.up(PROJ), /OpenRig/); return; }
   await hubs.down(PROJ);
   assert.ok(rig.nodes.filter((n) => n.rigName === r.rig).every((n) => n.sessionStatus === 'stopped'));
   const st = await hubs.status();

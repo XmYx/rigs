@@ -195,8 +195,7 @@ export function initA11y() {
   setInterval(() => { for (const el of document.querySelectorAll(SCROLLERS)) fixOne(el); }, 3000);
 }
 
-/** Popovers that exist once the UI is wired: brain menu and the ☰ panels menu. */
+/** Popovers that exist once the UI is wired: the brain menu. */
 export function initPopovers() {
   watchPopover(document.getElementById('brain-menu'), { label: 'Brain', isOpen: (e) => e.classList.contains('open'), close: () => document.getElementById('brain-menu').classList.remove('open') });
-  watchPopover(document.getElementById('panels-menu'), { label: 'Panels', isOpen: (e) => !e.classList.contains('hidden'), close: () => document.getElementById('panels-menu').classList.add('hidden') });
 }

@@ -4,6 +4,8 @@ import { openWindow, listWindows } from './wm.js';
 import {
   focusPanel, hideOthers, hidePanel, lastFocusedPanel, listPanels, listRemoved, openPanel, removePanel, removed, resetLayout, restorePanel, showAll,
 } from './layout-actions.js';
+import { isDocking, toggleDocking } from './docking.js';
+import { isScaling, toggleScaling } from './scaling.js';
 
 // Every JARVIS command the top menu, context menus and shortcuts use, registered into commands.js. `deps` are the
 // actions main.js owns (windows, machines, the brain popover); the layout goes through layout-actions.js.
@@ -74,6 +76,8 @@ export function registerJarvisCommands(deps) {
     { id: 'window.hideOthers', label: (c, a) => (a ? 'Hide others' : 'Hide other panels'), run: (c, a) => hideOthers(a?.id ?? lastFocusedPanel()) },
     { id: 'window.remove', label: 'Remove', when: (c, a) => a?.kind === 'panel' || a?.kind === 'app', run: (c, a) => removePanel(a) },
     { id: 'window.showAll', label: 'Show all panels', run: () => showAll() },
+    { id: 'panels.docking', label: 'Docking layout', checked: () => isDocking(), when: (ctx) => !ctx.phone, run: () => toggleDocking() },
+    { id: 'panels.scaling', label: 'Smart scaling', checked: () => isScaling(), when: (ctx) => !ctx.phone, run: () => toggleScaling() },
     { id: 'window.reset', label: 'Reset layout', run: () => resetLayout() },
     { id: 'window.restore', label: (c, a) => `Restore ${a?.icon ? a.icon + ' ' : ''}${a?.label || a?.id}`, run: (c, a) => restorePanel(a) },
     { id: 'window.restoreAll', label: 'Restore all', enabled: () => removed.size > 0, run: () => removed.restoreAll() },
@@ -156,14 +160,16 @@ export function menuModel() {
       { cmd: 'edit.undo' }, { cmd: 'edit.redo' }, { sep: true }, { cmd: 'edit.copy' }, { cmd: 'edit.paste' },
       { sep: true }, { cmd: 'edit.find' }, { cmd: 'edit.settings' }, { cmd: 'edit.display' },
     ] },
+    { id: 'panels', label: 'Panels', items: () => [
+      { cmd: 'panels.docking' }, { cmd: 'panels.scaling' }, { sep: true },
+      ...panels.map(perItem),
+      { sep: true }, { cmd: 'window.hideOthers' }, { cmd: 'window.showAll' }, { cmd: 'window.reset' },
+    ] },
     { id: 'window', label: 'Window', items: () => [
-      { header: 'Panels' }, ...panels.map(perItem),
-      ...(apps.length ? [{ sep: true }, { header: 'Apps' }, ...apps.map(perItem)] : []),
-      ...(wins.length ? [{ sep: true }, { header: 'Open windows' }, ...wins.map(perItem)] : []),
-      { sep: true },
+      ...(apps.length ? [{ header: 'Apps' }, ...apps.map(perItem), { sep: true }] : []),
+      ...(wins.length ? [{ header: 'Open windows' }, ...wins.map(perItem), { sep: true }] : []),
       { header: 'Ask JARVIS' }, { cmd: 'window.ask' }, { cmd: 'window.askTopbar' }, { cmd: 'window.askFloat' }, { cmd: 'window.askHide' },
       { sep: true },
-      { cmd: 'window.hideOthers' }, { cmd: 'window.showAll' }, { cmd: 'window.reset' },
       { id: 'removed', label: `Removed items${gone.length ? ` (${gone.length})` : ''}`, submenu: () => (gone.length
         ? [...gone.map((g) => ({ cmd: 'window.restore', args: g })), { sep: true }, { cmd: 'window.restoreAll' }]
         : [{ label: 'Nothing removed', disabled: true }]) },
