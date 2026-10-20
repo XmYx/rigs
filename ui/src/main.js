@@ -4,7 +4,7 @@ import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
-import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, openPanel, resetPanel, toggleCollapse } from './layout-actions.js';
+import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isDocked, listRemoved, openPanel, panelWindowAction, panelWindowState, resetPanel } from './layout-actions.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
 import { sourcesFromSnapshot } from './app-dock-model.js';
 import { TOOLS } from './app-dock-state.js';
@@ -215,6 +215,8 @@ function updateQuestionCount(n) {
 
 // The dock's tools show the toolbar's live state: the questions count, the agents badge and the voice toggle.
 const TOOL_PANEL = { ask: 'questions', agents: 'agents', work: 'work', usage: 'usage', desktops: 'desktops', traces: 'traces', graphify: 'graphify' };
+/** The app dock's tool tile that stands for a panel (its minimized mark goes there, panels.js `dockRef`). */
+const toolRef = (panel) => { const t = Object.keys(TOOL_PANEL).find((k) => TOOL_PANEL[k] === panel); return t ? `tool:${t}` : null; };
 let askCount = 0;
 let agentCount = 0;
 function syncToolBadges() {
@@ -1334,7 +1336,7 @@ function processesWindow(m) {
 
 // ------------------------------------------------------------------ wiring
 function wire() {
-  // Every panel floats: drag by its title bar (or ⠿), close with ✕, bring back from the top menu's Panels item, which also switches the docking layout (panels.js, docking.js, jarvis-commands.js)
+  // Every panel is a window: drag by its title bar (or ⠿), – minimize, □ maximize, ✕ close (reopen from the top menu's Panels item, which also switches the docking layout) (panels.js, docking.js, jarvis-commands.js)
   makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
   makeFloating($('#legend'), { id: 'legend', title: 'Filters', handle: $('#legend .sec-h'), keep: [$('#legend .sec-h')] });
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });
@@ -1348,29 +1350,29 @@ function wire() {
     onOpenQuestions: showQuestions,
     getWaiting: attnItems,
   });
-  makeFloating($('#work'), { id: 'work', title: 'Active projects', into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => work.setActive(!closed && !collapsed) });
-  { const st = panelState('work'); work.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#work'), { id: 'work', title: 'Active projects', dockRef: toolRef('work'), into: $('#work .wk-head'), keep: [$('#work .wk-head')], closedOnPhone: true, onToggle: ({ closed, minimized }) => work.setActive(!closed && !minimized) });
+  { const st = panelState('work'); work.setActive(!st.closed && !st.minimized); }
   const questions = createQuestions($('#questions'), { onOpenQuestion: (g, it) => openAttention({ ...it, nodeId: g.nodeId, nodeName: g.node }) });
-  makeFloating($('#questions'), { id: 'questions', title: 'Questions', into: $('#questions .wk-head'), keep: [$('#questions .wk-head')], closedOnPhone: true, onToggle: ({ closed, collapsed }) => questions.setActive(!closed && !collapsed) });
-  { const st = panelState('questions'); questions.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#questions'), { id: 'questions', title: 'Questions', dockRef: toolRef('questions'), into: $('#questions .wk-head'), keep: [$('#questions .wk-head')], closedOnPhone: true, onToggle: ({ closed, minimized }) => questions.setActive(!closed && !minimized) });
+  { const st = panelState('questions'); questions.setActive(!st.closed && !st.minimized); }
   const usagePanel = createUsage($('#usage'), { routerNode: () => currentBrain()?.nodeId });
-  makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => usagePanel.setActive(!closed && !collapsed) });
-  { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#usage'), { id: 'usage', title: 'Tokens & time', dockRef: toolRef('usage'), into: $('#usage .wk-head'), keep: [$('#usage .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, minimized }) => usagePanel.setActive(!closed && !minimized) });
+  { const st = panelState('usage'); usagePanel.setActive(!st.closed && !st.minimized); }
   const desktopsPanel = createDesktops($('#desktops'), { machines: () => machines().map((m) => ({ id: m.id, name: m.name })) });
-  makeFloating($('#desktops'), { id: 'desktops', title: 'Desktops', into: $('#desktops .wk-head'), keep: [$('#desktops .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => desktopsPanel.setActive(!closed && !collapsed) });
-  { const st = panelState('desktops'); desktopsPanel.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#desktops'), { id: 'desktops', title: 'Desktops', dockRef: toolRef('desktops'), into: $('#desktops .wk-head'), keep: [$('#desktops .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, minimized }) => desktopsPanel.setActive(!closed && !minimized) });
+  { const st = panelState('desktops'); desktopsPanel.setActive(!st.closed && !st.minimized); }
   const tracesPanel = createTraces($('#traces'));
-  makeFloating($('#traces'), { id: 'traces', title: 'Request traces', into: $('#traces .wk-head'), keep: [$('#traces .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => tracesPanel.setActive(!closed && !collapsed) });
-  { const st = panelState('traces'); tracesPanel.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#traces'), { id: 'traces', title: 'Request traces', dockRef: toolRef('traces'), into: $('#traces .wk-head'), keep: [$('#traces .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, minimized }) => tracesPanel.setActive(!closed && !minimized) });
+  { const st = panelState('traces'); tracesPanel.setActive(!st.closed && !st.minimized); }
   agentsPanel = createAgents($('#agents'), {
     snapshot: () => snap, onAttach: attachSession, onChat: attachChat,
     onCount: (n, waiting) => { agentCount = n; syncToolBadges(); const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
   });
-  makeFloating($('#agents'), { id: 'agents', title: 'Active agents', into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
+  makeFloating($('#agents'), { id: 'agents', title: 'Active agents', dockRef: toolRef('agents'), into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
   agentsPanel.update();
   graphifyPanel = createGraphify($('#graphify'), { createGraph, types: TYPES, data: () => buildGraph(visibleSnap()), hidden: () => [...hiddenTypes], attention: attentionGraphIds, onSelect: (n) => { select(n.id); revealInspector(); } });
-  makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
-  { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
+  makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', dockRef: toolRef('graphify'), into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, minimized }) => graphifyPanel.setActive(!closed && !minimized) });
+  { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.minimized); }
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   appDock = createAppDock({ // the app dock only calls the existing open / focus / launch paths
@@ -1615,7 +1617,7 @@ function wireContextMenus() {
   const providers = createProviders();
   registerJarvisProviders(providers, {
     copy: copyText,
-    layout: { toggleCollapse, isCollapsed, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
+    layout: { state: panelWindowState, act: panelWindowAction, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
     window: { minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
     app: {
       key: appKey, isOpen: isAppOpen, status: (a) => a.health?.status, url: (a) => `${location.origin}${appPath(a)}`,

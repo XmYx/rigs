@@ -108,7 +108,7 @@ test("window state persists in 'rigs.dock' across a reload", () => {
   a.setWindow('app:n1/szuf', W.transition(W.initialRecord(R, 1), 'maximize', { at: 2 }));
   a.setWindow('files:n1', W.transition(W.initialRecord({ x: 30, y: 40, w: 900, h: 500 }, 3), 'minimize', { at: 4 }));
   const stored = JSON.parse(storage.getItem('rigs.dock'));
-  assert.equal(stored.version, 2);
+  assert.equal(stored.version, D.VERSION);
   assert.equal(stored.windows['app:n1/szuf'].state, 'maximized');
 
   const b = D.createDockManager(); // a fresh page
@@ -134,7 +134,7 @@ test('saving a window record tells listeners with its own cause and is skipped w
   assert.deepEqual(m.getLayout().windows, {});
 });
 
-test('migration: a version 1 layout keeps its panels and gains an empty windows map', () => {
+test('migration: a version 1 layout keeps its panels, gains an empty windows map, and its collapsed panels are minimized', () => {
   const v1 = {
     version: 1,
     root: { type: 'split', dir: 'row', ratios: [0.3, 0.7], children: [{ type: 'tabs', panels: ['work', 'questions'], active: 'work' }, { type: 'panel', id: 'stage' }] },
@@ -144,31 +144,32 @@ test('migration: a version 1 layout keeps its panels and gains an empty windows 
   };
   const L = D.deserialize(JSON.stringify(v1));
   assert.equal(L.version, D.VERSION);
-  assert.equal(D.VERSION, 2);
+  assert.equal(D.VERSION, 3);
   assert.deepEqual(L.windows, {});
   assert.deepEqual(L.root, v1.root);
   assert.deepEqual(L.floating, v1.floating);
   assert.deepEqual(Object.keys(L.hidden), ['usage']);
-  assert.deepEqual(L.collapsed, ['chat']);
-  assert.deepEqual(D.deserialize(D.serialize(L)), L, 'and round-trips as version 2');
+  assert.deepEqual(L.minimized, ['chat']);
+  assert.deepEqual(L.maximized, []);
+  assert.deepEqual(D.deserialize(D.serialize(L)), L, 'and round-trips as version 3');
 
   // Through the manager, as a page load does: the stored v1 text is read, migrated and written back as v2.
   const storage = memoryStorage({ 'rigs.dock': JSON.stringify(v1) });
   const m = D.createDockManager();
   m.attach({ storage });
   const now = JSON.parse(storage.getItem('rigs.dock'));
-  assert.equal(now.version, 2);
+  assert.equal(now.version, D.VERSION);
   assert.deepEqual(now.windows, {});
   assert.deepEqual(now.root, v1.root);
   assert.equal(m.getWindow('anything'), null);
 });
 
-test("migration: legacy 'rigs.panels' state lands in version 2 with no windows; unreadable versions start clean", () => {
+test("migration: legacy 'rigs.panels' state lands in the current version with no windows; unreadable versions start clean", () => {
   const storage = memoryStorage({ 'rigs.panels': JSON.stringify({ left: { closed: false, collapsed: false, pos: { left: 24, top: 30, width: '340px', height: '700px' } } }) });
   const m = D.createDockManager();
   m.attach({ storage, viewport: () => ({ w: 1440, h: 900 }) });
   const L = m.getLayout();
-  assert.equal(L.version, 2);
+  assert.equal(L.version, D.VERSION);
   assert.deepEqual(L.windows, {});
   assert.deepEqual(L.floating.map((f) => f.id), ['left']);
   assert.deepEqual(D.deserialize({ version: 99, windows: { a: { state: 'normal' } } }), D.emptyLayout());

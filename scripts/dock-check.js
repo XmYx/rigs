@@ -92,12 +92,12 @@ const errors = [];
   check('floating rect persisted in rigs.dock', saved && Math.abs(saved.x - chatAfter.x) < 2, JSON.stringify(saved));
 
   // Controls inside a bar still click: collapse the Active projects panel from its header and back.
-  await page.click('#work .pcollapse');
+  await page.click('#work .pctl .win-btn.win-min');
   await sleep(250);
-  const collapsed = await page.evaluate(() => document.querySelector('#work').classList.contains('panel-collapsed'));
-  await page.click('#work .pcollapse');
+  const collapsed = await page.evaluate(() => document.querySelector('#work').classList.contains('panel-min'));
+  await page.click('#work .pctl .win-btn.win-min');
   await sleep(250);
-  check('buttons inside the header still click (collapse/expand)', collapsed && !(await page.evaluate(() => document.querySelector('#work').classList.contains('panel-collapsed'))));
+  check('buttons inside the header still click (minimize/restore)', collapsed && !(await page.evaluate(() => document.querySelector('#work').classList.contains('panel-min'))));
 
   // A wm window: drag by its title, double-click maximises and restores.
   await page.click('#btn-sess');
@@ -191,7 +191,7 @@ const errors = [];
 
   // (4) Hide the active tab panel, reload, restore from ☰ → same tab group.
   const active = await page.evaluate(() => document.querySelector('.dock-tab[aria-selected="true"]').dataset.id);
-  await page.click(`#${active} .pctl .pclose:not(.pcollapse)`);
+  await page.click(`#${active} .pctl .win-btn.close`);
   await sleep(500);
   check('hidden panel leaves the tab group', (await page.evaluate(() => document.querySelectorAll('.dock-tab').length)) === 0);
   await page.reload({ waitUntil: 'domcontentloaded' });

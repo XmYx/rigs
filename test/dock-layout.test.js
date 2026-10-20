@@ -37,8 +37,16 @@ function checkInvariants(layout) {
     n.children.forEach(walk);
   };
   if (layout.root) walk(layout.root);
+  const tree = new Set(ids);
   ids.push(...layout.floating.map((f) => f.id), ...Object.keys(layout.hidden));
   assert.equal(new Set(ids).size, ids.length, `panel listed twice: ${ids.join(',')}`);
+  // Window states: a minimized panel is never in the tree (a docked one waits in `hidden`); both lists name known panels once.
+  for (const key of ['minimized', 'maximized']) {
+    const list = layout[key] || [];
+    assert.equal(new Set(list).size, list.length, `${key} lists a panel twice`);
+    for (const id of list) assert.ok(ids.includes(id), `${key} names an unknown panel ${id}`);
+  }
+  for (const id of layout.minimized || []) assert.ok(!tree.has(id), `minimized panel ${id} is in the tree`);
 }
 
 /** Deep equality with a tolerance for floating-point ratios. */
@@ -193,9 +201,10 @@ test('restore still finds its place after other panels moved, and falls back sen
   assert.equal(D.hide(n, 'nope'), n, 'hiding an unknown panel is a no-op');
 });
 
-test('tree stays normalised after random dock / undock / hide / restore / remove sequences', () => {
+test('tree stays normalised after random dock / undock / hide / restore / minimize / maximize / remove sequences', () => {
   const ids = ['left', 'legend', 'topbar', 'orb', 'dock', 'work', 'questions', 'usage', 'desktops', 'traces', 'agents', 'bar'];
   const zones = ['left', 'right', 'top', 'bottom', 'center', 'tab'];
+  const actions = ['minimize', 'maximize', 'restore', 'toggleMaximize', 'close', 'open'];
   for (let seed = 1; seed <= 60; seed++) {
     const r = rng(seed);
     const pick = (a) => a[Math.floor(r() * a.length)];
@@ -203,7 +212,7 @@ test('tree stays normalised after random dock / undock / hide / restore / remove
     for (let step = 0; step < 150; step++) {
       const id = pick(ids);
       const other = pick(ids);
-      const op = Math.floor(r() * 10);
+      const op = Math.floor(r() * 12);
       if (op <= 2) l = D.dock(l, id, r() < 0.15 ? 'root' : other, pick(zones), { share: 0.1 + r() * 0.8 });
       else if (op === 3) l = D.undock(l, id, { x: r() * 1000, y: r() * 600, w: 200 + r() * 300, h: 100 + r() * 300 });
       else if (op === 4) l = D.hide(l, id);
@@ -211,6 +220,7 @@ test('tree stays normalised after random dock / undock / hide / restore / remove
       else if (op === 6) l = D.moveTab(l, id, other, Math.floor(r() * 4));
       else if (op === 7) l = D.reorder(l, id, Math.floor(r() * 4));
       else if (op === 8) { const p = D.pathOf(l, id); if (p?.length) l = D.resizeSplit(l, p.slice(0, -1), D.nodeAt(l, p.slice(0, -1)).ratios.map(() => r())); }
+      else if (op >= 10) l = D.panelAction(l, id, pick(actions));
       else if (r() < 0.2) { l = D.removePanel(l, id); l = D.ensurePanels(l, [id]); }
       try { checkInvariants(l); } catch (e) { e.message += ` (seed ${seed}, step ${step}, op ${op} ${id}→${other})`; throw e; }
       // Every panel is still somewhere.
@@ -219,6 +229,9 @@ test('tree stays normalised after random dock / undock / hide / restore / remove
       if (step % 5 === 0) {
         const t = pick(ids);
         if (D.panelStatus(l, t) === 'docked') approxEqual(D.restore(D.hide(l, t), t).root, l.root, `seed ${seed} step ${step} hide/restore ${t}`);
+        // …and so is minimizing a docked panel (its tab) and restoring it, or maximizing and restoring it.
+        if (D.panelStatus(l, t) === 'docked') approxEqual(D.panelAction(D.panelAction(l, t, 'minimize'), t, 'restore').root, l.root, `seed ${seed} step ${step} minimize/restore ${t}`);
+        if (D.panelWindowState(l, t) === 'normal') assert.deepEqual(D.panelAction(D.panelAction(l, t, 'maximize'), t, 'restore'), l, `seed ${seed} step ${step} maximize/restore ${t}`);
       }
     }
   }
@@ -403,24 +416,27 @@ test('serialize / deserialize round-trips and rejects junk', () => {
   let l = withRoot(split('row', [leaf('a'), tabs(['b', 'c'], 'c')], [0.3, 0.7]));
   l = D.undock(l, 'd', { x: 1, y: 2, w: 300, h: 200, vw: 1920, vh: 1080 });
   l = D.hide(l, 'b');
-  l = D.setCollapsed(l, 'a', true);
+  l = D.panelAction(l, 'd', 'minimize');
+  l = D.panelAction(l, 'c', 'maximize');
   const s = D.serialize(l);
   assert.equal(JSON.parse(s).version, D.VERSION);
   assert.deepEqual(D.deserialize(s), l);
   assert.deepEqual(D.deserialize(JSON.parse(s)), l);
   assert.deepEqual(D.restore(D.deserialize(s), 'b').root, D.restore(l, 'b').root, 'hidden place survives storage');
+  assert.deepEqual([D.panelWindowState(D.deserialize(s), 'd'), D.panelWindowState(D.deserialize(s), 'c')], ['minimized', 'maximized'], 'window states survive storage');
   for (const junk of ['{nope', 'null', '[]', 42, null, undefined, JSON.stringify({ version: 99, root: leaf('a') })]) {
     assert.deepEqual(D.deserialize(junk), D.emptyLayout(), String(junk));
   }
   // Duplicate ids keep only their first place; broken nodes are dropped; result is normalised.
-  const messy = D.deserialize({ version: 1, root: split('row', [leaf('a'), tabs(['a', 'b']), { type: 'weird' }, split('column', [leaf('c')])]), floating: [{ id: 'b', x: 0, y: 0, w: 1, h: 1, z: 1 }, { id: 'e', x: 'x' }], hidden: { c: { kind: 'float', rect: {} }, f: { kind: 'bogus' }, g: { kind: 'split', anchors: ['a', 3] } }, collapsed: ['a', 'zz'] });
+  const messy = D.deserialize({ version: 1, root: split('row', [leaf('a'), tabs(['a', 'b']), { type: 'weird' }, split('column', [leaf('c')])]), floating: [{ id: 'b', x: 0, y: 0, w: 1, h: 1, z: 1 }, { id: 'e', x: 'x' }], hidden: { c: { kind: 'float', rect: {} }, f: { kind: 'bogus' }, g: { kind: 'split', anchors: ['a', 3] } }, collapsed: ['e', 'zz'] });
   checkInvariants(messy);
   approxEqual(messy.root, split('row', [leaf('a'), leaf('b'), leaf('c')]));
   assert.deepEqual(messy.floating.map((f) => f.id), ['e']);
   assert.deepEqual(messy.floating[0].x, null);
   assert.deepEqual(Object.keys(messy.hidden), ['g']);
   assert.deepEqual(messy.hidden.g.anchors, ['a']);
-  assert.deepEqual(messy.collapsed, ['a']);
+  assert.deepEqual(messy.minimized, ['e'], 'a version 1 collapsed panel is minimized; unknown ids dropped');
+  assert.ok(!('collapsed' in messy));
 });
 
 test("migration from 'rigs.panels' keeps current users' layout", () => {
@@ -443,7 +459,10 @@ test("migration from 'rigs.panels' keeps current users' layout", () => {
   assert.deepEqual(l.floating.find((f) => f.id === 'dock'), { id: 'dock', x: null, y: null, w: null, h: null, vw: null, vh: null, z: 3 }, 'no saved position = CSS default place');
   assert.deepEqual(Object.keys(l.hidden).sort(), ['usage', 'work']);
   assert.deepEqual(l.hidden.work.rect, { x: 1500, y: 300, w: 420, h: null, vw: 1920, vh: 1080 });
-  assert.deepEqual(l.collapsed, ['left']);
+  assert.deepEqual(l.minimized, ['left'], 'collapsed = minimized now (its title strip, where it was)');
+  assert.equal(D.panelWindowState(l, 'left'), 'minimized');
+  assert.equal(D.panelWindowState(l, 'work'), 'closed', 'closed = closed');
+  assert.equal(D.panelWindowState(l, 'dock'), 'normal');
   // Restoring a panel that was closed in the old format brings it back at its old position.
   const back = D.restore(l, 'work');
   assert.equal(back.floating.find((f) => f.id === 'work').x, 1500);

@@ -460,15 +460,15 @@ export function onClosed(state, { kind, source } = {}) {
 
 /**
  * A window was minimized: the dock is where it is reached again. `event` = { source: { id, title, icon } (the wm.js
- * window), rep } where `rep` is the id of the item that already stands for that window (an applet tile for an app
+ * window, or a JARVIS panel with `kind: 'panel'`: its item is a panel item), rep } where `rep` is the id of the item that already stands for that window (an applet tile for an app
  * window, a terminal item for a terminal). That item shows it minimized when it is a tile of its own (top level, not
  * hidden); otherwise — no such item, or it sits inside a group's popover — the window gets a window item of its own
  * (also with autoDock off), so a minimized window is always one click away. That item goes again when the window is
  * restored (unless pinned meanwhile). `minimized` / `transient` are display state: serialize() leaves them out.
  */
-export function onMinimized(state, { source, rep } = {}) {
+export function onMinimized(state, { source, rep, kind = 'window' } = {}) {
   if (typeof rep === 'string' && own(state.items, rep) && !state.items[rep].hidden && topIndex(state, 'item', rep) >= 0) return markMinimized(state, rep, true);
-  const item = toItem('window', source);
+  const item = toItem(kind === 'panel' ? 'panel' : 'window', source);
   if (!item) return state;
   if (own(state.items, item.id)) return markMinimized(addItem(state, item), item.id, true); // already docked (autoDock / pinned): keep it as it is
   const d = draft(addItem(state, item));
@@ -478,10 +478,10 @@ export function onMinimized(state, { source, rep } = {}) {
 }
 
 /** The window is back on the stage (or closed): its item stops showing it minimized; an item added only for that goes. */
-export function onRestored(state, { source, rep } = {}) {
+export function onRestored(state, { source, rep, kind = 'window' } = {}) {
   let s = state;
   if (typeof rep === 'string' && own(s.items, rep)) s = markMinimized(s, rep, false);
-  const item = toItem('window', source);
+  const item = toItem(kind === 'panel' ? 'panel' : 'window', source);
   if (!item || !own(s.items, item.id)) return s;
   const it = s.items[item.id];
   if (it.transient && !it.pinned) return removeItem(s, item.id);

@@ -7,7 +7,7 @@
 // label, enabled rule and shortcut are the same as in the top menu), { label, run, icon?, hint?, disabled?, danger?,
 // checked?, submenu? } runs inline, { sep: true } separates. Items whose action dep is missing are left out.
 //
-// deps (all optional; main.js wires them): copy(text, what), layout{toggleCollapse,isCollapsed,resetPanel,canDock,
+// deps (all optional; main.js wires them): copy(text, what), layout{state,act,resetPanel,canDock,
 // isDocked,dock,float,removed}, window{minimize,isMin,toggleMax,isMax,closeOthers,closeAll,count}, app{key,isOpen,status,url,open,
 // openTab,reload}, session{transcript,attach,chat,galaxy,newHere}, project{open,act,galaxy}, task{openSession,mark},
 // node{get,status,terminal,files,screen,sessions,control,ssh,sshCommand,newAgent}, trace{open}, galaxy{select,fit,
@@ -175,15 +175,17 @@ export function registerJarvisProviders(reg, deps = {}) {
     const id = t.data?.id ?? t.id;
     const ref = { kind: 'panel', id, title: t.data?.title || id, open: true };
     const L = d('layout');
-    const collapsed = !!L.isCollapsed?.(id);
+    const state = L.state?.(id) || 'normal';
     const docked = !!L.isDocked?.(id);
-    return [
-      it(collapsed ? 'Expand' : 'Collapse', bind(L, 'toggleCollapse', id), { icon: collapsed ? '▸' : '▾' }),
+    const act = (action) => () => L.act?.(id, action);
+    return [ // the title bar's own three buttons first, as for a window: minimize / restore, maximize / restore size, close
+      state === 'minimized' ? it('Restore', act('restore'), { icon: '❐' }) : it('Minimize', act('minimize'), { icon: '–' }),
+      it(state === 'maximized' ? 'Restore size' : 'Maximize', act('toggleMaximize'), { icon: state === 'maximized' ? '❐' : '□' }),
+      { cmd: 'window.hide', args: ref, label: 'Close', icon: '✕' },
+      SEP,
       it('Reset position and size', bind(L, 'resetPanel', id), { icon: '↺' }),
       L.canDock?.(id) ? it(docked ? 'Float' : 'Dock', bind(L, docked ? 'float' : 'dock', id)) : null,
-      SEP,
-      { cmd: 'window.hide', args: ref, label: 'Hide' },
-      { cmd: 'window.hideOthers', args: ref, label: 'Hide other panels' },
+      { cmd: 'window.hideOthers', args: ref, label: 'Close other panels' },
       SEP,
       { cmd: 'window.remove', args: ref, label: 'Remove (undoable)' },
     ];

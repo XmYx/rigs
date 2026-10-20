@@ -236,7 +236,7 @@ const errors = [];
   await page.keyboard.press('ControlOrMeta+k');
   await sleep(500);
   check('⌘/Ctrl+K reopens and focuses it', (await panelShown(page)) && (await page.evaluate(() => document.activeElement?.id)) === 'ask');
-  await page.click('#ask-panel .pclose[aria-label^="Close"]');
+  await page.click('#ask-panel .pctl .win-btn.close');
   await sleep(400);
   check('✕ in its title bar hides it', !(await panelShown(page)) && (await saved(page))?.mode === 'hidden');
   await page.mouse.click(720, 500);

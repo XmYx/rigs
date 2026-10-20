@@ -87,12 +87,14 @@ export function transition(rec, action, { rect, at } = {}) {
 
 /**
  * The title bar buttons, in their fixed order: minimize (–), maximize / restore (□ / ❐), close (✕).
- * `action` is the transition a click asks for; `pressed` is the maximize toggle's aria-pressed.
+ * `action` is the transition a click asks for; `pressed` is the maximize toggle's aria-pressed. A minimized title strip
+ * (a JARVIS panel shown folded to its bar; a minimized wm.js window is off the stage) has Restore (❐) in the first place.
  */
 export function chromeButtons(rec) {
   const max = rec?.state === 'maximized';
+  const min = rec?.state === 'minimized';
   return [
-    { action: 'minimize', glyph: '–', label: 'Minimize', cls: 'win-min' },
+    min ? { action: 'restore', glyph: '❐', label: 'Restore', cls: 'win-min' } : { action: 'minimize', glyph: '–', label: 'Minimize', cls: 'win-min' },
     { action: 'toggleMaximize', glyph: max ? '❐' : '□', label: max ? 'Restore' : 'Maximize', cls: 'win-max', pressed: max },
     { action: 'close', glyph: '✕', label: 'Close', cls: 'close' },
   ];
@@ -138,20 +140,22 @@ export function putWindow(windows, key, rec, max = MAX_WINDOWS) {
  * maximize / restore glyph, label and aria-pressed after every state change.
  */
 export function buildChrome(h, act) {
-  const specs = chromeButtons(null);
-  const els = specs.map((b) => h('button', {
+  let cur = chromeButtons(null); // what each button does now (the first one is Restore on a minimized strip)
+  const els = cur.map((b, i) => h('button', {
     class: `win-btn ${b.cls}`, type: 'button', title: b.label, 'aria-label': b.label, 'data-win-act': b.action,
     ...(b.pressed !== undefined ? { 'aria-pressed': String(b.pressed) } : {}),
-    onclick: (e) => { e?.stopPropagation?.(); act(b.action); },
+    onclick: (e) => { e?.stopPropagation?.(); act(cur[i].action); },
   }, b.glyph));
   return {
     els,
     sync(rec) {
-      chromeButtons(rec).forEach((b, i) => {
+      cur = chromeButtons(rec);
+      cur.forEach((b, i) => {
         const el = els[i];
         if (el.textContent !== b.glyph) el.textContent = b.glyph;
         el.title = b.label;
         el.setAttribute('aria-label', b.label);
+        el.setAttribute('data-win-act', b.action);
         if (b.pressed !== undefined) el.setAttribute('aria-pressed', String(b.pressed));
       });
     },

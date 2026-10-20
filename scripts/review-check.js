@@ -146,7 +146,7 @@ const inside = (page) => page.evaluate(() => {
 
   // Hide and restore (exact place).
   const before = await rect(page, '#legend');
-  await page.click('#legend .pctl .pclose:not(.pcollapse)'); await sleep(400);
+  await page.click('#legend .pctl .win-btn.close'); await sleep(400);
   const gone = await page.evaluate(() => document.querySelector('#legend').classList.contains('panel-closed'));
   await page.click('#panels-btn'); await sleep(250);
   await shot(page, '05-hidden-in-menu@1920x1080.png');

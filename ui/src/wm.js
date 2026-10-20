@@ -26,6 +26,10 @@ let nextId = 1;
 const backStack = []; // close() of phone windows that pushed a history entry, oldest first
 let skipPop = 0;
 window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } backStack.pop()?.({ fromBack: true }); });
+/** Phones: `fn({ fromBack: true })` runs on the next back gesture (panels.js uses it for its sheets, like windows). */
+export function pushBack(fn) { history.pushState({ rigsWin: true }, ''); backStack.push(fn); }
+/** Give a pushBack entry back (the sheet closed some other way), so back does not close something nobody sees. */
+export function dropBack(fn) { const i = backStack.indexOf(fn); if (i >= 0) { backStack.splice(i, 1); skipPop++; history.back(); } }
 
 const reducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
