@@ -198,8 +198,8 @@ export function openExhibits({ docId = null, auto = false } = {}) {
   const sketches = new Map(); // entry id → { handle, host }: the p5 sketch drawing that card's picture
   const unmount = (id) => { const s = sketches.get(id); if (s) { s.handle.destroy(); s.host.remove(); sketches.delete(id); } };
   const unmountAll = () => { for (const id of [...sketches.keys()]) unmount(id); };
-  const win = openWindow({ title: 'Exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); clearTimeout(actTimer); document.removeEventListener('visibilitychange', motion); unmountAll(); st.ui = null; } });
-  if (!isPhone()) { // beside the work: the right edge, under the menu bar
+  const win = openWindow({ title: 'Exhibits', key: 'exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); clearTimeout(actTimer); document.removeEventListener('visibilitychange', motion); unmountAll(); st.ui = null; } });
+  if (!isPhone() && !win.remembered) { // beside the work: the right edge, under the menu bar (unless it opens where it was left)
     const w = win.el.offsetWidth;
     Object.assign(win.el.style, { left: Math.max(16, window.innerWidth - w - 20) + 'px', top: (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mb-h')) || 0) + 56 + 'px' });
   }
@@ -501,7 +501,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     empty.replaceChildren(
       h('div', { class: 'ex-empty-art', 'aria-hidden': 'true' }, '🎞'),
       h('p', {}, st.enabled ? 'No exhibits yet. Send JARVIS a request or start a project — its story builds here as it happens.' : 'Exhibits are off. They turn each request and project into an illustrated story as it happens.'),
-      st.enabled ? null : h('button', { class: 'btn primary', onclick: async () => { await setExhibitsEnabled(true); renderEmpty(); } }, 'Turn on Exhibits'));
+      ...(st.enabled ? [] : [h('button', { class: 'btn primary', onclick: async () => { await setExhibitsEnabled(true); renderEmpty(); } }, 'Turn on Exhibits')])); // replaceChildren would print a null as the text "null"
     empty.hidden = !!cur()?.doc.entries.length;
     renderHead(); renderTicker();
   }

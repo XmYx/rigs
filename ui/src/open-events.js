@@ -3,7 +3,7 @@
 // events, and bindDock() feeds them to the dock as the t1 state transitions (onOpened / onClosed). With autoDock and
 // autoTabTerminals off (the default) the state transitions change nothing, so listening costs nothing visible.
 // Unit-tested in test/app-dock-auto.test.js.
-import { addItem, mergeSources, onClosed, onOpened, removeItem, TERMINAL_GROUP, toItem, ungroup } from './app-dock-state.js';
+import { addItem, mergeSources, onClosed, onMinimized, onOpened, onRestored, removeItem, TERMINAL_GROUP, toItem, ungroup } from './app-dock-state.js';
 
 /** The automatic Terminals group is not kept once its last terminal has closed. */
 const dropEmptyTerminalGroup = (s) => (s.groups[TERMINAL_GROUP] && !s.groups[TERMINAL_GROUP].items.length ? ungroup(s, TERMINAL_GROUP) : s);
@@ -35,6 +35,9 @@ export const openBus = createOpenBus();
 export const emitOpened = (kind, source, extra = {}, bus = openBus) => bus.emit({ type: 'opened', kind, source, ...extra });
 export const emitClosed = (kind, source, bus = openBus) => bus.emit({ type: 'closed', kind, source });
 export const emitTitle = (kind, source, bus = openBus) => bus.emit({ type: 'title', kind, source });
+/** A wm.js window was minimized / came back (or closed while minimized). `rep`: the dock item that stands for it, if any. */
+export const emitMinimized = (source, rep = null, bus = openBus) => bus.emit({ type: 'minimized', kind: 'window', source, rep });
+export const emitRestored = (source, rep = null, bus = openBus) => bus.emit({ type: 'restored', kind: 'window', source, rep });
 
 /**
  * Windows that get no 'window' dock item: terminals (docked as terminal items) and app windows (their applet tile
@@ -76,6 +79,7 @@ export function trackPanels({ list, subscribe, bus = openBus, icon = '▤' }) {
  *           autoTabTerminals is on
  *   closed  the item leaves the dock (a pinned one stays, dimmed)
  *   title   a docked item's label follows its window's title
+ *   minimized / restored   a minimized window is reached from the dock (onMinimized / onRestored)
  */
 export function bindDock(bus, dock) {
   return bus.on((ev) => {
@@ -84,5 +88,7 @@ export function bindDock(bus, dock) {
     if (ev.type === 'opened') dock.act((s) => (s.items[it.id] ? addItem(s, it) : onOpened(s, ev)));
     else if (ev.type === 'closed') dock.act((s) => (ev.kind === 'terminal' ? dropEmptyTerminalGroup(onClosed(s, ev)) : onClosed(s, ev)));
     else if (ev.type === 'title') dock.act((s) => (s.items[it.id] ? addItem(s, it) : s));
+    else if (ev.type === 'minimized') dock.act((s) => onMinimized(s, ev));
+    else if (ev.type === 'restored') dock.act((s) => onRestored(s, ev));
   });
 }

@@ -119,7 +119,7 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
   const label = `${nodeName} — ${short}`;
   const dispose = () => { closed = true; offTheme(); ws?.close(); term.dispose(); closeLive(id, toFront); };
   // `tab` (an automatically opened session while the app dock's autoTabTerminals is on) mounts in the shared Terminals window; otherwise its own window as always.
-  const w = tab ? terminalTabs().addTab({ title: short, tip: label, status, onClose: dispose }) : openWindow({ title: label, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: dispose });
+  const w = tab ? terminalTabs().addTab({ title: short, tip: label, status, onClose: dispose }) : openWindow({ title: label, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: dispose, key: `term:${nodeId}`, dockRef: `terminal:${id}` });
   const toFront = () => { w.raise(); term.focus(); };
   live.set(id, [...(live.get(id) || []), toFront]);
   emitOpened('terminal', { id, nodeId, title: `${short} — ${nodeName}` }, { auto }); // the app dock docks / tabs it when its settings say so

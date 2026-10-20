@@ -8,7 +8,7 @@
 // checked?, submenu? } runs inline, { sep: true } separates. Items whose action dep is missing are left out.
 //
 // deps (all optional; main.js wires them): copy(text, what), layout{toggleCollapse,isCollapsed,resetPanel,canDock,
-// isDocked,dock,float,removed}, window{toggleMax,isMax,closeOthers,closeAll,count}, app{key,isOpen,status,url,open,
+// isDocked,dock,float,removed}, window{minimize,isMin,toggleMax,isMax,closeOthers,closeAll,count}, app{key,isOpen,status,url,open,
 // openTab,reload}, session{transcript,attach,chat,galaxy,newHere}, project{open,act,galaxy}, task{openSession,mark},
 // node{get,status,terminal,files,screen,sessions,control,ssh,sshCommand,newAgent}, trace{open}, galaxy{select,fit,
 // hideType,typeLabel,talkToModel,useAsBrain,newSession,newInProject}, station{select,fit}.
@@ -192,11 +192,15 @@ export function registerJarvisProviders(reg, deps = {}) {
     const id = t.id;
     const W = d('window');
     const ref = { kind: 'window', id, title: t.data?.title || id, open: true };
-    return [
-      { cmd: 'window.open', args: ref, label: 'Bring to front' },
-      it(W.isMax?.(id) ? 'Restore size' : 'Maximize', bind(W, 'toggleMax', id)),
+    const min = !!W.isMin?.(id);
+    const max = !!W.isMax?.(id);
+    return [ // the title bar's own three buttons, in the same order: minimize, maximize / restore, close
+      { cmd: 'window.open', args: ref, label: min ? 'Restore' : 'Bring to front' },
       SEP,
-      { cmd: 'window.hide', args: ref, label: 'Close' },
+      it('Minimize', bind(W, 'minimize', id), { icon: '–', disabled: min }),
+      it(max ? 'Restore size' : 'Maximize', bind(W, 'toggleMax', id), { icon: max ? '❐' : '□' }),
+      { cmd: 'window.hide', args: ref, label: 'Close', icon: '✕' },
+      SEP,
       it('Close other windows', bind(W, 'closeOthers', id), { disabled: (W.count?.() ?? 2) < 2 }),
       it('Close all windows', bind(W, 'closeAll'), { disabled: (W.count?.() ?? 1) < 1 }),
     ];

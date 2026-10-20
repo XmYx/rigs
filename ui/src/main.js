@@ -48,7 +48,7 @@ import { focusTerminal, openTerminal } from './terminal-lazy.js';
 import { bindDock, openBus, reconcileOnLoad, trackPanels } from './open-events.js';
 import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
-import { closeAll as closeAllWindows, closeOthers, isMaximized, openWindow, toggleMaximize, windowCount } from './wm.js';
+import { closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, minimizeWindow, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
 
 applyTheme();
@@ -1616,7 +1616,7 @@ function wireContextMenus() {
   registerJarvisProviders(providers, {
     copy: copyText,
     layout: { toggleCollapse, isCollapsed, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
-    window: { toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
+    window: { minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
     app: {
       key: appKey, isOpen: isAppOpen, status: (a) => a.health?.status, url: (a) => `${location.origin}${appPath(a)}`,
       open: openApp, openTab: (a) => window.open(appPath(a), '_blank', 'noopener'), reload: reloadApp,

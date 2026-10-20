@@ -54,11 +54,14 @@ function approxEqual(a, b, path = '') {
   assert.equal(a, b, path);
 }
 
-test('the module touches no DOM and imports nothing', () => {
-  const src = fs.readFileSync(new URL('../ui/src/dock-layout.js', import.meta.url), 'utf8');
-  const code = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.doesNotMatch(code, /\b(document|window|localStorage|sessionStorage|navigator|HTMLElement|requestAnimationFrame)\b/);
-  assert.doesNotMatch(code, /^\s*import\b/m);
+test('the module touches no DOM and imports nothing but the pure window-state model', () => {
+  for (const file of ['dock-layout.js', 'window-state.js']) {
+    const src = fs.readFileSync(new URL(`../ui/src/${file}`, import.meta.url), 'utf8');
+    const code = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.doesNotMatch(code.replace(/^\s*import\b.*$/gm, ''), /\b(document|window|localStorage|sessionStorage|navigator|HTMLElement|requestAnimationFrame)\b/, file);
+    const imports = [...code.matchAll(/^\s*import\b.*?from\s+'([^']+)'/gm)].map((m) => m[1]);
+    assert.deepEqual(imports, file === 'dock-layout.js' ? ['./window-state.js'] : [], file);
+  }
   for (const name of ['dock', 'undock', 'moveTab', 'reorder', 'setActiveTab', 'resizeSplit', 'hide', 'restore', 'removePanel', 'normalize',
     'serialize', 'deserialize', 'migrateLegacy', 'dropZoneAt', 'solveFit', 'fitHome', 'dockPanel', 'floatPanel', 'hidePanel', 'restorePanel', 'resetLayout', 'listPanels']) {
     assert.equal(typeof D[name], 'function', name);
@@ -432,7 +435,8 @@ test("migration from 'rigs.panels' keeps current users' layout", () => {
   };
   const l = D.deserialize(JSON.stringify(legacy), { viewport: { w: 1920, h: 1080 } });
   checkInvariants(l);
-  assert.equal(l.version, 1);
+  assert.equal(l.version, D.VERSION);
+  assert.deepEqual(l.windows, {}, 'no window was remembered before');
   assert.equal(l.root, null, 'nothing was docked before');
   assert.deepEqual(l.floating.find((f) => f.id === 'left'), { id: 'left', x: 24, y: 30, w: 340, h: 700, vw: 1920, vh: 1080, z: 1 });
   assert.deepEqual(l.floating.find((f) => f.id === 'topbar'), { id: 'topbar', x: 700, y: 8, w: null, h: null, vw: 1920, vh: 1080, z: 2 });

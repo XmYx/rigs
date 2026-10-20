@@ -20,7 +20,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   const upload = h('input', { type: 'file', multiple: true, 'aria-hidden': 'true', tabindex: '-1', style: { display: 'none' } });
 
   const w = openWindow({
-    title: `${nodeName} — files`, icon: '📁', width: 980, height: 560, className: 'files-win',
+    title: `${nodeName} — files`, key: `files:${nodeId}`, icon: '📁', width: 980, height: 560, className: 'files-win',
     tools: [rootsSel], onClose: () => { closed = true; },
   });
   const hiddenBox = h('input', { type: 'checkbox', checked: showHidden, onchange: (e) => { showHidden = e.target.checked; load(cur.path); } });

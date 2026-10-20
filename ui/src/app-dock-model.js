@@ -214,7 +214,7 @@ export function itemEntries(state, id, act, ui = {}) {
   const others = Object.values(state.groups).filter((x) => x.id !== g?.id);
   const [back, fwd] = steps(state, ui.phone);
   return [
-    ui.open ? { label: canOpen(it) ? 'Open' : `Open (${it.kind === 'rig' ? 'offline' : 'not available'})`, icon: it.icon || '▦', disabled: !canOpen(it), run: () => ui.open(it) } : null,
+    ui.open ? { label: canOpen(it) ? (it.minimized ? 'Restore' : 'Open') : `Open (${it.kind === 'rig' ? 'offline' : 'not available'})`, icon: it.icon || '▦', disabled: !canOpen(it), run: () => ui.open(it) } : null,
     SEP,
     { label: 'Keep in dock (pin)', checked: it.pinned, run: () => act((s) => setPinned(s, id, !s.items[id]?.pinned)) },
     { label: 'Hide from dock', icon: '🙈', run: () => act((s) => setHidden(s, id, true)) },

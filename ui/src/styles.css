@@ -150,6 +150,11 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .win-btn { width: 24px; height: 22px; border: 0; background: transparent; border-radius: 5px; color: var(--muted); }
 .win-btn:hover { background: rgba(255, 255, 255, .07); color: #fff; }
 .win-btn.close:hover { background: rgba(248, 113, 113, .25); }
+/* The window chrome (wm.js + window-state.js): minimize, maximize / restore, close — same order and style on every window. */
+.win-bar > .win-btn { flex: none; display: inline-grid; place-items: center; padding: 0; font: 13px/1 var(--mono); }
+.win-bar > .win-btn.win-min { margin-left: 2px; }
+.win.min { display: none !important; }
+.win.win-minimizing { opacity: 0; scale: .9; translate: 0 48px; pointer-events: none; }
 .win-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .term-holder { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; background: #05090e; }
 .term-status { font: 11px var(--mono); color: var(--muted); }
@@ -675,7 +680,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   .win-bar { min-height: 52px; padding: 4px 4px 4px 14px; cursor: default; }
   .win-title-text { font-size: 14px; }
   .win-btn { width: 44px; height: 44px; font-size: 18px; }
-  .win-bar > .win-btn:not(.close) { display: none; }
+  .win-bar > .win-btn.win-max { display: none; } /* phones: every window is full-screen already; minimize and close stay */
   .win-tools { flex-wrap: wrap; justify-content: flex-end; }
   /* list over detail: the list gets most of the room until something is picked, then the detail does */
   .files-split, .sess-split, .proj-split { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); }
@@ -1703,6 +1708,8 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .adock.pos-left .adock-run { top: 50%; left: -5px; margin-top: -2.5px; }
 .adock.pos-right .adock-run { top: 50%; right: -5px; margin-top: -2.5px; }
 .adock-tile.off { opacity: .42; filter: grayscale(.85); cursor: default; }
+/* A minimized window lives here: a hollow ring instead of the running dot (click restores it in place). */
+.adock-tile.min .adock-run, .adock-pop-tile.min .adock-run { opacity: 1; background: transparent; border: 1.5px solid var(--accent); width: 7px; height: 7px; box-sizing: border-box; }
 .adock-tile.dragging { opacity: .22; }
 .adock-tile.drop-onto .adock-icon { box-shadow: 0 0 0 3px var(--accent), 0 0 20px rgba(var(--accent-rgb), .65); }
 html.adock-dragging, html.adock-dragging * { cursor: grabbing !important; user-select: none; }

@@ -1,11 +1,13 @@
 // Dock layout engine (pure, no DOM): the model behind dockable, tabbed and floating JARVIS panels.
 //
 // A layout is plain JSON:
-//   { version: 1,
+//   { version: 2,
 //     root: Node | null,                  // the docked tree
 //     floating: [{ id, x, y, w, h, z, vw, vh }],  // free panels; vw/vh = viewport they were placed in
 //     hidden: { [id]: Place },            // closed panels and where they were, so restore puts them back
-//     collapsed: [id] }                   // panels folded to their header (kept from rigs.panels)
+//     collapsed: [id],                    // panels folded to their header (kept from rigs.panels)
+//     windows: { [key]: WindowRecord } }  // wm.js windows by stable key: state + rect (window-state.js), version 2
+// Version 1 (no `windows`) and the older 'rigs.panels' state are migrated on load.
 // Node = { type: 'split', dir: 'row' | 'column', ratios: [n], children: [Node] }
 //      | { type: 'tabs', panels: [id], active: id }
 //      | { type: 'panel', id }
@@ -16,7 +18,9 @@
 // (dockPanel, floatPanel, hidePanel, restorePanel, resetLayout, listPanels) wraps them in a store
 // with optional localStorage-style persistence for the UI, the top menu and context menus.
 
-export const VERSION = 1;
+import { normalizeWindows, normalizeRecord, putWindow } from './window-state.js';
+
+export const VERSION = 2;
 export const STORAGE_KEY = 'rigs.dock';
 export const LEGACY_KEY = 'rigs.panels';
 export const ZONES = ['left', 'right', 'top', 'bottom', 'center'];
@@ -28,7 +32,7 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isId = (v) => typeof v === 'string' && v.length > 0;
 
 export function emptyLayout() {
-  return { version: VERSION, root: null, floating: [], hidden: {}, collapsed: [] };
+  return { version: VERSION, root: null, floating: [], hidden: {}, collapsed: [], windows: {} };
 }
 
 // ---------------------------------------------------------------- tree helpers
@@ -379,6 +383,12 @@ export function setCollapsed(layout, id, collapsed) {
   return out;
 }
 
+/** Store a wm.js window's state record under its stable key (window-state.js); null forgets it. */
+export function setWindow(layout, key, rec) {
+  const windows = putWindow(layout.windows || {}, key, rec);
+  return windows === layout.windows ? layout : { ...layout, windows };
+}
+
 /** Add panels the layout has never seen as floating with no rect (the UI keeps its CSS default place). */
 export function ensurePanels(layout, ids, { hidden = [] } = {}) {
   const missing = ids.filter((id) => isId(id) && !panelStatus(layout, id));
@@ -628,7 +638,7 @@ export function deserialize(raw, { viewport } = {}) {
   if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch { return emptyLayout(); } }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return emptyLayout();
   if (v.version === undefined) return migrateLegacy(v, { viewport });
-  if (v.version !== VERSION) return emptyLayout(); // a format we cannot read: start clean
+  if (v.version !== VERSION && v.version !== 1) return emptyLayout(); // a format we cannot read: start clean (1 = before `windows`)
   const seen = new Set();
   const layout = emptyLayout();
   layout.root = normalize(withoutRepeats(v.root, seen));
@@ -645,6 +655,7 @@ export function deserialize(raw, { viewport } = {}) {
     layout.hidden[id] = place;
   }
   layout.collapsed = [...new Set((Array.isArray(v.collapsed) ? v.collapsed : []).filter((id) => isId(id) && seen.has(id)))];
+  layout.windows = v.version === 1 ? {} : normalizeWindows(v.windows);
   return layout;
 }
 
@@ -704,6 +715,10 @@ export function createDockManager({ storage = null, key = STORAGE_KEY, legacyKey
     restorePanel: (id) => set(restore(layout, id), 'restore'),
     togglePanel: (id) => (layout.hidden[id] ? api.restorePanel(id) : api.hidePanel(id)),
     resetLayout: () => set(ensurePanels(defaultLayout(), [...titles.keys()]), 'reset'),
+    /** A wm.js window's saved state record (window-state.js) or null. */
+    getWindow: (key) => normalizeRecord(layout.windows?.[key]),
+    /** Save a window's state record (null forgets it). Listeners hear cause 'windows'; docking.js does not re-render for it. */
+    setWindow: (key, rec) => set(setWindow(layout, key, rec), 'windows'),
     /** [{id, title, status: docked|floating|hidden, collapsed, path?}] for menus. */
     listPanels: () => listLayoutPanels(layout).map((p) => ({ ...p, title: titles.get(p.id) ?? p.id })),
   };

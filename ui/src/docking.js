@@ -172,6 +172,20 @@ export function unregisterDockable(id) {
   else render();
 }
 
+/**
+ * A window left the stage (minimized): if it is in the layout (docked, or adopted by smart scaling) it leaves it the
+ * way a hidden panel does, remembering its exact place; unstowDockable puts it back there when it is restored.
+ */
+export function stowDockable(id) {
+  const it = items.get(id);
+  if (drag?.it === it) endDrag(true);
+  const L = dockManager.getLayout();
+  if (panelStatus(L, id) && panelStatus(L, id) !== 'hidden') dockManager.hidePanel(id);
+}
+export function unstowDockable(id) {
+  if (panelStatus(dockManager.getLayout(), id) === 'hidden') dockManager.restorePanel(id);
+}
+
 export function setDockTitle(id, title) {
   const it = items.get(id);
   if (!it || it.title === title) return;
@@ -893,7 +907,7 @@ export function initDocking({ defaults }) {
   for (const p of [...panelsIn(L.root), ...L.floating.map((f) => f.id), ...Object.keys(L.hidden)]) if (p.startsWith('win-')) L = removePanel(L, p);
   if (panelStatus(L, STAGE) !== 'docked') L = dock(removePanel(L, STAGE), STAGE, 'root', 'right', { share: 0.7 });
   dockManager.setLayout(L);
-  dockManager.subscribe(() => render());
+  dockManager.subscribe((_L, cause) => { if (cause !== 'windows') render(); }); // a wm.js window saving its state record moves nothing
   window.addEventListener('resize', onResize);
   // The top menu bar (--mb-h) and the app dock (--ad-*) show / hide / move by setting variables on <html>: lay out again inside them.
   const insetKey = () => { const a = appDockInsets(); return `${topInset()},${a.l},${a.r},${a.b}`; };
