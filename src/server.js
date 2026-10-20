@@ -20,7 +20,8 @@ import * as chat from './chat.js';
 import { comfyRoute, createComfyService } from './comfyui.js';
 import { createSlack, slackRoute } from './connectors/slack.js';
 import { createGoogleDrive, googleDriveRoute } from './connectors/google-drive.js';
-import { config, loadConfig, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
+import { adoptGlobal, config, currentGlobal, loadConfig, markGlobalChanged, onGlobalChange, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
+import { homeNode, relayTarget } from './globalbrain.js';
 import { createLinearService, linearRoute } from './linear.js';
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
@@ -678,7 +679,12 @@ export async function startServer() {
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'GET') { const c = await chat.getChat(mm[1]); if (!c) throw new HttpError(404, 'not found'); return c; }
     if ((mm = m(/^chats\/([\w-]+)$/)) && method === 'DELETE') return { ok: await chat.deleteChat(mm[1]) };
     if (sub === 'jarvis/send' && method === 'POST') {
-      // A request from the screen or voice: routed (answer · implement · plan · continue) into a new or ongoing thread.
+      // One JARVIS for the whole mesh: a request that reaches any machine goes to the main-brain machine (src/globalbrain.js),
+      // which answers and delegates. Relayed once (x-rigs-relayed marks our relay; gateway proxy hops don't set it); if the
+      // main brain is offline we answer here.
+      const relay = relayTarget(config(), config().name, { via: req?.headers?.['x-rigs-relayed'] || '' });
+      const home = relay ? discovery.get(relay) : null;
+      if (home && !home.self && home.online && home.rigs && res) { req.headers['x-rigs-relayed'] = config().name; forwardHttp(home, req, res, 'jarvis/send'); return undefined; }
       const b = await body();
       const ac = new AbortController();
       res.on('close', () => { if (!res.writableEnded) ac.abort(); });
@@ -687,6 +693,7 @@ export async function startServer() {
       // Intake: the request gets its trace here (src/trace.js); router, brain turn, tools and handoffs hang off this span.
       const intake = startIntake(req, String(b.text || ''), 'jarvis/send', b);
       res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
+      if (relay) res.write(JSON.stringify({ type: 'status', text: `The main brain on ${relay} is unreachable — answering on ${config().name}.` }) + '\n');
       const seen = intakeWatcher();
       try {
         await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick });
@@ -726,6 +733,18 @@ export async function startServer() {
     // model catalog + this machine's core brain (provider / exact model / effort)
     if (sub === 'models') return models.catalog();
     if (sub === 'brain/core' && method === 'GET') return models.coreBrain();
+    // Global JARVIS settings: { rev, by, settings, home }. POST adopts a peer's newer revision (never re-broadcast).
+    if (sub === 'global' && method === 'GET') return { ...currentGlobal(), home: homeNode(config()) };
+    if (sub === 'global' && method === 'POST') { const adopted = adoptGlobal(await body()); if (adopted) broadcast({ type: 'global', ...currentGlobal() }); return { adopted, ...currentGlobal() }; }
+    // The main brain: the machine (and its conversational brain) every JARVIS on the mesh talks to.
+    if (sub === 'brain/home' && method === 'POST') {
+      const b = await body();
+      const n = b.node ? discovery.get(b.node) : null;
+      if (b.node && !n) throw new HttpError(400, `unknown machine ${b.node}`);
+      const chat = b.provider ? { chat: { provider: b.provider, model: b.model || '', effort: b.effort || '' } } : {};
+      patchConfig({ brain: { home: n ? n.name : '', ...chat } });
+      return { ...currentGlobal(), home: homeNode(config()) };
+    }
     if (sub === 'brain/chat' && method === 'GET') return models.chatBrain();
     if (sub === 'brain/chat' && method === 'POST') {
       const b = await body();
@@ -745,7 +764,7 @@ export async function startServer() {
     if (sub === 'brain/core' && method === 'POST') {
       const b = await body();
       const cfg = config();
-      cfg.brain.core = { provider: b.provider || 'auto', model: b.model || '', effort: b.effort || '', node: b.node || '' };
+      cfg.brain.core = { provider: b.provider || 'auto', model: b.model || '', effort: b.effort || '', node: b.node || cfg.name };
       patchConfig({ brain: { core: cfg.brain.core } });
       // the local-model brain remembers its model (it is the default when a chat doesn't name one)
       if (cfg.brain.core.provider === models.CLAUDE_OLLAMA && cfg.brain.core.model) patchConfig({ brain: { claudeOllama: { model: cfg.brain.core.model } } });
@@ -883,6 +902,7 @@ export async function startServer() {
       const cfg = config();
       cfg.router = next;
       saveConfig(cfg);
+      markGlobalChanged();
       return routerView();
     }
     if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
@@ -1375,6 +1395,22 @@ export async function startServer() {
   if (![...servers.keys()].some((h) => h === '127.0.0.1' || h === '0.0.0.0')) throw new Error(`could not bind port ${cfg.port} — is another RIGS instance running?`);
   if (cfg.bind === 'auto') setInterval(() => bindAll().catch(() => {}), 30000).unref();
 
+  // Global JARVIS settings: push our change to every peer at once; pull the newest revision when peers (re)appear.
+  onGlobalChange((g) => {
+    broadcast({ type: 'global', ...g });
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      peerJson(n, 'global', { method: 'POST', body: g, timeout: 8000 }).catch((e) => log(`global → ${n.name}:`, e.message));
+    }
+  });
+  let pulling = null;
+  const pullGlobal = () => (pulling ||= (async () => {
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      try { const g = await peerJson(n, 'global', { timeout: 8000 }); if (adoptGlobal(g)) { log(`global settings: adopted revision ${g.rev} from ${n.name} (set on ${g.by})`); broadcast({ type: 'global', ...currentGlobal() }); } }
+      catch { /* an old peer without /global, or offline: the next pull tries again */ }
+    }
+  })().finally(() => { pulling = null; }));
+  discovery.on('change', () => { pullGlobal(); });
+  setInterval(() => { pullGlobal(); }, 2 * 60 * 1000).unref();
   discovery.start();
   if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
     if (!r.restart) return;

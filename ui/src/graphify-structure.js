@@ -84,7 +84,9 @@ const N = [
 
   // ── Intake & routing ────────────────────────────────────────────────────────────────────────────────────────────
   ['sir', 's-entry', 'routing', 'Sir — voice · chat · API', [0, 3.2], 'src/server.js', 'jarvis/send',
-    'A request from the JARVIS UI (typed or spoken) arrives as POST jarvis/send; agents and other tools can send the same way.'],
+    'A request from the JARVIS UI (typed or spoken) arrives as POST jarvis/send; agents and other tools can send the same way. One JARVIS for the mesh: on any machine that is not the main brain (globalbrain.js homeNode) the request is relayed once to the main-brain machine, which answers and delegates; if it is unreachable this machine answers and says so. The brains, router, routing rules and quick path are global settings (config.globalRev): changed anywhere, pushed to every peer, pulled again when a peer returns.'],
+  ['global', 's-store', 'routing', 'Global JARVIS settings', [0, 4.4], 'src/globalbrain.js', 'relayTarget',
+    'brain.core · brain.chat · brain.home (main-brain machine) · router · routing · quick, stamped with a revision; the newest revision wins on every machine. Machine-bound keys (Ollama URL, LocalJev url/key, permission modes) stay local.'],
   ['intake', 's-stage', 'routing', 'Intake + trace', [1, 3.2], 'src/server.js', 'startIntake',
     'Mints the traceId (the root span of everything that follows) and starts the request timing that ends as one `request` record in the usage ledger.'],
   ['d-preroute', 's-decision', 'routing', 'Pre-routing on?', [2, 3.2], 'src/router.js', 'prerouteOn',
@@ -209,7 +211,7 @@ const L = [
   ['registry', 'dispatch', 'tool', 'matching tools go into every task brief'],
   ['registry', 'plan', 'tool', 'tool catalog goes into the planning prompt'],
 
-  ['sir', 'intake', 'flow'], ['intake', 'd-preroute', 'flow'], ['intake', 'traces', 'tool', 'root span'],
+  ['sir', 'intake', 'flow'], ['global', 'sir', 'tool', 'relays to the main brain'], ['intake', 'd-preroute', 'flow'], ['intake', 'traces', 'tool', 'root span'],
   ['d-preroute', 'router', 'branch', 'on (default)'],
   ['d-preroute', 'direct', 'branch', 'off'],
   ['direct', 'brain', 'flow', 'the brain decides and files work itself'],
