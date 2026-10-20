@@ -19,7 +19,7 @@ const root = document.documentElement;
 const SHEET = [
   ['btn-hands', 'Hands-free'], ['btn-term', 'Terminal'], ['btn-files', 'Files'], ['btn-desk', 'Desktop'],
   ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-ask', 'Questions'], ['btn-agents', 'Active agents'], ['btn-work', 'Active projects'], ['btn-usage', 'Tokens & time'], ['btn-desktops', 'Desktops'], ['btn-graphify', 'Graphify'], ['btn-traces', 'Traces'], ['btn-apps', 'Apps'],
-  ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'], ['panels-btn', 'Layout'],
+  ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'],
 ];
 
 let drawerBtn;
@@ -74,7 +74,6 @@ function placeButtons() {
     if (!b) continue;
     b.dataset.label = label;
     if (phone) { if (b.parentElement !== sheet) sheet.append(b); continue; }
-    if (id === 'panels-btn') { if (b.parentElement !== document.body) document.body.insertBefore(b, $('#panels-menu')); continue; }
     if (id === 'btn-hands') continue; // back into the Ask JARVIS row: ask-panel.js
     if (b.parentElement !== bar) bar.insertBefore(b, moreBtn);
   }
@@ -101,7 +100,7 @@ function trackViewport() {
 }
 
 // ------------------------------------------------------------------ setup
-/** Call once after the panels and the ☰ menu exist (main.js wire()). */
+/** Call once after the panels exist (main.js wire()). */
 export function initMobile() {
   const left = $('#left');
   drawerBtn = h('button', { id: 'drawer-btn', class: 'round', title: 'Side panel — search, inspector, hubs', 'aria-label': 'Side panel', 'aria-controls': 'left', 'aria-expanded': 'false',
@@ -115,11 +114,11 @@ export function initMobile() {
   moreBtn = h('button', { id: 'btn-more', class: 'round', title: 'More — terminal, files, sessions, projects, questions, active projects, tokens & time, traces, apps, mesh, voice', 'aria-label': 'More controls', 'aria-controls': 'more-sheet', 'aria-expanded': 'false',
     onclick: (e) => { e.stopPropagation(); if (sheet.classList.contains('open')) closeSheet(); else openSheet(); } }, '⋯');
   sheet = h('div', { id: 'more-sheet', class: 'panel', role: 'group', 'aria-label': 'More controls' });
-  // A tap on a sheet button does its job and puts the sheet away (☰ Layout opens its own menu above it).
+  // A tap on a sheet button does its job and puts the sheet away.
   sheet.addEventListener('click', (e) => { if (e.target.closest('button')) setTimeout(closeSheet, 0); });
   $('#bar')?.append(moreBtn);
   document.body.append(sheet);
-  document.addEventListener('pointerdown', (e) => { if (!sheet.contains(e.target) && !moreBtn.contains(e.target) && !e.target.closest?.('#panels-menu')) closeSheet(); });
+  document.addEventListener('pointerdown', (e) => { if (!sheet.contains(e.target) && !moreBtn.contains(e.target)) closeSheet(); });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (sheet.classList.contains('open')) { closeSheet(); moreBtn.focus(); } else if (drawerOpen()) closeDrawer();
