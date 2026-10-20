@@ -6,6 +6,7 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
+import { appendedSince, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
 import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
@@ -30,14 +31,40 @@ export async function listChats() {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+// chat object → how many messages it had when read: saving merges in what other writers appended since (see saveChat)
+const loadedLength = new WeakMap();
+const chatLocks = new Map();
+
 export async function getChat(id) {
   if (!/^[\w-]+$/.test(id)) return null;
-  return readJson(path.join(DIR, id + '.json'));
+  const c = await readJson(path.join(DIR, id + '.json'));
+  if (c?.messages) loadedLength.set(c, c.messages.length);
+  return c;
 }
 
+/** Run `fn` after every earlier write to chat `id` in this process has finished. */
+function withChatLock(id, fn) {
+  const run = (chatLocks.get(id) || Promise.resolve()).then(fn);
+  const tail = run.catch(() => {});
+  chatLocks.set(id, tail);
+  tail.then(() => { if (chatLocks.get(id) === tail) chatLocks.delete(id); });
+  return run;
+}
+
+/**
+ * Write a chat. A turn holds its chat object for as long as the brain runs; messages another writer appended to the
+ * file meanwhile (a report, a work request mirrored into the JARVIS thread, a quick answer) are kept, after this
+ * object's own — so they also stay after a turn's `seen` mark and the brain is told about them next turn.
+ */
 async function saveChat(c) {
-  c.updatedAt = Date.now();
-  await writeJsonAtomic(path.join(DIR, c.id + '.json'), c);
+  const file = path.join(DIR, c.id + '.json');
+  await withChatLock(c.id, async () => {
+    const base = loadedLength.get(c);
+    if (base != null) c.messages.push(...appendedSince(await readJson(file), base, c.messages));
+    c.updatedAt = Date.now();
+    await writeJsonAtomic(file, c);
+    loadedLength.set(c, c.messages.length);
+  });
 }
 
 function workRoot() {
@@ -179,21 +206,6 @@ export function personaPrompt(meshSummary, projects = '') {
   ].filter(Boolean).join('\n');
 }
 
-/** Messages this brain hasn't seen yet (said by other brains / typed while another brain was active). */
-function unseenContext(chat, brainKey) {
-  const from = chat.seen?.[brainKey] ?? 0;
-  const slice = chat.messages.slice(from, -1);
-  if (!slice.length) return '';
-  return 'Earlier in this conversation (handled by other brains):\n' + slice.map((m) => `${m.role === 'user' ? 'User' : `${m.brain || 'assistant'}`}: ${truncate(m.text, 2000)}`).join('\n') + '\n\nNow the user says:\n';
-}
-
-/** The last few messages before the current one, for a fast-path turn (a fresh session that resumes nothing). */
-function recentContext(chat, { messages = 6, chars = 800 } = {}) {
-  const slice = chat.messages.slice(0, -1).slice(-messages);
-  if (!slice.length) return '';
-  return 'Recently in this conversation:\n' + slice.map((m) => `${m.role === 'user' ? 'User' : 'JARVIS'}: ${truncate(m.text, chars)}`).join('\n') + '\n\nNow the user says:\n';
-}
-
 function cleanEnv() {
   const env = { ...process.env, PATH: augmentedPath() };
   for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
@@ -226,8 +238,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   const cfg = config().brain;
   // The local-model variant is the same harness, stream and tools on another endpoint; it keeps its own Claude session
   // and usage totals (a session started against Anthropic's API is not resumed against Ollama, or the other way round).
-  // A fast-path turn (quick = { maxTurns }, src/quick.js) is a fresh session every time with the last few messages as
-  // context: it never resumes or replaces the JARVIS thread's own Claude session.
+  // A fast-path turn (quick = { maxTurns }, src/quick.js) is a fresh session every time with the thread's recent history
+  // as context (threadContext, src/main-chat.js): it never resumes or replaces the JARVIS thread's own Claude session.
   // A YOLO turn (yolo = { maxTurns, cwd, note }, src/yolo.js) is a fresh session too, run in the run's sandbox folder with
   // the tools that file work, plan, propose or touch git taken away.
   const fresh = quick || yo;
@@ -235,14 +247,14 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   const sessionKey = viaOllama ? 'claudeOllamaSessionId' : yo ? 'yoloSessionId' : quick ? 'quickSessionId' : 'claudeSessionId';
   const usageKey = viaOllama ? 'claudeOllamaUsage' : yo ? 'yoloUsage' : quick ? 'quickUsage' : 'claudeUsage';
   const system = personaPrompt(meshSummary, projects) + (yo ? '\n\n' + yo.note : quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
-  const args = ['-p', (fresh ? recentContext(chat) : unseenContext(chat, key)) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+  const resumed = !fresh && !!chat[sessionKey];
+  const args = ['-p', (fresh ? threadContext(chat) : unseenContext(chat, key, { withSummary: !resumed })) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', system, '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   if (yo) args.push('--disallowedTools', yolo.YOLO_BLOCKED_TOOLS.join(','));
   args.push('--add-dir', workRoot());
   const maxTurns = yo?.maxTurns || quick?.maxTurns;
   args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort, ...(maxTurns ? { maxTurns } : {}) })));
-  const resumed = !fresh && !!chat[sessionKey];
   if (resumed) args.push('--resume', chat[sessionKey]);
   if (viaOllama) env = { ...env, ...claudeOllamaEnv({ url: claudeOllamaUrl(cfg), model }) };
   let full = '';
@@ -289,7 +301,7 @@ const runClaudeOllama = (chat, text, model, effort, emit, meshSummary, signal, p
 
 async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
   const cfg = config().brain;
-  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary, projects) + '\n\n') + unseenContext(chat, 'codex') + text;
+  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary, projects) + '\n\n') + unseenContext(chat, 'codex', { withSummary: !chat.codexThreadId }) + text;
   // `codex exec resume` takes its own option set (no --sandbox: that is fixed by the original session).
   const flags = codexFlags({ model, effort });
   const args = chat.codexThreadId
@@ -459,7 +471,11 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
       out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint: `${hint}\n[The fast path (${r.model || q.model}) handed this request to you: ${r.escalate}.${ran}]`.trim(), onTool });
       return out;
     }
-    out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint, onTool });
+    // Work routed to its own thread leaves its request — and, when done, the reply — in the JARVIS thread too.
+    const mirror = m.preroute && MIRRORED_ROUTES.includes(m.route) ? await mirrorToMain(chatId, { role: 'user', text, route: m.route }) : null;
+    try { out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint, onTool }); } finally {
+      if (mirror) await mirrorToMain(chatId, { role: 'assistant', text: out?.text || '', route: m.route }, mirror);
+    }
     return out;
   } catch (e) { failed = true; throw e; } finally {
     const end = Date.now();
@@ -473,6 +489,25 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
     emit({ type: 'timing', ...timing });
     await recordRequest({ tsStart: t0, tsEnd: end, chatId: m.chatId, model: m.model, traceId: opts.trace?.traceId || '', status: opts.signal?.aborted ? 'stopped' : failed || out?.error ? 'failed' : 'done', ...timing });
   }
+}
+
+const MIRRORED_ROUTES = ['implement', 'plan', 'continue'];
+
+/**
+ * Mirror one message of a work thread (src/main-chat.js mirrorMessage) into the JARVIS thread, so the next answer there
+ * knows what Sir asked for and what was set in motion. Nothing when the work runs in the JARVIS thread itself. Never
+ * fails the request. Resolves to the work thread's { title } for the reply, or null.
+ */
+async function mirrorToMain(chatId, { role, text, route }, work = null) {
+  try {
+    const main = await mainChat();
+    if (!chatId || main.id === chatId) return null;
+    const thread = work || await getChat(chatId);
+    const last = role === 'assistant' ? (await getChat(chatId))?.messages?.findLast((x) => x.role === 'assistant') : null;
+    const msg = mirrorMessage({ role, text, chatId, route, title: thread?.title || '', brain: last?.brain || '', model: last?.model || '' });
+    if (msg) { main.messages.push(msg); await saveChat(main); }
+    return { title: thread?.title || '' };
+  } catch { return null; }
 }
 
 /**

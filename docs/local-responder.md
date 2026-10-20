@@ -47,8 +47,8 @@ All references are to this worktree at `677facc`.
      that could be `[[ESCALATE]]`;
    - an `AbortController` adds the lane's own timeout (`config.quick.timeoutMs`, 90 s; `src/chat.js:572-576`);
    - `tracedRun` (`src/chat.js:517`) runs `runClaude` (`src/chat.js:221`) with `quick: { maxTurns }`: a fresh
-     `claude -p` session (never the thread's own), the last six messages as context (`recentContext`,
-     `src/chat.js:187`), the full persona prompt plus `quickNote` (`src/quick.js:182`), `--max-turns 8`, every MCP
+     `claude -p` session (never the thread's own), the JARVIS thread's recent history as context
+     (`threadContext`, `src/main-chat.js`: the last 30 messages under `MAIN_CONTEXT`), the full persona prompt plus `quickNote` (`src/quick.js:182`), `--max-turns 8`, every MCP
      server the user registered (rigs, rea, …) and `ToolSearch`.
 5. **Outcome.** `[[ESCALATE]]` (`parseEscalation`, `src/quick.js:149`), the turn limit, an error or the timeout return
    `{ escalate }`; `jarvisSend` then emits `status` with `reset: true` (the screen drops what the fast turn streamed) and
