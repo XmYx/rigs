@@ -20,7 +20,7 @@ import { createUsage } from './usage-panel.js';
 import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
-import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
+import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -274,7 +274,7 @@ function connectEvents() {
     if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.session) popups.handle(m);
     if (m.type === 'control') controlEvent(m);
-    if (m.type === 'trace-span') onTraceSpan(m.span);
+    if (m.type === 'trace-span') { onTraceSpan(m.span); onExhibitSpan(m.span); } // the Exhibit window's activity follows the same stream
     if (m.type?.startsWith('exhibit')) onExhibitEvent(m); // experimental Exhibit window (exhibits.js)
     if (m.type === 'starnet-config') onStarnetConfig(m); // experimental space-station view switched (starnet/index.js)
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
@@ -1342,6 +1342,10 @@ setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLin
 function focusedMachine() {
   const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null;
   return n || machineById(selfId) || null;
+  const exAnim = $('#d-exanim'); // Exhibit animations: off | auto | always (exhibits.js keeps it under rigs.exhibitAnim, like `store`)
+  exAnim.value = exhibitAnim();
+  exAnim.onchange = () => setExhibitAnim(exAnim.value);
+  window.addEventListener('rigs:exhibit-anim', (e) => { exAnim.value = e.detail; });
 }
 
 function wireMenus() {

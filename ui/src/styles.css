@@ -1457,6 +1457,52 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .ex-list.ex-doc { padding: 18px 16px 28px; }
 .ex-doc .ex-card { max-width: var(--measure, 68ch); margin: 0 auto 22px; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
 .ex-doc .ex-card::before, .ex-doc .ex-card::after, .ex-doc .ex-sheen, .ex-doc .ex-ghost { display: none; }
+/* motion is decoration (exhibits.js motion): nothing loops while no work runs, the window is hidden, on low power or with
+   Exhibit animations off (.ex-still); 'auto' drifts only the card of the stage running now (.ex-current) */
+.win-exhibits.ex-still .ex-img.in, .win-exhibits.ex-still .ex-pulse, .win-exhibits.ex-still .ex-badge.live::before, .win-exhibits.ex-still .ex-ghost i, .win-exhibits.ex-still .ex-type { animation: none; }
+.win-exhibits.ex-still .ex-scan { display: none; }
+.win-exhibits:not(.ex-motion-all) .ex-card:not(.ex-current) .ex-img.in { animation: none; }
+.ex-anim { background: rgba(var(--accent-rgb), .06); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: 11px var(--mono); }
+
+/* the activity: what the work is doing, from its trace spans */
+.ex-act { flex: none; max-height: 46%; overflow-y: auto; padding: 9px 12px 10px; border-bottom: 1px solid var(--line); display: grid; gap: 7px; font-size: 12px; scrollbar-width: thin; overscroll-behavior: contain; }
+.ex-act-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ex-act-kind { flex: none; font: 600 9.5px var(--mono); letter-spacing: .16em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+.ex-act-kind.live { color: var(--accent); border-color: var(--accent); }
+.ex-act-title { margin: 0; flex: 1; min-width: 0; font: 600 13px/1.35 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-act-prog { flex: none; font: 11px var(--mono); color: var(--muted); }
+.ex-act-bar { height: 3px; border-radius: 2px; background: rgba(var(--accent-rgb), .12); overflow: hidden; }
+.ex-act-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s ease; }
+.ex-act-now { font: 11.5px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ex-act.live .ex-act-now { color: var(--accent-2); }
+.ex-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.ex-step { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font: 11px var(--mono); color: var(--muted); }
+.ex-step span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30ch; }
+.ex-step.ok { color: var(--text); }
+.ex-step.ok b { color: var(--accent-2); }
+.ex-step.running { color: var(--accent); border-color: var(--accent); }
+.ex-step.error b, .ex-tool.error .ex-tst, .ex-file.err .ex-mark { color: var(--danger); }
+.ex-step.pending { opacity: .65; border-style: dashed; }
+.ex-act-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 10px; }
+.ex-act-col { min-width: 0; }
+.ex-act-col h4 { margin: 0 0 4px; font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.ex-files, .ex-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ex-file, .ex-tool { display: flex; align-items: baseline; gap: 6px; min-width: 0; font: 11.5px/1.45 var(--mono); }
+.ex-mark { flex: none; width: 15px; text-align: center; border-radius: 3px; font-size: 10px; color: var(--muted); border: 1px solid var(--line); }
+.ex-file.m-edit .ex-mark { color: var(--accent); border-color: var(--accent); }
+.ex-file.m-create .ex-mark { color: var(--accent-2); border-color: var(--accent-2); }
+.ex-fname { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ex-fdir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--muted); font-size: 10.5px; }
+.ex-fcount { flex: none; color: var(--muted); font-size: 10.5px; }
+.ex-tst { flex: none; width: 12px; color: var(--muted); }
+.ex-tool.ok .ex-tst { color: var(--accent-2); }
+.ex-tool.running .ex-tst { color: var(--accent); }
+.ex-tname { flex: none; color: var(--text); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-ttarget { flex: 1 1 30%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.ex-tsum { flex: 0 1 40%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; }
+.ex-tool.error .ex-tsum { color: var(--danger); }
+.ex-none { color: var(--muted); font: 11px var(--mono); opacity: .7; }
+
 .ex-doc .ex-card, .ex-doc .ex-card.ex-new, .ex-doc .ex-img, .ex-doc .ex-img.in { animation: none; }
 .ex-doc .ex-img { opacity: 1; clip-path: none; transform: none; filter: none; transition: none; }
 .ex-doc .ex-h { font-size: 17px; }
@@ -1478,7 +1524,7 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   .ex-img { opacity: 1; clip-path: none; transform: none; filter: none; }
   .ex-sheen { display: none; }
   .ex-scan { display: none; }
-  .ex-p5 { transition: none; }
+  .ex-p5, .ex-act-bar i { transition: none; }
 }
 
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
@@ -1494,9 +1540,12 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 
 /* print: only the document, black on white, one card never split across pages */
 @media print {
+  .ex-act { padding: 8px var(--sp-3); max-height: 52%; }
+  .ex-act-cols { grid-template-columns: minmax(0, 1fr); }
+  .ex-anim { min-height: 44px; font-size: 13px; flex: 1 1 auto; }
   body > *:not(.win-exhibits) { display: none !important; }
   .win-exhibits { position: static !important; width: auto !important; height: auto !important; inset: auto !important; box-shadow: none !important; border: 0 !important; background: #fff !important; color: #000 !important; resize: none; animation: none !important; transition: none !important; overflow: visible !important; }
-  .win-exhibits::after, .win-bar, .ex-ticker, .ex-bar, .ex-ghost, .ex-sheen, .ex-card::before, .ex-card::after, .presize { display: none !important; }
+  .win-exhibits::after, .win-bar, .ex-ticker, .ex-act, .ex-bar, .ex-ghost, .ex-sheen, .ex-card::before, .ex-card::after, .presize { display: none !important; }
   .win-exhibits .win-body, .ex-list { display: block !important; overflow: visible !important; height: auto !important; padding: 0 !important; }
   .ex-head { background: none; border: 0; padding: 0 0 12px; }
   .ex-title { color: #000; font-size: 22px; }
