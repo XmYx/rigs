@@ -179,3 +179,16 @@ test('Window menu: the Ask JARVIS group is there and every menu entry is a regis
   assert.ok(matchShortcut('Mod+K', key('k', { metaKey: true }), { mac: true }));
   assert.ok(matchShortcut('Mod+K', key('k', { ctrlKey: true }), { mac: false }));
 });
+
+test('Panels is its own top-level menu with the docking / scaling switches, the panel toggles and Reset layout; the ☰ corner button is gone', () => {
+  const src = fs.readFileSync(new URL('../ui/src/jarvis-commands.js', import.meta.url), 'utf8');
+  const tops = [...src.matchAll(/\{ id: '(\w+)', label: '([^']+)', items: \(\) => \[/g)].map((m) => m[1]);
+  assert.deepEqual(tops, ['file', 'edit', 'panels', 'window', 'tools', 'experimental', 'help']);
+  const panels = src.slice(src.indexOf("{ id: 'panels', label: 'Panels'"), src.indexOf("{ id: 'window', label: 'Window'"));
+  for (const c of ['panels.docking', 'panels.scaling', 'window.hideOthers', 'window.showAll', 'window.reset']) assert.ok(panels.includes(`cmd: '${c}'`), c);
+  assert.match(panels, /panels\.map\(perItem\)/, 'every panel has a show / hide entry');
+  assert.match(src, /id: 'panels\.docking'[^\n]*when: \(ctx\) => !ctx\.phone/, 'phones never dock');
+  for (const f of ['ui/src/panels.js', 'ui/src/mobile.js', 'ui/src/a11y.js', 'ui/src/styles.css', 'ui/src/main.js']) {
+    assert.doesNotMatch(fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'), /panels-btn|panels-menu|panelMenu\(/, `${f} still refers to the old menu`);
+  }
+});

@@ -19,7 +19,7 @@ export const scalingActive = () => on && !isPhone();
 export const reducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 export function onScalingChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-/** Switch smart scaling on or off (the ☰ menu and the top menu call this). */
+/** Switch smart scaling on or off (the Panels menu calls this). */
 export function setScaling(next) {
   next = !!next;
   if (next === on) return on;
@@ -53,7 +53,7 @@ export function fitStats() {
 }
 export function resetFitStats() { samples.length = 0; }
 
-/** Commands for menus (☰ today; the top menu and context menus call the same). */
+/** Commands for menus (the top menu's Panels item and context menus call the same). */
 export const scaleCommands = { isScaling, setScaling, toggleScaling, fitStats, resetFitStats };
 
 // Read-only timing hook for scripts/scale-check.js and the console: __rigsFit.stats() / .reset()

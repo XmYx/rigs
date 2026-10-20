@@ -20,7 +20,7 @@ import {
 // The elements (#ask, #btn-mic, #btn-hands) are moved, never cloned, so main.js's wiring (submit, history, voice)
 // and everything else that looks up #ask keeps working in every placement. The placement model is
 // ask-panel-model.js (persisted in rigs.askPanel; desktop default: the top bar). In the top bar the panel itself is
-// hidden in the dock layout and left out of ☰ / Show all.
+// hidden in the dock layout and left out of the Panels menu / Show all.
 //
 // Menu bar hidden (Ctrl/⌘+Shift+M): an Ask docked in the top bar stays there and peeks with the bar — hover the top
 // edge, press ⌘/Ctrl+K (peeks the bar and focuses the field) or F10; the bar stays out while the field has focus.
