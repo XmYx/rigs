@@ -31,10 +31,11 @@ export function validateOpen(a = {}) {
   if (a === null || typeof a !== 'object' || Array.isArray(a)) throw bad('ui_open needs an object of arguments');
   const view = a.view === undefined || a.view === '' ? 'files' : a.view;
   if (typeof view !== 'string' || !UI_VIEWS.includes(view)) throw bad(`unknown view "${view}" (one of: ${UI_VIEWS.join(', ')})`);
-  for (const k of ['node', 'path']) {
+  for (const k of ['node', 'machine', 'path']) {
     if (a[k] !== undefined && a[k] !== null && typeof a[k] !== 'string') throw bad(`${k} must be a string`);
   }
-  const node = String(a.node ?? '').trim();
+  // `machine` is what mesh_workspaces calls it, and brains carry it over: the same thing as node.
+  const node = String(a.node || a.machine || '').trim();
   const path = String(a.path ?? '').trim();
   if (node.length > 120) throw bad('node is too long');
   if (path.length > 4096) throw bad('path is too long');

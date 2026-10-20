@@ -29,7 +29,7 @@ import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
-import { addClaim, filesTarget, uiOpenAction } from './ui-open-model.js';
+import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
 import { createGraphify } from './graphify.js';
@@ -969,7 +969,8 @@ async function intent(text) {
     const n = findMachine(m[1]);
     if (n) { desktopTo(n); say(`Connecting to ${n.name}'s desktop.`); return true; }
   }
-  if ((m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
+  const browse = isBrowseAsk(t); // a folder or file: JARVIS opens it in the file browser (ui_open), not a pin or graph node
+  if (!browse && (m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
     const q = m[1].toLowerCase().replace(/[?.!]$/, '').trim();
     const pin = allPins().find((p) => p.name.toLowerCase() === q) || allPins().find((p) => q.length > 2 && p.name.toLowerCase().includes(q));
     if (pin) { projectWindow(pin); say(`${pin.name}, on ${pin.node.name}.`); return true; }
@@ -991,7 +992,7 @@ async function intent(text) {
     const b = pref(pool.filter((x) => x.model && (words.includes(x.model.toLowerCase().split(':')[0]) || x.model.toLowerCase().includes(words.trim())))) || pref(pool.filter((x) => what.includes(x.brain)));
     if (b) { setBrain(b); say(`Switching my brain to ${b.label} on ${b.nodeName}.`); return true; }
   }
-  if ((m = t.match(/^(?:focus|zoom(?: in)?(?: on)?|go to|show me)\s+(.+)$/i))) {
+  if (!browse && (m = t.match(/^(?:focus|zoom(?: in)?(?: on)?|go to|show me)\s+(.+)$/i))) {
     const q = m[1].toLowerCase();
     const hit = graph.nodes().find((x) => x.name?.toLowerCase() === q) || graph.nodes().find((x) => x.name?.toLowerCase().includes(q));
     if (hit) { select(hit.id); say(`${hit.name}.`); return true; }

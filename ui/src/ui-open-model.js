@@ -31,6 +31,14 @@ export function filesTarget(wins, nodeId) {
   return w && !w.closed ? w : null;
 }
 
+/**
+ * Asks to open or show a folder or file ("open my Downloads folder", "show me what's in ~/Documents"): JARVIS answers them
+ * with ui_open, so main.js's local shortcuts (focus a graph node, open a pinned project) leave them alone. Those match
+ * by name, and JARVIS's own past turns are session nodes named after Sir's requests: "show me what's in ~/Documents"
+ * asked twice would focus the first one's session instead of opening the folder.
+ */
+export const isBrowseAsk = (text) => /(?:^|[\s"'(])(?:~|\/|[a-z]:\\)|\b(?:folders?|director(?:y|ies)|files?|downloads|documents)\b|\bwhat(?:'|’)?s in\b/i.test(String(text || ''));
+
 /** Trace ids this UI sent, newest last, capped (re-claimed on every reconnect). */
 export function addClaim(list = [], traceId, cap = 20) {
   if (!/^tr-\d{8}-[0-9a-f]{12}$/.test(String(traceId || '')) || list.includes(traceId)) return list;

@@ -37,6 +37,8 @@ const NODES = [
 test('validateOpen: files is the default view; unknown views and malformed values are a 400', () => {
   assert.deepEqual(U.validateOpen({}), { view: 'files', node: '', path: '' });
   assert.deepEqual(U.validateOpen({ view: 'files', node: ' magix-system ', path: ' ~/rigs-dev ' }), { view: 'files', node: 'magix-system', path: '~/rigs-dev' });
+  // A brain that says machine (mesh_workspaces' word) instead of node still reaches that machine.
+  assert.deepEqual(U.validateOpen({ machine: 'magix-system', path: '~' }), { view: 'files', node: 'magix-system', path: '~' });
   for (const bad of [{ view: 'terminal' }, { view: 3 }, { path: 42 }, { node: ['a'] }, { path: 'a\0b' }, { path: 'x'.repeat(5000) }, { node: 'n'.repeat(200) }]) {
     assert.throws(() => U.validateOpen(bad), (e) => e.status === 400 && e.code === 'bad-request', JSON.stringify(bad).slice(0, 60));
   }
@@ -198,6 +200,16 @@ test('filesTarget: an open window for that machine is navigated, a closed one or
   assert.equal(M.filesTarget(wins, 'n-lin'), null);
   assert.equal(M.filesTarget(wins, 'n-win'), null);
   assert.equal(M.filesTarget(undefined, 'n-mac'), null);
+});
+
+test('isBrowseAsk: folder and file asks skip the UI\'s by-name shortcuts (graph focus, pinned projects)', () => {
+  for (const t of ['open my Downloads folder', "show me what's in ~/Documents", 'show me what’s in MadMikeUnity', 'open the rigs folder on the linux machine',
+    'show me /var/log', 'open ~/Projects/gone/notes on this machine', 'show me the files in my home folder', 'show me Downloads']) {
+    assert.equal(M.isBrowseAsk(t), true, t);
+  }
+  for (const t of ['show me magix-system', 'open the MadMikeUnity project', 'go to macbookpro', 'show me the agents', 'focus claude']) {
+    assert.equal(M.isBrowseAsk(t), false, t);
+  }
 });
 
 test('addClaim: trace ids only, no repeats, capped', () => {
