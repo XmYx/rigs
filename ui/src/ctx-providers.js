@@ -315,12 +315,18 @@ export function registerJarvisProviders(reg, deps = {}) {
 
   // ------------------------------------------------------------ files and traces
   reg.register('file', (t) => {
-    const { entry: e, actions: X = {}, machines = [] } = t.data || {};
+    // tools: [{ id, label, icon }] the built-in file tools for this file (file-tools-model.js toolsFor), default first;
+    // count: how many rows a zip covers (the multi-selection when this row is in it); zip: the row is a .zip archive.
+    const { entry: e, actions: X = {}, machines = [], tools = [], count = 1, zip = false } = t.data || {};
     if (!e) return null;
     const dir = e.type === 'dir';
+    const openWith = !dir && tools.length && typeof X.openWith === 'function';
     return [
       it(dir ? 'Open folder' : 'Preview', bind(X, 'open', e), { icon: dir ? '📁' : '👁' }),
+      openWith ? { label: 'Open with', icon: '↗', submenu: () => tools.map((x) => ({ label: x.label, icon: x.icon, run: () => X.openWith(e, x.id) })) } : null,
       dir ? null : it('Download', bind(X, 'download', e), { icon: '⇩' }),
+      it(count > 1 ? `Compress ${count} items to zip` : 'Compress to zip', bind(X, 'zip', e), { icon: '🗜' }),
+      zip && !dir ? it('Extract here', bind(X, 'unzip', e), { icon: '📦' }) : null,
       it('Copy path', copy(e.path, 'Path'), { icon: '⧉' }),
       it('Terminal here', bind(X, 'terminalHere', dir ? e.path : e.path.replace(/[\\/][^\\/]*$/, '') || '/'), { icon: '⌨' }),
       !dir && machines.length && typeof X.copyTo === 'function'

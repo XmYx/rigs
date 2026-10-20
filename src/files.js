@@ -147,3 +147,117 @@ export async function trash(p) {
   }
   return { path: src, trashedTo: dest };
 }
+
+// ------------------------------------------------------------------ zip / unzip
+// Built-in file tools (ui/src/file-tools.js): POST files/zip {paths, dest?} and files/unzip {path, dest?}.
+// In memory through fflate, under a size cap (config.files.zip); never overwrite (a " (2)" suffix instead);
+// unzip refuses any entry that would land outside its folder (zip-slip: '..', absolute paths, symlinked parents).
+// Pure rules: src/zip-model.js. Imported lazily so the daemon's start does not pay for them.
+
+const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
+const exists = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
+const COMPRESSED = /\.(zip|gz|tgz|bz2|xz|zst|7z|rar|png|jpe?g|gif|webp|avif|heic|mp4|mov|webm|mkv|mp3|m4a|ogg|opus|flac|pdf|docx|xlsx|pptx)$/i;
+
+function commonDir(dirs) {
+  let common = dirs[0];
+  for (const d of dirs.slice(1)) {
+    while (common !== path.dirname(common) && !(d === common || d.startsWith(common.endsWith(path.sep) ? common : common + path.sep))) common = path.dirname(common);
+  }
+  return common;
+}
+
+/** Zip files and folders into one archive → { path, files, bytes, size }. */
+export async function zip(paths, dest, { limits: lim, config: cfg } = {}) {
+  const { zipSync } = await import('fflate');
+  const { archiveName, uniqueName, zipLimits } = await import('./zip-model.js');
+  const limits = lim || zipLimits(cfg);
+  if (!Array.isArray(paths) || !paths.length || paths.some((p) => typeof p !== 'string' || !p)) throw bad('paths: a non-empty list of files or folders');
+  const items = [...new Set(paths.map(resolvePath))];
+  for (const p of items) if (!exists(p)) throw bad(`not found: ${p}`, 404);
+  const base = commonDir(items.map((p) => path.dirname(p)));
+
+  let out = dest ? resolvePath(dest) : path.join(base, archiveName(items));
+  try { if (fs.statSync(out).isDirectory()) out = path.join(out, archiveName(items)); } catch {}
+  if (!/\.zip$/i.test(out)) out += '.zip';
+  out = path.join(path.dirname(out), uniqueName(path.basename(out), (n) => exists(path.join(path.dirname(out), n))));
+
+  const entries = {};
+  let bytes = 0;
+  let files = 0;
+  const add = async (full) => {
+    if (full === out) return;
+    const st = await fsp.lstat(full);
+    if (st.isSymbolicLink()) return; // never follow links out of the selection
+    const rel = path.relative(base, full).split(path.sep).join('/');
+    if (++files > limits.maxEntries) throw bad(`more than ${limits.maxEntries} files (zip limit)`, 413);
+    if (st.isDirectory()) {
+      const kids = await fsp.readdir(full);
+      if (!kids.length) entries[rel + '/'] = new Uint8Array(0);
+      for (const k of kids) await add(path.join(full, k));
+      return;
+    }
+    if (!st.isFile()) return;
+    bytes += st.size;
+    if (bytes > limits.maxBytes) throw bad(`selection is larger than ${limits.maxBytes} bytes (zip size cap)`, 413);
+    const data = new Uint8Array(await fsp.readFile(full));
+    entries[rel] = COMPRESSED.test(full) ? [data, { level: 0 }] : data;
+  };
+  for (const p of items) await add(p);
+  const buf = zipSync(entries, { level: 6, mtime: new Date() });
+  await fsp.mkdir(path.dirname(out), { recursive: true });
+  await fsp.writeFile(out, buf, { flag: 'wx' }); // wx: fail instead of overwriting something that appeared meanwhile
+  return { path: out, files: Object.keys(entries).filter((k) => !k.endsWith('/')).length, bytes, size: buf.length };
+}
+
+/** Extract an archive → { path (the folder), files, bytes, renamed: [{ from, to }] }. */
+export async function unzip(p, dest, { limits: lim, config: cfg } = {}) {
+  const { unzipSync } = await import('fflate');
+  const { extractFolderName, planExtract, uniqueName, zipLimits } = await import('./zip-model.js');
+  const limits = lim || zipLimits(cfg);
+  if (typeof p !== 'string' || !p) throw bad('path: the archive to extract');
+  const archive = resolvePath(p);
+  const st = await fsp.stat(archive);
+  if (!st.isFile()) throw bad('not a file');
+  if (st.size > limits.maxBytes) throw bad(`archive is larger than ${limits.maxBytes} bytes (zip size cap)`, 413);
+  const buf = new Uint8Array(await fsp.readFile(archive));
+
+  // Pass 1 reads the central directory only: refuse the whole archive before writing anything.
+  const infos = [];
+  try { unzipSync(buf, { filter: (f) => { infos.push(f); return false; } }); } catch (e) { throw bad(`not a readable zip archive: ${e.message}`); }
+  const plan = planExtract(infos, limits);
+  if (!plan.ok) throw bad(plan.error, /size cap|limit/.test(plan.error) ? 413 : 400);
+
+  let root;
+  if (dest) root = resolvePath(dest);
+  else {
+    const dir = path.dirname(archive);
+    root = path.join(dir, uniqueName(extractFolderName(archive), (n) => exists(path.join(dir, n)), { dir: true }));
+  }
+  await fsp.mkdir(root, { recursive: true });
+  const realRoot = await fsp.realpath(root);
+  const inside = (x) => x === realRoot || x.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
+
+  let data;
+  try { data = unzipSync(buf); } catch (e) { throw bad(`could not extract: ${e.message}`); }
+  const renamed = [];
+  let files = 0;
+  let bytes = 0;
+  for (const e of plan.entries) {
+    const target = path.resolve(realRoot, ...e.path.split('/'));
+    if (!inside(target)) throw bad(`unsafe path in archive: ${JSON.stringify(e.name)}`);
+    const parent = e.dir ? target : path.dirname(target);
+    await fsp.mkdir(parent, { recursive: true });
+    if (!inside(await fsp.realpath(parent))) throw bad(`unsafe path in archive (symlinked folder): ${JSON.stringify(e.name)}`);
+    if (e.dir) continue;
+    const body = data[e.name];
+    if (!body) continue;
+    bytes += body.length;
+    if (bytes > limits.maxBytes) throw bad(`archive unpacks to more than ${limits.maxBytes} bytes (size cap)`, 413);
+    const name = uniqueName(path.basename(target), (n) => exists(path.join(parent, n)));
+    const file = path.join(parent, name);
+    if (name !== path.basename(target)) renamed.push({ from: e.path, to: path.relative(realRoot, file).split(path.sep).join('/') });
+    await fsp.writeFile(file, body, { flag: 'wx' });
+    files++;
+  }
+  return { path: root, archive, files, bytes, renamed };
+}

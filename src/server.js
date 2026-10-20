@@ -711,6 +711,8 @@ export async function startServer() {
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
     if (sub === 'files/rename' && method === 'POST') { const b = await body(); return files.rename(b.from, b.to); }
     if (sub === 'files/trash' && method === 'POST') return files.trash((await body()).path);
+    if (sub === 'files/zip' && method === 'POST') { const b = await body(); return files.zip(b.paths, b.dest, { config: config().files?.zip }); }
+    if (sub === 'files/unzip' && method === 'POST') { const b = await body(); return files.unzip(b.path, b.dest, { config: config().files?.zip }); }
 
     // terminals
     if (sub === 'pty' && method === 'GET') return pty.listPtys();
