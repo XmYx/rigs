@@ -171,16 +171,17 @@ export function registerJarvisProviders(reg, deps = {}) {
   });
 
   // ------------------------------------------------------------ panels and windows
-  reg.register('panel', (t) => {
+  reg.register('panel', (t, c = {}) => {
     const id = t.data?.id ?? t.id;
     const ref = { kind: 'panel', id, title: t.data?.title || id, open: true };
     const L = d('layout');
     const state = L.state?.(id) || 'normal';
     const docked = !!L.isDocked?.(id);
     const act = (action) => () => L.act?.(id, action);
+    // Phones: the panel shows only ✕ (panels.js ignores minimize / maximize there); a panel minimized on the desktop can still be restored.
     return [ // the title bar's own three buttons first, as for a window: minimize / restore, maximize / restore size, close
-      state === 'minimized' ? it('Restore', act('restore'), { icon: '❐' }) : it('Minimize', act('minimize'), { icon: '–' }),
-      it(state === 'maximized' ? 'Restore size' : 'Maximize', act('toggleMaximize'), { icon: state === 'maximized' ? '❐' : '□' }),
+      state === 'minimized' ? it('Restore', act('restore'), { icon: '❐' }) : (c.phone ? null : it('Minimize', act('minimize'), { icon: '–' })),
+      c.phone ? null : it(state === 'maximized' ? 'Restore size' : 'Maximize', act('toggleMaximize'), { icon: state === 'maximized' ? '❐' : '□' }),
       { cmd: 'window.hide', args: ref, label: 'Close', icon: '✕' },
       SEP,
       it('Reset position and size', bind(L, 'resetPanel', id), { icon: '↺' }),
@@ -190,7 +191,7 @@ export function registerJarvisProviders(reg, deps = {}) {
       { cmd: 'window.remove', args: ref, label: 'Remove (undoable)' },
     ];
   });
-  reg.register('window', (t) => {
+  reg.register('window', (t, c = {}) => {
     const id = t.id;
     const W = d('window');
     const ref = { kind: 'window', id, title: t.data?.title || id, open: true };
@@ -200,7 +201,7 @@ export function registerJarvisProviders(reg, deps = {}) {
       { cmd: 'window.open', args: ref, label: min ? 'Restore' : 'Bring to front' },
       SEP,
       it('Minimize', bind(W, 'minimize', id), { icon: '–', disabled: min }),
-      it(max ? 'Restore size' : 'Maximize', bind(W, 'toggleMax', id), { icon: max ? '❐' : '□' }),
+      c.phone ? null : it(max ? 'Restore size' : 'Maximize', bind(W, 'toggleMax', id), { icon: max ? '❐' : '□' }), // phones: windows are always full-screen
       { cmd: 'window.hide', args: ref, label: 'Close', icon: '✕' },
       SEP,
       it('Close other windows', bind(W, 'closeOthers', id), { disabled: (W.count?.() ?? 2) < 2 }),

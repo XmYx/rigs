@@ -126,6 +126,19 @@ test('window: Close others / Close all are disabled when there is nothing else t
   assert.deepEqual(cmds(lone), ['window.open', 'window.hide']);
 });
 
+test('phone: panels offer only Close (and Restore when minimized on the desktop), windows no Maximize — as their title bars', () => {
+  const panel = { kind: 'panel', id: 'work', data: { id: 'work', title: 'Active projects' } };
+  const phone = resolveMenu(setup().reg, [panel], { phone: true });
+  assert.ok(!find(phone, 'Minimize') && !find(phone, 'Maximize') && find(phone, 'Close'));
+  const minimized = resolveMenu(setup({ layout: { state: () => 'minimized', act: () => {}, resetPanel: () => {} } }).reg, [panel], { phone: true });
+  assert.ok(find(minimized, 'Restore') && !find(minimized, 'Maximize'));
+  const W = { minimize: () => {}, isMin: () => false, toggleMax: () => {}, isMax: () => false, closeOthers: () => {}, closeAll: () => {}, count: () => 2 };
+  const win = resolveMenu(setup({ window: W }).reg, [{ kind: 'window', id: '2', data: { title: 'Files' } }], { phone: true });
+  assert.ok(find(win, 'Minimize') && find(win, 'Close') && !find(win, 'Maximize') && !find(win, 'Restore size'));
+  const desk = resolveMenu(setup({ window: W }).reg, [{ kind: 'window', id: '2', data: { title: 'Files' } }]);
+  assert.ok(find(desk, 'Maximize'), 'the desktop keeps Maximize');
+});
+
 test('app: Reload needs an open window; Remove is the reversible command; Open turns into Start & open for an app that is down', () => {
   const app = { id: 'krea', name: 'Krea', node: 'ubuntu', nodeId: 'n1', health: { status: 'up' } };
   const closed = resolveMenu(setup().reg, [{ kind: 'app', id: 'n1/krea', data: { app } }]);
