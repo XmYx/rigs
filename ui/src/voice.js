@@ -9,6 +9,7 @@
 // and Chromium on Linux, whose SpeechRecognition exists but has no backend — the microphone is recorded and
 // transcribed by the mesh's own Whisper (hearing.js). localStorage rigs.stt = "server" | "browser" forces one.
 import { createHearing } from './hearing.js';
+import { drain } from './sentences.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AC = window.AudioContext || window.webkitAudioContext;
@@ -31,6 +32,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
   let muted = localStorage.getItem('rigs.muted') === '1';
   let pref = parsePref(localStorage.getItem('rigs.voice') || '');
   let queue = '';
+  let spokeFirst = false; // the first chunk of a reply may be cut at a comma (sentences.js)
   let meter = null;
 
   // ---- output: server voice through Web Audio, browser speechSynthesis as fallback
@@ -200,17 +202,15 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
   /** Feed streaming text; complete sentences are spoken as they arrive. */
   function feed(delta, final = false) {
     queue += delta;
-    const re = /([^.!?\n]+[.!?]+["')\]]?\s|[^\n]+\n)/;
-    let m;
-    while ((m = queue.match(re))) {
-      speakNow(m[0]);
-      queue = queue.slice(m.index + m[0].length);
-    }
-    if (final) { speakNow(queue); queue = ''; }
+    const d = drain(queue, { first: !spokeFirst });
+    for (const c of d.chunks) { speakNow(c); spokeFirst = true; }
+    queue = d.rest;
+    if (final) { speakNow(queue); queue = ''; spokeFirst = false; }
   }
 
   function stopSpeaking() {
     queue = '';
+    spokeFirst = false;
     gen++;
     pending.length = 0;
     abort.abort();

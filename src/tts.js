@@ -6,13 +6,16 @@
 // "node/id") is up anywhere on the mesh, speech is rendered there — reached through this daemon's own
 // app proxy, so every machine gets the same voice — and comes back with a viseme timeline
 // (x-visemes) that the JARVIS face lip-syncs to. persona.neural = false opts out; any failure falls
-// back to the local engine.
+// back to the local engine. persona.tts = { engine: 'auto'|'neural'|'piper'|'local', piperUrl, trim } selects the engine
+// (tts-plan.js): 'piper' is the resident CPU voice (applets/piper-voice, default http://127.0.0.1:8210); whatever is
+// chosen, a failing engine falls through to the next one without an error, so speech never goes silent.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as appsReg from './apps.js';
 import { config } from './config.js';
+import { engineOrder, runChain, trimSilence } from './tts-plan.js';
 import { expandHome, isMac, isWin, run, which } from './util.js';
 
 const PREFERRED = ['Daniel', 'Oliver', 'Arthur', 'Microsoft George', 'Microsoft Ryan', 'Microsoft David'];
@@ -160,27 +163,54 @@ async function renderWav(e, text, voice, inFile, outFile) {
   if (!fs.existsSync(outFile)) throw new Error(`tts (${e}) failed: ${(r.stderr || '').trim().slice(0, 300) || 'no audio'}`);
 }
 
+const ttsCfg = () => config().persona?.tts || {};
+const piperBase = () => String(ttsCfg().piperUrl || 'http://127.0.0.1:8210').replace(/\/$/, '');
+let piperDownUntil = 0;
+
+async function piperSynth(text) {
+  const r = await fetch(piperBase() + '/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(15000) });
+  if (r.status === 204) return null;
+  if (!r.ok) throw new Error(`piper voice: HTTP ${r.status}`);
+  return { audio: Buffer.from(await r.arrayBuffer()), visemes: '', engine: 'piper' };
+}
+
+function trimmed(r) {
+  if (!r || ttsCfg().trim === false) return r;
+  const t = trimSilence(r.audio, r.visemes);
+  return { ...r, audio: t.audio, visemes: t.visemes };
+}
+
+function logFail(name, e) { console.warn(`[tts] ${name} failed, falling back: ${e?.message || e}`); }
+
 /**
  * Render text to { audio: WAV Buffer, visemes: base64 JSON or '', engine }, or null when there is
- * nothing to say. The neural voice is used unless a specific local voice is requested.
+ * nothing to say. The neural voice is used unless a specific local voice is requested; the engines
+ * are tried in tts-plan.js order and a failing one is skipped silently (logged only).
  */
 export async function synthesize(text, voice) {
   const t = speakable(text);
   if (!t) return null;
-  if (wantsNeural(voice)) {
-    const base = await neuralBase();
-    if (base) {
-      try { return await neuralSynth(base, t, voice); } catch { /* fall back to the local engine */ }
-    }
-  }
-  const e = engine();
-  if (!e) throw new Error('no text-to-speech engine on this machine (install espeak-ng or piper)');
-  const v = await pickVoice(wantsNeural(voice) ? '' : voice);
-  return withTemp(async (dir) => {
-    const out = path.join(dir, 'out.wav');
-    await renderWav(e, t, v, path.join(dir, 'in.txt'), out);
-    return { audio: await fsp.readFile(out), visemes: '', engine: e };
-  });
+  const named = !wantsNeural(voice);
+  const base = named ? null : await neuralBase();
+  const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base, up: { piper: !named && Date.now() >= piperDownUntil, local: !!engine() } });
+  const local = async () => {
+    const e = engine();
+    if (!e) throw new Error('no text-to-speech engine on this machine (install espeak-ng or piper)');
+    const v = await pickVoice(named ? voice : '');
+    return withTemp(async (dir) => {
+      const out = path.join(dir, 'out.wav');
+      await renderWav(e, t, v, path.join(dir, 'in.txt'), out);
+      return { audio: await fsp.readFile(out), visemes: '', engine: e };
+    });
+  };
+  const r = await runChain(order.length ? order : ['local'], {
+    neural: async () => trimmed(await neuralSynth(base, t, voice)),
+    piper: async () => {
+      try { const p = await piperSynth(t); piperDownUntil = 0; return trimmed(p); } catch (e) { piperDownUntil = Date.now() + 30000; throw e; }
+    },
+    local,
+  }, logFail);
+  return r;
 }
 
 function player() {

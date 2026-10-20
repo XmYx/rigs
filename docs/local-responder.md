@@ -611,3 +611,13 @@ with Piper-generated speech through `POST /api/local/stt`.
 - **Models pulled for this benchmark** (~57 GB on magix-system, disk now 96 % full): `qwen3:8b` (keep — the choice),
   `gpt-oss:20b` (keep — the alternative), and removable with `ollama rm` once Sir has no use for them:
   `llama3.1:8b`, `qwen3:14b`, `qwen3.5:9b`, `mistral-small3.2:24b`, `gemma4:latest`.
+
+## 7. Speech engine (task t3)
+
+Implemented on the existing path (§2, §5.8); nothing replaces the current voice.
+
+- `persona.tts.engine`: `auto` (default: neural Kokoro → resident Piper → the machine's own engine) | `neural` | `piper` | `local`. The chosen engine goes first, the others stay as silent fallback (`src/tts-plan.js`, wired in `src/tts.js`; failures are logged `[tts] <engine> failed, falling back`, never sent to the UI). `persona.tts.piperUrl` (default `http://127.0.0.1:8210`), `persona.tts.trim: false` disables trimming.
+- Resident Piper `en_GB-alan-medium`: `applets/piper-voice/server.py` (unit `jarvis-piper.service`, `~/apps/jarvis-piper`, port 8210, `/healthz`, `POST /tts`), registered as App Cloud app `piper-voice`; reachable from other nodes at `/api/nodes/magix-system/apps/piper-voice/tts`. ~60 ms per sentence.
+- Silence trim in the daemon (`trimSilence`): the neural clip loses its lead/tail silence (30 ms lead, 150 ms tail kept) and the viseme cues are shifted: "Good evening, sir." 2.00 s → 1.35 s.
+- UI: chunking moved to `ui/src/sentences.js` (fixes a dropped-prefix bug on "3.5 …"); the first chunk of a reply may end at a comma after 80 chars.
+- Follow-up (not built): speech input is Web Speech / mesh Whisper, already local; nothing cloud-dependent to swap.
