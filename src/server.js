@@ -57,6 +57,7 @@ import { APP_DIR, isWin, log, run, truncate } from './util.js';
 import * as work from './work.js';
 import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
+import * as uiOpen from './ui-open.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -561,6 +562,39 @@ export async function startServer() {
       results.push({ node: config().name, aloud: true });
     }
     return results;
+  }
+
+  /**
+   * ui_open: open a view (the file browser) in JARVIS at a machine + path. The path is looked up on that machine (a
+   * file opens its folder with it selected; a missing one its nearest parent), then pushed to the UI that sent the
+   * request (sockets that claimed its trace, on any machine), else to every open UI on the mesh.
+   */
+  async function openUiView(b, tctx) {
+    const args = uiOpen.validateOpen(b);
+    if (!discovery.list().some((n) => n.self)) await discovery.tick(); // the first scan has not finished yet
+    const nodes = discovery.list();
+    const findWorkspace = async (name, machine) => {
+      const r = workspaces.resolve({ workspace: name, machine }, await meshWorkspaces());
+      return r.workspace ? { node: r.node, path: r.workspace.path, name: r.workspace.name } : null;
+    };
+    const t = await uiOpen.resolveTarget(args, { nodes, findWorkspace });
+    if (!t.node) throw new HttpError(404, 'no machine to open it on');
+    if (!t.node.self && !(t.node.online && t.node.rigs)) throw new HttpError(503, `${t.node.name} is offline`);
+    const located = await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
+    const traceId = tctx?.traceId || '';
+    const event = uiOpen.uiOpenEvent({ view: args.view, node: t.node, located, requested: args.path || t.path, trace: traceId, workspace: t.workspace });
+    const live = nodes.filter((n) => n.self || (n.online && n.rigs));
+    const push = (only) => Promise.all(live.map((n) => callNode(n.id, 'ui/push', { method: 'POST', body: { event, only }, timeout: 8000 })
+      .then((r) => ({ node: n.name, delivered: r.delivered || 0 })).catch((e) => ({ node: n.name, delivered: 0, error: e.message }))));
+    let rounds = traceId ? await push(traceId) : [];
+    const target = uiOpen.deliveredCount(rounds) ? 'requester' : 'all';
+    if (target === 'all') rounds = await push('');
+    const delivered = uiOpen.deliveredCount(rounds);
+    return {
+      ok: delivered > 0, view: args.view, node: t.node.name, path: event.path, select: event.select || undefined, missing: event.missing,
+      requested: event.requested, via: t.via, ...(t.workspace ? { workspace: t.workspace } : {}), ...(t.moved ? { note: `${t.workspace} lives on ${t.node.name}, not ${t.moved}` } : {}),
+      shownOn: target, delivered, ...(delivered ? {} : { message: 'No JARVIS window is open anywhere on the mesh, so nothing could be shown.' }),
+    };
   }
 
   /** A background agent session just started here: pop it up as a terminal in every open JARVIS UI (unless surface:false). */
@@ -1198,6 +1232,19 @@ export async function startServer() {
       return { ok: true, delivered: uiSockets.size };
     }
 
+    // ui_open (src/ui-open.js): what to open for a path here, and the push to this machine's JARVIS UIs.
+    if (sub === 'ui/locate' && method === 'GET') return files.locate(q.get('path') || '~');
+    if (sub === 'ui/push' && method === 'POST') {
+      const b = await body();
+      const ev = b.event;
+      if (!ev || ev.type !== 'ui-open' || !uiOpen.UI_VIEWS.includes(ev.view)) throw new HttpError(400, 'event must be a ui-open push');
+      // only = a trace id: just the UIs that sent that request (none here → delivered 0, the caller widens it).
+      const to = [...uiSockets].filter((w) => w.readyState === 1 && (!b.only || w.rigsTraces?.includes(b.only)));
+      const s = JSON.stringify(ev);
+      for (const w of to) w.send(s);
+      return { ok: true, delivered: to.length };
+    }
+
     throw new HttpError(404, `unknown endpoint ${method} /api/local/${sub}`);
   }
 
@@ -1228,6 +1275,7 @@ export async function startServer() {
       return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
+    if (p === '/api/mesh/ui/open' && req.method === 'POST') { const b = await readBody(req); return openUiView(b, traceOf(req, b)); }
     if (p === '/api/mesh/control/kill' && req.method === 'POST') {
       // "Hands off everywhere": switch screen control off on every online machine.
       const b = await readBody(req);
@@ -1363,6 +1411,13 @@ export async function startServer() {
       wss.handleUpgrade(req, socket, head, (ws) => {
         uiSockets.add(ws);
         ws.send(JSON.stringify({ type: 'hello', self: { id: config().nodeId, name: config().name }, nodes: discovery.list().map(stripNode) }));
+        // A UI says which requests it sent ({type:'claim-trace', traceId}), so ui-open pushes reach that UI first.
+        ws.rigsTraces = [];
+        ws.on('message', (data) => {
+          let m;
+          try { m = JSON.parse(String(data).slice(0, 2000)); } catch { return; }
+          if (m?.type === 'claim-trace' && /^tr-\d{8}-[0-9a-f]{12}$/.test(m.traceId || '') && !ws.rigsTraces.includes(m.traceId)) ws.rigsTraces = [...ws.rigsTraces, m.traceId].slice(-20);
+        });
         ws.on('close', () => uiSockets.delete(ws));
       });
       return;

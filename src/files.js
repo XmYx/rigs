@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { RIGS_HOME } from './config.js';
 import { HOME, expandHome, isWin } from './util.js';
+import { nearestExisting } from './ui-open.js';
 
 const MIME = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -43,6 +44,18 @@ export async function list(p, { showHidden = false } = {}) {
   entries.sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   const parent = path.dirname(dir);
   return { path: dir, parent: parent !== dir ? parent : null, sep: path.sep, entries, roots: await roots() };
+}
+
+/**
+ * What the file browser should open for `p` on this machine (ui_open, src/ui-open.js): the folder itself, a file's
+ * folder with the file selected, or the nearest existing parent when `p` is missing → { requested, path, folder,
+ * select, missing, sep }.
+ */
+export function locate(p) {
+  const full = resolvePath(p);
+  const kind = (x) => { try { const st = fs.statSync(x); return st.isDirectory() ? 'dir' : 'file'; } catch { return null; } };
+  const r = nearestExisting(full, kind, path.dirname);
+  return { requested: p || '~', path: full, folder: r.folder || HOME, select: r.select, missing: r.missing || !r.folder, sep: path.sep };
 }
 
 export function mimeOf(p) {

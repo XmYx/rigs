@@ -58,8 +58,8 @@ const N = [
     'One JSONL record per chat turn, planning call, task run and request in RIGS_HOME/usage: model, node, tokens, cost, outcome and the pre-routing timing behind the "time saved" figures.'],
 
   ['mcp-mesh', 's-surface', 'tooling', 'mesh_* reach', [1, 1.2], 'src/mcp.js', 'mesh_exec',
-    'Act on any machine of the tailnet: run commands, read / write / list files, processes, sessions of Claude Code · Codex · OpenRig, start an agent, ask another machine\'s brain, notify Sir, update a machine.',
-    ['mesh_status', 'mesh_exec', 'mesh_read_file', 'mesh_write_file', 'mesh_list_dir', 'mesh_processes', 'mesh_kill', 'mesh_sessions', 'mesh_session_transcript', 'mesh_send', 'mesh_start_agent', 'mesh_ask', 'mesh_notify', 'mesh_update', 'mesh_workspaces', 'mesh_pin_project']],
+    'Act on any machine of the tailnet: run commands, read / write / list files, processes, sessions of Claude Code · Codex · OpenRig, start an agent, ask another machine\'s brain, notify Sir, open the JARVIS file browser at a folder (ui_open), update a machine.',
+    ['mesh_status', 'mesh_exec', 'mesh_read_file', 'mesh_write_file', 'mesh_list_dir', 'mesh_processes', 'mesh_kill', 'mesh_sessions', 'mesh_session_transcript', 'mesh_send', 'mesh_start_agent', 'mesh_ask', 'mesh_notify', 'ui_open', 'mesh_update', 'mesh_workspaces', 'mesh_pin_project']],
   ['mcp-control', 's-surface', 'tooling', 'Screen control (gated)', [2, 1.2], 'src/mcp.js', 'mesh_control',
     'See and drive a machine\'s desktop. Gated by the access policy (src/access.js); no tool can switch control on, only Sir can, and every refusal is explained.',
     ['mesh_screen', 'mesh_windows', 'mesh_control', 'mesh_access']],

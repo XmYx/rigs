@@ -21,6 +21,7 @@ const TOOL_USE = {
   mesh_processes: "processes on one machine (needs the machine's name)",
   usage_report: 'tokens, time or money spent',
   trace_list: "Sir's recent requests and what happened to them",
+  ui_open: 'opens the JARVIS file browser on a machine at a folder or file (path, a place like downloads or home, or a project name); use it whenever Sir asks to open, show or browse a folder or file',
 };
 
 /**
@@ -55,6 +56,7 @@ export function responderPrompt({ soul = '', persona = {}, name = '', model = ''
     ...tools.map((t) => `- ${t}: ${TOOL_USE[t] || 'read-only lookup'}`),
     'Call the tool, then answer from its result. If a tool fails, say so plainly.',
     '## What you cannot do',
+    tools.includes('ui_open') ? 'Opening the file browser with ui_open is the one action you may take; say what opened (and where it fell back to, if the result says missing).' : '',
     `You cannot file work, start agents or projects, run commands, write files, send messages, search the web or change any setting, and you must never say or imply that you did or will. For any request to build, make, write, fix, change, install, run, start, stop, send or research something, reply with only ${ESCALATE_MARKER} followed by one short reason, and nothing else: the full JARVIS brain takes it over from there.`,
     `Local time: ${clock(now)}. You run on "${name}".`,
   ].filter(Boolean).join('\n');

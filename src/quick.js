@@ -20,9 +20,10 @@ export const ESCALATE_MARKER = '[[ESCALATE]]';
 /**
  * The local first responder (config.quick.local, src/responder.js, design in docs/local-responder.md): a model on a
  * machine's own Ollama answers the fast path's tiers it lists, with read-only tools only. Off by default.
- * READ_ONLY_TOOLS is the hard limit: config can narrow it, never widen it.
+ * READ_ONLY_TOOLS is the hard limit: config can narrow it, never widen it. ui_open is in it because it changes only what
+ * the JARVIS screen shows (it opens the file browser at a folder), never data: "open my Downloads" stays local.
  */
-export const READ_ONLY_TOOLS = ['mesh_status', 'mesh_sessions', 'mesh_apps', 'project_list', 'mesh_processes', 'usage_report', 'trace_list'];
+export const READ_ONLY_TOOLS = ['mesh_status', 'mesh_sessions', 'mesh_apps', 'project_list', 'mesh_processes', 'usage_report', 'trace_list', 'ui_open'];
 const DEFAULT_LOCAL = {
   enabled: false, node: '', model: 'qwen3:8b', tiers: ['haiku'], tools: READ_ONLY_TOOLS,
   think: false, numCtx: 16384, keepAlive: '30m', maxRounds: 4, guard: true, firstTokenMs: 2500, timeoutMs: 30000,
@@ -271,6 +272,7 @@ export function quickNote({ model = '', maxTurns = DEFAULT_QUICK.maxTurns } = {}
     `# Fast path`,
     `This turn runs on JARVIS's fast path (${model || 'a smaller model'}, at most ${maxTurns} tool turns): answer the question, do the quick lookup, search or tool call, summary or short report yourself, briefly, in character.`,
     `Substantial work (writing or changing code, building, long multi-step jobs) is still filed with jarvis_task as usual.`,
+    `Opening or showing a folder or file ("open my Downloads", "show me the files in …", "show it in Files") is one ui_open call: it opens the JARVIS file browser there. Never Finder, \`open\`, xdg-open, mesh_control or a text listing instead; don't search the disk first when Sir named the place.`,
     `If answering well needs the full JARVIS brain (deep reasoning, a long investigation, many steps), do not start it: reply with only ${ESCALATE_MARKER} followed by one short reason, and nothing else. The full brain then takes the request over.`,
   ].join('\n');
 }
