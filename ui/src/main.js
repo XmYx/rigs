@@ -48,6 +48,8 @@ import { focusTerminal, openTerminal } from './terminal-lazy.js';
 import { bindDock, openBus, reconcileOnLoad, trackPanels } from './open-events.js';
 import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
+import { SEPARATOR, spokenText } from './sentences.js';
+import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
 import { closeAll as closeAllWindows, closeOthers, isMaximized, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
 
@@ -142,8 +144,17 @@ function feel(text) {
   }).catch(() => {});
 }
 
+// Voice timing per JARVIS request, in ms after the request was sent (thinkingAudio, firstDelta, firstSentenceAudio,
+// replyDone): window.rigsVoiceTimings, newest last, and one console line per reply.
+let timing = null;
+const voiceTimings = (window.rigsVoiceTimings = []);
+function markTiming(key) { if (timing && timing[key] == null) timing[key] = Math.round(performance.now() - timing.t0); }
+let lastPhrase = '';
+
 const voice = createVoice({
   onSpeech: (s) => { if (!face) return; if (s) face.speak(s); else face.stop(); },
+  onAudio: ({ kind }) => markTiming(kind === 'thinking' ? 'thinkingAudio' : 'firstSentenceAudio'),
+  onSkip: () => { if (timing) timing.thinkingSkipped = true; },
   onTranscript: (t) => { $('#ask').value = ''; ask(t, { spoken: true }); },
   onInterim: (t) => { if (t) showSubtitle(t, 'user interim'); },
   onState: (s) => setOrb(s),
@@ -906,18 +917,7 @@ function toggleBrainMenu(onlyNode) {
 
 // ------------------------------------------------------------------ JARVIS conversation
 // A reply is a short spoken line, optionally followed by a "---" line and a written description that
-// is shown but never read out. spokenText() is what the voice says; the subtitle shows everything.
-const SEPARATOR = /(^|\n)[ \t]*-{3,}[ \t]*(\n|$)/;
-const SPOKEN_MAX = 420; // safety cap when a brain ignores the format: say the opening, show the rest
-function spokenText(text, final = false) {
-  const m = text.match(SEPARATOR);
-  let s = m ? text.slice(0, m.index) : final ? text : text.replace(/\n[ \t]*-{1,2}[ \t]*$/, ''); // hold back a half-typed "---"
-  if (s.length > SPOKEN_MAX) {
-    const cut = s.slice(0, SPOKEN_MAX).search(/[.!?](?=[^.!?]*$)/);
-    s = s.slice(0, cut > 80 ? cut + 1 : SPOKEN_MAX);
-  }
-  return s;
-}
+// is shown but never read out. spokenText() (sentences.js) is what the voice says; the subtitle shows everything.
 
 function showSubtitle(text, cls = 'jarvis') {
   const el = $('#subtitle');
@@ -1081,6 +1081,14 @@ async function ask(text, { spoken = false } = {}) {
   const ac = new AbortController();
   busy = ac;
   setOrb('thinking');
+  timing = { text: text.slice(0, 80), t0: performance.now() };
+  voiceTimings.push(timing);
+  if (voiceTimings.length > 20) voiceTimings.shift();
+  // Answer at once: a pre-rendered thinking phrase while the router and the brain work (persona.thinkingPhrases).
+  if (thinkingEnabled(persona) && !voice.muted) {
+    const phrase = pickPhrase({ last: lastPhrase, address: persona.address });
+    if (voice.think(phrase)) { lastPhrase = phrase; timing.thinkingPhrase = phrase; }
+  }
   let reply = '';
   let fed = 0; // characters of the spoken part already handed to the voice
   let felt = false;
@@ -1110,6 +1118,7 @@ async function ask(text, { spoken = false } = {}) {
           tierTag.classList.remove('hidden');
         }
       } else if (e.type === 'delta') {
+        markTiming('firstDelta');
         if (!reply) setOrb('speaking');
         reply += e.text;
         showSubtitle(reply, 'jarvis');
@@ -1121,7 +1130,7 @@ async function ask(text, { spoken = false } = {}) {
         chips.push(activity(e.name, e.input));
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
       } else if (e.type === 'status') {
-        if (e.reset) { reply = ''; fed = 0; felt = false; } // the fast path handed over: the full brain's reply starts afresh
+        if (e.reset) { reply = ''; fed = 0; felt = false; voice.reset(); } // the fast path handed over: the full brain's reply starts afresh, its queued speech is dropped
         showSubtitle(`${reply}\n… ${e.text}`, 'jarvis');
       } else if (e.type === 'error') {
         toast(e.message, 'error', 10000);
@@ -1129,10 +1138,12 @@ async function ask(text, { spoken = false } = {}) {
       }
     }, ac.signal);
     for (const c of chips) c.done(true);
+    markTiming('replyDone');
+    console.info('[voice] timing', JSON.stringify(timing));
     const say = spokenText(reply, true);
     if (say.trim()) feel(say); // the whole spoken line refines it
     if ((spoken || !voice.muted) && say.length > fed) voice.feed(say.slice(fed));
-    voice.feed('', true);
+    voice.feed('', true, say.length >= fed); // the final spoken line is shorter than what was fed: it hit the cap, drop the half sentence
     if (!voice.speaking) setOrb(voice.mode === 'handsfree' ? 'listening' : 'online');
     else setTimeout(function wait() { if (voice.speaking) setTimeout(wait, 300); else setOrb(voice.mode === 'handsfree' ? 'listening' : 'online'); }, 300);
   } catch (e) {
@@ -1496,7 +1507,8 @@ setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/global').then((g) => { globalBrain = g; renderBrainBadge(); }).catch(() => {});
-api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
+window.addEventListener('rigs:persona', (e) => { persona = { ...persona, ...e.detail }; if (thinkingEnabled(persona)) voice.prewarm(allPhrases(persona.address)); }); // settings saved
+api('/api/local/config').then((c) => { persona = c.persona; if (thinkingEnabled(persona)) voice.prewarm(allPhrases(persona.address)); $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();
 connectEvents();

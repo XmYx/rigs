@@ -23,6 +23,30 @@ function commaCut(queue, min) {
   return 0;
 }
 
+// A reply is a short spoken line, optionally followed by a "---" line and a written description that is shown but
+// never read out. Fenced blocks (```visual cards, code) are never read out either: speech stops at the first fence.
+export const SEPARATOR = /(^|\n)[ \t]*-{3,}[ \t]*(\n|$)/;
+const FENCE = /```|~~~/;
+const SPOKEN_MAX = 420; // safety cap when a brain ignores the format: say the opening, show the rest
+
+/**
+ * The part of a (possibly still streaming) reply that is said aloud. While streaming (`final` false) a half-typed
+ * "---" or fence at the end is held back, so it never reaches the voice before it is recognised.
+ */
+export function spokenText(text, final = false) {
+  let s = String(text ?? '');
+  const sep = s.match(SEPARATOR);
+  if (sep) s = s.slice(0, sep.index);
+  const fence = s.search(FENCE);
+  if (fence >= 0) s = s.slice(0, fence);
+  if (!final && !sep && fence < 0) s = s.replace(/\n[ \t]*-{1,2}[ \t]*$/, '').replace(/(?:`{1,2}|~{1,2})$/, '');
+  if (s.length > SPOKEN_MAX) {
+    const cut = s.slice(0, SPOKEN_MAX).search(/[.!?](?=[^.!?]*$)/);
+    s = s.slice(0, cut > 80 ? cut + 1 : SPOKEN_MAX);
+  }
+  return s;
+}
+
 /** Split everything that is complete; `rest` is the unfinished tail. Returns { chunks, rest }. */
 export function drain(queue, opts = {}) {
   const chunks = [];
