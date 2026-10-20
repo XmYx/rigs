@@ -1,8 +1,9 @@
 import os from 'node:os';
 import { isLinux, isMac, isWin, run } from './util.js';
 
-/** Native desktop notification on THIS machine (where the waiting agent runs). Best effort. */
+/** Native desktop notification on THIS machine (where the waiting agent runs). Best effort; RIGS_NO_NOTIFY=1 (tests) mutes it. */
 export async function osNotify(title, body) {
+  if (process.env.RIGS_NO_NOTIFY) return null;
   const t = String(title).slice(0, 120);
   const b = String(body).slice(0, 240);
   if (isMac) {
