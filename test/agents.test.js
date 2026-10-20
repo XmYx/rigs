@@ -1,7 +1,7 @@
 // Active agents panel: which sessions count as live agents, and their state (pure selector, no DOM).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activeAgents, agentState, isLiveAgent } from '../ui/src/agents-data.js';
+import { activeAgents, agentState, isLiveAgent, filterAgents, pruneDismissed, agentKey, agentSig, FINISHED_WINDOW_MS } from '../ui/src/agents-data.js';
 
 const NOW = 1_000_000;
 const node = (id, online = true) => ({ id, name: id, online });
@@ -50,4 +50,37 @@ test('a transcript shadowed by a running terminal in the same cwd is shown once,
     { kind: 'codex', id: 'cx', live: true, cwd: '/w/x', updatedAt: NOW - 4000 }, // other agent family: not covered
   ] }];
   assert.deepEqual(activeAgents(snap, NOW).map((r) => r.session.id).sort(), ['cx', 'seat@r', 'tr2']);
+});
+
+// ---- 12h window + dismissals
+const H = 3600 * 1000;
+const done = (id, ageH) => ({ kind: 'claude', id, live: false, updatedAt: NOW - ageH * H });
+const rowsOf = (sessions, attention) => activeAgents([{ node: node('a'), sessions, attention }], NOW);
+
+test('12h window: running shown, finished 11h ago shown, finished 13h ago hidden', () => {
+  const rows = filterAgents(rowsOf([
+    { kind: 'claude', id: 'run', live: true, updatedAt: NOW - 1000 },
+    done('d11', 11), done('d13', 13),
+  ]), { now: NOW });
+  assert.deepEqual(rows.map((r) => [r.session.id, r.state]), [['run', 'working'], ['d11', 'done']]);
+  assert.equal(FINISHED_WINDOW_MS, 12 * H);
+});
+
+test('a dismissed agent is hidden, and comes back when it runs again', () => {
+  const key = agentKey(rowsOf([done('d1', 2)])[0]);
+  const dismissed = { [key]: { sig: agentSig(rowsOf([done('d1', 2)])[0]), at: NOW - H } };
+  assert.equal(filterAgents(rowsOf([done('d1', 2)]), { now: NOW, dismissed }).length, 0);
+  const again = rowsOf([{ kind: 'claude', id: 'd1', live: true, updatedAt: NOW - 500 }]);
+  assert.equal(filterAgents(again, { now: NOW, dismissed }).length, 1);
+  // a running agent dismissed while running reappears once it needs you
+  const run = rowsOf([{ kind: 'claude', id: 'r', live: true, updatedAt: NOW - 500 }]);
+  const d2 = { [agentKey(run[0])]: { sig: agentSig(run[0]), at: NOW } };
+  assert.equal(filterAgents(run, { now: NOW, dismissed: d2 }).length, 0);
+  const wait = rowsOf([{ kind: 'claude', id: 'r', live: true, updatedAt: NOW - 500 }], [{ session: { kind: 'claude', id: 'r' } }]);
+  assert.equal(filterAgents(wait, { now: NOW, dismissed: d2 }).length, 1);
+});
+
+test('dismissals older than 12h are pruned', () => {
+  const kept = pruneDismissed({ a: { sig: 'x', at: NOW - 11 * H }, b: { sig: 'x', at: NOW - 13 * H } }, NOW);
+  assert.deepEqual(Object.keys(kept), ['a']);
 });
