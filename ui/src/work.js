@@ -33,7 +33,9 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
     const live = new Set();
     for (const n of w.nodes || []) {
       for (const pj of n.projects || []) {
-        if (pj.pct >= 100) continue; // done: nothing left to watch
+        // done: nothing left to watch (projectProgress drops these too; this covers machines not yet updated,
+        // whose pct still rounds 199 of 200 up to 100%, hence counted rather than pct).
+        if (pj.total && pj.done >= pj.total && !pj.running.length) continue;
         const key = `${n.node}/${pj.id}`;
         const line = `${pj.pct}% done${pj.blocked ? ', stuck' : ''}`;
         if (seenStatus.has(key) && seenStatus.get(key) !== line) announce(`Project ${pj.name}: ${line}`);
@@ -53,9 +55,9 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
     head.lastChild.textContent = `${(w.nodes || []).reduce((c, n) => c + (n.projects || []).filter((p) => p.running.length).length, 0)} active`;
   }
 
-  async function refresh(force = false) {
+  async function refresh() {
     try {
-      const w = await api(`/api/mesh/work${force ? '?force=1' : ''}`);
+      const w = await api('/api/mesh/work');
       last = w;
       renderProjects(w);
     } catch (e) { if (!last) list.replaceChildren(h('div', { class: 'muted small pad' }, e.message)); }
@@ -65,7 +67,7 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
     clearInterval(timer);
     if (on) { refresh(); timer = setInterval(refresh, 8000); }
   }
-  head.ondblclick = () => refresh(true);
+  head.ondblclick = () => refresh();
   setActive(true);
   return { refresh, rerender: () => { if (last) renderProjects(last); }, setActive, get active() { return active; } };
 }

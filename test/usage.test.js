@@ -62,6 +62,31 @@ test('projectProgress: only projects with work in flight, with percent and runni
   assert.deepEqual(a.running.map((t) => [t.title, t.node, t.model]), [['y', 'mac', 'claude-sonnet-5-5']]);
 });
 
+test('projectProgress: a project with every task done drops out, partial, running, failed, blocked and empty ones stay', () => {
+  const T = (...st) => st.map((status, i) => ({ id: `t${i + 1}`, title: `task ${i + 1}`, status }));
+  const ps = [
+    { id: 'done', name: 'All done', status: 'running', tasks: T('done', 'done') },
+    { id: 'rigs', name: 'rigs', main: true, status: 'running', tasks: T('done', 'done', 'done') },
+    { id: 'part', name: 'Partial', status: 'running', tasks: T('done', 'todo') },
+    { id: 'run', name: 'Running', status: 'running', tasks: T('done', 'running') },
+    { id: 'fail', name: 'Failed', status: 'running', tasks: T('done', 'failed') },
+    { id: 'block', name: 'Blocked', status: 'running', tasks: T('done', 'blocked') },
+    { id: 'empty', name: 'Just planned', status: 'running', tasks: [] },
+    { id: 'big', name: '199 of 200', status: 'running', tasks: [...T(...Array(199).fill('done')), { id: 't200', status: 'running' }] },
+  ];
+  const out = U.projectProgress(ps);
+  assert.deepEqual(out.map((p) => p.id), ['part', 'run', 'fail', 'block', 'empty', 'big']);
+  const by = Object.fromEntries(out.map((p) => [p.id, p]));
+  assert.equal(by.fail.blocked, 1);
+  assert.equal(by.block.blocked, 1);
+  assert.equal(by.empty.pct, 0);
+  assert.equal(by.big.pct, 99, '199/200 would round to 100: capped at 99 while a task is still running, and listed');
+  assert.equal(by.big.running.length, 1);
+  // the main project comes back as soon as it gets new work
+  ps[1].tasks.push({ id: 't4', status: 'running' });
+  assert.ok(U.projectProgress(ps).some((p) => p.id === 'rigs' && p.main));
+});
+
 // ------------------------------------------------------------------ usage ledger
 
 const T0 = Date.parse('2026-10-17T10:00:00Z');

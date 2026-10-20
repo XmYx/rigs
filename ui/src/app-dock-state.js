@@ -83,7 +83,7 @@ export const TOOL_GROUPS = Object.freeze([
     { id: 'ask', button: 'btn-ask', title: 'Questions', icon: '❓', hint: 'Questions — agents waiting for your answer', badge: true },
     { id: 'agents', button: 'btn-agents', title: 'Active agents', icon: '🤖', hint: 'Active agents — every live agent session, one click to attach', badge: true },
     { id: 'proj', button: 'btn-proj', title: 'Projects', icon: '📋', hint: 'Projects — plan and delegate work across machines and models' },
-    { id: 'work', button: 'btn-work', title: 'Active projects', icon: '📊', hint: 'Active projects — running projects, progress and plan limits' },
+    { id: 'work', button: 'btn-work', title: 'Active projects', icon: '📊', hint: 'Active projects — running projects and their progress' },
     { id: 'sess', button: 'btn-sess', title: 'Sessions', icon: '💬', hint: 'All sessions on all machines' },
   ] },
   { id: 'g-tools-insight', name: 'Insight', tools: [

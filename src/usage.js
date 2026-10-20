@@ -219,13 +219,15 @@ export async function liveSessions() {
   return out.sort((a, b) => (b.status === 'busy') - (a.status === 'busy') || (b.lastAt || 0) - (a.lastAt || 0));
 }
 
-/** Projects with work in flight: done/total tasks, the running ones and how many are stuck. Pure. */
+/** Projects with work in flight: done/total tasks, the running ones and how many are stuck. Pure. A project whose
+ * tasks are all done is left out: the main "rigs" project stays 'running' for intake and would sit there at 100%. */
 export function projectProgress(projects) {
-  return (projects || []).filter((p) => p.status === 'running' || p.tasks?.some((t) => t.status === 'running')).map((p) => {
+  const finished = (p) => p.tasks?.length && p.tasks.every((t) => t.status === 'done');
+  return (projects || []).filter((p) => (p.status === 'running' || p.tasks?.some((t) => t.status === 'running')) && !finished(p)).map((p) => {
     const total = p.tasks?.length || 0;
     const done = (p.tasks || []).filter((t) => t.status === 'done').length;
     return {
-      id: p.id, name: p.name, status: p.status, done, total, pct: total ? Math.round((done / total) * 100) : 0,
+      id: p.id, name: p.name, status: p.status, done, total, pct: !total ? 0 : done === total ? 100 : Math.min(99, Math.round((done / total) * 100)), // 100% only when finished
       main: !!p.main,
       running: (p.tasks || []).filter((t) => t.status === 'running').map((t) => ({ id: t.id, title: t.title, node: t.assign?.node, model: t.assign?.model || t.assign?.provider, effort: t.assign?.effort, via: t.run?.mode === 'openrig' ? `OpenRig ${t.run.seat}` : t.run?.session ? `${t.run.session.kind} ${t.run.session.id}` : '', session: t.run?.session || null, startedAt: t.run?.startedAt || 0 })),
       blocked: (p.tasks || []).filter((t) => t.status === 'blocked' || t.status === 'failed').length,
