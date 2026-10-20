@@ -197,12 +197,13 @@ const browser = await chromium.launch({ args: ['--no-sandbox'] });
   await (await menuItem(page, 'Show all')).click();
   await sleep(250);
   check('the dock menu shows hidden items again', !(await state(page)).items[first.id].hidden);
-  // Keyboard: Shift+F10 on a focused tile gives the same menu (dock entries, then the app's own).
+  // Keyboard: Shift+F10 (the Menu key on macOS, where Chrome sends no contextmenu for Shift+F10) on a focused tile gives the same menu (dock entries, then the app's own).
   await page.evaluate(() => document.querySelector('#app-dock .adock-tile.k-applet').focus());
-  await page.keyboard.press('Shift+F10');
+  const menuKey = process.platform === 'darwin' ? 'ContextMenu' : 'Shift+F10';
+  await page.keyboard.press(menuKey);
   await sleep(300);
   const kbd = await page.evaluate(() => [...document.querySelectorAll('.mb-menu .mb-label')].map((x) => x.textContent));
-  check('Shift+F10 on a focused tile opens its dock + app menu', kbd.includes('Keep in dock (pin)') && kbd.includes('Open in a browser tab'), kbd.slice(0, 6).join(' | '));
+  check(`${menuKey} on a focused tile opens its dock + app menu`, kbd.includes('Keep in dock (pin)') && kbd.includes('Open in a browser tab'), kbd.slice(0, 6).join(' | '));
   await page.keyboard.press('Escape');
   await sleep(200);
   gt = await rect(page, '#app-dock .adock-group');

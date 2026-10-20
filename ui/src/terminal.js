@@ -7,10 +7,10 @@ import { currentTheme, onTheme } from './themes.js';
 import { CAPS, createDisposer } from './cleanup.js';
 import { emitClosed, emitOpened } from './open-events.js';
 
-const live = new Map(); // ptyId → bring-to-front, for terminals open in this page (the app dock's terminal items)
-/** Bring an open terminal's window (or tab) to the front; false when it is not open here. */
+const live = new Map(); // ptyId → [bring-to-front, …], one per window/tab showing it in this page (the app dock's terminal items)
+/** Bring an open terminal's window (or tab) to the front (the newest when it is open twice); false when it is not open here. */
 export function focusTerminal(ptyId) {
-  const f = live.get(ptyId);
+  const f = live.get(ptyId)?.at(-1);
   if (!f) return false;
   f();
   return true;
@@ -91,6 +91,14 @@ function terminalTabs() {
   return tabsHost;
 }
 
+/** One window/tab of `ptyId` closed: the dock item goes only with the last one (the same PTY can be attached twice). */
+function closeLive(ptyId, toFront) {
+  const rest = (live.get(ptyId) || []).filter((f) => f !== toFront);
+  if (rest.length) { live.set(ptyId, rest); return; }
+  live.delete(ptyId);
+  emitClosed('terminal', { id: ptyId });
+}
+
 /**
  * Terminal window on any machine. Either creates a new PTY (shell or a command) or attaches to an
  * existing one (`ptyId`) — several people/machines can watch and type into the same terminal.
@@ -109,11 +117,11 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
   let closed = false;
   const short = title || 'shell';
   const label = `${nodeName} — ${short}`;
-  const dispose = () => { closed = true; offTheme(); ws?.close(); term.dispose(); if (live.get(id) === toFront) live.delete(id); emitClosed('terminal', { id }); };
+  const dispose = () => { closed = true; offTheme(); ws?.close(); term.dispose(); closeLive(id, toFront); };
   // `tab` (an automatically opened session while the app dock's autoTabTerminals is on) mounts in the shared Terminals window; otherwise its own window as always.
   const w = tab ? terminalTabs().addTab({ title: short, tip: label, status, onClose: dispose }) : openWindow({ title: label, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: dispose });
   const toFront = () => { w.raise(); term.focus(); };
-  live.set(id, toFront);
+  live.set(id, [...(live.get(id) || []), toFront]);
   emitOpened('terminal', { id, nodeId, title: `${short} — ${nodeName}` }, { auto }); // the app dock docks / tabs it when its settings say so
   const term = new Terminal({
     fontFamily: 'ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace', fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: CAPS.terminalScrollback,

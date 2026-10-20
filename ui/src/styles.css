@@ -1822,6 +1822,8 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 .adock-pop.phone .adock-pop-name { min-height: 44px; font-size: 16px; }
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   :root.adock-phone { --bar-bottom: calc(max(8px, var(--sab)) + max(var(--kb), var(--ad-phone))); }
+  .term-tab { min-height: 44px; }
+  .term-tab-x { width: 44px; height: 44px; line-height: 44px; font-size: 13px; } /* the shared Terminals window's tab close: a finger-sized target */
 }
 @media (prefers-reduced-motion: reduce) {
   .adock, .adock-label, .adock-pop, .adock-caret, .adock-run { transition: none; }
