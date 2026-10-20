@@ -32,6 +32,7 @@ import { onYoloEvent } from './yolo.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
+import { configureMediaPlayer, openMediaPlayer } from './media-player.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
@@ -701,13 +702,14 @@ function showInFiles(path, select = '') {
   if (w) { w.navigate(path, { select }); w.raise(); } else filesOn(self, path, { select });
 }
 
-/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — today the file browser at a folder. */
+/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — the file browser at a folder, the media player for an audio or video file. */
 const uiOpenSeen = new Set();
 function onUiOpen(m) {
   const a = uiOpenAction(m, { machines: snap.map((e) => e.node) });
   if (!a || (a.id && uiOpenSeen.has(a.id))) return;
   if (a.id) { uiOpenSeen.add(a.id); if (uiOpenSeen.size > 50) uiOpenSeen.delete(uiOpenSeen.values().next().value); }
-  if (a.view === 'files') {
+  if (a.view === 'files' && a.play) openMediaPlayer({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.play }); // an audio or video file: play it
+  else if (a.view === 'files') {
     const w = filesTarget(filesWins, a.nodeId);
     if (w) { w.navigate(a.path, { select: a.select, showHidden: a.showHidden }); w.raise(); }
     else filesOn({ id: a.nodeId, name: a.nodeName }, a.path, { select: a.select, showHidden: a.showHidden });
@@ -1471,6 +1473,8 @@ function wire() {
   };
   $('#btn-term').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; const m = n || machineById(selfId); if (m) openTerminal({ nodeId: m.id, nodeName: m.name }); };
   $('#btn-files').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; filesOn(n || machineById(selfId)); };
+  configureMediaPlayer({ browse: () => filesOn(machineById(selfId) || { id: 'self', name: 'this machine' }) }); // the empty player's Browse files…
+  $('#btn-player').onclick = () => openMediaPlayer();
   $('#btn-desk').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; if (n && !n.self) desktopTo(n); else toast('Focus another machine first (click it in the galaxy), then press 🖥.'); };
   $('#btn-sess').onclick = () => sessionsWindow();
   $('#btn-mesh').onclick = meshWindow;
@@ -1602,6 +1606,7 @@ function wireMenus() {
     openApps: () => openApps(),
     openAppStore: () => openAppStore(),
     files: (m) => filesOn(m),
+    player: () => openMediaPlayer(),
     sessions: () => sessionsWindow(),
     mesh: () => meshWindow(),
     find: () => reveal('#search'),

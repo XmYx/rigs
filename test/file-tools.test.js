@@ -37,7 +37,7 @@ test('toolFor: double-click opens txt/md in the editor, png/jpg in the image vie
   assert.equal(toolFor('Makefile'), 'text', 'no extension = text');
   assert.equal(toolFor('.bashrc'), 'text');
   assert.equal(toolFor('server.js'), 'text');
-  assert.equal(toolFor('movie.mp4'), null, 'no built-in tool: the browser downloads it');
+  assert.equal(toolFor('movie.mp4'), 'media', 'audio and video: the media player');
   assert.equal(toolFor('archive.zip'), null);
   assert.ok(isZip('x/Archive.ZIP'));
   assert.ok(!isZip('zip.txt'));

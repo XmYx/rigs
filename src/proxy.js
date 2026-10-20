@@ -18,7 +18,10 @@ function peerHeaders(node, incoming = {}) {
   return h;
 }
 
-/** Stream an HTTP request through to a peer's /api/local/* endpoint. */
+/**
+ * Stream an HTTP request through to a peer's /api/local/* endpoint. Request headers (Range, If-Range…) go as they are and
+ * the status and headers come back unchanged (206 + Content-Range for media seeking), the body piped, never buffered.
+ */
 export function forwardHttp(node, req, res, localPath) {
   const target = new URL(node.url.replace(/\/$/, '') + '/api/local/' + localPath);
   const lib = target.protocol === 'https:' ? https : http;

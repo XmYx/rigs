@@ -2,12 +2,13 @@ import { api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { nativeCtx } from './ctx-tag.js';
 import { isPhone } from './mobile.js';
+import { openMediaPlayer } from './media-player.js';
 import {
   DELIMITERS, TOOLS, checkJSON, editorTitle, fitScale, imageSiblings, isSaveKey, jsonChildren, jsonKind, jsonSummary,
   nextSort, parseCSV, sniffDelimiter, sortRows, stepIndex, toolFor, zoomStep,
 } from './file-tools-model.js';
 
-// Built-in file tools: text editor, image / PDF / CSV / JSON viewers, each a wm.js window (floats, docks, closes
+// Built-in file tools: text editor, image / PDF / CSV / JSON viewers (audio and video go to media-player.js), each a wm.js window (floats, docks, closes
 // like any other; full screen on phones). Opened from the file browser (files.js: double-click by type, "Open with",
 // preview buttons) and by anything else that holds a machine + path:
 //   openFileTool({ nodeId, nodeName, path, name?, tool?, entries?, onSaved? })
@@ -34,6 +35,7 @@ export function openFileTool({ nodeId, nodeName = '', path, name, tool, entries,
   name = name || baseName(path);
   tool = tool || toolFor(name);
   if (!TOOLS[tool]) { toast(`No built-in tool opens ${name}`, 'warn'); return null; }
+  if (tool === 'media') return openMediaPlayer({ nodeId, nodeName, path, name, entries }); // one player window, it raises itself
   const key = `${nodeId}|${tool}|${path}`;
   const prev = open.get(key);
   if (prev && !prev.closed) { prev.raise(); return prev; }

@@ -190,7 +190,7 @@ test('uiOpenAction: a push → open the file browser for that machine at that fo
   assert.equal(M.uiOpenAction({ type: 'ui-open', view: 'terminal', nodeId: 'n-mac', path: '/x' }), null);
   assert.equal(M.uiOpenAction({ type: 'ui-open', view: 'files', path: '/x' }), null);
   const a = M.uiOpenAction({ type: 'ui-open', id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'mac', path: '/Users/mix/Downloads', select: '', missing: false, requested: '~/Downloads' }, { machines });
-  assert.deepEqual(a, { id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'macbookpro', path: '/Users/mix/Downloads', select: '', showHidden: false, toast: '' });
+  assert.deepEqual(a, { id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'macbookpro', path: '/Users/mix/Downloads', select: '', showHidden: false, play: '', toast: '' });
   const f = M.uiOpenAction({ type: 'ui-open', view: 'files', nodeId: 'n-x', nodeName: 'magix-system', path: '/home/mix', select: '/home/mix/.bashrc', missing: false }, { machines });
   assert.deepEqual([f.nodeName, f.select, f.showHidden], ['magix-system', '/home/mix/.bashrc', true]);
   const m = M.uiOpenAction({ type: 'ui-open', view: 'files', nodeId: 'n-mac', path: '/Users/mix', missing: true, requested: '~/gone/deep' }, { machines });

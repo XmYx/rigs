@@ -1,13 +1,16 @@
 // The `ui-open` push (src/ui-open.js, MCP ui_open) → what main.js does with it. Pure (test/ui-open.test.js).
 // A new view = a name in VIEWS and a branch in uiOpenAction; main.js's onUiOpen runs the result.
+import { mediaKind } from './media-player-model.js';
 
 export const VIEWS = ['files'];
 
 const baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || String(p || '');
 
 /**
- * A ui-open push → { id, view, nodeId, nodeName, path, select, showHidden, toast } or null when it is not one this UI
+ * A ui-open push → { id, view, nodeId, nodeName, path, select, showHidden, play, toast } or null when it is not one this UI
  * can open. `machines` are the mesh's machines ({ id, name }), for the window title when the push only names an id.
+ * `play` = the audio or video file the push named (it is the selected file, not a fallback): the media player opens it
+ * instead of the file browser.
  */
 export function uiOpenAction(m, { machines = [] } = {}) {
   if (!m || m.type !== 'ui-open' || !VIEWS.includes(m.view) || !m.nodeId || !m.path) return null;
@@ -18,6 +21,7 @@ export function uiOpenAction(m, { machines = [] } = {}) {
     id: String(m.id || ''), view: m.view, nodeId: known?.id || m.nodeId, nodeName, path: String(m.path), select,
     // A dotfile to select only shows with hidden files on.
     showHidden: !!select && baseName(select).startsWith('.'),
+    play: select && !m.missing && mediaKind(select) ? select : '',
     toast: m.missing ? `${m.requested || 'That path'} isn't on ${nodeName}; opened ${m.path} instead.` : '',
   };
 }

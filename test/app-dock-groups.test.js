@@ -32,7 +32,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
   const html = fs.readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8');
   const bar = html.slice(html.indexOf('<nav id="bar"'), html.indexOf('</nav>', html.indexOf('<nav id="bar"')));
   const buttons = [...bar.matchAll(/<button id="([\w-]+)"/g)].map((m) => m[1]);
-  assert.equal(buttons.length, 15);
+  assert.equal(buttons.length, 16);
   assert.deepEqual(S.TOOLS.map((t) => t.button).sort(), [...buttons].sort(), 'one tool per toolbar button, none missing, none extra');
   assert.equal(new Set(S.TOOLS.map((t) => t.id)).size, S.TOOLS.length, 'tool ids are unique');
   for (const t of S.TOOLS) {
@@ -41,7 +41,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
     assert.equal(t.button, `btn-${t.id}`);
   }
   const of = (id) => S.TOOL_GROUPS.find((g) => g.tools.some((t) => t.id === id)).name;
-  assert.deepEqual(['term', 'files', 'desk'].map(of), ['This machine', 'This machine', 'This machine']);
+  assert.deepEqual(['term', 'files', 'desk', 'player'].map(of), Array(4).fill('This machine'));
   assert.deepEqual(['proj', 'work', 'ask', 'agents', 'sess'].map(of), Array(5).fill('Work'));
   assert.deepEqual(['usage', 'traces', 'graphify', 'desktops'].map(of), Array(4).fill('Insight'));
   assert.deepEqual(['apps', 'mesh', 'mute'].map(of), Array(3).fill('System'));
@@ -67,7 +67,7 @@ test('tool items: kind tool, stable id tool:<name>, title, icon and the action/b
 test('a fresh dock: tools seeded into their four groups in table order, then app groups and Machines', () => {
   const s = check(fresh({ applets: [applet('krea'), applet('fuel', 'lin')], rigs: [rig('mac'), rig('lin')] }));
   assert.deepEqual(view(s), [
-    '[This machine:tool:term,tool:files,tool:desk]',
+    '[This machine:tool:term,tool:files,tool:desk,tool:player]',
     '[Work:tool:ask,tool:agents,tool:proj,tool:work,tool:sess]',
     '[Insight:tool:usage,tool:traces,tool:graphify,tool:desktops]',
     '[System:tool:apps,tool:mesh,tool:mute]',

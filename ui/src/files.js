@@ -2,6 +2,7 @@ import { ago, api, fmtBytes, h, node, toast } from './api.js';
 import { openWindow } from './wm.js';
 import { nativeCtx, tagCtx } from './ctx-tag.js';
 import { openFileTool } from './file-tools.js';
+import { mediaKind, mediaPreview } from './media-player.js';
 import { TOOLS, actionTargets, clickSelect, isZip, toolFor, toolsFor } from './file-tools-model.js';
 
 const ICON = { dir: '📁', file: '📄', link: '🔗' };
@@ -179,7 +180,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
         const r = await api(`${node(nodeId)}/files/read?path=${encodeURIComponent(e.path)}`);
         preview.append(nativeCtx(h('pre', { class: 'pv-text' }, r.text.slice(0, 200000)))); // file text: the browser's menu (copy, search)
       } catch (err) { preview.append(h('div', { class: 'muted pad' }, err.message)); }
-    } else if (/\.(mp4|webm|mov)$/i.test(e.name)) preview.append(h('video', { class: 'pv-img', src: raw, controls: true }));
+    } else if (mediaKind(e.name)) preview.append(mediaPreview({ nodeId, nodeName, path: e.path, name: e.name, entries: cur.entries })); // <audio>/<video> + Open in Player
     else if (/\.pdf$/i.test(e.name)) preview.append(h('iframe', { class: 'pv-frame', src: raw }));
   }
 
