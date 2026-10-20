@@ -1128,7 +1128,7 @@ function attachChat(m, s) {
   targetPoll = setInterval(() => pollTarget(), 2500);
   pollTarget(true);
   toast(`Chat attached to ${s.kind} session “${chatTarget.title}” on ${m.name}. Say “detach” to talk to JARVIS again.`);
-  $('#ask').focus();
+  focusAsk(); // wherever Ask is: reopens it when hidden, peeks a hidden menu bar
 }
 
 function detachChat() {

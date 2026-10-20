@@ -143,7 +143,19 @@ function wireHistory(ask) {
   ask.addEventListener('input', () => { hIndex = null; }); // typing leaves the history
 }
 
+/** Esc in the top bar's field leaves it, so a hidden menu bar can slide away again (its focusout ends the peek). */
+function wireEscape(ask) {
+  ask.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.isComposing && state?.mode === 'topbar' && !isPhone()) ask.blur();
+  });
+}
+
 // ------------------------------------------------------------------ the drop target over the menu bar
+
+function leaveTarget() {
+  setTarget(false);
+  if (menubarHidden()) peekMenubar();
+}
 
 function setTarget(on) {
   const slot = askSlot();
@@ -155,8 +167,8 @@ function setTarget(on) {
 
 /** The pointer is over the menu bar (its 32px, or the top edge when the bar is hidden): the slot is the target. */
 function hit(x, y) {
-  if (isPhone() || y > 40) { setTarget(false); return null; }
-  if (menubarHidden()) peekMenubar();
+  if (isPhone() || y > 40) { if (askSlot()?.classList.contains('mb-ask-target')) leaveTarget(); return null; }
+  if (menubarHidden()) peekMenubar({ hold: true }); // stays out while the drag hovers; leave() lets it go
   const r = setTarget(true)?.getBoundingClientRect();
   if (!r || !r.width) return null;
   return { x: r.left - 4, y: r.top - 3, w: r.width + 8, h: r.height + 6 };
@@ -173,12 +185,13 @@ export function initAskPanel({ onSend } = {}) {
   const head = panel.querySelector('.ask-head');
   head.append(h('button', { class: 'pclose ask-pin', title: 'Dock into the top bar', 'aria-label': 'Dock Ask JARVIS into the top bar', onclick: (e) => { e.stopPropagation(); dockAskToTopbar(); } }, '⤒'));
   wireHistory($('#ask'));
+  wireEscape($('#ask'));
   $('#ask-send')?.addEventListener('click', () => { onSend?.(); $('#ask').focus({ preventScroll: true }); });
   undockBtn = h('button', { class: 'mb-ask-undock', title: 'Float Ask JARVIS — pop it out of the menu bar', 'aria-label': 'Float Ask JARVIS', onclick: () => floatAsk() }, '⏏');
 
   makeFloating(panel, { id: ID, title: 'Ask JARVIS', into: head, keep: [head], closedByDefault: true, listed: () => state.mode !== 'topbar' });
   dockManager.subscribe((L, cause) => sync({ type: 'layout', status: panelStatus(L, ID), rect: floatingRect(L), cause }));
-  addDropTarget({ accepts: (id) => id === ID, hit, leave: () => setTarget(false), drop: () => dockAskToTopbar(), label: 'Dock Ask JARVIS into the top bar' });
+  addDropTarget({ accepts: (id) => id === ID, hit, leave: leaveTarget, drop: () => dockAskToTopbar(), label: 'Dock Ask JARVIS into the top bar' });
   window.matchMedia?.(PHONE_QUERY)?.addEventListener?.('change', () => { place(); enforce(); });
   place();
   enforce();

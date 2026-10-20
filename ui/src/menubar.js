@@ -374,8 +374,11 @@ function startPeek() {
   document.body.classList.add('mb-peek');
   applyHidden();
 }
-/** Show a hidden bar for a moment (it stays while it has focus or the pointer), e.g. to reach the Ask slot. */
-export function peekMenubar() { startPeek(); schedulePeekEnd(); }
+/**
+ * Show a hidden bar for a moment (it stays while it has focus or the pointer), e.g. to reach the Ask slot.
+ * `hold`: keep it out until the next plain peekMenubar() (a drag over it: pointer capture means it never sees :hover).
+ */
+export function peekMenubar({ hold = false } = {}) { startPeek(); if (!hold) schedulePeekEnd(); }
 
 // ------------------------------------------------------------------ the Ask JARVIS slot
 
