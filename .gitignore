@@ -3,3 +3,5 @@ ui/dist
 *.log
 .DS_Store
 .rigs-dev/
+# ad-hoc tools agents file during a task (src/toolbox.js): kept on this machine until promoted and merged
+tools/local/

@@ -210,7 +210,7 @@ export const TOOLS = [
     run: (a) => (a.node ? api(`/api/nodes/${n(a.node)}/tools/${encodeURIComponent(a.id)}`) : locateTool(a.id)),
   },
   {
-    name: 'tool_register', description: 'File a script you wrote during a task as a reusable tool, so later tasks run it instead of writing it again. Worth it for anything another task could need (a check, a converter, a publisher, a log or transcript parser). The script reads its arguments as JSON from stdin (or the RIGS_TOOL_ARGS env var) and prints its result to stdout (JSON preferred); keep paths, hosts and names as arguments, never secrets. safety: "read-only" or "mutating" (writes files, changes state); mutating tools only run when a caller passes allowMutating. Registering an existing id updates it (bump version). Saved under ~/.rigs/tools/<id>/ on node (default this machine).',
+    name: 'tool_register', description: 'File a script you wrote during a task as a reusable tool, so later tasks run it instead of writing it again. Worth it for anything another task could need (a check, a converter, a publisher, a log or transcript parser). The script reads its arguments as JSON from stdin (or the RIGS_TOOL_ARGS env var) and prints its result to stdout (JSON preferred); keep paths, hosts and names as arguments, never secrets. safety: "read-only" or "mutating" (writes files, changes state); mutating tools only run when a caller passes allowMutating. Registering an existing id updates it (bump version). Saved as an ad-hoc tool in the gitignored tools/local/<id>/ of the RIGS checkout on node (default this machine): runnable at once with tool_run, no dev worktree, propose or merge needed; it is tracked as unmerged (tool_adhoc_list) until someone promotes it (tool_promote). Give origin { project, task } from your brief.',
     inputSchema: { type: 'object', properties: {
       node: { type: 'string', description: 'machine to file it on; "self" (default)' },
       id: { type: 'string', description: 'a-z0-9_- id, e.g. "screenshot-check"' }, name: { type: 'string' },
@@ -231,6 +231,24 @@ export const TOOLS = [
       const { node, ...tool } = a;
       return api(`/api/nodes/${n(node)}/tools/register`, { method: 'POST', body: { ...tool, origin: toolOrigin(a) } });
     },
+  },
+  {
+    name: 'tool_adhoc_list', description: 'The ad-hoc tools agents filed with tool_register that are not merged into RIGS yet, per machine or across the mesh: id, node, origin (project, task, node it was written on), age (created), uses and status: "unmerged" (only on that machine), "promoted" (copied into a dev worktree for a merge, unchanged since) or "merged" (a seed with the same content is on main; shown with all: true, its local copy can be dropped). node limits it to one machine.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'one machine; default every machine' }, all: { type: 'boolean', description: 'include merged tools' } } },
+    run: async (a) => {
+      const r = await api(`/api/tools/adhoc?${new URLSearchParams({ all: a.all ? '1' : '', node: a.node || '' })}`, { timeout: 30000 });
+      return { tools: r.tools.map(({ dir, nodeId, ...t }) => t), errors: r.errors };
+    },
+  },
+  {
+    name: 'tool_promote', description: 'Prepare ad-hoc tools for a later merge into RIGS: copies each into a RIGS dev worktree\'s tools/<id>/ (worktree, or a new one from rigs_dev_start with topic), runs its smoke call there and marks it "promoted". A tool must be plain Node with a smoke call, 3+ tags and an 80+ character description to ship as a seed; one that is not, or whose smoke call fails, is reported and left out. Never commits, pushes or proposes: commit tools/<id> in the worktree, then rigs_propose (the merge steward tests and merges). Runs on the machine that holds the tools (node, default this one).',
+    inputSchema: { type: 'object', properties: {
+      ids: { type: 'array', items: { type: 'string' }, description: 'ad-hoc tool ids' },
+      worktree: { type: 'string', description: 'path of a RIGS dev worktree on that machine' },
+      topic: { type: 'string', description: 'without worktree: topic for a new dev worktree (default "tools <ids>")' },
+      node: { type: 'string', description: 'machine holding the ad-hoc tools; "self" (default)' },
+    }, required: ['ids'] },
+    run: (a) => api(`/api/nodes/${n(a.node)}/tools/promote`, { method: 'POST', body: { ids: a.ids, worktree: a.worktree, topic: a.topic }, timeout: 15 * 60 * 1000 }),
   },
   {
     name: 'tool_run', description: 'Run a filed tool on a machine with JSON arguments (checked against its inputs schema) and get its result. node defaults to where the tool is (this machine first); a tool filed elsewhere is copied to the chosen node first. Mutating tools are refused unless allowMutating is true: pass it only when the change is what the task wants. The git guard applies (no commit/push/branch switch outside a RIGS dev worktree), stdout/stderr are redacted, and it is killed after timeoutSec (default the tool\'s, else 60; max 600). cwd is the folder it works in (default the tool\'s own folder).',

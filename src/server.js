@@ -366,6 +366,12 @@ export async function startServer() {
     const out = [];
     for (const it of items) {
       const ws = it.workspace;
+      if (it.tool) {
+        // A helper tool for a task: an ordinary task under the main rigs project — no dev worktree, no merge-steward proposal.
+        const r = await planner.intake({ title: it.title, instruction: it.goal, kind: 'code', trace: tctx || undefined }, plannerCtx);
+        out.push({ id: r.project.id, name: r.project.name, owner: r.project.owner, node: config().name, path: '', workspace: 'RIGS · JARVIS', self: false, tool: true, flow: '', note: it.note || 'ad-hoc tool, filed in the ad-hoc store' });
+        continue;
+      }
       // One handoff span per project filed, under the router's span; the project keeps its context so its planning
       // call and task briefs attach to the same trace. It ends once planning and dispatch have run.
       const hs = tctx ? trace.startSpan({ ...tctx, kind: 'handoff', name: 'file-work', input: { goal: it.goal, workspace: ws?.name || '', node: it.node || '', self: !!it.self, flow: it.flow?.name || '' } }) : null;
@@ -456,6 +462,20 @@ export async function startServer() {
     const results = toolbox.searchCatalog(entries, { q: searchParams.get('q') || '', tag: searchParams.get('tag') || '', kind: searchParams.get('kind') || '', limit });
     if (searchParams.get('track') === '1') usage.recordToolEvent({ event: 'list', query: searchParams.get('q') || searchParams.get('tag') || '', toolIds: results.map((r) => r.id), trace: traceOf(req)?.traceId, seat: callerSeat(req) });
     return { results, errors };
+  }
+
+  /**
+   * The ad-hoc tools of every online node (toolbox.listAdhoc), merged like the tool catalog: { tools, errors }.
+   * all=1 includes the merged ones; node= one machine.
+   */
+  async function meshAdhoc(searchParams) {
+    if (!discovery.list().some((n) => n.self)) await discovery.tick();
+    const all = searchParams.get('all') === '1';
+    const want = (searchParams.get('node') || '').toLowerCase();
+    const nodes = discovery.list().filter((n) => n.online && n.rigs && (!want || n.name.toLowerCase() === want || n.id === want));
+    const results = await Promise.all(nodes.map((n) => (n.self ? toolbox.listAdhoc({ all }) : peerJson(n, `tools/adhoc${all ? '?all=1' : ''}`, { timeout: 7000 }))
+      .then((r) => ({ node: n, tools: r.tools })).catch((e) => ({ node: n, error: e.message }))));
+    return toolbox.aggregateAdhoc(results);
   }
 
   /** Call any node's local API by id or name (direct function call for this node). */
@@ -602,6 +622,15 @@ export async function startServer() {
     // tool registry (src/toolbox.js): scripts filed by agents, listed, read, registered and run here
     if (sub === 'tools' && method === 'GET') return toolbox.listLocal();
     if (sub === 'tools/register' && method === 'POST') return toolbox.registerTool(await body());
+    // ad-hoc tools: what is filed here and not merged yet; promote copies them into a dev worktree for a later merge
+    if (sub === 'tools/adhoc' && method === 'GET') return toolbox.listAdhoc({ all: q.get('all') === '1' });
+    if (sub === 'tools/promote' && method === 'POST') {
+      const b = await body();
+      const ids = [].concat(b.ids ?? b.id ?? []);
+      const worktree = b.worktree ? files.resolvePath(b.worktree) : (await merge.startWork(b.topic || `tools ${ids.join(' ')}`)).dir;
+      return toolbox.promoteTools(ids, { worktree });
+    }
+    if (sub === 'tools/drop' && method === 'POST') { const b = await body(); return toolbox.dropAdhoc([].concat(b.ids ?? b.id ?? []), { force: b.force === true }); }
     if ((mm = m(/^tools\/([^/]+)$/)) && method === 'GET') return toolbox.getTool(decodeURIComponent(mm[1]));
     if ((mm = m(/^tools\/([^/]+)\/run$/)) && method === 'POST') {
       const b = await body();
@@ -1213,6 +1242,7 @@ export async function startServer() {
     if (p === '/api/mesh/refresh' && req.method === 'POST') { await discovery.tick(); return discovery.list().map(stripNode); }
     if (p === '/api/apps') return meshApps();
     if (p === '/api/tools') return meshTools(url.searchParams, req);
+    if (p === '/api/tools/adhoc') return meshAdhoc(url.searchParams);
     if (p === '/api/usage') return meshUsage(url.searchParams);
     if (p === '/api/preroute/stats') return meshPrerouteStats(url.searchParams);
     if (p === '/api/traces') return meshTraces(url.searchParams);

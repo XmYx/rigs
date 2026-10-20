@@ -71,6 +71,14 @@ export function jevUrl(s, apps = config().apps || []) {
 const QUESTION = /^\s*(what|why|how|when|where|who|which|is|are|was|were|did|does|do|can|could|should|would|will)\b|\?\s*$/i;
 // A request about JARVIS / RIGS itself: changed in a RIGS dev worktree and shipped through the merge steward.
 const SELF = /\b(jarvis|rigs(?: os)?)\b/i;
+// Building or using a helper tool to get something done (a script, checker, converter…) is ordinary work, not a change to
+// RIGS: the tool is filed in the ad-hoc store (tool_register), never through a dev worktree and the merge steward.
+// Anything that names RIGS's own UI, router, planner, daemon, MCP tools (mesh_exec…), CLI, connectors or code stays a
+// RIGS change. Conservative on purpose: a miss here only means the old routing.
+const TOOL_WORK = /\b(?:build|write|make|create|code|develop|script up|put together|whip up|need|use|run)\b[^.;\n]{0,50}\b(?:scripts?|helpers?|tools?|one-?offs?|checkers?|probes?|converters?|parsers?|scrapers?|utility|utilities|cli)\b/i;
+const RIGS_CHANGE = /\b(?:dashboards?|ui|interface|buttons?|pages?|views?|panels?|windows?|widgets?|dark mode|themes?|css|router|planner|daemon|steward|mcp|endpoints?|settings|setup|codebase|source code|src\/|features?|behaviou?r|tools? (?:page|tab|panel|list|registry|store|box|ui)|rigs tools|tool_register|toolbox|(?:mesh|tool|rigs|project|linear|slack|drive|trace|appstore|exhibit|usage|preroute)_[a-z_]+|subcommands?|(?:rigs|jarvis) (?:cli|commands?)|connectors?|integrations?)\b/i;
+/** A request whose work is building or using a helper tool, as opposed to changing RIGS/JARVIS itself. Pure. */
+export const isToolWork = (text) => TOOL_WORK.test(String(text || '')) && !RIGS_CHANGE.test(String(text || ''));
 const WORDS = (s) => new Set(String(s || '').toLowerCase().match(/[a-zà-ž0-9]{4,}/g) || []);
 
 // Leading verbs that ask for something to be made, changed, improved, run or updated.
@@ -198,7 +206,10 @@ export function bindWork(items, catalog, request = '', { selfNode = '' } = {}) {
     // "JARVIS feature: …" is a change to RIGS itself — unless it clearly names some other project. A match on a
     // RIGS checkout (the installed app, a dev clone) is the same thing: never let agents edit the live install.
     const aboutSelf = selfNode && (isRigsCheckout(r.workspace) || (!r.workspace && SELF.test(`${it.workspace} ${it.goal}`)));
-    if (aboutSelf) {
+    if (selfNode && isToolWork(it.goal) && (aboutSelf || (!r.workspace && !it.workspace))) {
+      // A helper tool for some task: an ordinary task under the main rigs project, no dev worktree, no merge steward.
+      out.push({ ...it, title, request, node: selfNode, tool: true, workspace: null });
+    } else if (aboutSelf) {
       previousNode = selfNode;
       out.push({ ...it, title, request, node: selfNode, self: true, workspace: SELF_WORKSPACE });
     } else if (r.workspace) {
@@ -234,7 +245,7 @@ function routerPrompt(text, { rules, threads, projects, catalog = [] }) {
     'Operating rules:',
     rules,
     '',
-    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Polite or casual phrasing does not make a request a question: "can you …", "please …", "lets …", "I want you to …", "make sure …" followed by make/build/add/fix/change/improve/update/run/create/separate are work. Talk ("answer") is only for real questions, status checks, chat and one-step actions like opening a window or reading a file; never answer a work request with a description of what you would do.',
+    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". But building or using a helper script or tool to get something done ("build a script to check disk on every machine") is NOT a change to RIGS: give it the workspace it is for, or none — never "rigs" (agents file such a tool in the ad-hoc store with tool_register; only changes to RIGS code, UI, router or agents are workspace "rigs"). A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Polite or casual phrasing does not make a request a question: "can you …", "please …", "lets …", "I want you to …", "make sure …" followed by make/build/add/fix/change/improve/update/run/create/separate are work. Talk ("answer") is only for real questions, status checks, chat and one-step actions like opening a window or reading a file; never answer a work request with a description of what you would do.',
     '',
     'Ongoing threads (continue ONLY if the request clearly belongs to one; otherwise do not pick one):',
     threads.length ? threads.map((t) => `- ${t.id} · ${t.title} · project ${t.project || '—'}`).join('\n') : '(none)',
@@ -392,7 +403,7 @@ export function withWork(d, text, { catalog = [], selfNode = '' } = {}) {
   }
   if (['implement', 'plan'].includes(d.route) && (catalog.length || selfNode)) {
     let items = d.work?.length ? d.work : heuristicWork(text, catalog);
-    if (!items.length && selfNode && SELF.test(text)) items = [{ title: '', goal: text, workspace: 'rigs', machine: '' }];
+    if (!items.length && selfNode && (SELF.test(text) || isToolWork(text))) items = [{ title: '', goal: text, workspace: isToolWork(text) ? '' : 'rigs', machine: '' }];
     d.work = bindWork(items, catalog, text, { selfNode });
   }
   return d;

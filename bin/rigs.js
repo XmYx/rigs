@@ -313,10 +313,13 @@ const commands = {
     }
     fail('usage: rigs starnet [status|on|off|install [--from <checkout>] [--force]|remove]');
   },
-  /** rigs tools [list [query] [--tag t] [--kind tool|applet]] · rigs tools show <id> [--node n] · rigs tools run <id> ['{json}'] [--node n] [--allow-mutating] */
+  /**
+   * rigs tools [list [query] [--tag t] [--kind tool|applet]] · rigs tools show <id> [--node n] · rigs tools run <id> ['{json}'] [--node n] [--allow-mutating]
+   * · rigs tools adhoc [--all] [--node n] [--local] · rigs tools promote <id…> [--worktree dir | --topic t] · rigs tools drop <id…> [--force]
+   */
   async tools() {
     const [sub = 'list', ...rest] = argv;
-    const flags = new Set(['--tag', '--kind', '--node', '--timeout', '--cwd']);
+    const flags = new Set(['--tag', '--kind', '--node', '--timeout', '--cwd', '--worktree', '--topic']);
     const opt = (k) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
     const pos = rest.filter((x, i) => !x.startsWith('--') && !flags.has(rest[i - 1]));
     const fail = (msg) => { console.error(msg); process.exit(1); };
@@ -345,8 +348,48 @@ const commands = {
       }
       process.exit(bad ? 1 : 0);
     }
+    if (sub === 'adhoc') {
+      // Ad-hoc tools not merged yet, mesh-wide through the daemon; --local (or a daemon without the route) reads this machine.
+      const T = await import('../src/toolbox.js');
+      const all = rest.includes('--all');
+      let r = rest.includes('--local') ? null : await daemonFetch(`/api/tools/adhoc?${new URLSearchParams({ all: all ? '1' : '', node: opt('--node') || '' })}`, { timeout: 60000 }).catch(() => null);
+      if (!Array.isArray(r?.tools)) {
+        if (r) console.log('(the daemon has no ad-hoc listing yet: this machine only)');
+        const l = await T.listAdhoc({ all });
+        r = T.aggregateAdhoc([{ node: { id: 'self', name: l.node }, tools: l.tools }]);
+      }
+      if (!r.tools.length) console.log(all ? 'no ad-hoc tools' : 'no unmerged ad-hoc tools');
+      else console.log(`${'status'.padEnd(9)} ${'id'.padEnd(26)} ${'node'.padEnd(16)} ${'age'.padStart(4)} ${'uses'.padStart(4)}  origin`);
+      const now = Date.now();
+      for (const t of r.tools) {
+        const o = t.origin || {};
+        const origin = [o.project && `project ${o.project}`, o.task && `task ${o.task}`, o.node && o.node !== t.node && `from ${o.node}`].filter(Boolean).join(' · ') || '-';
+        console.log(`${t.status.padEnd(9)} ${String(t.id).padEnd(26)} ${String(t.node).padEnd(16)} ${T.ageText(t.created ? now - t.created : null).padStart(4)} ${String(t.uses || 0).padStart(4)}  ${origin}${t.legacy ? ' (in ~/.rigs/tools)' : ''}${t.changedSincePromote ? ' (changed since promoted)' : ''}`);
+      }
+      for (const e of r.errors || []) console.log(`  (${e.node}: ${e.error})`);
+      return;
+    }
+    if (sub === 'promote' || sub === 'drop') {
+      const T = await import('../src/toolbox.js');
+      if (!pos.length) fail(`usage: rigs tools ${sub === 'promote' ? 'promote <id…> [--worktree <dev worktree> | --topic <topic>]' : 'drop <id…> [--force]'}`);
+      let r;
+      if (sub === 'drop') r = await T.dropAdhoc(pos, { force: rest.includes('--force') });
+      else {
+        let worktree = opt('--worktree');
+        if (!worktree) {
+          const w = await daemonFetch('/api/local/dev/start', { method: 'POST', body: JSON.stringify({ topic: opt('--topic') || `tools ${pos.join(' ')}` }), timeout: 120000 }).catch((e) => ({ error: e.message }));
+          if (w.error || !w.dir) fail(`no dev worktree: ${w.error || 'RIGS daemon is not running (rigs start)'} — pass --worktree <dir>`);
+          console.log(`${w.existing ? 'existing' : 'new'} dev worktree ${w.dir} (${w.branch})`);
+          worktree = w.dir;
+        }
+        r = await T.promoteTools(pos, { worktree: path.resolve(worktree) }).catch((e) => fail(e.message));
+      }
+      for (const x of r.results) console.log(`${x.ok ? '✓' : '✗'} ${String(x.id).padEnd(24)} ${x.ok ? (x.to ? `${x.status} → ${x.to} (smoke ${x.smokeMs} ms)` : `→ ${x.trashedTo}`) : x.problem}`);
+      if (r.next) console.log(`\nnext: ${r.next}`);
+      process.exit(r.results.every((x) => x.ok) ? 0 : 1);
+    }
     const id = pos[0];
-    if (!id || !['show', 'run'].includes(sub)) fail('usage: rigs tools [list [query] [--tag t] [--kind tool|applet]]\n       rigs tools show <id> [--node n]\n       rigs tools smoke [id…]   (run each tool\'s declared dry-run check on this machine)\n       rigs tools run <id> [\'{"arg": 1}\'] [--node n] [--allow-mutating] [--timeout sec] [--cwd dir]');
+    if (!id || !['show', 'run'].includes(sub)) fail('usage: rigs tools [list [query] [--tag t] [--kind tool|applet]]\n       rigs tools show <id> [--node n]\n       rigs tools smoke [id…]   (run each tool\'s declared dry-run check on this machine)\n       rigs tools adhoc [--all] [--node n] [--local]   (ad-hoc tools not merged yet)\n       rigs tools promote <id…> [--worktree dir | --topic t]   (copy into a dev worktree for a merge)\n       rigs tools drop <id…> [--force]   (move merged ad-hoc copies to ~/.rigs/trash)\n       rigs tools run <id> [\'{"arg": 1}\'] [--node n] [--allow-mutating] [--timeout sec] [--cwd dir]');
     if (sub === 'show') {
       const r = await daemonFetch(`/api/nodes/${node}/tools/${encodeURIComponent(id)}`).catch((e) => ({ error: e.message }));
       if (r.error || !r.manifest) fail(r.error || 'RIGS daemon is not running (rigs start).');
@@ -463,6 +506,9 @@ const commands = {
   rigs tools [list [query] [--tag t]]  search the tool registry + App Cloud applets across the mesh
   rigs tools show <id> | run <id> ['{json args}'] [--node n] [--allow-mutating]
                        read or run a filed tool (mutating tools need --allow-mutating)
+  rigs tools adhoc [--all] [--node n]  ad-hoc tools agents filed (tools/local, gitignored) that are not merged yet
+  rigs tools promote <id…> [--worktree dir]  copy ad-hoc tools into a dev worktree's tools/, smoke-check, mark promoted
+  rigs tools drop <id…> [--force]      move merged ad-hoc copies to ~/.rigs/trash
   rigs service [uninstall]  (re)install or remove the autostart service`);
   },
 };

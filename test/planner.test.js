@@ -66,3 +66,10 @@ test('work spreads across machines', () => {
   const p = routeProject(project([task('a', 'research'), task('b', 'research'), task('c', 'research'), task('d', 'research')]), mesh);
   assert.ok(new Set(p.tasks.map((t) => t.assign.node)).size >= 2);
 });
+
+test('planningPrompt: tool building is an ad-hoc task, never a dev-worktree or propose task', async () => {
+  const { planningPrompt } = await import('../src/planner.js');
+  const text = planningPrompt(project([]), [], '', []);
+  assert.match(text, /ad-hoc store \(tool_register, then tool_run\)/);
+  assert.match(text, /never plan a task to start a RIGS dev worktree, propose, or edit tools\/ seeds just to add a tool/);
+});

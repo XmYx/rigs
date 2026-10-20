@@ -212,7 +212,7 @@ test('structure: the routing algorithm shown is the one in router.js, the tool f
   const merge = read('src/merge.js');
   assert.ok(merge.indexOf("run(npm, ['run', 'build']") > 0 && merge.indexOf("run(npm, ['run', 'build']") < merge.indexOf("run(npm, ['test']"), 'build runs before tests');
   assert.match(merge, /merges ONE request at a time/, 'serial merging');
-  assert.match(merge, /FORBIDDEN = \/\^\(node_modules\|ui\\\/dist\)/, 'the policy gate drawn is the forbidden-paths rule');
+  assert.match(merge, /FORBIDDEN = \/\^\(node_modules\|ui\\\/dist[|)]/, 'the policy gate drawn is the forbidden-paths rule');
 });
 
 test('structure: connections() lists what is wired to a node, in and out', () => {

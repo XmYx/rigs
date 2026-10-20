@@ -15,10 +15,12 @@ const SEEDS = path.join(ROOT, 'tools');
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-seeds-'));
 process.env.RIGS_NAME = 'box';
 delete process.env.RIGS_SEED_TOOLS;
+process.env.RIGS_ADHOC_TOOLS = path.join(process.env.RIGS_HOME, 'adhoc'); // filed tools go here, never into the checkout's tools/local
 const T = await import('../src/toolbox.js');
 const { validateApp } = await import('../src/apps.js');
 
-const seedIds = fs.readdirSync(SEEDS, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+// tools/local is this machine's gitignored ad-hoc folder, not a seed.
+const seedIds = fs.readdirSync(SEEDS, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== T.ADHOC_DIR).map((d) => d.name).sort();
 const manifestOf = (id) => JSON.parse(fs.readFileSync(path.join(SEEDS, id, 'manifest.json'), 'utf8'));
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-seed-t-'));
 const run = async (id, args) => { const r = await T.runTool(id, { args, allowMutating: true, cwd: tmp() }); return r.result; };
@@ -38,7 +40,9 @@ test('there are at least 6 seed tools and each folder is a valid tool', () => {
     assert.ok(manifest.description.length >= 80, `${id}: description says what it does and when to use it`);
     assert.ok(manifest.smoke?.args, `${id}: declares a smoke check`);
     assert.equal(manifest.language, 'node', `${id}: node runs everywhere RIGS does`);
-    assert.equal(manifest.origin?.project, '0010e8a52d');
+    assert.equal(manifest.adhoc, undefined, `${id}: a seed carries no ad-hoc block`);
+    const files = Object.fromEntries(fs.readdirSync(path.join(SEEDS, id)).filter((f) => f !== 'manifest.json').map((f) => [f, fs.readFileSync(path.join(SEEDS, id, f))]));
+    assert.deepEqual(T.seedProblems(manifest, files), [], `${id}: the rules promotion checks (toolbox.seedProblems)`);
   }
 });
 
@@ -89,7 +93,7 @@ test('running a seed counts its use in RIGS_HOME, never in the seed folder; a fi
   assert.equal(l.tools.find((t) => t.id === 'healthz-wait').name, 'Mine');
   assert.equal(l.tools.find((t) => t.id === 'healthz-wait').seed, undefined);
   assert.deepEqual((await T.runTool('healthz-wait')).result, { mine: true });
-  fs.rmSync(path.join(process.env.RIGS_HOME, 'tools', 'healthz-wait'), { recursive: true });
+  fs.rmSync(path.join(process.env.RIGS_ADHOC_TOOLS, 'healthz-wait'), { recursive: true });
 });
 
 test('smoke field: validated, matched as a subset, reported when a tool has none or fails', async () => {
@@ -108,7 +112,7 @@ test('smoke field: validated, matched as a subset, reported when a tool has none
   assert.match((await T.smokeTool('sm')).problem, /does not contain/);
   await T.registerTool({ ...base, source: 'process.exit(3)', smoke: { args: {} } });
   assert.match((await T.smokeTool('sm')).problem, /exit 3/);
-  fs.rmSync(path.join(process.env.RIGS_HOME, 'tools', 'sm'), { recursive: true });
+  fs.rmSync(path.join(process.env.RIGS_ADHOC_TOOLS, 'sm'), { recursive: true });
 });
 
 test('usage-transcript-parse: totals, dedup, no message text; ledger grouping', async () => {

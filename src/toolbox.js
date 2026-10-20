@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -5,24 +6,38 @@ import path from 'node:path';
 import { gitViolation } from './autonomy.js';
 import { config, RIGS_HOME } from './config.js';
 import { redact } from './trace.js';
-import { APP_DIR, augmentedPath, isWin, run, truncate, which, writeJsonAtomic } from './util.js';
+import { APP_DIR, augmentedPath, expandHome, isWin, run, truncate, which, writeJsonAtomic } from './util.js';
 
 /**
  * Tool registry: small scripts an agent wrote for one task, kept so later tasks run them instead of writing them
  * again. (src/tools.js is something else: it finds CLI binaries such as claude, rig and git.)
  *
- * One tool per folder, RIGS_HOME/tools/<id>/:
+ * One tool per folder, <root>/<id>/:
  *   manifest.json  { id, name, description, tags: [], language: node|python|bash|sh|powershell, entry: "main.py",
  *                    inputs: <JSON schema of the arguments, type object>, outputs: "what it prints" | <JSON schema>,
  *                    platforms: [linux, darwin, windows], safety: "read-only" | "mutating", version: "1.0.0",
  *                    timeoutSec?: 60, origin: { project, task, session, node, trace }, created, updated, uses, lastUsed,
- *                    smoke?: { args: <a safe call, e.g. { dryRun: true }>, expect?: <subset the result must contain> } }
+ *                    smoke?: { args: <a safe call, e.g. { dryRun: true }>, expect?: <subset the result must contain> },
+ *                    adhoc?: { status: unmerged|promoted|merged, origin: { project, task, node }, created, contentHash,
+ *                              promoted?: { worktree, branch, at, contentHash } } }
  *   <entry> and any other script files it needs (plain relative names, no "..").
  *
- * Seeds: tools/<id>/ in the RIGS checkout (APP_DIR/tools, same layout) ship with every update, so every machine has
- * them. roots() lists RIGS_HOME/tools first (filed tools, and an override of a seed with the same id), then the seeds.
- * A seed folder is never written to (the checkout must stay clean for the updater): its usage counts live in
- * RIGS_HOME/tools/.usage.json. `smokeTool` runs a tool's `smoke` call; `rigs tools smoke` runs them all.
+ * Roots, first wins when two hold the same id (roots()):
+ *   1. ad-hoc: tools/local/<id>/ in the RIGS checkout (APP_DIR), gitignored. tool_register files new tools here: an
+ *      agent builds a tool for its task and runs it at once, with no dev worktree, test or merge agent involved. The
+ *      folder survives updates and rollbacks (`git merge --ff-only` and `git reset --hard` leave ignored files alone,
+ *      nothing in RIGS runs `git clean -x`, and the merge steward refuses a branch that commits into it, so no update can
+ *      overwrite it), and the updater's clean-checkout check never sees it.
+ *   2. RIGS_HOME/tools/<id>/: where tools were filed before the ad-hoc folder; still read (and updated in place on a
+ *      re-register), never moved. Both writable roots count as ad-hoc: tracked until merged.
+ *   3. seeds: tools/<id>/ in the checkout ship with every update, so every machine has them. A seed folder is never
+ *      written to (the checkout must stay clean for the updater): its usage counts live in RIGS_HOME/tools/.usage.json.
+ * `smokeTool` runs a tool's `smoke` call; `rigs tools smoke` runs them all.
+ *
+ * Ad-hoc tracking: every tool in a writable root is "unmerged" until it is promoted (`promoteTools`: copied into a
+ * RIGS dev worktree's tools/, smoke-checked there, marked "promoted"; the normal propose / merge steward flow takes it
+ * from there) and "merged" once a seed with the same id and the same content hash is on main (`adhocState`, pure).
+ * A merged local copy is dropped into ~/.rigs/trash (`dropAdhoc`), never deleted.
  *
  * Running: the entry runs with its interpreter in `cwd` (default the tool folder). The arguments are checked against
  * `inputs` and arrive as JSON on stdin and in RIGS_TOOL_ARGS; stdout is the result (parsed when it is JSON). Rules:
@@ -42,6 +57,11 @@ export const PLATFORMS = Object.freeze(['linux', 'darwin', 'windows']);
 export const SAFETY = Object.freeze(['read-only', 'mutating']);
 export const MAX_TIMEOUT_SEC = 600;
 export const DEFAULT_TIMEOUT_SEC = 60;
+export const ADHOC_STATUS = Object.freeze(['unmerged', 'promoted', 'merged']);
+/** The ad-hoc folder's name inside the seed root (tools/local), never a seed. */
+export const ADHOC_DIR = 'local';
+// Ids that are API routes (tools/adhoc, tools/register, tools/promote) or the ad-hoc folder itself.
+const RESERVED = new Set([ADHOC_DIR, 'adhoc', 'register', 'promote']);
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const FILE_RE = /^[\w][\w.-]{0,79}(?:\/[\w][\w.-]{0,79}){0,3}$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
@@ -50,14 +70,21 @@ const MAX_FILES = 20;
 const SCHEMA_TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
 const DEFAULT_PLATFORMS = { node: PLATFORMS, python: PLATFORMS, bash: ['linux', 'darwin'], sh: ['linux', 'darwin'], powershell: ['windows'] };
 
-/**
- * Where tools live on this machine; the first root wins when two hold the same id, and new tools go there. The seed
- * root is the checkout's tools/ folder (RIGS_SEED_TOOLS overrides it; empty switches seeds off, as tests do).
- */
-export function roots() {
+/** The gitignored ad-hoc folder in the checkout, where new tools are filed (RIGS_ADHOC_TOOLS overrides it, as tests do). */
+export const adhocRoot = () => path.resolve(process.env.RIGS_ADHOC_TOOLS || path.join(APP_DIR, 'tools', ADHOC_DIR));
+/** Tools filed before the ad-hoc folder existed, and the seeds' usage counts. */
+export const homeRoot = () => path.join(RIGS_HOME, 'tools');
+/** The checkout's tools/ folder (RIGS_SEED_TOOLS overrides it; empty switches seeds off, as tests do), or null. */
+export function seedRoot() {
   const seeds = process.env.RIGS_SEED_TOOLS ?? path.join(APP_DIR, 'tools');
-  return [path.join(RIGS_HOME, 'tools'), ...(seeds ? [path.resolve(seeds)] : [])].filter((r, i, all) => all.indexOf(r) === i);
+  return seeds ? path.resolve(seeds) : null;
 }
+
+/** Where tools live on this machine: ad-hoc, RIGS_HOME/tools, seeds. The first root wins when two hold the same id; new tools go there. */
+export function roots() {
+  return [adhocRoot(), homeRoot(), seedRoot()].filter((r, i, all) => r && all.indexOf(r) === i);
+}
+const isSeedRoot = (root) => root === seedRoot();
 
 export class ToolError extends Error { constructor(status, code, msg) { super(msg); this.name = 'ToolError'; this.status = status; this.code = code; } }
 
@@ -94,6 +121,7 @@ export function validateManifest(raw, { now = Date.now() } = {}) {
   const errors = [];
   const id = str(raw.id).toLowerCase();
   if (!ID_RE.test(id)) errors.push('id must be 1-40 chars of a-z, 0-9, - or _, starting with a letter or digit');
+  else if (RESERVED.has(id)) errors.push(`id "${id}" is reserved (${[...RESERVED].join(', ')})`);
   const name = str(raw.name);
   if (!name) errors.push('name is required');
   else if (name.length > 80) errors.push('name must be at most 80 characters');
@@ -145,15 +173,32 @@ export function validateManifest(raw, { now = Date.now() } = {}) {
     if (!plainObject(raw.origin)) errors.push('origin must be an object { project, task, session, node, trace }');
     else for (const k of ['project', 'task', 'session', 'node', 'trace']) if (raw.origin[k] != null && raw.origin[k] !== '') origin[k] = String(raw.origin[k]).slice(0, 200);
   }
+  let adhoc;
+  if (raw.adhoc != null) {
+    if (!plainObject(raw.adhoc) || !ADHOC_STATUS.includes(raw.adhoc.status)) errors.push(`adhoc must be { status: ${ADHOC_STATUS.join('|')}, origin, created, contentHash }`);
+    else adhoc = normalizeAdhoc(raw.adhoc);
+  }
   if (errors.length) return { manifest: null, errors: errors.map((e) => `${id || '?'}: ${e}`) };
   return {
     manifest: {
       id, name, description, tags, language, entry, inputs, outputs, platforms, safety, version,
-      ...(timeoutSec ? { timeoutSec } : {}), ...(smoke ? { smoke } : {}), origin,
+      ...(timeoutSec ? { timeoutSec } : {}), ...(smoke ? { smoke } : {}), origin, ...(adhoc ? { adhoc } : {}),
       created: time(raw.created) || now, updated: time(raw.updated) || now,
       uses: Math.max(0, Math.floor(Number(raw.uses) || 0)), lastUsed: time(raw.lastUsed),
     },
     errors: [],
+  };
+}
+
+function normalizeAdhoc(a) {
+  const text = (v) => (v == null || v === '' ? undefined : String(v).slice(0, 200));
+  const o = plainObject(a.origin) ? a.origin : {};
+  const p = plainObject(a.promoted) ? a.promoted : null;
+  return {
+    status: a.status,
+    origin: Object.fromEntries(['project', 'task', 'node'].map((k) => [k, text(o[k])]).filter(([, v]) => v)),
+    created: time(a.created), contentHash: text(a.contentHash) || null,
+    ...(p ? { promoted: { worktree: text(p.worktree), branch: text(p.branch), at: time(p.at), contentHash: text(p.contentHash) || null } } : {}),
   };
 }
 
@@ -315,7 +360,8 @@ export function hintLines(matches, { width = 90 } = {}) {
 // What agents are told. Each stays a few hundred characters: it is paid for in every brief and every setup.
 
 /** The paragraph of a task brief's tool section. */
-export const BRIEF_NOTE = 'Before writing a helper script, call the rigs MCP tool `tool_list` with what you need (filed tools and published applets are ranked together); run a hit with `tool_run`, open an applet instead of building another. When you write a script another task could reuse (a check, converter, publisher, parser), file it with `tool_register`: arguments as JSON on stdin, result on stdout, no secrets.';
+export const ADHOC_RULE = 'When a task needs a helper script or tool, build it in the ad-hoc store with `tool_register`, use it with `tool_run` and finish the task. Never call `rigs_dev_start` or `rigs_propose` just to add a tool, and never edit seeds in `tools/` to get a task done: promotion into RIGS is a separate, explicit step (`rigs tools promote`).';
+export const BRIEF_NOTE = `Before writing a helper script, call the rigs MCP tool \`tool_list\` with what you need (filed tools and published applets are ranked together); run a hit with \`tool_run\`, open an applet instead of building another. When you write a script another task could reuse (a check, converter, publisher, parser), file it with \`tool_register\`: arguments as JSON on stdin, result on stdout, no secrets. ${ADHOC_RULE}`;
 
 /** The task brief's "Reusable tools" section: the paragraph plus this task's likely matches. */
 export function briefSection(matches) {
@@ -326,11 +372,11 @@ export function briefSection(matches) {
 /** The planning prompt's tool rule with the filed tools that fit the goal. */
 export function planNote(matches) {
   const lines = hintLines(matches, { width: 70 });
-  return `- Agents reuse filed tools: before writing a helper they call \`tool_list\`, and they file reusable scripts with \`tool_register\`. Where a filed tool fits, name it in the task description so the agent runs it with \`tool_run\` instead of writing it again.${lines.length ? `\n  Filed tools that fit this goal:\n${lines.map((l) => `  ${l}`).join('\n')}` : ''}`;
+  return `- Agents reuse filed tools: before writing a helper they call \`tool_list\`, and they file reusable scripts with \`tool_register\`. A helper tool a task needs is built in the ad-hoc store (tool_register, then tool_run) inside that task: never plan a task to start a RIGS dev worktree, propose, or edit tools/ seeds just to add a tool; promotion (\`rigs tools promote\`) is a separate step Sir asks for. Where a filed tool fits, name it in the task description so the agent runs it with \`tool_run\` instead of writing it again.${lines.length ? `\n  Filed tools that fit this goal:\n${lines.map((l) => `  ${l}`).join('\n')}` : ''}`;
 }
 
 /** The agent instructions bullet written by `rigs setup`. */
-export const AGENT_NOTE = '**Reusable tools**: before writing a helper script, search the registry with `tool_list` (tools other agents filed plus App Cloud applets) and run a hit with `tool_run`. When you write a script another task could reuse, file it with `tool_register` (JSON arguments on stdin, result on stdout, no secrets).';
+export const AGENT_NOTE = '**Reusable tools**: before writing a helper script, search the registry with `tool_list` (tools other agents filed plus App Cloud applets) and run a hit with `tool_run`. When you write a script another task could reuse, file it with `tool_register` (JSON arguments on stdin, result on stdout, no secrets). Build a helper a task needs in the ad-hoc store with `tool_register`, use it with `tool_run` and finish the task: never call `rigs_dev_start` or `rigs_propose` just to add a tool, and never edit seeds in `tools/` to get a task done (promotion is the separate `rigs tools promote` step).';
 
 /**
  * Merge per-node results like aggregateApps: [{ node: {id,name}, tools?: [...], error? }] → { tools, errors }.
@@ -356,6 +402,116 @@ export const summary = (m) => ({
   ...(m.origin?.project || m.origin?.task ? { origin: { project: m.origin.project, task: m.origin.task } } : {}),
 });
 
+// ---------------------------------------------------------------- ad-hoc tracking (pure)
+
+/**
+ * The content hash of a tool: sha256 over its files (name and bytes, sorted by name), manifest.json left out, so usage
+ * counts, origin and an edited description never change it. A promoted copy and the seed it becomes hash the same.
+ * `files` is { name: Buffer | text }. Pure.
+ */
+export function hashContents(files) {
+  const h = crypto.createHash('sha256');
+  for (const name of Object.keys(files || {}).filter((f) => f !== 'manifest.json').sort()) {
+    const buf = Buffer.isBuffer(files[name]) ? files[name] : Buffer.from(String(files[name]));
+    h.update(`${name}\0${buf.length}\0`).update(buf);
+  }
+  return `sha256:${h.digest('hex')}`;
+}
+
+/**
+ * The adhoc block of a tool that is being (re-)filed: it stays "promoted" only while its content is what was promoted;
+ * a changed tool is "unmerged" again. created is when it was first filed. Pure.
+ */
+export function filedAdhoc(prev, origin, hash, { now = Date.now(), node = '' } = {}) {
+  const was = prev?.adhoc;
+  const keep = was?.status === 'promoted' && was.promoted?.contentHash === hash;
+  return {
+    status: keep ? 'promoted' : 'unmerged',
+    origin: Object.fromEntries([['project', origin?.project], ['task', origin?.task], ['node', origin?.node || was?.origin?.node || node]].filter(([, v]) => v)),
+    created: was?.created || prev?.created || now, contentHash: hash,
+    ...(keep ? { promoted: was.promoted } : {}),
+  };
+}
+
+/**
+ * Where each ad-hoc tool stands. tools: [{ id, name, uses, lastUsed, created, origin, adhoc?: { status, origin,
+ * created, contentHash, promoted? }, legacy? }] with adhoc.contentHash the hash of the files as they are now; seeds:
+ * [{ id, contentHash }] from main. Status:
+ *   merged    a seed with the same id and the same content hash exists (whatever the stored status says);
+ *   promoted  copied into a dev worktree and unchanged since (its hash is the promoted one);
+ *   unmerged  everything else, including a promoted tool edited after the copy and a tool without an adhoc block.
+ * `seed` is "same" / "differs" when a seed with that id exists. Pure.
+ */
+export function adhocState(tools, seeds, { now = Date.now() } = {}) {
+  const seedHash = new Map((seeds || []).map((s) => [s.id, s.contentHash]));
+  return (tools || []).map((t) => {
+    const a = t.adhoc || {};
+    const hash = a.contentHash || null;
+    const seed = seedHash.get(t.id);
+    const promotedNow = (a.status === 'promoted' || a.status === 'merged') && !!a.promoted && (!a.promoted.contentHash || a.promoted.contentHash === hash);
+    const status = seed && hash && seed === hash ? 'merged' : promotedNow ? 'promoted' : 'unmerged';
+    const created = time(a.created) || time(t.created) || null;
+    const origin = { ...(t.origin?.project ? { project: t.origin.project } : {}), ...(t.origin?.task ? { task: t.origin.task } : {}), ...(t.origin?.node ? { node: t.origin.node } : {}), ...(a.origin || {}) };
+    return {
+      id: t.id, name: t.name, status, origin, created, ageMs: created ? Math.max(0, now - created) : null,
+      uses: t.uses || 0, lastUsed: t.lastUsed || null, contentHash: hash,
+      ...(seed !== undefined ? { seed: seed === hash ? 'same' : 'differs' } : {}),
+      ...(a.promoted && status !== 'unmerged' ? { promoted: a.promoted } : {}),
+      ...(a.promoted && status === 'unmerged' ? { changedSincePromote: true } : {}),
+      ...(t.legacy ? { legacy: true } : {}),
+    };
+  }).sort((x, y) => x.id.localeCompare(y.id));
+}
+
+/** Merge per-node ad-hoc listings like aggregateTools: [{ node: {id,name}, tools?, error? }] → { tools, errors }. Pure. */
+export function aggregateAdhoc(results) {
+  const tools = [];
+  const errors = [];
+  for (const r of results) {
+    if (r.error) { errors.push({ node: r.node.name, error: /HTTP 404|no tool "adhoc"|not a tool id/.test(r.error) ? 'no ad-hoc tracking (older RIGS)' : r.error }); continue; }
+    if (!Array.isArray(r.tools)) { errors.push({ node: r.node.name, error: 'no ad-hoc tracking (older RIGS)' }); continue; }
+    for (const t of r.tools) tools.push({ ...t, node: r.node.name, nodeId: r.node.id });
+  }
+  tools.sort((a, b) => a.node.localeCompare(b.node) || a.id.localeCompare(b.id));
+  return { tools, errors };
+}
+
+/** "3d" / "5h" / "12m" / "now": the age column of `rigs tools adhoc`. Pure. */
+export function ageText(ms) {
+  if (ms == null) return '?';
+  const m = Math.floor(ms / 60000);
+  return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
+}
+
+const SECRET_RE = /sk-[A-Za-z0-9]{16,}|(?:token|password|secret|api[_-]?key)["']?\s*[:=]\s*["'][^"'\s]{8,}|Bearer\s+[A-Za-z0-9._-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY/i;
+
+/**
+ * What keeps a tool from shipping as a seed, the rules test/toolbox-seeds.test.js holds every seed to: a smoke call,
+ * plain Node (seeds run on every machine), 3+ tags and an 80+ character description so search finds it, and files
+ * without secrets, BOM or CRLF. files: { name: Buffer | text }. [] when it can ship. Pure.
+ */
+export function seedProblems(manifest, files = {}) {
+  const out = [];
+  if (!manifest.smoke?.args) out.push('declare a smoke call ("smoke": { "args": { "dryRun": true }, "expect": {…} }) so the merge checks can run it');
+  if (manifest.language !== 'node') out.push(`seeds are plain Node so they run on every machine; this one is ${manifest.language}`);
+  if ((manifest.tags || []).length < 3) out.push('give it at least 3 tags so search finds it');
+  if (String(manifest.description || '').length < 80) out.push('say what it does and when to use it in 80+ characters of description');
+  for (const [f, v] of Object.entries(files)) {
+    const buf = Buffer.isBuffer(v) ? v : Buffer.from(String(v));
+    if (SECRET_RE.test(buf.toString('utf8'))) out.push(`${f} looks like it holds a secret`);
+    if (buf.subarray(0, 3).toString('hex') === 'efbbbf') out.push(`${f} starts with a BOM`);
+    if (buf.includes('\r\n')) out.push(`${f} has CRLF line ends`);
+  }
+  return out;
+}
+
+/** The manifest a promoted tool ships with as a seed: no adhoc block, no usage counts, origin only project/task. Pure. */
+export function seedManifest(m, { now = Date.now() } = {}) {
+  const { adhoc, uses, lastUsed, seed, origin, created, updated, outputs, ...rest } = m;
+  const iso = (v) => new Date(time(v) || now).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return { ...rest, ...(outputs ? { outputs } : {}), created: iso(created), updated: iso(now), origin: { ...(origin?.project ? { project: origin.project } : {}), ...(origin?.task ? { task: origin.task } : {}) } };
+}
+
 // ---------------------------------------------------------------- storage
 
 async function readManifest(dir) {
@@ -366,41 +522,51 @@ async function readManifest(dir) {
 }
 
 // Seed tools live in the checkout, which must stay clean: their usage counts are kept beside the filed tools.
-const usageFile = (root) => path.join(root, '.usage.json');
-async function readUsage(root) { try { return JSON.parse(await fsp.readFile(usageFile(root), 'utf8')); } catch { return {}; } }
+const usageFile = () => path.join(homeRoot(), '.usage.json');
+async function readUsage() { try { return JSON.parse(await fsp.readFile(usageFile(), 'utf8')); } catch { return {}; } }
 const seedView = (m, usage) => ({ ...m, seed: true, ...(usage[m.id] ? { uses: Number(usage[m.id].uses) || 0, lastUsed: usage[m.id].lastUsed || null } : {}) });
-async function bumpUsage(dir, manifest, home) {
-  if (path.dirname(dir) === home) return writeJsonAtomic(path.join(dir, 'manifest.json'), { ...manifest, uses: manifest.uses + 1, lastUsed: Date.now() });
-  const usage = await readUsage(home);
+async function bumpUsage(dir, manifest, root) {
+  if (!isSeedRoot(root)) return writeJsonAtomic(path.join(dir, 'manifest.json'), { ...manifest, uses: manifest.uses + 1, lastUsed: Date.now() });
+  const usage = await readUsage();
   usage[manifest.id] = { uses: manifest.uses + 1, lastUsed: Date.now() };
-  await fsp.mkdir(home, { recursive: true });
-  return writeJsonAtomic(usageFile(home), usage);
+  return writeJsonAtomic(usageFile(), usage);
+}
+
+/** The tool folders of one root: the ad-hoc folder inside the seed root and hidden folders are not tools. */
+async function toolDirs(root, dirs) {
+  let entries = [];
+  try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { return []; }
+  return entries.filter((d) => d.isDirectory() && !d.name.startsWith('.') && !(isSeedRoot(root) && d.name === ADHOC_DIR) && !dirs.includes(path.join(root, d.name))).map((d) => d.name);
+}
+
+/** Every manifest on this machine, first root wins: { tools: [{ root, dir, manifest }], errors: [{ id, error }] }. */
+async function scan(dirs) {
+  const seen = new Map();
+  const errors = [];
+  const usage = dirs.some(isSeedRoot) ? await readUsage() : {};
+  for (const root of dirs) {
+    for (const name of await toolDirs(root, dirs)) {
+      if (seen.has(name)) continue;
+      const dir = path.join(root, name);
+      try { const m = await readManifest(dir); seen.set(name, { root, dir, manifest: isSeedRoot(root) ? seedView(m, usage) : m }); } catch (e) { errors.push({ id: name, error: e.code === 'ENOENT' ? 'no manifest.json' : e.message }); }
+    }
+  }
+  return { tools: [...seen.values()].sort((a, b) => a.manifest.id.localeCompare(b.manifest.id)), errors };
 }
 
 /** Every tool on this machine: { node, tools: [summary], errors: [{ id, error }] } (a broken manifest is reported). */
 export async function listLocal({ dirs = roots() } = {}) {
-  const seen = new Map();
-  const errors = [];
-  const usage = dirs.length > 1 ? await readUsage(dirs[0]) : {};
-  for (const root of dirs) {
-    let entries = [];
-    try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { continue; }
-    for (const d of entries) {
-      if (!d.isDirectory() || seen.has(d.name) || d.name.startsWith('.')) continue;
-      try { const m = await readManifest(path.join(root, d.name)); seen.set(d.name, root === dirs[0] ? m : seedView(m, usage)); } catch (e) { errors.push({ id: d.name, error: e.code === 'ENOENT' ? 'no manifest.json' : e.message }); }
-    }
-  }
-  const tools = [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
-  return { node: config().name, tools: tools.map(summary), errors };
+  const { tools, errors } = await scan(dirs);
+  return { node: config().name, tools: tools.map((t) => summary(t.manifest)), errors };
 }
 
 async function find(id, dirs) {
   const key = String(id || '').trim().toLowerCase();
-  if (!ID_RE.test(key)) throw new ToolError(400, 'bad-id', `"${id}" is not a tool id`);
+  if (!ID_RE.test(key) || RESERVED.has(key)) throw new ToolError(400, 'bad-id', `"${id}" is not a tool id`);
   for (const root of dirs) {
     const dir = path.join(root, key);
     if (!fs.existsSync(path.join(dir, 'manifest.json'))) continue;
-    try { const m = await readManifest(dir); return { dir, manifest: root === dirs[0] ? m : seedView(m, await readUsage(dirs[0])) }; } catch (e) { throw new ToolError(500, 'bad-manifest', e.message); }
+    try { const m = await readManifest(dir); return { root, dir, manifest: isSeedRoot(root) ? seedView(m, await readUsage()) : m }; } catch (e) { throw new ToolError(500, 'bad-manifest', e.message); }
   }
   throw new ToolError(404, 'not-found', `no tool "${key}" on ${config().name}`);
 }
@@ -441,7 +607,7 @@ export async function getTool(id, { dirs = roots() } = {}) {
  */
 export async function registerTool(body, { dirs = roots(), now = Date.now() } = {}) {
   if (!plainObject(body)) throw new ToolError(400, 'invalid', 'body must be a JSON object: the manifest plus files or source');
-  const { files: rawFiles, source, created, updated, uses, lastUsed, ...raw } = body;
+  const { files: rawFiles, source, created, updated, uses, lastUsed, adhoc: _adhoc, ...raw } = body;
   const { manifest, errors } = validateManifest(raw, { now });
   if (!manifest) throw new ToolError(400, 'invalid', `invalid tool manifest: ${errors.join('; ')}`);
   const files = {};
@@ -459,19 +625,26 @@ export async function registerTool(body, { dirs = roots(), now = Date.now() } = 
   }
   if (Object.keys(files).length > MAX_FILES) throw new ToolError(400, 'invalid', `at most ${MAX_FILES} files per tool`);
   for (const [f, text] of Object.entries(files)) if (Buffer.byteLength(text) > MAX_FILE_BYTES) throw new ToolError(400, 'invalid', `${f} is larger than ${MAX_FILE_BYTES / 1024} KB`);
-  const dir = path.join(dirs[0], manifest.id);
+  // A tool filed earlier in another writable root (RIGS_HOME/tools) is updated where it is; a new one goes to the first root.
+  const writable = dirs.filter((r) => !isSeedRoot(r));
+  if (!writable.length) throw new ToolError(500, 'no-root', 'no writable tool folder');
+  const dir = path.join(writable.find((r) => fs.existsSync(path.join(r, manifest.id, 'manifest.json'))) || writable[0], manifest.id);
   let prev = null;
   try { prev = await readManifest(dir); } catch {}
   if (files[manifest.entry] === undefined && !fs.existsSync(path.join(dir, ...manifest.entry.split('/')))) throw new ToolError(400, 'invalid', `${manifest.id}: the entry file "${manifest.entry}" is missing: send it as source or in files`);
-  const out = { ...manifest, origin: Object.keys(manifest.origin).length ? manifest.origin : prev?.origin || {}, created: prev?.created || now, updated: now, uses: prev?.uses || 0, lastUsed: prev?.lastUsed || null };
   await fsp.mkdir(dir, { recursive: true });
   for (const [f, text] of Object.entries(files)) {
     const p = path.join(dir, ...f.split('/'));
     await fsp.mkdir(path.dirname(p), { recursive: true });
     await fsp.writeFile(p, text, { mode: f === manifest.entry ? 0o755 : 0o644 });
   }
+  const origin = Object.keys(manifest.origin).length ? manifest.origin : prev?.origin || {};
+  const out = {
+    ...manifest, origin, created: prev?.created || now, updated: now, uses: prev?.uses || 0, lastUsed: prev?.lastUsed || null,
+    adhoc: filedAdhoc(prev, origin, await contentHash(dir), { now, node: config().name }),
+  };
   await writeJsonAtomic(path.join(dir, 'manifest.json'), out);
-  return { node: config().name, tool: summary(out), created: !prev };
+  return { node: config().name, tool: summary(out), created: !prev, dir, adhoc: out.adhoc };
 }
 
 // ---------------------------------------------------------------- running
@@ -511,7 +684,7 @@ const parseOut = (s) => { const t = s.trim(); if (!t) return null; try { return 
  * the interpreter lookup and the dev-worktree check.
  */
 export async function runTool(id, { args = {}, allowMutating = false, timeoutSec, cwd, dirs = roots(), deps = {}, count = true } = {}) {
-  const { dir, manifest } = await find(id, dirs);
+  const { root, dir, manifest } = await find(id, dirs);
   const isDev = deps.isDevWorktree || (await import('./work.js')).isDevWorktree;
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const workDir = cwd ? path.resolve(String(cwd).replace(/^~(?=$|[\\/])/, home)) : dir;
@@ -531,7 +704,7 @@ export async function runTool(id, { args = {}, allowMutating = false, timeoutSec
   const durationMs = Date.now() - start;
   const timedOut = r.code === -2;
   // The usage count is best effort: it never fails a run.
-  if (count) await bumpUsage(dir, manifest, dirs[0]).catch(() => {});
+  if (count) await bumpUsage(dir, manifest, root).catch(() => {});
   return {
     node: config().name, id: manifest.id, version: manifest.version, ok: r.code === 0, code: r.code, timedOut, durationMs,
     ...(timedOut ? { error: `timed out after ${limit}s` } : {}),
@@ -566,4 +739,152 @@ export async function smokeTool(id, { dirs = roots(), deps = {} } = {}) {
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------- ad-hoc tools: listing, promotion, drop
+
+/** The content hash of the tool folder as it is on disk (hashContents over every file but manifest.json). */
+export async function contentHash(dir) {
+  const files = {};
+  for (const f of await listFiles(dir)) files[f] = await fsp.readFile(path.join(dir, f));
+  return hashContents(files);
+}
+
+/** The seeds as main has them: [{ id, contentHash }] from the seed root in `dirs` (none without one). */
+async function seedHashes(dirs) {
+  const root = dirs.find(isSeedRoot);
+  if (!root) return [];
+  return Promise.all((await scan([root])).tools.map(async (t) => ({ id: t.manifest.id, contentHash: await contentHash(t.dir) })));
+}
+
+/**
+ * The ad-hoc tools on this machine (both writable roots) and where each stands (adhocState): { node, tools, counts,
+ * errors }. Merged ones only with `all`. The seed root is the installed checkout, which is main on a RIGS machine.
+ */
+export async function listAdhoc({ dirs = roots(), all = false, now = Date.now() } = {}) {
+  const own = await scan(dirs.filter((r) => !isSeedRoot(r)));
+  const seeds = await seedHashes(dirs);
+  const where = new Map(own.tools.map((t) => [t.manifest.id, t]));
+  const input = await Promise.all(own.tools.map(async (t) => ({
+    ...t.manifest, adhoc: { ...(t.manifest.adhoc || { status: 'unmerged' }), contentHash: await contentHash(t.dir) },
+    ...(t.root === homeRoot() && t.root !== adhocRoot() ? { legacy: true } : {}),
+  })));
+  const state = adhocState(input, seeds, { now }).map((s) => ({ ...s, dir: where.get(s.id).dir }));
+  const counts = Object.fromEntries(ADHOC_STATUS.map((k) => [k, state.filter((s) => s.status === k).length]));
+  return { node: config().name, tools: all ? state : state.filter((s) => s.status !== 'merged'), counts, errors: own.errors };
+}
+
+/** The completion-note line for a project's unmerged ad-hoc tools ('' when it filed none). Pure. */
+export function adhocNote(tools, projectId) {
+  const n = (tools || []).filter((t) => t.status === 'unmerged' && String(t.origin?.project || '') === String(projectId)).length;
+  return n ? `${n} ad-hoc tool${n === 1 ? '' : 's'} unmerged; \`rigs tools adhoc\` lists ${n === 1 ? 'it' : 'them'}, \`rigs tools promote\` ships ${n === 1 ? 'it' : 'them'}.` : '';
+}
+
+/**
+ * adhocNote for the tools on this machine, read synchronously from their manifests (the completion note is told at once;
+ * "unmerged" is the status the manifest carries, so a tool merged to main since is only noticed by `rigs tools adhoc`).
+ * Never throws: a completion note must not fail over a listing.
+ */
+export function projectAdhocNote(projectId, { dirs = roots() } = {}) {
+  const tools = [];
+  for (const root of dirs.filter((r) => !isSeedRoot(r))) {
+    let names = [];
+    try { names = fs.readdirSync(root); } catch { continue; }
+    for (const n of names) {
+      try { const m = JSON.parse(fs.readFileSync(path.join(root, n, 'manifest.json'), 'utf8')); if (m?.adhoc) tools.push({ id: m.id, status: m.adhoc.status, origin: m.adhoc.origin || m.origin }); } catch { /* not a tool folder */ }
+    }
+  }
+  return adhocNote(tools, projectId);
+}
+
+/**
+ * Promote ad-hoc tools for a later merge: copy each into `worktree`/tools/<id>/ (a RIGS dev worktree, from rigs dev /
+ * rigs_dev_start) with a seed manifest, run its smoke call there, and mark the local copy "promoted". A tool that
+ * is not ready to ship as a seed (seedProblems) or whose smoke call fails is left out, and the worktree is put back
+ * as it was for it. Never commits, pushes or proposes: commit the folder, then the normal propose / merge steward
+ * flow takes over. Returns { node, worktree, branch, ok, results: [{ id, ok, to?, problem? }], next? }.
+ * `deps.git` runs git (tests), the rest goes to smokeTool.
+ */
+export async function promoteTools(ids, { worktree, dirs = roots(), deps = {}, now = Date.now() } = {}) {
+  const list = [...new Set([].concat(ids || []).map((i) => String(i).trim().toLowerCase()).filter(Boolean))];
+  if (!list.length) throw new ToolError(400, 'invalid', 'name the ad-hoc tools to promote');
+  if (!worktree) throw new ToolError(400, 'no-worktree', 'promote needs a RIGS dev worktree: make one with rigs dev <topic> (rigs_dev_start) or pass its path');
+  const wt = path.resolve(expandHome(String(worktree)));
+  if (!fs.existsSync(path.join(wt, '.git'))) throw new ToolError(400, 'not-worktree', `${wt} is not a git checkout`);
+  const isDev = deps.isDevWorktree || (await import('./work.js')).isDevWorktree;
+  if (!isDev(wt)) throw new ToolError(400, 'not-dev-worktree', `${wt} is not a RIGS dev worktree: promote into one made by rigs dev <topic> (rigs_dev_start)`);
+  const target = path.join(wt, 'tools');
+  if (!fs.existsSync(target) || !fs.existsSync(path.join(wt, 'src', 'toolbox.js'))) throw new ToolError(400, 'not-rigs', `${wt} is not a RIGS checkout (no tools/ and src/toolbox.js)`);
+  const branch = (await (deps.git || ((args) => run(which('git') || 'git', args, { cwd: wt, timeout: 10000 })))(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!branch || branch === 'HEAD' || branch === 'main') throw new ToolError(400, 'bad-branch', `${wt} is on ${branch || 'no branch'}: promote into a work branch`);
+  const own = dirs.filter((r) => !isSeedRoot(r) && path.resolve(r) !== target);
+  const results = [];
+  for (const id of list) results.push(await promoteOne(id, { own, target, wt, branch, deps, now }).catch((e) => ({ id, ok: false, problem: e.message })));
+  const done = results.filter((r) => r.ok).map((r) => `tools/${r.id}`);
+  return {
+    node: config().name, worktree: wt, branch, ok: results.every((r) => r.ok), results,
+    ...(done.length ? { next: `commit ${done.join(' ')} in ${wt}, then rigs propose: the merge steward tests and merges it` } : {}),
+  };
+}
+
+async function promoteOne(id, { own, target, wt, branch, deps, now }) {
+  let found;
+  try { found = await find(id, own); } catch (e) { throw e.code === 'not-found' ? new Error(`no ad-hoc tool "${id}" on ${config().name} (seeds are on main already)`) : e; }
+  const { dir, manifest } = found;
+  const files = {};
+  for (const f of await listFiles(dir)) files[f] = await fsp.readFile(path.join(dir, f));
+  const problems = seedProblems(manifest, files);
+  if (problems.length) return { id: manifest.id, ok: false, problem: `not ready to ship as a seed: ${problems.join('; ')}` };
+  const hash = hashContents(files);
+  const dest = path.join(target, manifest.id);
+  // A seed with this id in the worktree is the older version: kept aside and put back if the new one fails.
+  const backup = fs.existsSync(dest) ? fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-promote-')) : null;
+  if (backup) await fsp.cp(dest, path.join(backup, 'tool'), { recursive: true });
+  let smoke;
+  try {
+    await fsp.rm(dest, { recursive: true, force: true });
+    for (const [f, buf] of Object.entries(files)) {
+      const p = path.join(dest, ...f.split('/'));
+      await fsp.mkdir(path.dirname(p), { recursive: true });
+      await fsp.writeFile(p, buf, { mode: f === manifest.entry ? 0o755 : 0o644 });
+    }
+    await fsp.writeFile(path.join(dest, 'manifest.json'), `${JSON.stringify(seedManifest(manifest, { now }), null, 2)}\n`);
+    smoke = await smokeTool(manifest.id, { dirs: [target], deps });
+    if (!smoke.ok) throw new Error(`its smoke call failed in ${wt}: ${smoke.problem}`);
+  } catch (e) {
+    await fsp.rm(dest, { recursive: true, force: true });
+    if (backup) await fsp.cp(path.join(backup, 'tool'), dest, { recursive: true });
+    return { id: manifest.id, ok: false, problem: e.message };
+  } finally {
+    if (backup) fs.rmSync(backup, { recursive: true, force: true });
+  }
+  const promoted = { worktree: wt, branch, at: now, contentHash: hash };
+  const adhoc = { ...(manifest.adhoc || filedAdhoc(null, manifest.origin, hash, { now: manifest.created, node: config().name })), status: 'promoted', contentHash: hash, promoted };
+  await writeJsonAtomic(path.join(dir, 'manifest.json'), { ...manifest, adhoc });
+  return { id: manifest.id, ok: true, to: dest, smokeMs: smoke.durationMs, status: 'promoted' };
+}
+
+/**
+ * Move ad-hoc tools into RIGS_HOME/trash (never deleted): only merged ones, whose seed now does the job, unless
+ * `force`. Returns { node, results: [{ id, ok, trashedTo?, problem? }] }.
+ */
+export async function dropAdhoc(ids, { dirs = roots(), force = false, now = Date.now() } = {}) {
+  const { tools } = await listAdhoc({ dirs, all: true, now });
+  const results = [];
+  for (const raw of [].concat(ids || [])) {
+    const id = String(raw).trim().toLowerCase();
+    const t = tools.find((x) => x.id === id);
+    if (!t) { results.push({ id, ok: false, problem: `no ad-hoc tool "${id}" on ${config().name}` }); continue; }
+    if (t.status !== 'merged' && !force) { results.push({ id, ok: false, problem: `${id} is ${t.status}: its seed is not on main yet (force drops it anyway)` }); continue; }
+    const trash = path.join(RIGS_HOME, 'trash');
+    const dest = path.join(trash, `${now}-tool-${id}`);
+    await fsp.mkdir(trash, { recursive: true });
+    try { await fsp.rename(t.dir, dest); } catch (e) {
+      if (e.code !== 'EXDEV') throw e;
+      await fsp.cp(t.dir, dest, { recursive: true });
+      await fsp.rm(t.dir, { recursive: true, force: true });
+    }
+    results.push({ id, ok: true, status: t.status, trashedTo: dest });
+  }
+  return { node: config().name, results };
 }

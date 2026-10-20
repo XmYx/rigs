@@ -98,3 +98,34 @@ test('heuristicRoute: a new multi-part goal is not swallowed by a thread that sh
   const docking = [{ id: 'dock', title: 'dockable panels and windows in jarvis' }];
   assert.equal(heuristicRoute('continue the dockable panels work: windows should snap to the side, panels should tab together, and the layout should persist across reloads', docking).route, 'continue');
 });
+
+test('isToolWork / withWork: building a helper tool is not a RIGS change, a RIGS feature is', async () => {
+  const { isToolWork } = await import('../src/router.js');
+  const tool = ['build a script to check disk on every machine', 'write a helper to convert these logs to csv', 'please create a tool that parses the invoices', 'make a one-off checker for expired certificates'];
+  const rigs = ['add a dark mode to the dashboard', 'JARVIS feature: a tools page with a search box', 'fix the router so it stops misreading requests', 'add a button to the window header'];
+  for (const t of tool) assert.equal(isToolWork(t), true, t);
+  for (const t of rigs) assert.equal(isToolWork(t), false, t);
+  // Changes to RIGS's own MCP tools, CLI and connectors use tool words but are RIGS changes: dev worktree + steward.
+  for (const t of ['make the mesh_exec tool support timeouts', 'write a new rigs CLI subcommand that lists sessions', 'build a scraper so the Linear connector pulls comments', 'create a helper so mesh_ask retries on timeout']) {
+    assert.equal(isToolWork(t), false, t);
+    assert.equal(withWork(heuristicRoute(`JARVIS: ${t}`, []), `JARVIS: ${t}`, { catalog: [], selfNode: 'box' }).work[0].self, true, t);
+  }
+  const route = (t) => withWork(heuristicRoute(t, []), t, { catalog: [], selfNode: 'box' });
+  for (const t of tool) {
+    const d = route(t);
+    assert.ok(['implement', 'plan'].includes(d.route), `${t} → ${d.route}`);
+    assert.equal(d.work.length, 1, t);
+    assert.ok(d.work[0].tool && !d.work[0].self && !d.work[0].unresolved, `${t} must be an ordinary tool task, not self`);
+    assert.equal(d.work[0].workspace, null);
+  }
+  for (const t of rigs.slice(0, 2)) {
+    const d = route(`JARVIS: ${t}`);
+    assert.equal(d.work[0].self, true, t);
+    assert.ok(!d.work[0].tool);
+  }
+  // A model that names workspace "rigs" for a tool request is overruled; for a RIGS change it is kept.
+  const bound = (goal) => withWork({ route: 'implement', work: [{ title: '', goal, workspace: 'rigs', machine: '' }] }, goal, { catalog: [], selfNode: 'box' }).work[0];
+  assert.equal(bound('build a script to check disk on every machine').self, undefined);
+  assert.equal(bound('build a script to check disk on every machine').tool, true);
+  assert.equal(bound('add a dark mode to the dashboard').self, true);
+});
