@@ -1295,6 +1295,12 @@ body.dock-dragging .dock-stage { opacity: 1; }
 .dock-pad[data-zone="center"] i::after { left: 0; right: 0; top: 0; height: 28%; } /* a tab strip */
 .dock-pad.on { background: rgba(var(--accent-rgb), .4); border-color: var(--accent); scale: 1.14; }
 
+/* Window tiling (tiling.js): the preview while a window is dragged to an edge or corner, and its glide into the zone. */
+.dock-overlay.tile .dock-preview { border-radius: 12px; background: rgba(var(--accent-rgb), .10); border: 1px solid rgba(var(--accent-rgb), .6);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2); backdrop-filter: blur(6px) saturate(1.2); box-shadow: 0 14px 44px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.win.tile-anim { transition: left .22s cubic-bezier(.2, .8, .2, 1), top .22s cubic-bezier(.2, .8, .2, 1), width .22s cubic-bezier(.2, .8, .2, 1), height .22s cubic-bezier(.2, .8, .2, 1),
+  opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
+
 #panels-menu .pm-dock { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
 #panels-menu .pm-where { margin-left: auto; padding: 0 6px; border-radius: 999px; font: 10px var(--mono); color: var(--accent); border: 1px solid rgba(var(--accent-rgb), .4); }
 #panels-menu .pm-sub { margin: 4px 0 0; font: 600 10px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
