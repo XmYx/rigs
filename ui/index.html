@@ -76,10 +76,17 @@
     <div id="subtitle" aria-label="Open the conversation with JARVIS"></div>
   </section>
 
+  <aside id="ask-panel" class="panel" aria-label="Ask JARVIS">
+    <div class="wk-head ask-head"><span class="wk-title">Ask JARVIS</span></div>
+    <div id="ask-row" class="ask-row">
+      <input id="ask" aria-label="Ask JARVIS" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS…">
+      <button id="btn-mic" class="round" title="Push to talk" aria-label="Push to talk">🎙</button>
+      <button id="btn-hands" class="round" aria-pressed="false" title="Hands-free — just say “Jarvis…”" aria-label="Hands-free — just say “Jarvis…”">👂</button>
+      <button id="ask-send" class="round" title="Send (Enter)" aria-label="Send">➤</button>
+    </div>
+  </aside>
+
   <nav id="bar" aria-label="JARVIS controls">
-    <input id="ask" aria-label="Ask JARVIS" autocomplete="off" spellcheck="false" placeholder="Ask JARVIS…">
-    <button id="btn-mic" class="round" title="Push to talk" aria-label="Push to talk">🎙</button>
-    <button id="btn-hands" class="round" aria-pressed="false" title="Hands-free — just say “Jarvis…”" aria-label="Hands-free — just say “Jarvis…”">👂</button>
     <button id="btn-term" class="round" title="Terminal on the focused machine" aria-label="Terminal on the focused machine">⌨</button>
     <button id="btn-files" class="round" title="Files on the focused machine" aria-label="Files on the focused machine">📁</button>
     <button id="btn-desk" class="round" title="Remote desktop to the focused machine" aria-label="Remote desktop to the focused machine">🖥</button>

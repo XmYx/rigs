@@ -9,6 +9,8 @@ import { isPhone, PHONE_QUERY } from './mobile.js';
 // ARIA: menubar / menu / menuitem(checkbox) / separator. On a phone it collapses into one ⋮ button in the header
 // whose menu drills into File, Edit… in place.
 // openMenuAt() renders the same menus at a point, for context menus.
+// The right side holds one self-contained slot, #menubar-ask-slot: mountAskSlot() puts the inline Ask JARVIS field
+// there (ask-panel.js decides when), askSlot() is the element (its drop target), peekMenubar() shows a hidden bar.
 
 const KEY = 'rigs.menubar';
 const mac = isMac();
@@ -27,6 +29,8 @@ let lastField = null; // the last text field used (Edit › Copy/Paste act on it
 let hidden = readHidden();
 let peekTimer = null;
 let hoverTimer = null;
+let askSlotEl = null; // #menubar-ask-slot
+let askPending = null; // mountAskSlot() before initMenubar()
 
 function readHidden() { try { return localStorage.getItem(KEY) === 'hidden'; } catch { return false; } }
 function saveHidden() { try { localStorage.setItem(KEY, hidden ? 'hidden' : 'shown'); } catch { /* private mode */ } }
@@ -141,9 +145,12 @@ export function closeMenus({ restore = true, focusTop = false } = {}) {
   else if (had && restore && prevFocus?.isConnected) prevFocus.focus?.({ preventScroll: true });
 }
 
+/** Part of the bar's own chrome (menus, buttons) — the Ask slot's field is an ordinary text field. */
+const inChrome = (el) => !!el?.closest?.('.mb-menu, #menubar, #mb-phone') && !el.closest('#menubar-ask-slot');
+
 function rememberFocus() {
   const a = document.activeElement;
-  if (a && !a.closest?.('.mb-menu, #menubar, #mb-phone')) prevFocus = a;
+  if (a && !inChrome(a)) prevFocus = a;
 }
 
 function openTopMenu(i, { focus = 'none' } = {}) {
@@ -367,6 +374,22 @@ function startPeek() {
   document.body.classList.add('mb-peek');
   applyHidden();
 }
+/** Show a hidden bar for a moment (it stays while it has focus or the pointer), e.g. to reach the Ask slot. */
+export function peekMenubar() { startPeek(); schedulePeekEnd(); }
+
+// ------------------------------------------------------------------ the Ask JARVIS slot
+
+/** Put nodes into the right-side slot (none = empty and hidden). Works before initMenubar too. */
+export function mountAskSlot(...nodes) {
+  if (!askSlotEl) { askPending = nodes; return; }
+  const keep = nodes.some((n) => n?.contains?.(document.activeElement)) ? document.activeElement : null;
+  askSlotEl.replaceChildren(...nodes);
+  askSlotEl.hidden = !nodes.length && !askSlotEl.classList.contains('mb-ask-target');
+  keep?.focus?.({ preventScroll: true });
+}
+
+/** The slot element (null before initMenubar). */
+export const askSlot = () => askSlotEl;
 function endPeek() {
   clearTimeout(peekTimer);
   document.body.classList.remove('mb-peek');
@@ -402,11 +425,12 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
     onpointerenter: () => { if (open.length && openTop >= 0 && openTop !== i) { setRoving(i); tops[i].focus({ preventScroll: true }); openTopMenu(i); } },
   }, d.label));
   const statusEl = h('span', { class: 'mb-status' });
+  askSlotEl = h('div', { id: 'menubar-ask-slot', class: 'mb-ask-slot', role: 'group', 'aria-label': 'Ask JARVIS', hidden: true });
   const hideBtn = h('button', { class: 'mb-hide', title: `Hide menu bar (${formatShortcut('Mod+Shift+M', mac)})`, 'aria-label': 'Hide menu bar', onclick: () => setMenubarHidden(true) }, '⌃');
   bar = h('nav', { id: 'menubar', 'aria-label': 'JARVIS menu bar' },
     h('span', { class: 'mb-brand', 'aria-hidden': 'true' }, '◆ JARVIS'),
     h('div', { class: 'mb-tops', role: 'menubar', 'aria-label': 'JARVIS' }, ...tops),
-    h('span', { class: 'mb-spacer' }), statusEl, hideBtn);
+    h('span', { class: 'mb-spacer' }), askSlotEl, statusEl, hideBtn);
   bar.addEventListener('keydown', onBarKey);
   bar.addEventListener('pointerleave', schedulePeekEnd);
   bar.addEventListener('pointerenter', () => clearTimeout(peekTimer));
@@ -415,6 +439,7 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
   zone.addEventListener('pointerenter', () => { clearTimeout(peekTimer); peekTimer = setTimeout(startPeek, 120); });
   zone.addEventListener('pointerleave', () => { if (!document.body.classList.contains('mb-peek')) clearTimeout(peekTimer); });
   document.body.append(zone, bar);
+  if (askPending) { mountAskSlot(...askPending); askPending = null; }
   const updateStatus = () => { statusEl.textContent = status() || ''; };
   updateStatus();
   setInterval(updateStatus, 5000); // cheap; the node's name/version arrive with the first snapshot
@@ -440,7 +465,7 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
   }, true);
   document.addEventListener('focusin', (e) => {
     const t = e.target;
-    if (t.closest?.('.mb-menu, #menubar, #mb-phone')) return;
+    if (inChrome(t)) return;
     lastField = inTextField(t) && !t.closest?.('.xterm') ? t : null;
   });
   document.addEventListener('keydown', (e) => {

@@ -14,7 +14,7 @@ import { tagCtx } from './ctx-tag.js';
 // closable) switches the docking layout and Smart scaling (scaling.js: keeps every panel on screen as the window
 // resizes), lists hidden panels to bring them back, and resets the layout.
 
-const panels = new Map(); // id → { el, title, collapseBtn, onToggle }
+const panels = new Map(); // id → { el, title, collapseBtn, onToggle, listed }
 const startHidden = new Set(); // panels closed by default (also after Reset layout)
 const inherited = new Set(); // inheritPanel: start closed because the panel it was split from is closed
 const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of ☰
@@ -122,14 +122,15 @@ const isCollapsed = (id) => dockManager.getLayout().collapsed.includes(id);
 /**
  * Make a fixed element a movable, closable, dockable panel. The grip goes at the start of `into` (default: el).
  * `handle` is the title bar that drags it (default: `into` when that is a header, else the element itself).
+ * `listed() === false` leaves it out of ☰, the Window menu and Show all / Hide others for now (Ask JARVIS in the top bar).
  */
-export function makeFloating(el, { id, title, into = el, handle, keep = [], onToggle, closedOnPhone = false, closedByDefault = false }) {
+export function makeFloating(el, { id, title, into = el, handle, keep = [], onToggle, closedOnPhone = false, closedByDefault = false, listed = () => true }) {
   if (!el) return;
   for (const k of keep) k?.classList.add('keep');
   const grip = h('span', { class: 'pgrip', 'aria-hidden': 'true', title: `Drag to move ${title} (or drag its title bar) · double-click to reset` }, '⠿');
   const close = h('button', { class: 'pclose', title: `Close ${title} (bring it back from ☰)`, 'aria-label': `Close ${title}`, onclick: (e) => { e.stopPropagation(); setClosed(id, true); } }, '✕');
   const collapseBtn = h('button', { class: 'pclose pcollapse', title: `Collapse ${title}`, 'aria-label': `Collapse ${title}`, 'aria-expanded': 'true', onclick: (e) => { e.stopPropagation(); setCollapsed(id, !el.classList.contains('panel-collapsed')); } }, '▾');
-  const p = { el, title, collapseBtn, onToggle };
+  const p = { el, title, collapseBtn, onToggle, listed };
   panels.set(id, p);
   into.prepend(h('span', { class: 'pctl keep' }, grip, collapseBtn, close));
   el.classList.add('floating');
@@ -181,7 +182,7 @@ export function resetPanel(id) { reset(id); }
 
 /** Every registered panel: { id, el, title, closed, collapsed, removed }. */
 export function listPanels() {
-  return [...panels].map(([id, p]) => ({ id, el: p.el, title: p.title, closed: isClosed(id), collapsed: isCollapsed(id), removed: removedIds.has(id) }));
+  return [...panels].filter(([, p]) => p.listed()).map(([id, p]) => ({ id, el: p.el, title: p.title, closed: isClosed(id), collapsed: isCollapsed(id), removed: removedIds.has(id) }));
 }
 export const hasPanel = (id) => panels.has(id);
 
@@ -217,7 +218,7 @@ export function resetLayout() {
 
 function renderMenu() {
   if (!menu) return;
-  const list = dockManager.listPanels().filter((x) => panels.has(x.id) && !removedIds.has(x.id));
+  const list = dockManager.listPanels().filter((x) => panels.has(x.id) && panels.get(x.id).listed() && !removedIds.has(x.id));
   const hidden = list.filter((x) => x.status === 'hidden');
   menu.dockToggle.checked = isDocking();
   menu.dockRow.hidden = isPhone(); // phones never dock

@@ -18,6 +18,9 @@ import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion
 // (role=tablist) and splits get draggable separators. The galaxy is the 'stage' leaf of the tree: it is
 // never a tab and never closes, so docked panels gather around it. Phones never dock.
 //
+// Other modules can add drop targets outside the layout (addDropTarget: the top menu bar's Ask JARVIS slot). They
+// are checked first on every drag move, with or without the docking mode, and drawn with the same preview.
+//
 // Smart scaling (scaling.js, off by default) adds the fit pass at the top of render(): the solver in
 // dock-layout.js (solveFit) places every visible floating panel, window and the docked tree so all of them stay
 // fully on screen. Panels shrink toward their minimum before anything scales, and only when the minimums
@@ -40,6 +43,7 @@ const MOVE_MS = 340; // how long .fit-moving (the eased transitions) stays on af
 const NO_DRAG = 'button, a, input, select, textarea, label, summary, [contenteditable=""], [contenteditable="true"], [role="button"], [role="tab"], [role="slider"], [role="separator"], .presize, .no-drag';
 
 const items = new Map(); // id → dockable
+const dropTargets = new Set(); // addDropTarget: drop places outside the layout
 const modeListeners = new Set();
 let mode = readMode();
 let geo = { leaves: {}, groups: [], splits: [], stage: null };
@@ -558,6 +562,23 @@ function onSplitKey(e, el) {
 
 // ---------------------------------------------------------------- dragging
 
+/**
+ * A drop place outside the layout, for some dockables, with or without the docking mode:
+ *   accepts(id)  does it take this one     hit(x, y)  → screen rect of the target under the pointer, or null
+ *   label        what the preview says      leave()    the pointer left it, or the drag ended
+ *   drop(id)     the dockable was let go over it (its element is already back where the drag started)
+ */
+export function addDropTarget(t) { dropTargets.add(t); return () => dropTargets.delete(t); }
+
+function extTargetAt(id, x, y) {
+  for (const t of dropTargets) {
+    if (!t.accepts(id)) continue;
+    const rect = t.hit(x, y);
+    if (rect) return { target: t, rect };
+  }
+  return null;
+}
+
 function bindHandle(it, hd) {
   hd.classList.add('pdrag');
   hd.addEventListener('pointerdown', (e) => {
@@ -626,7 +647,12 @@ function onDragMove(ev) {
   const [left, top] = it.clamp(ev.clientX - drag.offX, ev.clientY - drag.offY, drag.w, drag.h);
   el.style.left = left + 'px';
   el.style.top = top + 'px';
-  if (!drag.docking) return;
+  const ext = extTargetAt(it.id, ev.clientX, ev.clientY);
+  const hadExt = drag.ext;
+  if (hadExt && hadExt.target !== ext?.target) hadExt.target.leave?.();
+  drag.ext = ext;
+  if (ext) { drag.target = null; showExtOverlay(ext); return; }
+  if (!drag.docking) { if (hadExt) hideOverlay(); return; }
   drag.target = hitTest(ev.clientX, ev.clientY);
   showOverlay(drag.target);
 }
@@ -707,6 +733,17 @@ function showOverlay(t) {
   o.label.classList.add('show');
 }
 
+/** An addDropTarget target: the same preview, its label just below it. */
+function showExtOverlay({ target, rect: r }) {
+  const o = ensureOverlay();
+  o.compass.classList.remove('show');
+  Object.assign(o.preview.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+  o.preview.classList.add('show');
+  o.label.textContent = target.label || 'Dock here';
+  Object.assign(o.label.style, { left: r.x + r.w / 2 + 'px', top: r.y + r.h + 18 + 'px' });
+  o.label.classList.add('show');
+}
+
 function hideOverlay() {
   if (!overlay) return;
   for (const el of [overlay.preview, overlay.compass, overlay.label]) el.classList.remove('show');
@@ -732,6 +769,7 @@ function endDrag(cancel) {
   try { d.hd.releasePointerCapture?.(d.pointerId); } catch { /* already released */ }
   document.body.classList.remove('dock-dragging');
   hideOverlay();
+  d.ext?.target.leave?.();
   const { el, it } = d;
   // The drag must not also click whatever sits under the pointer in the bar.
   const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
@@ -740,6 +778,14 @@ function endDrag(cancel) {
   if (cancel || !d.moved) {
     el.style.cssText = d.snapshot.css;
     el.className = d.snapshot.cls;
+    render();
+    return;
+  }
+  if (d.ext) {
+    // Let go over an outside target: the element goes back where it was, the target takes it from there.
+    el.style.cssText = d.snapshot.css;
+    el.className = d.snapshot.cls;
+    d.ext.target.drop(it.id);
     render();
     return;
   }
