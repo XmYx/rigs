@@ -574,10 +574,10 @@ async function serveFile(res, runId, rest, root) {
   const dir = path.join(root, runId);
   const abs = confinePath(dir, rest);
   if (!abs) return send(res, 403, { error: 'outside the sandbox' });
-  let real;
+  let real, realDir;
   try {
     real = await fsp.realpath(abs);
-    const realDir = await fsp.realpath(dir);
+    realDir = await fsp.realpath(dir);
     if (!real.startsWith(realDir + path.sep)) return send(res, 403, { error: 'outside the sandbox' });
     const st = await fsp.stat(real);
     if (st.isDirectory()) return serveFile(res, runId, `${String(rest || '').replace(/\/?$/, '/')}`, root);
@@ -585,7 +585,7 @@ async function serveFile(res, runId, rest, root) {
   } catch { return send(res, 404, { error: `not found: ${String(rest || 'index.html')}` }); }
   const type = TYPES[path.extname(real).toLowerCase()] || 'application/octet-stream';
   if (type.startsWith('text/html')) {
-    const rel = path.relative(dir, real).split(path.sep);
+    const rel = path.relative(realDir, real).split(path.sep); // both resolved: a symlinked root (macOS /var → /private/var) adds no levels
     const html = injectClient(await fsp.readFile(real, 'utf8'), { prefix: '../'.repeat(rel.length - 1), step: runs.get(runId)?.meta.updates || 0 });
     return send(res, 200, html, type);
   }
