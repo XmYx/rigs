@@ -1016,7 +1016,7 @@ export async function startServer() {
     // projects (owned by this machine) and the work they dispatch to machines
     if (sub === 'projects' && method === 'GET') return planner.listProjects();
     if (sub === 'work' && method === 'GET') {
-      // the work dashboard: live agent sessions, JARVIS replies in progress, projects in flight (+ plan limits)
+      // the work dashboard: live agent sessions, JARVIS replies in progress, projects in flight (+ plan limits with ?plan=1, for the tray)
       const [sess, projects, codex] = await Promise.all([usage.liveSessions().catch(() => []), Promise.resolve(planner.listProjects()).catch(() => []), usage.codexLimits().catch(() => null)]);
       return {
         node: config().name, sessions: sess, jarvis: [...chat.activeTurns.values()], projects: usage.projectProgress(projects), codex,
