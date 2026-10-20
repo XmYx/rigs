@@ -4,10 +4,11 @@ import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
-import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, openPanel, resetPanel, toggleCollapse } from './layout-actions.js';
+import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, openPanel, resetLayout, resetPanel, toggleCollapse } from './layout-actions.js';
+import { onRemoteKey, prepareKey, receiveLayout, syncedStorage } from './synced-storage.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
-import { sourcesFromSnapshot } from './app-dock-model.js';
-import { TOOLS } from './app-dock-state.js';
+import { sourcesFromSnapshot, STORAGE_KEY as APPDOCK_KEY } from './app-dock-model.js';
+import { TOOLS, deserialize as deserializeDock, serialize as serializeDock } from './app-dock-state.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
 import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
@@ -46,7 +47,7 @@ import { announce, initA11y, initPopovers, prefersReducedMotion } from './a11y.j
 import { openSessions } from './sessions.js';
 import { createPopups } from './popups.js';
 import { focusTerminal, openTerminal } from './terminal-lazy.js';
-import { bindDock, openBus, reconcileOnLoad, trackPanels } from './open-events.js';
+import { bindDock, keepTransient, openBus, reconcileOnLoad, trackPanels, withoutTransient } from './open-events.js';
 import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
 import { SEPARATOR, spokenText } from './sentences.js';
@@ -361,6 +362,7 @@ function connectEvents() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'ui-open') onUiOpen(m);
+    if (m.type === 'ui-layout') receiveLayout(m); // the dock layout / app dock changed on this or another machine (synced-storage.js)
     if (m.type === 'mesh') refresh();
     if (m.type === 'global') { globalBrain = { ...m, home: m.settings?.['brain.home'] || m.settings?.['brain.core']?.node || '' }; renderBrainBadge(); }
     onAppsEvent(m);
@@ -387,6 +389,7 @@ function connectEvents() {
   };
   ws.onopen = () => {
     if (orb.state === 'offline') setOrb('online');
+    syncedStorage.refresh(); // catch up on layout changes missed while the socket was down
     for (const traceId of tracesClaimed) ws.send(JSON.stringify({ type: 'claim-trace', traceId }));
   };
   ws.onclose = () => { setOrb('offline'); setTimeout(connectEvents, 3000); };
@@ -1403,7 +1406,14 @@ function wire() {
   { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
+  // The mesh shares the dock without this page's window / terminal tiles; one arriving from another machine keeps ours.
+  prepareKey(APPDOCK_KEY, (v) => { const s = deserializeDock(v); const t = withoutTransient(s); return t === s ? v : JSON.parse(serializeDock(t)); });
   appDock = createAppDock({ // the app dock only calls the existing open / focus / launch paths
+    storage: syncedStorage, // saved on the daemon and synced across the mesh (synced-storage.js)
+    layoutSync: {
+      status: () => syncedStorage.status(),
+      resetAll: () => { if (confirm('Reset the panel layout on every machine on the mesh?\n\nEvery panel goes back to its default place, here and on the other machines.')) resetLayout(); },
+    },
     sources: () => ({ ...sourcesFromSnapshot(snap, { isRemoved: isAppRemoved }), tools: TOOLS }),
     toolLabel: (it) => document.getElementById(it.ref.button)?.getAttribute('aria-label') || '',
     appFor: (ref) => meshApps().find((a) => a.nodeId === ref.node && a.id === ref.id) || null,
@@ -1432,6 +1442,7 @@ function wire() {
   // dock turns them into items only when its autoDock / autoTabTerminals settings are on (both off by default).
   appDock.act((s) => reconcileOnLoad(s, listPanels())); // a reload leaves no window or terminal open: drop their stale items
   bindDock(openBus, appDock);
+  onRemoteKey(APPDOCK_KEY, () => syncedStorage.quiet(() => appDock.reload(keepTransient))); // changed on another machine: redraw live
   trackPanels({ list: listPanels, subscribe: (fn) => dockManager.subscribe(fn) });
   wireMenus();
   $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };

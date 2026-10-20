@@ -3,7 +3,7 @@
 // events, and bindDock() feeds them to the dock as the t1 state transitions (onOpened / onClosed). With autoDock and
 // autoTabTerminals off (the default) the state transitions change nothing, so listening costs nothing visible.
 // Unit-tested in test/app-dock-auto.test.js.
-import { addItem, mergeSources, onClosed, onOpened, removeItem, TERMINAL_GROUP, toItem, ungroup } from './app-dock-state.js';
+import { addItem, createGroup, mergeSources, onClosed, onOpened, removeItem, TERMINAL_GROUP, toItem, ungroup } from './app-dock-state.js';
 
 /** The automatic Terminals group is not kept once its last terminal has closed. */
 const dropEmptyTerminalGroup = (s) => (s.groups[TERMINAL_GROUP] && !s.groups[TERMINAL_GROUP].items.length ? ungroup(s, TERMINAL_GROUP) : s);
@@ -18,6 +18,29 @@ export function reconcileOnLoad(state, panels = []) {
   for (const it of Object.values(state.items)) if (it.kind === 'window' || it.kind === 'terminal') s = removeItem(s, it.id);
   const shown = panels.filter((p) => !p.closed && !p.removed).map((p) => ({ id: p.id, title: p.title || p.id, icon: '▤' }));
   return dropEmptyTerminalGroup(mergeSources(s, { panels: shown }));
+}
+
+// Mesh sync (synced-storage.js): window and terminal tiles belong to this page (their ids die with it), so the dock
+// the mesh shares leaves them out, and a dock arriving from another machine keeps this page's own.
+const isTransient = (it) => it.kind === 'window' || it.kind === 'terminal';
+
+/** The dock as the mesh shares it: without this page's window and terminal tiles (an emptied Terminals group goes too). */
+export function withoutTransient(state) {
+  let s = state;
+  for (const it of Object.values(state.items)) if (isTransient(it)) s = removeItem(s, it.id);
+  return s === state ? s : dropEmptyTerminalGroup(s);
+}
+
+/** A dock from another machine (`next`) with this page's window and terminal tiles from `prev` put back, in their group. */
+export function keepTransient(next, prev) {
+  let s = withoutTransient(next);
+  for (const it of Object.values(prev.items)) {
+    if (!isTransient(it)) continue;
+    const g = Object.values(prev.groups).find((x) => x.items.includes(it.id));
+    if (g && !s.groups[g.id]) s = createGroup(s, { id: g.id, name: g.name });
+    s = addItem(s, it, { group: g ? g.id : null });
+  }
+  return s;
 }
 
 /** A tiny synchronous bus: a listener that throws never breaks the emitter or the other listeners. */
