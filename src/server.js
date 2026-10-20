@@ -577,7 +577,7 @@ export async function startServer() {
     const results = await Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
     // Nobody is looking at a JARVIS UI (or the caller asked for it): say it through this machine's speakers.
     const seen = results.some((r) => r.delivered > 0);
-    if (b.speak !== false && (b.aloud === true || (!seen && config().persona.speakAloud !== 'never'))) {
+    if (!process.env.RIGS_NO_NOTIFY && b.speak !== false && (b.aloud === true || (!seen && config().persona.speakAloud !== 'never'))) {
       tts.speakAloud(String(b.text || '').slice(0, 2000)).catch((e) => log('tts', e.message));
       results.push({ node: config().name, aloud: true });
     }
@@ -1326,11 +1326,11 @@ export async function startServer() {
         .then((items) => ({ node: n.name, nodeId: n.id, items })).catch(() => ({ node: n.name, nodeId: n.id, items: [] }))));
     }
     if (p === '/api/mesh/work') {
-      // every machine's work; plan limits once, from this machine's Claude account
+      // every machine's work
       const nodes = discovery.list().filter((n) => n.online && n.rigs);
       const per = await Promise.all(nodes.map((n) => (n.self ? localCall('work') : peerJson(n, 'work', { timeout: 8000 }))
         .then((w) => ({ ...w, node: n.name, nodeId: n.id })).catch((e) => ({ node: n.name, nodeId: n.id, error: e.message, sessions: [], jarvis: [], projects: [] }))));
-      return { nodes: per, plan: await usage.planLimits({ force: url.searchParams.get('force') === '1' }).catch((e) => ({ error: e.message })) };
+      return { nodes: per };
     }
     if (p === '/api/mesh/projects') {
       const snap = await meshSnapshot();
