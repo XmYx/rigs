@@ -280,8 +280,11 @@ const browser = await chromium.launch({ args: ['--no-sandbox'] });
   check('the pointer at the bottom edge reveals it', hid.y + hid.h <= 900 && hid.y < 860, String(Math.round(hid.y)));
   await shot(page, 'auto-hidden-revealed.png');
   await page.mouse.move(400, 300);
-  await sleep(1000);
-  check('it hides again when the pointer leaves', (await rect(page, '#app-dock .adock-list')).y >= 900);
+  // Wait on animation frames: idle headless Chromium may not start the slide-out transition until something renders,
+  // so a fixed sleep can read the dock still in place although it already dropped its `shown` class.
+  const hideStart = Date.now();
+  const hidAgain = await page.waitForFunction(() => document.querySelector('#app-dock .adock-list').getBoundingClientRect().y >= 900, null, { polling: 'raf', timeout: 2000 }).then(() => true, () => false);
+  check('it hides again when the pointer leaves', hidAgain, `${Date.now() - hideStart}ms`);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#app-dock .adock-tile');
   await sleep(1500);
