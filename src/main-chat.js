@@ -94,6 +94,8 @@ export function unseenContext(chat, brainKey, { withSummary = false, ...opts } =
   const msgs = (chat?.messages || []).slice(from, -1);
   const { lines, omitted } = budgetLines(msgs, b, { via: true });
   if (!lines.length && !s) return '';
+  // A session seeded after a compaction (src/compact.js) gets the stretch since the summary, not "since your last turn".
+  if (s && from === s.upto) return summaryBlock(s, b) + (lines.length ? `The conversation since that summary${omitted ? ` (the latest ${lines.length} of ${lines.length + omitted})` : ''}:\n${lines.join('\n')}\n\n` : '') + 'Now the user says:\n';
   return (s ? summaryBlock(s, b) : '')
     + (lines.length ? `Earlier in this conversation (since your last turn — answered on the fast path, routed to work threads, or reported by RIGS)${omitted ? `, the latest ${lines.length} of ${lines.length + omitted}` : ''}:\n${lines.join('\n')}\n\n` : '')
     + 'Now the user says:\n';

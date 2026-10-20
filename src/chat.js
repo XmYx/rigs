@@ -6,14 +6,15 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { appendedSince, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
+import { appendedSince, compactionSummary, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
+import { SUMMARY_SYSTEM, applyCompaction, compactSettings, compactStatus, compactionCut, contextTokens, keepCompaction, needsCompaction, summaryPrompt } from './compact.js';
 import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as yolo from './yolo.js';
 import * as trace from './trace.js';
 import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn, recordRequest } from './usage.js';
-import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
+import { APP_DIR, HOME, augmentedPath, log, readJson, run, spawnCmd, truncate, writeJsonAtomic } from './util.js';
 
 /**
  * JARVIS chats. One conversation can hop between brains mid-stream (Claude Code, Codex, any
@@ -54,13 +55,18 @@ function withChatLock(id, fn) {
 /**
  * Write a chat. A turn holds its chat object for as long as the brain runs; messages another writer appended to the
  * file meanwhile (a report, a work request mirrored into the JARVIS thread, a quick answer) are kept, after this
- * object's own — so they also stay after a turn's `seen` mark and the brain is told about them next turn.
+ * object's own — so they also stay after a turn's `seen` mark and the brain is told about them next turn. A compaction
+ * that landed meanwhile (src/compact.js) is kept too: the object's older summary and sessions are not written back.
  */
 async function saveChat(c) {
   const file = path.join(DIR, c.id + '.json');
   await withChatLock(c.id, async () => {
     const base = loadedLength.get(c);
-    if (base != null) c.messages.push(...appendedSince(await readJson(file), base, c.messages));
+    if (base != null) {
+      const disk = await readJson(file);
+      c.messages.push(...appendedSince(disk, base, c.messages));
+      keepCompaction(disk, c);
+    }
     c.updatedAt = Date.now();
     await writeJsonAtomic(file, c);
     loadedLength.set(c, c.messages.length);
@@ -260,6 +266,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   let full = '';
   let error = null;
   let usage = null;
+  let lastCall = null; // the usage of the session's last API call (its context), for when the result lacks iterations
+  let context = null;
   const res = await streamProcess(bin('claude'), args, {
     cwd: yo?.cwd || chat.cwd || HOME, signal, env,
     onLine: (line) => {
@@ -273,6 +281,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
       } else if (e.type === 'stream_event' && e.event?.type === 'content_block_start' && e.event.content_block?.type === 'text' && full && !full.endsWith('\n')) {
         full += '\n\n'; emit({ type: 'delta', text: '\n\n' });
       } else if (e.type === 'assistant') {
+        if (e.message?.usage && !e.parent_tool_use_id) lastCall = e.message.usage; // a subagent's call is not this session's context
         for (const b of e.message?.content || []) if (b.type === 'tool_use') emit({ type: 'tool', name: b.name, input: truncate(JSON.stringify(b.input), 300) });
       } else if (e.type === 'system' && e.subtype === 'api_retry') {
         emit({ type: 'status', text: `retrying (${e.error || e.error_status})…` });
@@ -283,6 +292,9 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
           chat[usageKey] = usage.cumulative; delete usage.cumulative;
           if (viaOllama) usage.costUsd = 0; // local model: nothing is billed (Claude Code would price it as a Claude model)
         } catch {}
+        // The session's context size for compaction (src/compact.js): the last call's tokens, never the summed usage.
+        context = contextTokens(e, lastCall);
+        if (!fresh && context != null) chat.context = { ...chat.context, [key]: { tokens: context, sessionId: e.session_id || chat[sessionKey] || '', ts: Date.now() } };
         // --max-turns (the fast path, YOLO) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
         if (e.is_error) error = e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
@@ -294,7 +306,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
     if (error) error = `Claude via Ollama (${model} at ${claudeOllamaUrl(cfg)}): ${error}`;
     if (error && /ECONNREFUSED|fetch failed|unable to connect|connection (refused|error)/i.test(error)) error += ' — is Ollama running?';
   } else if (error && /authenticat|401|login/i.test(error)) error += ' — run `claude` once in a terminal on this machine and /login.';
-  return { text: full, error, usage };
+  return { text: full, error, usage, contextTokens: context };
 }
 
 const runClaudeOllama = (chat, text, model, effort, emit, meshSummary, signal, projects, opts) => runClaude(chat, text, model, effort, emit, meshSummary, signal, projects, { ...opts, viaOllama: true });
@@ -343,7 +355,10 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
 async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools } = {}) {
   const url = config().brain.ollamaUrl.replace(/\/$/, '') + '/api/chat';
   const messages = [{ role: 'system', content: personaPrompt(meshSummary, projects) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
-  for (const m of chat.messages) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
+  // After a compaction (src/compact.js) the summary stands in for the messages before its cut.
+  const s = compactionSummary(chat);
+  if (s) messages.push({ role: 'system', content: `Summary of the conversation before this (compacted):\n${truncate(s.text, 8000)}` });
+  for (const m of chat.messages.slice(s?.upto || 0)) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
   let full = '';
   let usage = null;
   try {
@@ -785,6 +800,8 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', projects =
  * planner asks through a chat); plain chat turns are "chat-turn" under the chat's own project.
  */
 async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
+  // A compaction still summarising this thread finishes first: this turn then starts from its summary.
+  if (compacting.has(id)) { emit({ type: 'status', text: 'compacting the earlier conversation…' }); await compacting.get(id); }
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const switching = brain && brain !== chat.brain;
@@ -807,5 +824,92 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   await saveChat(chat);
   if (out.error) emit({ type: 'error', message: out.error });
   emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title });
+  // The JARVIS thread past its threshold is compacted in the background, after the reply; the next turn waits for it.
+  if (chat.main && needsCompaction(chat, resolved.brain, config().brain?.compact)) scheduleCompaction(chat.id, { brain: resolved.brain, reason: 'auto' });
   return out;
+}
+
+// ---------------------------------------------------------------- self-compaction of the JARVIS thread (src/compact.js)
+
+/** chatId → the compaction running for it (one at a time; the next full turn awaits it). Never rejects. */
+const compacting = new Map();
+
+/** The compaction running for chat `id` now, or null. */
+export const compactionRunning = (id) => compacting.get(id) || null;
+
+function scheduleCompaction(id, opts) {
+  if (!compacting.has(id)) compacting.set(id, compactChat(id, opts).finally(() => compacting.delete(id)));
+  return compacting.get(id);
+}
+
+/**
+ * The bounded summarisation call: one `claude -p` on config.brain.compact.model with no tools, no MCP, no saved
+ * session and one turn; the prompt goes on stdin (it can be far past a command-line argument's limit). `--safe-mode`
+ * keeps Sir's CLAUDE.md files, auto-memory, skills and hooks out of it: they would leak into the summary as if they
+ * were the conversation (a claude without the flag is asked again without it). Resolves to { text, usage } or
+ * { error, usage }.
+ */
+async function summarise(prompt, s, { safe = true } = {}) {
+  const args = ['-p', ...(safe ? ['--safe-mode'] : []), '--output-format', 'json', '--model', s.model, '--tools', '', '--strict-mcp-config', '--no-session-persistence', '--max-turns', '1', '--system-prompt', SUMMARY_SYSTEM];
+  const r = await run(bin('claude'), args, { input: prompt, timeout: s.timeoutMs, env: cleanEnv(), cwd: HOME });
+  if (safe && /unknown option.*safe-mode/i.test(r.stderr)) return summarise(prompt, s, { safe: false });
+  let e = null;
+  try { e = JSON.parse(r.stdout.trim().split('\n').filter(Boolean).at(-1)); } catch {}
+  if (e?.type !== 'result') return { error: truncate(r.stderr.trim() || r.stdout.trim(), 300) || `claude exited with ${r.code}` };
+  let usage = null;
+  try { usage = claudeResultUsage(e); delete usage.cumulative; } catch {}
+  if (e.is_error) return { error: truncate(e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error', 300), usage };
+  return { text: String(e.result || '').trim(), usage };
+}
+
+/**
+ * Compact a thread now: summarise the previous summary plus the messages up to the cut (compactionCut), store it
+ * (applyCompaction) and drop the brain sessions, so the next turn starts fresh from the summary and the last
+ * keepMessages messages. `force` (rigs compact now) skips the threshold, not the need for something to summarise. A
+ * failed summary changes nothing but `compactFailed`: the session goes on being resumed, and the next turn past the
+ * threshold tries again. `opts.summarise` replaces the call (tests). Never throws.
+ */
+export async function compactChat(id, { brain = '', reason = 'auto', summarise: call = summarise } = {}) {
+  try {
+    const chat = await getChat(id);
+    if (!chat) return { ok: false, error: 'chat not found' };
+    const s = compactSettings(config().brain?.compact);
+    const upto = compactionCut(chat, s.keepMessages);
+    if (upto <= (compactionSummary(chat)?.upto || 0)) return { ok: false, skipped: true, error: `nothing to compact yet: the last ${s.keepMessages} messages are kept as they are` };
+    const b = brain || (chat.brain && chat.brain !== 'auto' ? chat.brain : 'claude');
+    const tokensBefore = chat.context?.[b]?.tokens ?? null;
+    const { prompt } = summaryPrompt(chat, upto);
+    const startedAt = Date.now();
+    let r;
+    try { r = await call(prompt, s); } catch (e) { r = { error: e.message }; }
+    if (!r.error && !r.text) r.error = 'the summary came back empty';
+    await recordChatTurn({ chat, tag: null, brain: 'claude', model: s.model, effort: '', startedAt, out: { text: r.text || '', error: r.error || null, usage: r.usage || null }, aborted: false, lane: 'compact' });
+    const fresh = await getChat(id);
+    if (!fresh) return { ok: false, error: 'chat not found' };
+    if (r.error) {
+      fresh.compactFailed = { ts: Date.now(), error: r.error, tokens: tokensBefore };
+      await saveChat(fresh);
+      log(`compaction of chat ${id} failed (the session goes on; retried next turn): ${r.error}`);
+      return { ok: false, error: r.error };
+    }
+    applyCompaction(fresh, { summary: r.text, upto, tokensBefore, model: s.model, brain: b, reason });
+    await saveChat(fresh);
+    return { ok: true, upto, tokensBefore, chars: fresh.compaction.summary.length, messages: fresh.messages.length };
+  } catch (e) {
+    log(`compaction of chat ${id} failed: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
+/** The JARVIS thread's context size, threshold and last compaction (GET /api/local/compact, rigs compact status). */
+export async function mainCompactStatus() {
+  const main = await mainChat();
+  return { ...compactStatus(main, config().brain?.compact), running: compacting.has(main.id) };
+}
+
+/** `rigs compact now`: compact the JARVIS thread whatever its size (waits for it). */
+export async function compactMainNow() {
+  const main = await mainChat();
+  const r = await scheduleCompaction(main.id, { reason: 'manual' });
+  return { ...r, status: await mainCompactStatus() };
 }
