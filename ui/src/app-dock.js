@@ -39,7 +39,7 @@ function iconFor(it) {
 const toolIcon = (it) => (it.kind === 'tool' && it.pressed && it.ref.action === 'mute' ? '🔇' : it.icon || '▦');
 const badgeText = (b) => (typeof b === 'number' ? (b > 99 ? '99+' : String(b)) : String(b));
 /** Accessible name: a tool keeps the label of the toolbar button it replaces (with its live count). */
-const nameOf = (it, toolLabel) => `${it.kind === 'tool' ? toolLabel(it) || it.ref.hint || it.title : it.title}${it.live ? '' : ' (offline)'}`;
+const nameOf = (it, toolLabel) => `${it.kind === 'tool' ? toolLabel(it) || it.ref.hint || it.title : it.title}${it.live ? '' : ' (offline)'}${it.minimized ? ' (minimized)' : ''}`;
 /** Attributes a tool tile adds: its tooltip, aria-pressed for toggles. */
 const toolAttrs = (it, toolLabel) => (it.kind === 'tool' ? { title: toolLabel(it) || it.ref.hint || '', ...(it.ref.toggle ? { 'aria-pressed': String(!!it.pressed) } : {}) } : {});
 
@@ -119,7 +119,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
   function itemTile(it) {
     const hit = h('span', { class: 'adock-hit' }, iconFor(it));
     const el = h('button', {
-      class: `adock-tile k-${it.kind}${it.live ? '' : ' off'}${it.pinned ? ' pinned' : ''}`, type: 'button', 'data-id': it.id,
+      class: `adock-tile k-${it.kind}${it.live ? '' : ' off'}${it.pinned ? ' pinned' : ''}${it.minimized ? ' min' : ''}`, type: 'button', 'data-id': it.id,
       'aria-label': nameOf(it, toolLabel), tabindex: '-1', ...toolAttrs(it, toolLabel),
     }, hit, ...(it.badge ? [h('b', { class: 'adock-count', 'aria-hidden': 'true' }, badgeText(it.badge))] : []), h('i', { class: 'adock-run', 'aria-hidden': 'true' }));
     tagItem(el, it);
@@ -352,7 +352,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     const grid = h('div', { class: 'adock-pop-grid', role: 'group', 'aria-label': g.name, style: { '--cols': String(Math.max(1, Math.min(4, items.length))) } });
     for (const it of items) {
       const hit = h('span', { class: 'adock-hit' }, iconFor(it), h('span', { class: 'adock-pop-label' }, it.title));
-      const el = tagItem(h('button', { class: `adock-pop-tile k-${it.kind}${it.live ? '' : ' off'}`, type: 'button', 'data-id': it.id, 'aria-label': nameOf(it, toolLabel), ...toolAttrs(it, toolLabel) }, hit, ...(it.badge ? [h('b', { class: 'adock-count', 'aria-hidden': 'true' }, badgeText(it.badge))] : [])), it);
+      const el = tagItem(h('button', { class: `adock-pop-tile k-${it.kind}${it.live ? '' : ' off'}${it.minimized ? ' min' : ''}`, type: 'button', 'data-id': it.id, 'aria-label': nameOf(it, toolLabel), ...toolAttrs(it, toolLabel) }, hit, ...(it.badge ? [h('b', { class: 'adock-count', 'aria-hidden': 'true' }, badgeText(it.badge))] : [])), it);
       el.addEventListener('click', (e) => { if (consumeClick(e) || !canOpen(it)) return; closePop(); open(it); setTimeout(refreshRunning, 300); });
       grid.append(el);
     }

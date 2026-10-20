@@ -30,7 +30,7 @@ const same = (a, b) => !!a && !!b && ['x', 'y', 'w', 'h'].every((k) => Math.abs(
 /** Can this window tile right now? Not on phones, not while docked into the docking layout, not once closing. */
 export function canTile(win) {
   const el = winEl(win);
-  return !!el && el.isConnected && !isPhone() && !el.classList.contains('docked') && !el.classList.contains('win-leave');
+  return !!el && el.isConnected && !isPhone() && !el.classList.contains('docked') && !el.classList.contains('win-leave') && !el.classList.contains('min'); // a minimized window is off the stage
 }
 
 /** The window keyboard tiling acts on: the one holding focus, else the frontmost floating window. */
@@ -53,8 +53,8 @@ function place(el, r, animate) {
   clearTimeout(el._tileAnim);
   el.classList.toggle('tile-anim', glide);
   if (el.classList.contains('max')) {
-    el.classList.remove('max');
-    el.querySelector('.win-btn[aria-pressed]')?.setAttribute('aria-pressed', 'false');
+    if (el._wm?.act) el._wm.act('restore'); // wm.js keeps the window's state record (window-state.js) and its buttons in step
+    else { el.classList.remove('max'); el.querySelector('.win-btn[aria-pressed]')?.setAttribute('aria-pressed', 'false'); }
   }
   Object.assign(el.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
   if (glide) el._tileAnim = setTimeout(() => el.classList.remove('tile-anim'), ANIM_MS + 40);

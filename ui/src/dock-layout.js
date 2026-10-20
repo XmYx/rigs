@@ -1,11 +1,17 @@
 // Dock layout engine (pure, no DOM): the model behind dockable, tabbed and floating JARVIS panels.
 //
 // A layout is plain JSON:
-//   { version: 1,
+//   { version: 3,
 //     root: Node | null,                  // the docked tree
 //     floating: [{ id, x, y, w, h, z, vw, vh }],  // free panels; vw/vh = viewport they were placed in
-//     hidden: { [id]: Place },            // closed panels and where they were, so restore puts them back
-//     collapsed: [id] }                   // panels folded to their header (kept from rigs.panels)
+//     hidden: { [id]: Place },            // panels off the stage and where they were, so restore puts them back:
+//                                         // closed ones, and docked ones while minimized (also wm.js windows)
+//     minimized: [id],                    // minimized panels: floating ones show their title strip, docked ones are in `hidden`
+//     maximized: [id],                    // maximized panels: drawn over the whole stage, their place kept for restore
+//     windows: { [key]: WindowRecord } }  // wm.js windows by stable key: state + rect (window-state.js), version 2
+// A panel's window state (panelWindowState) is normal · minimized · maximized · closed, like a wm.js window.
+// Older layouts are migrated on load: version 2 and 1 (no `windows`) keep their places, their `collapsed` panels
+// become minimized and their hidden ones closed; the older 'rigs.panels' state (closed / collapsed) the same way.
 // Node = { type: 'split', dir: 'row' | 'column', ratios: [n], children: [Node] }
 //      | { type: 'tabs', panels: [id], active: id }
 //      | { type: 'panel', id }
@@ -16,7 +22,9 @@
 // (dockPanel, floatPanel, hidePanel, restorePanel, resetLayout, listPanels) wraps them in a store
 // with optional localStorage-style persistence for the UI, the top menu and context menus.
 
-export const VERSION = 1;
+import { normalizeWindows, normalizeRecord, putWindow } from './window-state.js';
+
+export const VERSION = 3;
 export const STORAGE_KEY = 'rigs.dock';
 export const LEGACY_KEY = 'rigs.panels';
 export const ZONES = ['left', 'right', 'top', 'bottom', 'center'];
@@ -26,9 +34,10 @@ const MIN_RATIO = 0.02;
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isId = (v) => typeof v === 'string' && v.length > 0;
+const without = (list, id) => (list || []).filter((x) => x !== id);
 
 export function emptyLayout() {
-  return { version: VERSION, root: null, floating: [], hidden: {}, collapsed: [] };
+  return { version: VERSION, root: null, floating: [], hidden: {}, minimized: [], maximized: [], windows: {} };
 }
 
 // ---------------------------------------------------------------- tree helpers
@@ -128,6 +137,19 @@ export function panelStatus(layout, id) {
   return null;
 }
 
+/**
+ * A panel's window state, the same four as a wm.js window (window-state.js): 'normal' | 'minimized' | 'maximized' |
+ * 'closed', or null when the layout does not know it. A minimized panel stays minimized wherever it is (floating: its
+ * title strip; docked: off the tree in `hidden`, reached from the app dock); maximized only counts while it is shown.
+ */
+export function panelWindowState(layout, id) {
+  const status = panelStatus(layout, id);
+  if (!status) return null;
+  if (layout.minimized?.includes(id)) return 'minimized';
+  if (status === 'hidden') return 'closed';
+  return layout.maximized?.includes(id) ? 'maximized' : 'normal';
+}
+
 // ---------------------------------------------------------------- detach / attach
 
 /**
@@ -136,7 +158,8 @@ export function panelStatus(layout, id) {
  */
 function detach(input, id) {
   const layout = clone(input);
-  layout.collapsed = layout.collapsed || [];
+  layout.minimized = layout.minimized || [];
+  layout.maximized = layout.maximized || [];
   const fi = layout.floating.findIndex((f) => f.id === id);
   if (fi >= 0) {
     const [f] = layout.floating.splice(fi, 1);
@@ -243,6 +266,7 @@ export function dock(layout, id, targetId, zone, { share } = {}) {
   const z = canonZone(zone);
   if (!isId(id) || !z || id === targetId) return layout;
   const { layout: out } = detach(layout, id);
+  out.minimized = without(out.minimized, id); // a minimized strip dropped into the tree is shown again (never minimized in the tree)
   const tpath = isId(targetId) && targetId !== 'root' ? pathOf(out, targetId) : null;
   if (!tpath) { dockAtRoot(out, id, z, share ?? 0.3); return finish(out); }
   if (z === 'center') { addTab(out, tpath, id, null, true); return finish(out); }
@@ -264,6 +288,7 @@ export function undock(layout, id, rect = {}) {
 export function moveTab(layout, id, targetId, index) {
   if (!isId(id) || id === targetId || !pathOf(layout, targetId)) return layout;
   const { layout: out } = detach(layout, id);
+  out.minimized = without(out.minimized, id);
   addTab(out, pathOf(out, targetId), id, index, true);
   return finish(out);
 }
@@ -310,11 +335,16 @@ export function resizeSplit(layout, path, ratios) {
   return out;
 }
 
-/** Close a panel, remembering exactly where it was. */
+/**
+ * Close a panel, remembering exactly where it was. A minimized one is closed too (a docked one is already off the tree,
+ * at its place); reopening brings it back normal, or maximized when it was (as a wm.js window does).
+ */
 export function hide(layout, id) {
-  if (layout.hidden[id] || !panelStatus(layout, id)) return layout;
+  if (!panelStatus(layout, id)) return layout;
+  if (layout.hidden[id]) return layout.minimized?.includes(id) ? { ...layout, minimized: without(layout.minimized, id) } : layout;
   const { layout: out, place } = detach(layout, id);
   out.hidden[id] = place;
+  out.minimized = without(out.minimized, id);
   return out;
 }
 
@@ -324,6 +354,7 @@ export function restore(layout, id) {
   if (!place) return layout;
   const out = clone(layout);
   delete out.hidden[id];
+  out.minimized = without(out.minimized, id); // back on the stage = no longer minimized
   const leaf = { type: 'panel', id };
   if (place.kind === 'float') {
     out.floating.push({ id, ...rectOf(place.rect), z: topZ(out) + 1 });
@@ -350,7 +381,8 @@ export function restore(layout, id) {
 /** Forget a panel everywhere (tree, floating, hidden). */
 export function removePanel(layout, id) {
   const { layout: out } = detach(layout, id);
-  out.collapsed = out.collapsed.filter((c) => c !== id);
+  out.minimized = without(out.minimized, id);
+  out.maximized = without(out.maximized, id);
   return out;
 }
 
@@ -371,12 +403,70 @@ export function raise(layout, id) {
   return out;
 }
 
-export function setCollapsed(layout, id, collapsed) {
-  const has = layout.collapsed.includes(id);
-  if (has === !!collapsed) return layout;
-  const out = clone(layout);
-  out.collapsed = collapsed ? [...out.collapsed, id] : out.collapsed.filter((c) => c !== id);
-  return out;
+/**
+ * Minimize a shown panel, or bring a minimized one back. A floating panel stays where it is as its title strip; a docked
+ * one (or a tab) leaves the tree the way a closed panel does, remembering its exact place, and goes back there when it is
+ * restored. Maximized stays as it was, so a maximized panel comes back maximized.
+ */
+export function setMinimized(layout, id, minimized) {
+  const status = panelStatus(layout, id);
+  const has = !!layout.minimized?.includes(id);
+  if (!status || has === !!minimized) return layout;
+  if (!minimized) {
+    if (status === 'hidden') return restore(layout, id); // a docked one: back to its place in the tree
+    return { ...layout, minimized: without(layout.minimized, id) };
+  }
+  if (status === 'hidden') return layout; // closed: there is nothing to minimize
+  if (status === 'docked') {
+    const { layout: out, place } = detach(layout, id);
+    out.hidden[id] = place;
+    out.minimized = [...out.minimized, id];
+    return finish(out);
+  }
+  return { ...layout, minimized: [...(layout.minimized || []), id] };
+}
+
+/** Maximize a panel (it fills the stage over everything else; its place is kept untouched) or restore its size. */
+export function setMaximized(layout, id, maximized) {
+  const has = !!layout.maximized?.includes(id);
+  if (!panelStatus(layout, id) || has === !!maximized) return layout;
+  return { ...layout, maximized: maximized ? [...(layout.maximized || []), id] : without(layout.maximized, id) };
+}
+
+/**
+ * Apply one title bar action to a panel, as window-state.js `transition` does for a wm.js window:
+ *   minimize        normal / maximized → minimized (maximized is remembered)
+ *   maximize        normal / minimized → maximized
+ *   restore         minimized → as before (normal or maximized); maximized → normal; closed → reopened at its place
+ *   toggleMaximize  maximized → normal; normal / minimized → maximized
+ *   close           → closed (the place is kept for reopening)
+ *   open            closed / minimized → shown again
+ */
+export function panelAction(layout, id, action) {
+  const state = panelWindowState(layout, id);
+  if (!state) return layout;
+  switch (action) {
+    case 'minimize': return state === 'closed' ? layout : setMinimized(layout, id, true);
+    case 'maximize': return state === 'closed' ? layout : setMaximized(setMinimized(layout, id, false), id, true);
+    case 'toggleMaximize':
+      if (state === 'closed') return layout;
+      return state === 'maximized' ? setMaximized(layout, id, false) : setMaximized(setMinimized(layout, id, false), id, true);
+    case 'restore':
+      if (state === 'minimized') return setMinimized(layout, id, false);
+      if (state === 'maximized') return setMaximized(layout, id, false);
+      return state === 'closed' ? restore(layout, id) : layout;
+    case 'open':
+      if (state === 'minimized') return setMinimized(layout, id, false);
+      return state === 'closed' ? restore(layout, id) : layout;
+    case 'close': return hide(layout, id);
+    default: return layout;
+  }
+}
+
+/** Store a wm.js window's state record under its stable key (window-state.js); null forgets it. */
+export function setWindow(layout, key, rec) {
+  const windows = putWindow(layout.windows || {}, key, rec);
+  return windows === layout.windows ? layout : { ...layout, windows };
 }
 
 /** Add panels the layout has never seen as floating with no rect (the UI keeps its CSS default place). */
@@ -397,7 +487,7 @@ export function listLayoutPanels(layout) {
   for (const id of panelsIn(layout.root)) out.push({ id, status: 'docked', path: pathOf(layout, id) });
   for (const f of [...layout.floating].sort((a, b) => (a.z ?? 0) - (b.z ?? 0))) out.push({ id: f.id, status: 'floating' });
   for (const id of Object.keys(layout.hidden)) out.push({ id, status: 'hidden' });
-  for (const p of out) p.collapsed = layout.collapsed.includes(p.id);
+  for (const p of out) { p.state = panelWindowState(layout, p.id); p.minimized = p.state === 'minimized'; p.maximized = !!layout.maximized?.includes(p.id); }
   return out;
 }
 
@@ -573,7 +663,7 @@ export function serialize(layout) {
 /**
  * The old 'rigs.panels' state ({ id: { closed, collapsed, pos: {left, top, width: '320px'|null, height} } })
  * as a layout: today every panel floats, so each becomes a floating panel (no rect = keep the CSS default
- * place), closed ones hidden with that rect, collapsed ones kept collapsed.
+ * place), closed ones closed (hidden with that rect), collapsed ones minimized (their title strip, as before).
  */
 export function migrateLegacy(state, { viewport } = {}) {
   const layout = emptyLayout();
@@ -587,7 +677,7 @@ export function migrateLegacy(state, { viewport } = {}) {
     const rect = rectOf({ x: num(p.left), y: num(p.top), w: px(p.width), h: px(p.height), vw: has ? viewport?.w : null, vh: has ? viewport?.h : null });
     if (s.closed) layout.hidden[id] = { kind: 'float', rect };
     else layout.floating.push({ id, ...rect, z: ++z });
-    if (s.collapsed) layout.collapsed.push(id);
+    if (s.collapsed && !s.closed) layout.minimized.push(id);
   }
   return layout;
 }
@@ -628,7 +718,7 @@ export function deserialize(raw, { viewport } = {}) {
   if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch { return emptyLayout(); } }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return emptyLayout();
   if (v.version === undefined) return migrateLegacy(v, { viewport });
-  if (v.version !== VERSION) return emptyLayout(); // a format we cannot read: start clean
+  if (![1, 2, VERSION].includes(v.version)) return emptyLayout(); // a format we cannot read: start clean (1 = before `windows`, 2 = before minimized / maximized)
   const seen = new Set();
   const layout = emptyLayout();
   layout.root = normalize(withoutRepeats(v.root, seen));
@@ -644,8 +734,15 @@ export function deserialize(raw, { viewport } = {}) {
     seen.add(id);
     layout.hidden[id] = place;
   }
-  layout.collapsed = [...new Set((Array.isArray(v.collapsed) ? v.collapsed : []).filter((id) => isId(id) && seen.has(id)))];
-  return layout;
+  const ids = (list) => [...new Set((Array.isArray(list) ? list : []).filter((id) => isId(id) && seen.has(id)))];
+  // Versions 1 and 2 folded panels to their header ('collapsed'): that is minimized now. A closed one stays closed.
+  const minimized = ids(v.version < 3 ? v.collapsed : v.minimized).filter((id) => v.version >= 3 || !layout.hidden[id]);
+  layout.maximized = v.version < 3 ? [] : ids(v.maximized);
+  layout.windows = v.version === 1 ? {} : normalizeWindows(v.windows);
+  // A minimized panel is never in the tree: a docked one waits in `hidden` at its exact place (setMinimized).
+  let out = layout;
+  for (const id of minimized) out = pathOf(out, id) ? setMinimized(out, id, true) : { ...out, minimized: [...out.minimized, id] };
+  return out;
 }
 
 // ---------------------------------------------------------------- command API
@@ -704,7 +801,15 @@ export function createDockManager({ storage = null, key = STORAGE_KEY, legacyKey
     restorePanel: (id) => set(restore(layout, id), 'restore'),
     togglePanel: (id) => (layout.hidden[id] ? api.restorePanel(id) : api.hidePanel(id)),
     resetLayout: () => set(ensurePanels(defaultLayout(), [...titles.keys()]), 'reset'),
-    /** [{id, title, status: docked|floating|hidden, collapsed, path?}] for menus. */
+    /** A wm.js window's saved state record (window-state.js) or null. */
+    getWindow: (key) => normalizeRecord(layout.windows?.[key]),
+    /** Save a window's state record (null forgets it). Listeners hear cause 'windows'; docking.js does not re-render for it. */
+    setWindow: (key, rec) => set(setWindow(layout, key, rec), 'windows'),
+    /** One title bar action on a panel (panelAction: minimize, maximize, restore, toggleMaximize, close, open). */
+    panelAction: (id, action) => set(panelAction(layout, id, action), action),
+    /** 'normal' | 'minimized' | 'maximized' | 'closed' | null. */
+    panelState: (id) => panelWindowState(layout, id),
+    /** [{id, title, status: docked|floating|hidden, state, minimized, maximized, path?}] for menus. */
     listPanels: () => listLayoutPanels(layout).map((p) => ({ ...p, title: titles.get(p.id) ?? p.id })),
   };
   return api;

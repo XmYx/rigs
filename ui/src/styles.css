@@ -150,6 +150,11 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .win-btn { width: 24px; height: 22px; border: 0; background: transparent; border-radius: 5px; color: var(--muted); }
 .win-btn:hover { background: rgba(255, 255, 255, .07); color: #fff; }
 .win-btn.close:hover { background: rgba(248, 113, 113, .25); }
+/* The window chrome (wm.js + window-state.js): minimize, maximize / restore, close — same order and style on every window. */
+.win-bar > .win-btn { flex: none; display: inline-grid; place-items: center; padding: 0; font: 13px/1 var(--mono); }
+.win-bar > .win-btn.win-min { margin-left: 2px; }
+.win.min { display: none !important; }
+.win.win-minimizing { opacity: 0; scale: .9; translate: 0 48px; pointer-events: none; }
 .win-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .term-holder { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; background: #05090e; }
 .term-status { font: 11px var(--mono); color: var(--muted); }
@@ -381,7 +386,7 @@ a.link { color: var(--accent); cursor: pointer; }
 #subtitle .spoken { font-size: 14px; font-weight: 500; }
 #subtitle .written { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); color: #b9c8d2; font-size: 12.5px; white-space: pre-wrap; }
 
-/* Floating panels (panels.js): ⠿ drag grip + ✕ on every panel, the top menu's Panels item to restore */
+/* Panels are windows (panels.js): ⠿ drag grip + the wm.js title bar buttons (– □ ✕, .win-btn), the top menu's Panels item reopens a closed one */
 .pctl { display: inline-flex; align-items: center; gap: 2px; flex: none; opacity: .35; transition: opacity .15s; }
 .floating:hover .pctl, .floating.dragging .pctl { opacity: 1; }
 .pgrip { cursor: grab; padding: 0 3px; font-size: 13px; line-height: 1; color: var(--muted); user-select: none; touch-action: none; }
@@ -390,6 +395,7 @@ a.link { color: var(--accent); cursor: pointer; }
 .pclose { border: 0; background: none; color: var(--muted); font-size: 11px; padding: 0 3px; line-height: 1; cursor: pointer; }
 .pclose:hover { color: var(--danger); }
 .pclose.hidden { display: none; }
+.pctl > .win-btn { flex: none; display: inline-grid; place-items: center; padding: 0; font: 13px/1 var(--mono); cursor: pointer; }
 #left > .brand > .pctl, #legend > .pctl, #orb-wrap > .pctl, #footer > .pctl { position: absolute; top: 4px; right: 6px; z-index: 2; }
 #left > .brand { position: relative; }
 #legend, #orb-wrap, #footer { position: fixed; }
@@ -402,13 +408,16 @@ a.link { color: var(--accent); cursor: pointer; }
 .floating.dragging { transition: none !important; }
 .floating.panel-out { opacity: 0; scale: .96; translate: 0 6px; filter: blur(2px); pointer-events: none; }
 .floating.panel-closed { display: none !important; }
-.floating.panel-collapsed > :not(.keep):not(.pctl) { display: none !important; }
-.floating.panel-collapsed { height: auto !important; bottom: auto !important; overflow: hidden; }
-#left.panel-collapsed section, #left.panel-collapsed #search, #left.panel-collapsed #search-results { display: none !important; }
+.floating.panel-min > :not(.keep):not(.pctl) { display: none !important; } /* minimized: its title strip (and .keep elements) */
+.floating.panel-min { height: auto !important; bottom: auto !important; overflow: hidden; }
+#left.panel-min section, #left.panel-min #search, #left.panel-min #search-results { display: none !important; }
+/* Maximized: fills the stage (docking.js placeMax) over the docked tree and the other panels, under windows (z 100+) */
+.floating.panel-max { z-index: 95 !important; max-width: none !important; max-height: none !important; min-width: 0 !important; min-height: 0 !important; margin: 0 !important;
+  box-sizing: border-box; overflow: auto; border-radius: 8px; background: var(--panel-solid); border: 1px solid var(--line); }
+.floating.panel-max .presize { display: none; }
 .floating > :not(.pctl) { animation: panel-reveal .22s ease both; }
 @keyframes panel-reveal { from { opacity: 0; translate: 0 -3px; } to { opacity: 1; translate: 0 0; } }
-.pcollapse { font-size: 10px; }
-#orb-wrap.panel-collapsed #face { display: none !important; }
+#orb-wrap.panel-min #face { display: none !important; }
 .win { transition: opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
 .win.win-enter, .win.win-leave { opacity: 0; scale: .96; translate: 0 8px; }
 .win.win-leave { pointer-events: none; }
@@ -602,12 +611,12 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   .scroll-contain, .win-body, .win-body *, #left, #work, #questions, #usage, #subtitle, #brain-menu, .xterm-viewport { overscroll-behavior: contain; }
   #legend, #footer, #face, #face.big { display: none !important; }
 
-  /* Panel chrome: no grips/resize/collapse; only the ✕ of the work and chat panels, at finger size. Saved
+  /* Panel chrome: no grips/resize/minimize/maximize; only the ✕ of the work and chat panels, at finger size. Saved
      desktop drags don't apply: geometry below wins over the inline styles panels.js sets. */
   .pctl, .presize { display: none !important; }
   #work > .wk-head > .pctl, #questions > .wk-head > .pctl, #chat-dock .pctl { display: inline-flex !important; opacity: 1; }
-  #work .pctl > :not(.pclose:last-child), #usage .pctl > :not(.pclose:last-child), #questions .pctl > :not(.pclose:last-child), #chat-dock .pctl > :not(.pclose:last-child) { display: none; }
-  .pclose { min-width: 44px; min-height: 44px; font-size: 16px; display: inline-grid; place-items: center; }
+  #work .pctl > :not(.close), #usage .pctl > :not(.close), #questions .pctl > :not(.close), #chat-dock .pctl > :not(.close) { display: none; }
+  .pclose, .pctl > .win-btn.close { min-width: 44px; min-height: 44px; font-size: 16px; display: inline-grid; place-items: center; }
   #topbar.floating.panel-closed { display: flex !important; } /* it holds ⋮, the only way to the Panels menu on a phone */
   #topbar.floating.panel-out { opacity: 1; pointer-events: auto; scale: none; translate: none; filter: none; }
 
@@ -626,7 +635,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
     padding: calc(var(--sat) + 12px) 14px calc(var(--sab) + 16px) calc(var(--sal) + 14px); border-radius: 0 12px 12px 0; border-left: 0; z-index: 60; visibility: hidden;
     background: var(--panel-solid); backdrop-filter: none; -webkit-backdrop-filter: none; transition: transform .25s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .25s !important; }
   body.drawer-open #left { transform: none !important; visibility: visible; transition: transform .25s cubic-bezier(.2, .8, .2, 1) !important; box-shadow: 12px 0 40px rgba(0, 0, 0, .6); }
-  #left.panel-collapsed section, #left.panel-collapsed #search, #left.panel-collapsed #search-results { display: block !important; }
+  #left.panel-min section, #left.panel-min #search, #left.panel-min #search-results { display: block !important; }
   #left .brand { padding-right: 52px; }
   #drawer-close { display: grid; position: absolute; top: -4px; right: -6px; }
   #drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 59; background: rgba(0, 0, 0, .55); opacity: 0; pointer-events: none; transition: opacity .25s; }
@@ -649,7 +658,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   .ag-head { min-height: 44px; }
   .ag-row { min-height: 52px; }
   .ag-chat { width: 44px; height: 44px; }
-  #agents .pctl > :not(.pclose:last-child) { display: none; }
+  #agents .pctl > :not(.close) { display: none; }
   #agents > .ag-head > .pctl { display: inline-flex !important; opacity: 1; }
 
 /* Chat dock: full width above the toolbar */
@@ -675,7 +684,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   .win-bar { min-height: 52px; padding: 4px 4px 4px 14px; cursor: default; }
   .win-title-text { font-size: 14px; }
   .win-btn { width: 44px; height: 44px; font-size: 18px; }
-  .win-bar > .win-btn:not(.close) { display: none; }
+  .win-bar > .win-btn.win-max { display: none; } /* phones: every window is full-screen already; minimize and close stay */
   .win-tools { flex-wrap: wrap; justify-content: flex-end; }
   /* list over detail: the list gets most of the room until something is picked, then the detail does */
   .files-split, .sess-split, .proj-split { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); }
@@ -1156,9 +1165,9 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   #traces { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
-  #traces .pctl > :not(.pclose:last-child) { display: none; }
+  #traces .pctl > :not(.close) { display: none; }
   #graphify { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: var(--room) !important; transform: none !important; max-height: var(--room); z-index: 20; }
-  #graphify .pctl > :not(.pclose:last-child) { display: none; }
+  #graphify .pctl > :not(.close) { display: none; }
   .gfy-bar .tb, .gfy-orbit, .gfy-jump { min-height: 44px; }
   .gfy-legend { display: none; }
   .gfy-detail { max-height: 62%; }
@@ -1229,7 +1238,6 @@ body.dock-dragging iframe, body.dock-resizing iframe { pointer-events: none; } /
 .docked { z-index: 4 !important; max-width: none !important; max-height: none !important; min-width: 0 !important; min-height: 0 !important; margin: 0 !important; box-sizing: border-box; overflow: auto; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   transition: left .22s cubic-bezier(.2, .8, .2, 1), top .22s cubic-bezier(.2, .8, .2, 1), width .22s cubic-bezier(.2, .8, .2, 1), height .22s cubic-bezier(.2, .8, .2, 1), opacity .19s ease, scale .19s ease !important; }
-.docked.panel-collapsed { height: auto !important; }
 .docked .presize { display: none; }
 .dock-tab-hidden { display: none !important; }
 .win.docked { resize: none; box-shadow: none; animation: none; background: var(--panel-solid); }
@@ -1709,6 +1717,8 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .adock.pos-left .adock-run { top: 50%; left: -5px; margin-top: -2.5px; }
 .adock.pos-right .adock-run { top: 50%; right: -5px; margin-top: -2.5px; }
 .adock-tile.off { opacity: .42; filter: grayscale(.85); cursor: default; }
+/* A minimized window lives here: a hollow ring instead of the running dot (click restores it in place). */
+.adock-tile.min .adock-run, .adock-pop-tile.min .adock-run { opacity: 1; background: transparent; border: 1.5px solid var(--accent); width: 7px; height: 7px; box-sizing: border-box; }
 .adock-tile.dragging { opacity: .22; }
 .adock-tile.drop-onto .adock-icon { box-shadow: 0 0 0 3px var(--accent), 0 0 20px rgba(var(--accent-rgb), .65); }
 html.adock-dragging, html.adock-dragging * { cursor: grabbing !important; user-select: none; }

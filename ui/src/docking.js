@@ -3,7 +3,7 @@ import { isPhone } from './mobile.js';
 import { announce } from './a11y.js';
 import {
   dockManager, panelStatus, panelsIn, dropZoneAt, allocate, minSizeOf, setActiveTab, reorder, resizeSplit,
-  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN, deserialize, serialize, STORAGE_KEY, VERSION as LAYOUT_VERSION,
+  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN, panelWindowState, deserialize, serialize, STORAGE_KEY, VERSION as LAYOUT_VERSION,
 } from './dock-layout.js';
 import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion } from './scaling.js';
 import { syncedStorage, readOnlyWhen, prepareKey, onRemoteKey } from './synced-storage.js';
@@ -19,6 +19,11 @@ import { usableArea } from './tiling-model.js';
 // screen: they keep their own element (never reparented) and get a fixed rect, tab groups get a tab strip
 // (role=tablist) and splits get draggable separators. The galaxy is the 'stage' leaf of the tree: it is
 // never a tab and never closes, so docked panels gather around it. Phones never dock.
+//
+// Panels have the window states of dock-layout.js panelWindowState: a minimized floating panel is drawn as its title
+// strip where it is, a minimized docked one is off the tree (like a closed one, its place kept), and a maximized one is
+// drawn over the whole stage (dockArea: below the top menu bar, clear of the app dock) on top of the docked tree and the
+// other panels, which keep their places, so restoring is exact. Phones ignore maximize (the CSS phone layout wins).
 //
 // Other modules can add drop targets outside the layout (addDropTarget: the top menu bar's Ask JARVIS slot). They
 // are checked first on every drag move, with or without the docking mode, and drawn with the same preview.
@@ -122,15 +127,16 @@ export const toggleDocking = () => setDocking(!mode);
  *   handles    the elements that grab it (its title bar); presses on controls inside are left alone
  *   canDrag    () => false to refuse a drag (phones, maximised windows)
  *   clamp      (left, top, w, h) => [left, top] for free moves
- *   onClosed / onCollapsed  panels: show the state change (called with (value, initial))
+ *   onState    panels: show a window state change (state, { initial, prev, stowed }): 'normal' | 'minimized' |
+ *              'maximized' | 'closed'; `stowed` = it is off the stage (closed, or minimized out of the docked tree)
  *   raise      windows: bring to the front of the window stack again after undocking
  */
 export function registerDockable(id, opts) {
   const it = {
     id, title: opts.title || id, kind: opts.kind || 'panel', el: opts.el, handles: (opts.handles || []).filter(Boolean),
     canDrag: opts.canDrag || (() => !isPhone()), clamp: opts.clamp || clampPanel,
-    onClosed: opts.onClosed, onCollapsed: opts.onCollapsed, raise: opts.raise,
-    closed: false, collapsed: false, styled: false, init: true, rect: null,
+    onState: opts.onState, raise: opts.raise,
+    state: null, closed: false, minimized: false, maximized: false, styled: false, init: true, rect: null,
   };
   it.el.dataset.dockId = id;
   if (!it.el.id) it.el.id = `dock-${id}`;
@@ -187,6 +193,20 @@ export function unregisterDockable(id) {
   items.delete(id);
   if (panelStatus(dockManager.getLayout(), id)) dockManager.apply(removePanel, id);
   else render();
+}
+
+/**
+ * A window left the stage (minimized): if it is in the layout (docked, or adopted by smart scaling) it leaves it the
+ * way a hidden panel does, remembering its exact place; unstowDockable puts it back there when it is restored.
+ */
+export function stowDockable(id) {
+  const it = items.get(id);
+  if (drag?.it === it) endDrag(true);
+  const L = dockManager.getLayout();
+  if (panelStatus(L, id) && panelStatus(L, id) !== 'hidden') dockManager.hidePanel(id);
+}
+export function unstowDockable(id) {
+  if (panelStatus(dockManager.getLayout(), id) === 'hidden') dockManager.restorePanel(id);
 }
 
 export function setDockTitle(id, title) {
@@ -343,13 +363,13 @@ function computeFit(L, docked) {
   const bare = [];
   for (const f of L.floating) {
     const it = items.get(f.id);
-    if (!it || it.closed || drag?.it === it || it.el.classList.contains('max') || it.el.classList.contains('panel-closed')) continue;
+    if (!it || it.closed || it.maximized || drag?.it === it || it.el.classList.contains('max') || it.el.classList.contains('panel-closed')) continue;
     const m = minOf(it.el);
     mins[f.id] = m;
     if ([f.x, f.y, f.w, f.h].every((v) => v !== null)) {
-      // A collapsed panel is only its header tall; a rect smaller than the element's own minimum is that minimum.
-      const hh = it.collapsed ? Math.min(f.h, it.el.offsetHeight || f.h) : Math.max(f.h, m.h);
-      if (it.collapsed) m.h = Math.min(m.h, hh);
+      // A minimized panel is only its title strip tall; a rect smaller than the element's own minimum is that minimum.
+      const hh = it.minimized ? Math.min(f.h, it.el.offsetHeight || f.h) : Math.max(f.h, m.h);
+      if (it.minimized) m.h = Math.min(m.h, hh);
       floating.push(below(fitHome({ ...f, w: Math.max(f.w, m.w), h: hh }, vp)));
     } else if (it.kind === 'panel') bare.push(it);
   }
@@ -392,13 +412,19 @@ function applyItem(it, L, active, group, fit) {
   const initial = it.init;
   it.init = false;
   if (it.kind === 'panel') {
-    const closed = status === 'hidden';
-    if (closed !== it.closed || initial) { it.closed = closed; it.onClosed?.(closed, initial); }
-    const collapsed = L.collapsed.includes(id);
-    if (collapsed !== it.collapsed || initial) { it.collapsed = collapsed; it.onCollapsed?.(collapsed, initial); }
-    if (closed) return;
+    const state = panelWindowState(L, id) || 'normal';
+    it.closed = status === 'hidden'; // off the stage: closed, or minimized out of the docked tree
+    it.minimized = state === 'minimized' && !it.closed; // drawn as its title strip
+    it.maximized = state === 'maximized' && !isPhone();
+    if (state !== it.state || initial) {
+      const prev = it.state;
+      it.state = state;
+      it.onState?.(state, { initial, prev, stowed: it.closed });
+    }
+    if (it.closed) return;
   }
   if (drag?.it === it) return;
+  if (it.maximized) { placeMax(it); return; }
   const r = status === 'docked' && active ? geo.leaves[id] : null;
   if (r) {
     if (!el.classList.contains('docked') && it.kind === 'window') el.style.zIndex = '';
@@ -440,6 +466,22 @@ function applyItem(it, L, active, group, fit) {
   }
   // No saved rect (the CSS default place), or docked while docking is not in effect (phones): CSS places it.
   if (it.kind === 'panel' && it.styled && status !== null) { clearGeom(el); it.styled = false; }
+}
+
+/** A maximized panel: over the whole stage, docked or not; its place in the layout is left alone for the restore. */
+function placeMax(it) {
+  const { el, id } = it;
+  if (el.classList.contains('docked') || el.classList.contains('dock-tab-hidden')) {
+    el.classList.remove('docked', 'dock-tab-hidden');
+    unTab(el, id);
+  }
+  if (it.fitted) unfit(it);
+  const r = dockArea();
+  const changed = !it.rect || ['x', 'y', 'w', 'h'].some((k) => Math.abs(it.rect[k] - r[k]) > 0.5);
+  setGeom(el, r);
+  it.rect = { ...r };
+  it.styled = true;
+  if (changed) el.dispatchEvent(new CustomEvent('panelresize'));
 }
 
 function unTab(el, id) {
@@ -973,7 +1015,7 @@ export function initDocking({ defaults }) {
   dockManager.attach({ storage: syncedStorage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
   // Windows never outlive the page; the galaxy always has its place in the tree.
   dockManager.setLayout(withStage(stripWindows(dockManager.getLayout())));
-  dockManager.subscribe(() => render());
+  dockManager.subscribe((_L, cause) => { if (cause !== 'windows') render(); }); // a wm.js window saving its state record moves nothing
   onRemoteKey(STORAGE_KEY, (raw) => { if (!checkFormat(raw)) reloadLayout(); });
   onRemoteKey(MODE_KEY, (raw) => setDocking(raw === '1'));
   window.addEventListener('resize', onResize);

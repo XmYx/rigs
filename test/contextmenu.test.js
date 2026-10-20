@@ -24,7 +24,7 @@ function setup(extra = {}) {
   const reg = createProviders();
   const deps = {
     copy: rec('copy'),
-    layout: { toggleCollapse: rec('collapse'), isCollapsed: () => false, resetPanel: rec('resetPanel'), removed: () => [] },
+    layout: { act: rec('act'), state: () => 'normal', resetPanel: rec('resetPanel'), removed: () => [] },
     window: { toggleMax: rec('max'), isMax: () => false, closeOthers: rec('closeOthers'), closeAll: rec('closeAll'), count: () => 3 },
     app: { key: (a) => `${a.nodeId}/${a.id}`, isOpen: () => false, status: () => 'up', url: (a) => `http://x/${a.id}`, open: rec('app.open'), openTab: rec('app.tab'), reload: rec('app.reload') },
     session: { transcript: rec('transcript'), attach: rec('attach'), chat: rec('chat'), galaxy: rec('galaxy') },
@@ -95,22 +95,26 @@ test('session: items follow its kind and liveness; a row inside a window adds th
 
 // ------------------------------------------------------------------ panels, windows, apps
 
-test('panel: hide / hide others / remove are the shared commands with the panel as argument; Dock only when the engine has it', () => {
+test('panel: the window buttons first (minimize, maximize, close), then reset / dock, close others, remove; Dock only when the engine has it', () => {
   const { reg, calls } = setup();
   const panel = { kind: 'panel', id: 'usage', data: { id: 'usage', title: 'Tokens & time' } };
   const menu = resolveMenu(reg, [panel]);
-  assert.deepEqual(labels(menu), ['Collapse', 'Reset position and size', 'Hide', 'Hide other panels', 'Remove (undoable)']);
+  assert.deepEqual(labels(menu), ['Minimize', 'Maximize', 'Close', 'Reset position and size', 'Close other panels', 'Remove (undoable)']);
   assert.deepEqual(cmds(menu), ['window.hide', 'window.hideOthers', 'window.remove']);
   const remove = menu.find((e) => e.cmd === 'window.remove');
   assert.deepEqual(remove.args, { kind: 'panel', id: 'usage', title: 'Tokens & time', open: true });
   assert.match(remove.label, /undoable/);
-  find(menu, 'Collapse').run();
-  assert.deepEqual(calls.at(-1), ['collapse', 'usage']);
+  find(menu, 'Minimize').run();
+  assert.deepEqual(calls.at(-1), ['act', 'usage', 'minimize']);
+  find(menu, 'Maximize').run();
+  assert.deepEqual(calls.at(-1), ['act', 'usage', 'toggleMaximize']);
 
-  const docking = setup({ layout: { canDock: () => true, isDocked: () => true, float: () => {}, dock: () => {}, isCollapsed: () => true, toggleCollapse: () => {}, resetPanel: () => {} } });
+  const docking = setup({ layout: { canDock: () => true, isDocked: () => true, float: () => {}, dock: () => {}, state: () => 'minimized', act: () => {}, resetPanel: () => {} } });
   const m2 = resolveMenu(docking.reg, [panel]);
   assert.ok(find(m2, 'Float') && !find(m2, 'Dock'));
-  assert.ok(find(m2, 'Expand'));
+  assert.ok(find(m2, 'Restore') && !find(m2, 'Minimize'), 'a minimized panel offers Restore');
+  const maxed = resolveMenu(setup({ layout: { state: () => 'maximized', act: () => {}, resetPanel: () => {} } }).reg, [panel]);
+  assert.ok(find(maxed, 'Restore size') && !find(maxed, 'Maximize'));
 });
 
 test('window: Close others / Close all are disabled when there is nothing else to close', () => {
@@ -120,6 +124,19 @@ test('window: Close others / Close all are disabled when there is nothing else t
   assert.equal(find(lone, 'Close other windows').disabled, true);
   assert.ok(find(lone, 'Restore size'), 'a maximized window offers Restore size');
   assert.deepEqual(cmds(lone), ['window.open', 'window.hide']);
+});
+
+test('phone: panels offer only Close (and Restore when minimized on the desktop), windows no Maximize — as their title bars', () => {
+  const panel = { kind: 'panel', id: 'work', data: { id: 'work', title: 'Active projects' } };
+  const phone = resolveMenu(setup().reg, [panel], { phone: true });
+  assert.ok(!find(phone, 'Minimize') && !find(phone, 'Maximize') && find(phone, 'Close'));
+  const minimized = resolveMenu(setup({ layout: { state: () => 'minimized', act: () => {}, resetPanel: () => {} } }).reg, [panel], { phone: true });
+  assert.ok(find(minimized, 'Restore') && !find(minimized, 'Maximize'));
+  const W = { minimize: () => {}, isMin: () => false, toggleMax: () => {}, isMax: () => false, closeOthers: () => {}, closeAll: () => {}, count: () => 2 };
+  const win = resolveMenu(setup({ window: W }).reg, [{ kind: 'window', id: '2', data: { title: 'Files' } }], { phone: true });
+  assert.ok(find(win, 'Minimize') && find(win, 'Close') && !find(win, 'Maximize') && !find(win, 'Restore size'));
+  const desk = resolveMenu(setup({ window: W }).reg, [{ kind: 'window', id: '2', data: { title: 'Files' } }]);
+  assert.ok(find(desk, 'Maximize'), 'the desktop keeps Maximize');
 });
 
 test('app: Reload needs an open window; Remove is the reversible command; Open turns into Start & open for an app that is down', () => {
@@ -389,7 +406,7 @@ test('unknown kinds, throwing providers and missing actions never break the menu
 test('every command a provider references exists in jarvis-commands.js', () => {
   const src = fs.readFileSync(new URL('../ui/src/jarvis-commands.js', import.meta.url), 'utf8');
   const known = new Set([...src.matchAll(/id: '([\w.]+)'/g)].map((m) => m[1]));
-  const { reg } = setup({ layout: { removed: () => [{ kind: 'panel', id: 'x', label: 'x' }], canDock: () => true, dock() {}, float() {}, toggleCollapse() {}, resetPanel() {} } });
+  const { reg } = setup({ layout: { removed: () => [{ kind: 'panel', id: 'x', label: 'x' }], canDock: () => true, dock() {}, float() {}, act() {}, state: () => 'normal', resetPanel() {} } });
   const used = new Set();
   const collect = (entries) => { for (const e of entries) { if (e.cmd) used.add(e.cmd); if (e.submenu) collect(e.submenu()); } };
   const app = { id: 'a', name: 'A', nodeId: 'n' };

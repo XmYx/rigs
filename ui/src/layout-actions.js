@@ -1,5 +1,5 @@
 import { toast } from './api.js';
-import { focusPanel as focusFloating, hasPanel, listPanels as floatingPanels, panelState, resetLayout as resetFloating, resetPanel as resetFloatingPanel, setClosed, setRemoved, showPanel, toggleCollapsed } from './panels.js';
+import { focusPanel as focusFloating, hasPanel, listPanels as floatingPanels, panelAction as floatingAction, panelState, resetLayout as resetFloating, resetPanel as resetFloatingPanel, setClosed, setRemoved, showPanel } from './panels.js';
 import { focusWindow, listWindows } from './wm.js';
 import { createRemovedStore } from './removed-store.js';
 
@@ -20,8 +20,8 @@ const floatingEngine = {
   focus: (id) => focusFloating(id),
   setRemoved: (id, on) => setRemoved(id, on),
   reset: () => resetFloating(),
-  isCollapsed: (id) => panelState(id).collapsed,
-  toggleCollapse: (id) => toggleCollapsed(id),
+  state: (id) => panelState(id).state,
+  act: (id, action) => floatingAction(id, action),
   resetPanel: (id) => resetFloatingPanel(id),
   // The dockable layout engine adds dock(id) / float(id) / isDocked(id) / canDock(id); the floating panels have none.
   windows: () => listWindows(),
@@ -75,7 +75,7 @@ const findApp = (key) => appsApi.list().find((a) => appKey(a) === key) || null;
 /** What can be shown in Window: panels, apps and open windows (removed ones are left out; see listRemoved). */
 export function listPanels() {
   const panels = engine.panels().filter((p) => !removed.isRemoved('panel', p.id))
-    .map((p) => ({ kind: 'panel', id: p.id, title: p.title, open: !p.closed }));
+    .map((p) => ({ kind: 'panel', id: p.id, title: p.title, open: !p.closed, minimized: !!p.minimized }));
   const apps = appsApi.list().filter((a) => !isAppRemoved(a))
     .map((a) => ({ kind: 'app', id: appKey(a), title: a.name, icon: a.icon || '▦', node: a.node, open: !!a.open, app: a }));
   const windows = engine.windows().map((w) => ({ kind: 'window', id: w.id, title: w.title, icon: w.icon, open: true }));
@@ -155,8 +155,10 @@ export function showAll() {
 export function resetLayout() { engine.reset(); }
 
 // Per-panel layout actions behind the panel context menu (ctx-providers.js). Dock / Float exist only when the engine has them.
-export const isCollapsed = (id) => !!engine.isCollapsed?.(id);
-export const toggleCollapse = (id) => engine.toggleCollapse?.(id);
+/** A panel's window state: 'normal' | 'minimized' | 'maximized' | 'closed' (null when unknown). */
+export const panelWindowState = (id) => engine.state?.(id) ?? null;
+/** A title bar action on a panel: minimize | maximize | restore | toggleMaximize | close | open (panels.js panelAction). */
+export const panelWindowAction = (id, action) => engine.act?.(id, action);
 export const resetPanel = (id) => engine.resetPanel?.(id);
 export const canDock = (id) => typeof engine.dock === 'function' && typeof engine.float === 'function' && (engine.canDock ? !!engine.canDock(id) : true);
 export const isDocked = (id) => !!engine.isDocked?.(id);

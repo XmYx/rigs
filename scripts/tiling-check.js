@@ -221,12 +221,12 @@ const errors = [];
   const A2 = await area(page);
   check('after a resize, a tiled quarter re-fits to its zone', near(await rect(page, w1), zone(A2, 'top-left')), JSON.stringify({ got: await rect(page, w1), want: zone(A2, 'top-left') }));
   // A tiled window that is maximised stays maximised through a resize (the re-fit leaves it alone).
-  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn[aria-label="Maximize"]').click(), w1);
+  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn.win-max').click(), w1);
   await sleep(200);
   await page.setViewportSize({ width: 1440, height: 900 });
   await sleep(400);
   check('a maximised tiled window stays maximised after a resize', await page.evaluate((s) => document.querySelector(s).classList.contains('max'), w1));
-  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn[aria-label="Maximize"]').click(), w1);
+  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn.win-max').click(), w1);
   await sleep(200);
   await closeAll(page);
   await sleep(400);

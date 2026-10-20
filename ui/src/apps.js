@@ -91,6 +91,7 @@ export function openApp(a) {
   const w = { app: a, frame, overlay, status: statusOf(a) };
   w.win = openWindow({
     title: `${a.name} — ${a.node}`, icon: a.icon || '▦', width: 1100, height: 760, className: 'app-win',
+    key: `app:${a.nodeId || a.node}/${a.id}`, dockRef: `applet:${a.nodeId || a.node}/${a.id}`, // minimized, it lives in its applet tile
     tools: [
       h('button', { class: 'win-btn', title: 'Reload', onclick: () => reload(w) }, '↻'),
       h('button', { class: 'win-btn', title: 'Open in a browser tab', onclick: () => window.open(appPath(a), '_blank', 'noopener') }, '↗'),

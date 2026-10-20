@@ -142,7 +142,7 @@ const watch = (page) => {
   await page.screenshot({ path: path.join(OUT, 'graphify-structure@1440x900.png') });
 
   // Close with ✕, reopen from Tools.
-  await page.click('#graphify .pclose:not(.pcollapse)');
+  await page.click('#graphify .pctl .win-btn.close');
   await sleep(500);
   check('closes with ✕', (await state(page)).closed);
   await menuItem(page, 'tools', 'Graphify');
@@ -183,12 +183,12 @@ const watch = (page) => {
   await page.screenshot({ path: path.join(OUT, 'graphify-floating@1440x900.png') });
 
   // Collapse and close persist as well.
-  await page.click('#graphify .pcollapse');
+  await page.click('#graphify .pctl .win-btn.win-min');
   await sleep(300);
-  check('collapses to its header', await is(page, '#graphify', 'panel-collapsed'));
-  await page.click('#graphify .pcollapse');
+  check('minimizes to its title strip', await is(page, '#graphify', 'panel-min'));
+  await page.click('#graphify .pctl .win-btn.win-min');
   await sleep(300);
-  await page.click('#graphify .pclose:not(.pcollapse)');
+  await page.click('#graphify .pctl .win-btn.close');
   await sleep(400);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#panels-btn');
@@ -215,9 +215,9 @@ const watch = (page) => {
   const fit = await page.evaluate(() => {
     const vw = innerWidth;
     const vh = innerHeight;
-    const clipped = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button, #graphify .gfy-bar input, #graphify .gfy-bar label, #graphify .gfy-bar select')].filter((e) => e.offsetParent).map((e) => ({ e, r: e.getBoundingClientRect() }))
+    const clipped = [...document.querySelectorAll('#graphify .pctl .win-btn.close, #graphify .gfy-bar button, #graphify .gfy-bar input, #graphify .gfy-bar label, #graphify .gfy-bar select')].filter((e) => e.offsetParent).map((e) => ({ e, r: e.getBoundingClientRect() }))
       .filter(({ r }) => r.left < 0 || r.right > vw + 0.5 || r.top < 0 || r.bottom > vh + 0.5).map(({ e }) => e.className || e.tagName);
-    const small = [...document.querySelectorAll('#graphify .pclose, #graphify .gfy-bar button, #graphify .gfy-bar select')].filter((e) => e.offsetParent && (e.getBoundingClientRect().height < 40 || e.getBoundingClientRect().width < 40)).map((e) => e.className);
+    const small = [...document.querySelectorAll('#graphify .pctl .win-btn.close, #graphify .gfy-bar button, #graphify .gfy-bar select')].filter((e) => e.offsetParent && (e.getBoundingClientRect().height < 40 || e.getBoundingClientRect().width < 40)).map((e) => e.className);
     return { clipped, small, hscroll: document.documentElement.scrollWidth > vw, box: document.querySelector('#graphify').getBoundingClientRect().toJSON() };
   });
   check('phone: no clipped controls, no sideways scroll', !fit.clipped.length && !fit.hscroll, JSON.stringify(fit));

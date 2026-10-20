@@ -81,10 +81,10 @@ export function registerJarvisCommands(deps) {
     { id: 'edit.display', label: 'Display & theme…', icon: '🎨', run: () => deps.display() },
 
     // ------------------------------------------------------------ Window (per item: args = { kind, id, title, open })
-    { id: 'window.toggle', label: (c, a) => a?.title || a?.id, checked: (c, a) => !!a?.open, run: (c, a) => (a.open && a.kind === 'panel' ? hidePanel(a) : focusPanel(a)) },
-    { id: 'window.open', label: (c, a) => (a?.kind === 'app' ? 'Open' : a?.open ? 'Focus' : 'Show'), run: (c, a) => (a.kind === 'app' ? openPanel(a) : focusPanel(a)) },
-    { id: 'window.hide', label: (c, a) => (a?.kind === 'panel' ? 'Hide' : 'Close'), enabled: (c, a) => !!a?.open, run: (c, a) => hidePanel(a) },
-    { id: 'window.hideOthers', label: (c, a) => (a ? 'Hide others' : 'Hide other panels'), run: (c, a) => hideOthers(a?.id ?? lastFocusedPanel()) },
+    { id: 'window.toggle', label: (c, a) => `${a?.title || a?.id}${a?.minimized ? ' (minimized)' : ''}`, checked: (c, a) => !!a?.open, run: (c, a) => (a.open && a.kind === 'panel' && !a.minimized ? hidePanel(a) : focusPanel(a)) }, // a minimized panel is restored, not closed
+    { id: 'window.open', label: (c, a) => (a?.kind === 'app' ? 'Open' : a?.minimized ? 'Restore' : a?.open ? 'Focus' : 'Show'), run: (c, a) => (a.kind === 'app' ? openPanel(a) : focusPanel(a)) },
+    { id: 'window.hide', label: 'Close', enabled: (c, a) => !!a?.open, run: (c, a) => hidePanel(a) },
+    { id: 'window.hideOthers', label: (c, a) => (a ? 'Close others' : 'Close other panels'), run: (c, a) => hideOthers(a?.id ?? lastFocusedPanel()) },
     { id: 'window.remove', label: 'Remove', when: (c, a) => a?.kind === 'panel' || a?.kind === 'app', run: (c, a) => removePanel(a) },
     { id: 'window.showAll', label: 'Show all panels', run: () => showAll() },
     { id: 'panels.docking', label: 'Docking layout', checked: () => isDocking(), when: (ctx) => !ctx.phone, run: () => toggleDocking() },
