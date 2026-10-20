@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -263,7 +264,7 @@ test('slackRoute maps the documented routes and keeps the confirm gate (only a J
 
 test('rigs serve: /api/local/connectors/slack/* answers through the normal /api/local handler', async (t) => {
   const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-slack-srv-'));
-  const PORT = 47600 + Math.floor(Math.random() * 300);
+  const PORT = await new Promise((r) => { const l = net.createServer().listen(0, '127.0.0.1', () => { const p = l.address().port; l.close(() => r(p)); }); }); // a free port, not a random one that another RIGS may hold
   const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'slack-test', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
   delete env.SLACK_BOT_TOKEN;
   delete env.SLACK_USER_TOKEN;
