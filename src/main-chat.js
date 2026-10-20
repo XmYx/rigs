@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { truncate } from './util.js';
 
 /**
@@ -121,4 +122,36 @@ export function appendedSince(disk, base, mine) {
   const key = (m) => `${m.role}\u0000${m.ts}\u0000${m.text}`;
   const have = new Set((mine || []).map(key));
   return extra.filter((m) => !have.has(key(m)));
+}
+
+/** What `mergeChat` compares a writer's copy against: its message count and other fields as read. */
+export function chatSnapshot(c) {
+  const { messages, ...fields } = c;
+  return { length: messages.length, fields: structuredClone(fields) };
+}
+
+/**
+ * Three-way merge of a chat a writer held while others wrote the file (pure; mutates and returns `mine`). `loaded` is
+ * the writer's copy as read (chatSnapshot), `disk` the file now. A field this writer left as it read it takes the
+ * file's value, so a stale copy never writes back an older `seen` mark, session, usage total or compaction. Messages
+ * appended meanwhile are kept: a writer that moved a `seen` mark (a full turn) keeps its own messages first, so the
+ * others stay after its mark and the brain is told them next turn; any other writer (a quick turn, a report, a mirror)
+ * adds its messages after the file's, so the file's `seen` marks stay true and a brain is never re-told its own turn.
+ */
+export function mergeChat(disk, loaded, mine) {
+  if (!disk || !loaded) return mine;
+  const seenMoved = !isDeepStrictEqual(mine.seen, loaded.fields.seen);
+  const keys = new Set([...Object.keys(loaded.fields), ...Object.keys(disk)]);
+  keys.delete('messages');
+  keys.delete('updatedAt');
+  for (const k of keys) {
+    if (!isDeepStrictEqual(mine[k], loaded.fields[k])) continue;
+    if (k in disk) mine[k] = disk[k]; else delete mine[k];
+  }
+  if (seenMoved) mine.messages.push(...appendedSince(disk, loaded.length, mine.messages));
+  else {
+    const onDisk = disk.messages || [];
+    mine.messages = [...onDisk, ...appendedSince({ messages: mine.messages }, loaded.length, onDisk)];
+  }
+  return mine;
 }

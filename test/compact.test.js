@@ -111,6 +111,14 @@ test('compactionCut / needsCompaction: the threshold on the live session, the la
   assert.equal(C.needsCompaction(c, 'claude', { ...s, keepMessages: 50 }), false, 'nothing to summarise');
   assert.equal(C.needsCompaction({ ...c, compaction: { summary: 'x', upto: 12 } }, 'claude', s), false, 'nothing new since the last cut');
   assert.equal(C.needsCompaction(c, 'codex', s), false);
+  // a session that starts near the threshold (persona + tools + a seeded summary) is not compacted after every turn
+  const near = (tokens, start) => ({ ...c, context: { claude: { tokens, start, sessionId: 's1' } } });
+  assert.equal(C.needsCompaction(near(100500, 99000), 'claude', s), false, 'grown less than 10% of atTokens since its first turn');
+  assert.equal(C.needsCompaction(near(109000, 99000), 'claude', s), true);
+  assert.equal(C.needsCompaction(near(100000, 40000), 'claude', s), true);
+  const low = { ...s, atTokens: 30000 }; // under a fresh session's size: a late MCP server's tools (+4k) is not a reason
+  assert.equal(C.needsCompaction(near(42000, 37800), 'claude', low), false, 'less than MIN_GROWTH.tokens');
+  assert.equal(C.needsCompaction(near(46000, 37800), 'claude', low), true);
 });
 
 test('summaryPrompt: previous summary + the stretch to the cut, bounded with the newest kept', () => {
@@ -193,6 +201,7 @@ test('past atTokens the next turn starts a fresh session seeded with the summary
   let c = await chat.getChat(main.id);
   const s1 = c.claudeSessionId;
   assert.equal(c.context.claude.tokens, 8000, 'the last call, not the 4M cumulative cache reads');
+  assert.equal(c.context.claude.start, 8000, 'the session\'s size at its first turn');
   assert.equal(summaries().length, 0, 'below the threshold: no compaction');
   assert.ok(turns().at(-1).includes('--resume'));
   process.env.FAKE_CTX = '25000';
@@ -220,6 +229,7 @@ test('past atTokens the next turn starts a fresh session seeded with the summary
   c = await chat.getChat(main.id);
   assert.ok(c.claudeSessionId && c.claudeSessionId !== s1);
   assert.equal(c.context.claude.tokens, 9000);
+  assert.equal(c.context.claude.start, 9000, 'a new session: a new start');
   // and the turn after resumes that new session with nothing replayed
   await say(main.id, 'thanks');
   assert.equal(turns().at(-1)[turns().at(-1).indexOf('--resume') + 1], c.claudeSessionId);

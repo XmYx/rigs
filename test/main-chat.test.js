@@ -24,7 +24,8 @@ const reply = 'Re: ' + args[1].split('\\n').at(-1);
 const model = args[args.indexOf('--model') + 1];
 const out = (o) => console.log(JSON.stringify(o));
 out({ type: 'system', subtype: 'init', session_id: sid });
-if (process.env.FAKE_CLAUDE_SLEEP) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_CLAUDE_SLEEP));
+const sleep = process.env.FAKE_CLAUDE_SLEEP || /slow:(\\d+)$/.exec(reply)?.[1]; // "… slow:<ms>" in a request slows that one
+if (sleep) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(sleep));
 out({ type: 'stream_event', session_id: sid, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: reply } } });
 out({ type: 'result', session_id: sid, is_error: false, result: reply, total_cost_usd: 0.001,
   usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { [model]: { inputTokens: 10, outputTokens: 5 } } });
@@ -117,6 +118,36 @@ test('appendedSince: what another writer added after a read, without what this c
   assert.deepEqual(M.appendedSince({ messages: [a, b] }, undefined, [a]), [], 'a chat never read has nothing to merge');
 });
 
+test('mergeChat: a stale copy keeps the file\'s seen marks, sessions and order; a full turn keeps its own messages first', () => {
+  const a = msg('user', 'a', { ts: 1 });
+  const read = { id: 'c', messages: [a], seen: { claude: 1 }, claudeSessionId: 's1', quickUsage: 1, compactFailed: { ts: 1 } };
+  // meanwhile a full turn saved: its request + reply, seen past them, a new session, the failure cleared
+  const uF = msg('user', 'full', { ts: 2 });
+  const aF = msg('assistant', 'Re: full', { ts: 3 });
+  const disk = { id: 'c', messages: [a, uF, aF], seen: { claude: 3 }, claudeSessionId: 's2', quickUsage: 1 };
+  // a quick turn read before it and saves after it
+  const quick = structuredClone(read);
+  const loaded = M.chatSnapshot(quick);
+  quick.messages.push(msg('user', 'quick', { ts: 4 }), msg('assistant', 'Re: quick', { ts: 5 }));
+  quick.quickUsage = 2;
+  M.mergeChat(disk, loaded, quick);
+  assert.deepEqual(quick.messages.map((m) => m.text), ['a', 'full', 'Re: full', 'quick', 'Re: quick'], 'after the file\'s messages');
+  assert.deepEqual(quick.seen, { claude: 3 }, 'the full turn\'s seen mark is not written back');
+  assert.equal(quick.claudeSessionId, 's2');
+  assert.equal(quick.quickUsage, 2, 'what this writer changed is its own');
+  assert.ok(!('compactFailed' in quick), 'a field removed from the file stays removed');
+  // the other way round: the full turn read first and saves after a report landed
+  const full = structuredClone(read);
+  const loadedFull = M.chatSnapshot(full);
+  full.messages.push(uF, aF);
+  full.seen = { claude: 3 };
+  const report = msg('assistant', 'done', { ts: 2.5, report: true, brain: 'rigs' });
+  M.mergeChat({ ...read, messages: [a, report] }, loadedFull, full);
+  assert.deepEqual(full.messages.map((m) => m.text), ['a', 'full', 'Re: full', 'done'], 'the report after the turn\'s seen mark');
+  assert.deepEqual(full.seen, { claude: 3 });
+  assert.equal(M.mergeChat(null, loaded, quick), quick, 'nothing on disk: written as it is');
+});
+
 // ---------------------------------------------------------------- end to end (stand-in claude)
 
 test('3 quick answers and 1 implement request: the next answer\'s prompt holds all of them; the full brain hears each once', { skip: !posix && 'stand-in claude is a POSIX script' }, async () => {
@@ -187,6 +218,21 @@ test('a report or mirror written while a full turn runs is kept, and the brain i
   assert.ok(c.seen.claude <= texts.indexOf('Project szuf is done.'), 'the report sits after the turn\'s seen mark');
   await chat.jarvisSend('next', CLAUDE, () => {}, { router: answerRouter, quick: false });
   assert.match(asked(), /RIGS report: Project szuf is done\.\n\nNow the user says:\nnext$/);
+});
+
+test('a quick answer that starts during a full turn and ends after it: the brain hears the quick one, not its own turn again', { skip: !posix && 'stand-in claude is a POSIX script' }, async () => {
+  const main = await chat.mainChat();
+  const full = chat.jarvisSend('a full one slow:600', CLAUDE, () => {}, { router: answerRouter, quick: false });
+  await new Promise((r) => setTimeout(r, 150));
+  const quick = chat.jarvisSend('a quick one slow:1500', {}, () => {}, { router: answerRouter, quick: 'haiku' });
+  await Promise.all([full, quick]);
+  const c = await chat.getChat(main.id);
+  const texts = c.messages.map((m) => m.text);
+  assert.ok(texts.indexOf('Re: a full one slow:600') < texts.indexOf('a quick one slow:1500'), 'the quick turn\'s messages after the full turn\'s');
+  assert.equal(c.seen.claude, texts.indexOf('a quick one slow:1500'), 'the full turn\'s seen mark survived the quick turn\'s save');
+  await chat.jarvisSend('next', CLAUDE, () => {}, { router: answerRouter, quick: false });
+  assert.equal(count(asked(), 'a full one'), 0, 'not re-told its own turn');
+  assert.equal(count(asked(), 'Re: a quick one'), 1);
 });
 
 test('chats/main/clear is still the explicit reset: the next answer starts a fresh thread with no history', { skip: !posix && 'stand-in claude is a POSIX script' }, async () => {

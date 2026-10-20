@@ -6,7 +6,7 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { appendedSince, compactionSummary, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
+import { chatSnapshot, compactionSummary, mergeChat, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
 import { SUMMARY_SYSTEM, applyCompaction, compactSettings, compactStatus, compactionCut, contextTokens, keepCompaction, needsCompaction, summaryPrompt } from './compact.js';
 import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
@@ -32,14 +32,14 @@ export async function listChats() {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// chat object → how many messages it had when read: saving merges in what other writers appended since (see saveChat)
-const loadedLength = new WeakMap();
+// chat object → its state when read (chatSnapshot): saving merges in what other writers changed since (see saveChat)
+const loadedAs = new WeakMap();
 const chatLocks = new Map();
 
 export async function getChat(id) {
   if (!/^[\w-]+$/.test(id)) return null;
   const c = await readJson(path.join(DIR, id + '.json'));
-  if (c?.messages) loadedLength.set(c, c.messages.length);
+  if (c?.messages) loadedAs.set(c, chatSnapshot(c));
   return c;
 }
 
@@ -53,23 +53,24 @@ function withChatLock(id, fn) {
 }
 
 /**
- * Write a chat. A turn holds its chat object for as long as the brain runs; messages another writer appended to the
- * file meanwhile (a report, a work request mirrored into the JARVIS thread, a quick answer) are kept, after this
- * object's own — so they also stay after a turn's `seen` mark and the brain is told about them next turn. A compaction
- * that landed meanwhile (src/compact.js) is kept too: the object's older summary and sessions are not written back.
+ * Write a chat. A turn holds its chat object for as long as the brain runs; what other writers did to the file
+ * meanwhile (a report, a work request mirrored into the JARVIS thread, a quick answer, a full turn) is kept
+ * (main-chat.js mergeChat): their messages, and every field this object didn't change itself, so a stale copy never
+ * writes back an older `seen` mark or session. A compaction that landed meanwhile (src/compact.js) is kept too: the
+ * object's older summary and sessions are not written back.
  */
 async function saveChat(c) {
   const file = path.join(DIR, c.id + '.json');
   await withChatLock(c.id, async () => {
-    const base = loadedLength.get(c);
-    if (base != null) {
+    const loaded = loadedAs.get(c);
+    if (loaded) {
       const disk = await readJson(file);
-      c.messages.push(...appendedSince(disk, base, c.messages));
+      mergeChat(disk, loaded, c);
       keepCompaction(disk, c);
     }
     c.updatedAt = Date.now();
     await writeJsonAtomic(file, c);
-    loadedLength.set(c, c.messages.length);
+    loadedAs.set(c, chatSnapshot(c));
   });
 }
 
@@ -294,7 +295,12 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
         } catch {}
         // The session's context size for compaction (src/compact.js): the last call's tokens, never the summed usage.
         context = contextTokens(e, lastCall);
-        if (!fresh && context != null) chat.context = { ...chat.context, [key]: { tokens: context, sessionId: e.session_id || chat[sessionKey] || '', ts: Date.now() } };
+        // `start`: the session's size at its first measured turn (persona, tools, a seeded summary), what compaction can't take away
+        if (!fresh && context != null) {
+          const sessionId = e.session_id || chat[sessionKey] || '';
+          const prev = chat.context?.[key];
+          chat.context = { ...chat.context, [key]: { tokens: context, sessionId, ts: Date.now(), start: prev?.sessionId === sessionId && prev.start != null ? prev.start : context } };
+        }
         // --max-turns (the fast path, YOLO) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
         if (e.is_error) error = e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }

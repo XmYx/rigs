@@ -94,16 +94,24 @@ export function compactionCut(chat, keep = COMPACT_DEFAULTS.keepMessages) {
   return prev;
 }
 
+// A compaction can only take away what the conversation added since the session started (`context.start`), never the
+// persona and tools every session starts with (~40k). Below this much growth — a share of atTokens, at least `tokens`
+// (a session's size also jumps by a few thousand when an MCP server's tools attach late) — it is not tried: with a
+// threshold at or under that start, every fresh session would otherwise be compacted again after its first turn.
+export const MIN_GROWTH = { share: 0.1, tokens: 8000 };
+
 /**
  * Whether the thread should be compacted after a turn of `brain`: on, a context size measured for the session that is
- * still live, at or past atTokens, and something to summarise (the cut moved past the previous one).
+ * still live, at or past atTokens, grown by at least MIN_GROWTH since the session's first turn, and
+ * something to summarise (the cut moved past the previous one).
  */
 export function needsCompaction(chat, brain, settings) {
   const s = compactSettings(settings);
   const c = chat?.context?.[brain];
   const session = chat?.[SESSION_KEYS[brain]];
   if (!s.enabled || !c || !session || c.sessionId !== session) return false;
-  return num(c.tokens) >= s.atTokens && compactionCut(chat, s.keepMessages) > prevUpto(chat);
+  return num(c.tokens) >= s.atTokens && num(c.tokens) - num(c.start) >= Math.max(MIN_GROWTH.tokens, MIN_GROWTH.share * s.atTokens)
+    && compactionCut(chat, s.keepMessages) > prevUpto(chat);
 }
 
 export const SUMMARY_SYSTEM = 'You compact a long conversation between Sir (the user) and JARVIS, the voice of RIGS OS (his control plane for the machines on his network), so JARVIS can continue it in a fresh session. You get the summary of the conversation before this stretch (when there is one) and the messages since, in the user message. Summarise only those: leave out anything else in your context (environment, account, tool or harness details). Write the new summary that replaces both. Keep what JARVIS needs to carry on: decisions taken and why; open threads and unanswered questions; work in flight (projects, tasks, machines, ids); Sir\'s preferences and standing instructions; names, paths, URLs, numbers and facts he told JARVIS. Drop small talk, finished one-off lookups and routine RIGS reports unless they still matter. Carry still-relevant points of the previous summary forward. Use these markdown headings in this order: Decisions, Open threads, Sir\'s preferences, Projects and references, Facts to remember. Terse bullets, no preamble, at most 6000 characters.';
