@@ -2,7 +2,8 @@
 // its /healthz, and the App Cloud registration on this machine (POST /api/local/apps, the same call as the MCP tool
 // mesh_app_register). Elsewhere (macOS, Windows, no systemd) it registers a launch command and asks JARVIS to start it.
 // The app must serve relative URLs (it lives under /api/nodes/<node>/apps/<id>/) and answer GET <healthPath>.
-//   { "id": "wordcloud", "name": "Word cloud", "icon": "☁️", "port": 8750, "command": "node server.js", "cwd": "~/apps/wordcloud",
+// Ad-hoc apps live in the shared folder synced across the mesh (`rigs shared path`, default ~/RIGS-Shared): apps/<id>.
+//   { "id": "wordcloud", "name": "Word cloud", "icon": "☁️", "port": 8750, "command": "node server.js", "cwd": "~/RIGS-Shared/apps/wordcloud",
 //     "description": "what it does", "tags": ["text"] }
 // It refuses to take over an App Cloud id that points at another port, or a unit file it did not write, unless force: true.
 import { execFile } from 'node:child_process';

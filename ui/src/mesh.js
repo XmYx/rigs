@@ -113,6 +113,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     const address = h('input', { class: 'path-input', value: cfg.persona.address });
     const humor = h('input', { type: 'range', min: 0, max: 100, value: cfg.persona.humor });
     const auto = h('input', { type: 'checkbox', checked: cfg.update.auto });
+    const thinking = h('input', { type: 'checkbox', checked: cfg.persona.thinkingPhrases !== false });
     const voices = voice.voices();
     const voiceSel = h('select', { class: 'mini' }, ...voices.map((v) => h('option', { value: v.id, selected: v.id === voice.voiceId }, v.label)));
     const perm = h('select', { class: 'mini' }, ...['auto', 'acceptEdits', 'manual', 'dontAsk', 'bypassPermissions', 'plan'].map((m) => h('option', { value: m, selected: cfg.brain.claudePermissionMode === m }, m)));
@@ -121,14 +122,16 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
     settings.replaceChildren(
       h('label', {}, 'Assistant name', name), h('label', {}, 'Calls you', address),
       h('label', {}, `Humor (${cfg.persona.humor}%)`, humor), h('label', {}, 'Voice', voiceSel),
+      h('label', { class: 'check' }, thinking, ' Answer at once with a thinking phrase (“One moment, sir.”)'),
       h('label', {}, 'JARVIS works in (cwd + writable root, this machine)', root),
       h('label', {}, 'Claude chat permission mode (this machine)', perm),
       h('label', {}, 'Codex chat sandbox (this machine)', sandbox),
       h('label', { class: 'check' }, auto, ' Auto-update this machine from GitHub every ', String(cfg.update.intervalMin), ' min'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
         voice.setVoice(voiceSel.value);
-        await api('/api/local/config', { method: 'POST', body: { persona: { name: name.value, address: address.value, humor: Number(humor.value) }, update: { auto: auto.checked }, brain: { claudePermissionMode: perm.value, codexSandbox: sandbox.value, workRoot: root.value.trim() || '~' } } });
+        await api('/api/local/config', { method: 'POST', body: { persona: { name: name.value, address: address.value, humor: Number(humor.value), thinkingPhrases: thinking.checked }, update: { auto: auto.checked }, brain: { claudePermissionMode: perm.value, codexSandbox: sandbox.value, workRoot: root.value.trim() || '~' } } });
         toast('Saved', 'ok');
+        window.dispatchEvent(new CustomEvent('rigs:persona', { detail: { name: name.value, address: address.value, thinkingPhrases: thinking.checked } })); // main.js picks it up at once
         voice.say(`Settings saved, ${address.value}.`);
       } }, 'Save'), h('button', { class: 'btn', onclick: () => voice.say(`Good evening, ${address.value}. All systems nominal.`) }, '▶ Test voice')));
   }

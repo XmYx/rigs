@@ -7,8 +7,12 @@ import { claudeFlags } from './models.js';
 import { catalogLines, matchFlow, resolve as resolveWorkspace } from './workspaces.js';
 import { bin } from './tools.js';
 import { HOME, augmentedPath, run } from './util.js';
+import { isYoloRequest, resolveYolo } from './yolo.js';
 
-export const ROUTES = ['answer', 'implement', 'plan', 'continue'];
+export { isYoloRequest };
+// 'yolo' (src/yolo.js): a YOLO marker ("yolo …", "… yolo it", "in yolo mode") or jarvis/send `yolo: true` — decided by
+// keyword before any engine runs, never filed as work. The engines themselves only choose among the other four.
+export const ROUTES = ['answer', 'implement', 'plan', 'continue', 'yolo'];
 export const ENGINES = ['jev', 'claude', 'rules'];
 const DEFAULT_ROUTER = {
   preroute: true, engine: 'jev', fallback: 'claude', claudeModel: 'claude-haiku-5-5',
@@ -386,6 +390,9 @@ export function parseProjects(text = '') {
  * Jev answered unsure (capture.unsure) goes to the keyword rules at once rather than the slower fallback. Engines are injectable for tests.
  */
 export async function route(text, ctx, { settings = routerSettings(config().router), engines = {} } = {}) {
+  // A YOLO request is decided by its marker before any engine is asked (ctx.yolo = the request's own yes/no wins).
+  const y = yoloDecision(text, ctx);
+  if (y) return y;
   const call = { jev: engines.jev || ((t, c) => jevRoute(t, c, settings)), claude: engines.claude || ((t, c) => modelRoute(t, c, { model: settings.claudeModel })) };
   const tried = [];
   for (const e of [...new Set([settings.engine, settings.fallback])]) {
@@ -405,8 +412,21 @@ export async function route(text, ctx, { settings = routerSettings(config().rout
   return withWork({ ...heuristicRoute(text, ctx.threads), via: 'rules' }, text, ctx);
 }
 
+/**
+ * The 'yolo' decision when the request is one (src/yolo.js resolveYolo: ctx.yolo, the request's `yolo`, beats the
+ * text; ctx.yoloSettings defaults to config.yolo), else null. Pure given its inputs.
+ */
+export function yoloDecision(text, { yolo, yoloSettings } = {}) {
+  const y = resolveYolo({ text, override: yolo, settings: yoloSettings ?? config().yolo });
+  return y.on ? { route: 'yolo', via: 'rules', reason: y.reason, title: '', yolo: { via: y.via, task: y.task } } : null;
+}
+
 /** Second opinion on the decision + work items bound to folders. Pure given the decision (tested). */
-export function withWork(d, text, { catalog = [], selfNode = '' } = {}) {
+export function withWork(d, text, { catalog = [], selfNode = '', yolo, yoloSettings } = {}) {
+  // A YOLO request is never work: it wins over the engines' pick, the guard, flows, tool work and self binding.
+  const y = yoloDecision(text, { yolo, yoloSettings });
+  if (y) { for (const k of ['work', 'threadId', 'projectId']) delete d[k]; return Object.assign(d, y); }
+  if (d.route === 'yolo') d.route = 'answer'; // a model named yolo for a request that isn't one (or said yolo: false)
   d = Object.assign(d, guardRoute(d, text));
   // Opening a folder or file is a one-step ui_open call: never filed as work, whatever the model said.
   if ((d.route === 'implement' || d.route === 'plan') && isBrowseRequest(text)) {

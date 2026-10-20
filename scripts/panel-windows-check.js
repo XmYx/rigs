@@ -79,6 +79,17 @@ async function menu(page, top, item) {
   await page.locator('.mb-item').filter({ hasText: item }).first().click();
   await sleep(450);
 }
+/**
+ * Store layout keys the way JARVIS keeps them: on the daemon (synced-storage.js → PUT /api/local/ui-layout, shared by
+ * every machine), with this page's localStorage as its cache. The next load reads them from there.
+ */
+const saveLayout = (page, keys) => page.evaluate(async (kv) => {
+  for (const [key, value] of Object.entries(kv)) {
+    const r = await fetch('/api/local/ui-layout', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, value }) });
+    if (!r.ok) throw new Error(`PUT ${key}: HTTP ${r.status}`);
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+}, keys);
 /** The dock tile showing a panel minimized: its own `panel:<id>` tile or its tool tile; a popover tile counts too. */
 const dockMark = (page, id) => page.evaluate((pid) => {
   const s = globalThis.__rigsAppDock.state;
@@ -127,6 +138,7 @@ try {
   const before = await rectOf(page, P('work'));
   await press(page, 'work', 'win-max');
   await sleep(450);
+  await settle(page, P('work'));
   const stage = await stageRect(page);
   const max = await rectOf(page, P('work'));
   check('maximize: the panel fills the stage (below the menu bar, inside the app dock)', near(max, stage, 3), `${JSON.stringify(max)} vs ${JSON.stringify(stage)}`);
@@ -135,6 +147,7 @@ try {
   await shot(page, 'maximized-1440.png');
   await press(page, 'work', 'win-max');
   await sleep(450);
+  await settle(page, P('work'));
   check('restore: back at the exact previous rect', near(await rectOf(page, P('work')), before), `${JSON.stringify(before)} → ${JSON.stringify(await rectOf(page, P('work')))}`);
   await page.locator(`${P('work')} .wk-head`).dispatchEvent('dblclick');
   await sleep(450);
@@ -214,7 +227,7 @@ try {
     collapsed: ['dock', 'questions', 'usage'],
     windows: {},
   };
-  await page.evaluate((L) => { localStorage.setItem('rigs.docking', '1'); localStorage.setItem('rigs.dock', JSON.stringify(L)); }, v2);
+  await saveLayout(page, { 'rigs.dock': v2, 'rigs.docking': 1 }); // as a machine saved it before this version
   await ready(page);
   const s3 = await stored(page);
   check('v2 docked layout migrates to version 3', s3.version === 3 && s3.minimized.includes('dock') && s3.minimized.includes('questions') && !s3.minimized.includes('usage'), JSON.stringify({ v: s3.version, min: s3.minimized }));
@@ -232,11 +245,13 @@ try {
   const slot = await rectOf(page, P('traces'));
   await press(page, 'traces', 'win-max');
   await sleep(450);
+  await settle(page, P('traces'));
   check('docked maximize zooms the panel over the whole stage', near(await rectOf(page, P('traces')), await stageRect(page), 3), JSON.stringify(await rectOf(page, P('traces'))));
   check('docked maximize keeps the tree (tabs and splitters stay)', (await tabs()).length === 3 && (await stored(page)).root.children.length === 4);
   await shot(page, 'docked-maximized-1440.png');
   await press(page, 'traces', 'win-max');
   await sleep(450);
+  await settle(page, P('traces'));
   check('restore drops it back into its slot', near(await rectOf(page, P('traces')), slot) && (await cls(page, P('traces'))).includes('docked'), `${JSON.stringify(slot)} → ${JSON.stringify(await rectOf(page, P('traces')))}`);
   // Minimize and close act on the tab.
   await page.locator('.dock-tab:has-text("Active agents")').dispatchEvent('click');
@@ -259,7 +274,7 @@ try {
   check('the galaxy has no window buttons and stays in the tree', !(await page.$('.dock-stage .win-btn, #graph .win-btn')) && (await stored(page)).root.children.some((c) => c.id === 'stage'));
   await menu(page, 'panels', 'Reset layout');
   check('Reset layout still works in docking mode', (await stored(page)).minimized.length === 0 && (await tabs()).length === 0);
-  await page.evaluate(() => localStorage.setItem('rigs.docking', '0'));
+  await saveLayout(page, { 'rigs.docking': 0 });
   await ctx.close();
 
   // ======================================================================== phone 390x844
@@ -267,6 +282,8 @@ try {
   const ph = await pctx.newPage();
   ph.on('pageerror', (e) => errors.push(String(e)));
   await ready(ph);
+  // The layout is shared with the desktop page through the daemon: start from a closed sheet, then open it by hand.
+  if ((await rectOf(ph, P('work')))?.shown) { await ph.locator(`${P('work')} .win-btn.close`).dispatchEvent('click'); await sleep(500); }
   await ph.evaluate(() => document.getElementById('btn-work').click());
   await sleep(600);
   const pw = await btnInfo(ph, `${P('work')} .pctl > .win-btn`);

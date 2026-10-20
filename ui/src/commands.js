@@ -98,12 +98,17 @@ export function matchShortcut(s, ev, { mac = false } = {}) {
   return true;
 }
 
+// Named keys as menus show them (the rest: first letter capitalised, F10).
+const KEY_NAMES = { arrowleft: '←', arrowright: '→', arrowup: '↑', arrowdown: '↓', pageup: 'PgUp', pagedown: 'PgDn' };
+const MAC_KEY_NAMES = { enter: '↩', backspace: '⌫', escape: '⎋', home: '↖', end: '↘', pageup: '⇞', pagedown: '⇟' };
+
 /** How a shortcut is shown in a menu: ⌘⇧M on macOS, Ctrl+Shift+M elsewhere. */
 export function formatShortcut(s, mac = false) {
   if (!s) return '';
   const first = Array.isArray(s) ? s[0] : s;
   const sc = parseShortcut(first);
-  const key = sc.key.length === 1 ? sc.key.toUpperCase() : sc.key.replace(/^./, (c) => c.toUpperCase());
+  const named = (mac && MAC_KEY_NAMES[sc.key]) || KEY_NAMES[sc.key];
+  const key = named || (sc.key.length === 1 ? sc.key.toUpperCase() : sc.key.replace(/^./, (c) => c.toUpperCase()));
   if (mac) return `${sc.ctrl ? '⌃' : ''}${sc.alt ? '⌥' : ''}${sc.shift ? '⇧' : ''}${sc.mod || sc.meta ? '⌘' : ''}${key}`;
   return [sc.mod || sc.ctrl ? 'Ctrl' : '', sc.meta ? 'Meta' : '', sc.alt ? 'Alt' : '', sc.shift ? 'Shift' : '', key].filter(Boolean).join('+');
 }

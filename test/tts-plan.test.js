@@ -1,22 +1,32 @@
 // Pure speech planning: engine order, silent fallback, silence trimming, sentence chunking for streamed speech.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { engineOrder, runChain, trimSilence } from '../src/tts-plan.js';
+import { engineOrder, notifyVoice, runChain, trimSilence, wantsDefaultVoice } from '../src/tts-plan.js';
 import { drain, nextChunk } from '../ui/src/sentences.js';
 
-test('engineOrder: auto prefers neural, then piper, then the machine engine; unreachable engines are left out', () => {
+test('engineOrder: auto prefers Kokoro (neural), then resident piper, then the machine engine; unreachable engines are left out', () => {
   assert.deepEqual(engineOrder({ up: { piper: true } }), ['neural', 'piper', 'local']);
   assert.deepEqual(engineOrder({ up: { piper: false } }), ['neural', 'local']);
   assert.deepEqual(engineOrder({ neural: false, up: { piper: true, local: false } }), ['piper']);
   assert.deepEqual(engineOrder({ up: { piper: true, neural: false } }), ['piper', 'local']);
+  // Kokoro down and nothing else installed: still an order that can only fail loudly in the log, never a silent skip
+  assert.deepEqual(engineOrder({ neural: false, up: { piper: false } }), ['local']);
 });
 
 test('engineOrder: the chosen engine goes first, the rest remain as fallback; named local voices stay local', () => {
+  assert.deepEqual(engineOrder({ choice: 'neural', up: { piper: true } }), ['neural', 'piper', 'local']);
   assert.deepEqual(engineOrder({ choice: 'piper', up: { piper: true } }), ['piper', 'neural', 'local']);
   assert.deepEqual(engineOrder({ choice: 'local', up: { piper: true } }), ['local', 'neural', 'piper']);
   assert.deepEqual(engineOrder({ choice: 'bogus', up: { piper: true } }), ['neural', 'piper', 'local']);
   assert.deepEqual(engineOrder({ voice: 'Daniel', up: { piper: true } }), ['local']);
-  assert.deepEqual(engineOrder({ voice: 'neural:bm_lewis', up: {} }), ['neural', 'local']);
+});
+
+test('the retired neural voice ids a saved UI preference may carry select Kokoro again', () => {
+  for (const voice of ['', undefined, 'neural', 'neural:bm_lewis']) {
+    assert.ok(wantsDefaultVoice(voice), String(voice));
+    assert.deepEqual(engineOrder({ voice, up: { piper: true } }), ['neural', 'piper', 'local']);
+  }
+  assert.ok(!wantsDefaultVoice('Daniel'));
 });
 
 test('runChain falls through failing engines, reports them, and keeps a null ("nothing to say") result', async () => {
@@ -83,4 +93,24 @@ test('the first chunk of a reply may end at a comma once it is long; later chunk
   assert.equal(first.chunks.join('') + first.rest, long);
   assert.deepEqual(drain(long, { first: false }).chunks, [long]);
   assert.deepEqual(drain('Yes, sir, right away, as you wish. ', { first: true }).chunks, ['Yes, sir, right away, as you wish. ']);
+});
+
+test('notifyVoice: one notification is voiced once — by the open UIs, or by the speakers here, never both', () => {
+  // aloud: the speakers say it, the UIs only show it (even when a UI is open)
+  const a = notifyVoice({ text: 'Done, sir.', aloud: true });
+  assert.equal(a.ui.speak, false);
+  assert.equal(a.ui.text, 'Done, sir.');
+  assert.equal(a.speakers(true), true);
+  assert.equal(a.speakers(false, 'never'), true); // asked for explicitly
+  // default: the UIs speak it; the speakers only when no UI received it, unless persona.speakAloud is 'never'
+  const d = notifyVoice({ text: 'Done.', speak: true });
+  assert.notEqual(d.ui.speak, false);
+  assert.equal(d.speakers(true), false);
+  assert.equal(d.speakers(false), true);
+  assert.equal(d.speakers(false, 'never'), false);
+  // speak: false wins over aloud: nobody says it
+  const s = notifyVoice({ text: 'Quiet.', speak: false, aloud: true });
+  assert.equal(s.ui.speak, false);
+  assert.equal(s.speakers(false), false);
+  assert.equal(s.speakers(true), false);
 });

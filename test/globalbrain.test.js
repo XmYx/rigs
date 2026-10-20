@@ -10,12 +10,14 @@ const cfg = () => ({
   router: { preroute: true, engine: 'jev', jev: { url: 'http://10.0.0.5:9000', apiKey: 'sekrit', timeoutMs: 8000 } },
   routing: { rules: [{ kind: '*', provider: 'claude' }], customized: false },
   quick: { enabled: true },
+  yolo: { enabled: false },
   ssh: { autoAuthorize: true },
 });
 
-test('globalSettings: brains, router, routing and quick are global; machine-bound keys and secrets are not', () => {
+test('globalSettings: brains, router, routing, quick and yolo are global; machine-bound keys and secrets are not', () => {
   const g = globalSettings(cfg());
-  assert.deepEqual(Object.keys(g).sort(), ['brain.chat', 'brain.core', 'brain.home', 'quick', 'router', 'routing']);
+  assert.deepEqual(Object.keys(g).sort(), ['brain.chat', 'brain.core', 'brain.home', 'quick', 'router', 'routing', 'yolo']);
+  assert.deepEqual(g.yolo, { enabled: false });
   assert.equal(g.router.jev.apiKey, undefined, 'the LocalJev API key never leaves the machine');
   assert.equal(g.router.jev.url, undefined, 'the LocalJev url is per machine');
   assert.equal(g.router.jev.timeoutMs, 8000);

@@ -1,22 +1,39 @@
 // Pure parts of speech output: which engines to try and in what order, running that chain with silent
 // fallback, and trimming the silence a neural voice puts around every clip (Kokoro: ~280 ms lead, 0.5-0.9 s
-// tail), which is more than the synthesis itself and delays first audio. No I/O here, so it is unit-tested.
+// tail), which is more than the synthesis itself and delays first audio. JARVIS has one voice, Kokoro (the
+// jarvis-voice app); resident piper and the machine's own engine only stand in when Kokoro is down, so speech never
+// goes silent. No I/O here, so it is unit-tested.
 
-/** persona.tts.engine: 'auto' (neural voice, then resident piper, then the machine's own) | 'neural' | 'piper' | 'local'. */
+/** persona.tts.engine: 'auto' (Kokoro, then resident piper, then the machine's own) | 'neural' | 'piper' | 'local'. */
 export const ENGINE_CHOICES = ['auto', 'neural', 'piper', 'local'];
 const DEFAULT_ORDER = ['neural', 'piper', 'local'];
 
+/** A voice request that names no particular voice: '' and 'neural' / 'neural:x' (Kokoro, optionally with its voice id x). */
+export const wantsDefaultVoice = (voice) => !voice || voice === 'neural' || String(voice).startsWith('neural:');
+
 /**
- * Ordered engines to try for one utterance. `voice` is the caller's request ('' / 'neural' / 'neural:x' = JARVIS's voice,
- * anything else = a named local voice, which only the machine's own engine can speak). `up` says which engines are
- * reachable right now; an unreachable one is left out, so a stopped engine never costs a timeout.
+ * Ordered engines to try for one utterance. `voice` is the caller's request (default voice = JARVIS's Kokoro,
+ * or a named local voice, which only the machine's own engine can speak). `up` says which engines are reachable right
+ * now; an unreachable one is left out, so a stopped engine never costs a timeout.
  */
 export function engineOrder({ voice = '', choice = 'auto', neural = true, up = {} } = {}) {
-  const named = voice && voice !== 'neural' && !String(voice).startsWith('neural:');
-  if (named) return ['local'];
+  if (!wantsDefaultVoice(voice)) return ['local'];
   const pick = ENGINE_CHOICES.includes(choice) ? choice : 'auto';
   const order = pick === 'auto' ? DEFAULT_ORDER : [pick, ...DEFAULT_ORDER.filter((e) => e !== pick)];
   return order.filter((e) => (e === 'neural' ? neural !== false && up.neural !== false : e === 'local' ? up.local !== false : up[e] === true));
+}
+
+/**
+ * One notification, one voice (server.js broadcastNotify). `ui` is the body every open JARVIS UI gets: with
+ * `aloud: true` this machine's speakers say it, so the UIs only show it. `speakers(seen, speakAloud)` says whether the
+ * speakers here say it, given whether any UI received it and persona.speakAloud ('auto' | 'never').
+ */
+export function notifyVoice(b = {}) {
+  const aloud = b.aloud === true && b.speak !== false;
+  return {
+    ui: aloud ? { ...b, speak: false } : b,
+    speakers: (seen, speakAloud = 'auto') => aloud || (b.speak !== false && !seen && speakAloud !== 'never'),
+  };
 }
 
 /**

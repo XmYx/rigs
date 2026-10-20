@@ -12,6 +12,9 @@ export const NAMED_PLACES = {
   downloads: '~/Downloads', download: '~/Downloads', desktop: '~/Desktop', documents: '~/Documents', docs: '~/Documents',
   pictures: '~/Pictures', photos: '~/Pictures', music: '~/Music', movies: '~/Movies', videos: '~/Videos',
   trash: '~/.rigs/trash', 'rigs trash': '~/.rigs/trash',
+  // The shared folder synced across the mesh (src/shared.js): '@shared' resolves on the machine that opens it.
+  shared: '@shared', '@shared': '@shared', 'rigs shared': '@shared', 'rigs-shared': '@shared', 'mesh shared': '@shared',
+  'shared apps': '@shared/apps', 'shared files': '@shared/files', 'shared reports': '@shared/reports',
 };
 
 /** "my Downloads folder", "the home directory", "Desktop" → "~/Downloads", "~", "~/Desktop"; null when it names no place. */

@@ -22,6 +22,7 @@ import { createSlack, slackRoute } from './connectors/slack.js';
 import { createGoogleDrive, googleDriveRoute } from './connectors/google-drive.js';
 import { adoptGlobal, config, currentGlobal, loadConfig, markGlobalChanged, onGlobalChange, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import { homeNode, relayTarget } from './globalbrain.js';
+import * as uilayout from './uilayout.js';
 import { createLinearService, linearRoute } from './linear.js';
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
@@ -30,6 +31,7 @@ import * as migrations from './migrations.js';
 import * as rootsteps from './rootsteps.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
+import * as shared from './shared.js';
 import * as models from './models.js';
 import * as hubs from './hubs.js';
 import * as openrig from './openrig.js';
@@ -51,6 +53,7 @@ import { stats, systemInfo } from './system.js';
 import * as ts from './tailscale.js';
 import * as toolbox from './toolbox.js';
 import * as tts from './tts.js';
+import { notifyVoice } from './tts-plan.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
 import { APP_DIR, isWin, log, run, truncate } from './util.js';
@@ -58,6 +61,7 @@ import * as work from './work.js';
 import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 import * as uiOpen from './ui-open.js';
+import * as yolo from './yolo.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -123,6 +127,19 @@ export async function startServer() {
   const cfg = config();
   await ssh.ensureKey().catch(() => null);
   const discovery = new Discovery(selfInfo);
+  // The shared folder (src/shared.js): synced with every online RIGS peer, authenticated like any other peer call.
+  const rigsPeers = () => discovery.list().filter((n) => !n.self && n.rigs);
+  const sharedCfg = cfg.shared || {};
+  const sharedEngine = sharedCfg.enabled === false ? null : shared.createShared({
+    root: files.sharedRoot(), stateDir: path.join(RIGS_HOME, 'shared'), trashDir: path.join(RIGS_HOME, 'trash'), node: cfg.name,
+    intervalSec: Number(sharedCfg.intervalSec) || 60, maxFileBytes: (Number(sharedCfg.maxFileMb) || 256) * 1024 * 1024,
+    ignore: Array.isArray(sharedCfg.ignore) ? sharedCfg.ignore : [], log,
+    peers: () => rigsPeers().filter((n) => n.online),
+    fetchPeer: (n, p, { method = 'GET' } = {}) => fetch(n.url.replace(/\/$/, '') + '/api/local/' + p, {
+      method, headers: n.viaToken ? { 'x-rigs-token': config().meshToken } : {},
+      signal: AbortSignal.timeout(p.startsWith('shared/file') ? 30 * 60 * 1000 : 20000),
+    }),
+  });
   responder.setPeers((name) => discovery.get(name)); // the local responder streams turns from the machine hosting its model
   // ComfyUI connector (/api/local/comfyui/*): the user's URL wins; the detected ComfyUI is the fallback.
   const comfy = createComfyService({ suggest: async () => { const c = (await caps.capabilities()).comfyui; return c?.url ? { url: c.url, running: c.running !== false } : null; } });
@@ -135,6 +152,9 @@ export async function startServer() {
   // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
   const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
+  // Dock layout + app dock (src/uilayout.js): saved here, pushed to peers, pulled when they come back.
+  const layoutStore = uilayout.createStore({ file: path.join(RIGS_HOME, 'ui-layout.json'), name: () => config().name });
+  const layoutErr = (e) => { throw e instanceof uilayout.LayoutError ? new HttpError(e.status, e.message) : e; };
   const broadcast = (msg) => { const s = JSON.stringify(msg); for (const w of uiSockets) if (w.readyState === 1) w.send(s); };
 
   discovery.on('change', async (nodes) => {
@@ -352,7 +372,7 @@ export async function startServer() {
       result: (aborted) => ({
         status: aborted ? 'stopped' : error && !done?.text ? 'error' : 'ok',
         // jarvisSend's measurement (pre-routing on/off, routerMs, timeToFiledMs, timeToReplyMs) on the root span too.
-        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy, ...(timing.lane ? { lane: timing.lane, tier: timing.tier, ...(timing.escalated ? { escalated: timing.escalated } : {}) } : {}) } } } : {}),
+        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy, ...(timing.lane === 'yolo' ? { lane: 'yolo', runId: timing.runId, timeToFirstFrameMs: timing.timeToFirstFrameMs } : timing.lane ? { lane: timing.lane, tier: timing.tier, ...(timing.escalated ? { escalated: timing.escalated } : {}) } : {}) } } } : {}),
         output: done ? { text: done.text, chatId: done.chatId, brain: done.brain, model: done.model, ...(error ? { error } : {}) } : { error: error || 'no reply' },
       }),
     };
@@ -573,11 +593,15 @@ export async function startServer() {
   };
 
   async function broadcastNotify(b) {
+    // One notification, one voice (tts-plan.js notifyVoice): when the speakers on this machine are asked for (aloud), the
+    // open UIs must not speak it as well, or Sir hears it twice. Otherwise the UIs speak it, and the speakers only when no UI saw it.
+    const voiced = notifyVoice(b);
+    b = voiced.ui;
     const all = discovery.list().filter((n) => n.online && n.rigs);
     const results = await Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
     // Nobody is looking at a JARVIS UI (or the caller asked for it): say it through this machine's speakers.
     const seen = results.some((r) => r.delivered > 0);
-    if (!process.env.RIGS_NO_NOTIFY && b.speak !== false && (b.aloud === true || (!seen && config().persona.speakAloud !== 'never'))) {
+    if (!process.env.RIGS_NO_NOTIFY && voiced.speakers(seen, config().persona.speakAloud)) {
       tts.speakAloud(String(b.text || '').slice(0, 2000)).catch((e) => log('tts', e.message));
       results.push({ node: config().name, aloud: true });
     }
@@ -683,6 +707,11 @@ export async function startServer() {
       return publicConfig();
     }
 
+    // shared folder (src/shared.js): status, manifest, raw files, forced sync, peer nudges
+    if (sub === 'shared' || sub.startsWith('shared/')) {
+      return shared.sharedRoute(sharedEngine, { method, sub, q, req, res, known: () => rigsPeers().map((n) => ({ name: n.name, online: n.online })) });
+    }
+
     // files
     if (sub === 'files' && method === 'GET') return files.list(q.get('path') || '~', { showHidden: q.get('hidden') === '1' || config().files.showHidden });
     if (sub === 'files/read') return files.readText(q.get('path'));
@@ -692,6 +721,8 @@ export async function startServer() {
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
     if (sub === 'files/rename' && method === 'POST') { const b = await body(); return files.rename(b.from, b.to); }
     if (sub === 'files/trash' && method === 'POST') return files.trash((await body()).path);
+    if (sub === 'files/zip' && method === 'POST') { const b = await body(); return files.zip(b.paths, b.dest, { config: config().files?.zip }); }
+    if (sub === 'files/unzip' && method === 'POST') { const b = await body(); return files.unzip(b.path, b.dest, { config: config().files?.zip }); }
 
     // terminals
     if (sub === 'pty' && method === 'GET') return pty.listPtys();
@@ -761,7 +792,7 @@ export async function startServer() {
       if (relay) res.write(JSON.stringify({ type: 'status', text: `The main brain on ${relay} is unreachable — answering on ${config().name}.` }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -801,6 +832,10 @@ export async function startServer() {
     // Global JARVIS settings: { rev, by, settings, home }. POST adopts a peer's newer revision (never re-broadcast).
     if (sub === 'global' && method === 'GET') return { ...currentGlobal(), home: homeNode(config()) };
     if (sub === 'global' && method === 'POST') { const adopted = adoptGlobal(await body()); if (adopted) broadcast({ type: 'global', ...currentGlobal() }); return { adopted, ...currentGlobal() }; }
+    // Dock layout + app dock, per-key revisions. PUT stamps and pushes; POST ui-layout/adopt is the peer-facing, never re-broadcast one.
+    if (sub === 'ui-layout' && method === 'GET') return layoutStore.snapshot();
+    if (sub === 'ui-layout' && method === 'PUT') { const b = await body(); try { return layoutStore.set(b.key, b.value, { baseRev: b.baseRev }); } catch (e) { layoutErr(e); } }
+    if (sub === 'ui-layout/adopt' && method === 'POST') return { adopted: layoutStore.adopt(await body()) };
     // The main brain: the machine (and its conversational brain) every JARVIS on the mesh talks to.
     if (sub === 'brain/home' && method === 'POST') {
       const b = await body();
@@ -987,6 +1022,22 @@ export async function startServer() {
         if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
       }
       return { ...next, local: localSettings(next.local) };
+    }
+    // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files
+    // (path-confined, served as an opaque-origin sandbox), live-reload events, the page's runtime errors, stop.
+    if (sub === 'yolo' && method === 'GET') return { settings: yolo.yoloSettings(config().yolo), runs: await yolo.listRuns({ limit: Number(q.get('limit')) || 50 }) };
+    if (sub === 'yolo/config' && method === 'GET') return yolo.yoloSettings(config().yolo);
+    if (sub === 'yolo/config' && method === 'POST') {
+      let next;
+      try { next = yolo.applyYoloPatch(config().yolo, await body()); } catch (e) { throw new HttpError(400, e.message); }
+      const cfg = config();
+      cfg.yolo = next;
+      saveConfig(cfg);
+      markGlobalChanged(); // mesh-global: requests run on the main-brain machine, which must see the switch
+      return yolo.yoloSettings(next);
+    }
+    if ((mm = m(/^yolo\/([^/]+)(?:\/([\s\S]*))?$/))) {
+      try { return await yolo.handle(req, res, mm[1], mm[2], { query: q, body }); } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
     // The local responder on this machine (src/responder.js): status, warm-up, busy (for the GPU overseer), and the
     // host side of a turn another machine's fast path streams from here (NDJSON).
@@ -1247,7 +1298,7 @@ export async function startServer() {
       const r = await tts.synthesize(b.text, b.voice);
       if (!res) return { bytes: r ? r.audio.length : 0, engine: r?.engine };
       if (!r) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
-      // x-visemes: base64 JSON lipsync timeline from the neural voice (empty for local engines)
+      // x-visemes: base64 JSON lipsync timeline when the engine provides one (Kokoro sends one; empty for the stand-in voices: the face follows the audio)
       res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': r.audio.length, 'cache-control': 'no-store', 'x-tts-engine': r.engine, ...(r.visemes ? { 'x-visemes': r.visemes } : {}) });
       res.end(r.audio);
       return undefined;
@@ -1346,6 +1397,9 @@ export async function startServer() {
     if (route) { await appHttp(req, res, url, route); return undefined; }
     if ((mm = p.match(/^\/api\/nodes\/([^/]+)\/(.+)$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));
+      // This machine is known from config alone: its own URLs (a YOLO window opened right after start) answer while the
+      // first discovery scan still runs, as the App Cloud routes do.
+      if (!node && appsReg.isSelfRef(decodeURIComponent(mm[1]))) return localApi(req, res, mm[2], url.searchParams);
       if (!node) throw new HttpError(404, 'unknown node ' + mm[1]);
       const rest = mm[2] + url.search;
       if (node.self) return localApi(req, res, mm[2], url.searchParams);
@@ -1396,6 +1450,8 @@ export async function startServer() {
       if (url.pathname === '/starnet' || url.pathname.startsWith('/starnet/')) return await starnet.serve(req, res, url.pathname); // 404 unless experimental.starnet is on
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
       if (starnet.blockedApiCall(req)) throw new HttpError(403, 'the StarNet station frame has no RIGS API access');
+      // A YOLO page (opaque origin) can't read the API, and must not change it blind either (src/yolo.js).
+      if (yolo.opaqueOriginRefused({ method: req.method, pathname: url.pathname, origin: req.headers.origin })) throw new HttpError(403, 'a page in an opaque origin (a YOLO sandbox) may not change anything here');
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
       req.rigsAuth = a;
@@ -1433,6 +1489,7 @@ export async function startServer() {
 
   async function onUpgrade(req, socket, head) {
     const url = new URL(req.url, 'http://localhost');
+    if (yolo.opaqueOriginRefused({ pathname: url.pathname, origin: req.headers.origin, upgrade: true })) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     const a = await authorize(req);
     if (!a.ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     req.rigsAuth = a;
@@ -1513,6 +1570,21 @@ export async function startServer() {
       peerJson(n, 'global', { method: 'POST', body: g, timeout: 8000 }).catch((e) => log(`global → ${n.name}:`, e.message));
     }
   });
+  // Dock layout: tell our browsers about every change; push only what this machine changed to the online peers.
+  layoutStore.onChange((key, entry, source) => {
+    broadcast({ type: 'ui-layout', key, ...entry });
+    if (source !== 'local') return;
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      peerJson(n, 'ui-layout/adopt', { method: 'POST', body: { keys: { [key]: entry } }, timeout: 8000 }).catch(() => { /* offline or an old peer: it pulls when it is back */ });
+    }
+  });
+  let pullingLayout = null;
+  const pullLayout = () => (pullingLayout ||= (async () => {
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      try { const adopted = layoutStore.adopt(await peerJson(n, 'ui-layout', { timeout: 8000 })); if (adopted.length) log(`dock layout: adopted ${adopted.join(', ')} from ${n.name}`); }
+      catch { /* an old peer without /ui-layout, or offline: the next pull tries again */ }
+    }
+  })().finally(() => { pullingLayout = null; }));
   let pulling = null;
   const pullGlobal = () => (pulling ||= (async () => {
     for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
@@ -1520,9 +1592,16 @@ export async function startServer() {
       catch { /* an old peer without /global, or offline: the next pull tries again */ }
     }
   })().finally(() => { pulling = null; }));
-  discovery.on('change', () => { pullGlobal(); });
-  setInterval(() => { pullGlobal(); }, 2 * 60 * 1000).unref();
+  discovery.on('change', () => { pullGlobal(); pullLayout(); });
+  setInterval(() => { pullGlobal(); pullLayout(); }, 2 * 60 * 1000).unref();
   discovery.start();
+  if (sharedEngine) {
+    // A local change tells the online peers to pull now, so it lands everywhere within seconds; a peer (re)appearing
+    // brings a reconcile too.
+    sharedEngine.start({ notify: () => Promise.all(rigsPeers().filter((n) => n.online).map((n) => peerJson(n, 'shared/nudge', { method: 'POST', body: { from: config().name }, timeout: 8000 }).catch(() => null))) });
+    discovery.on('change', () => sharedEngine.nudge());
+    log(`shared folder: ${sharedEngine.root}`);
+  }
   if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
     if (!r.restart) return;
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
@@ -1608,6 +1687,7 @@ export async function startServer() {
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
   // Request traces: each span written here goes to the open UIs as it happens (live view); old day files are pruned.
   trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
+  yolo.events.on('event', (e) => broadcast(e)); // yolo-start · yolo-update · yolo-done (src/yolo.js)
   // Exhibits: fed from the same span stream and the planner's saves; each new entry is pushed live ('exhibit').
   trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
   planner.onProjectSaved((p) => exhibitSvc.handleProject(p));
@@ -1631,5 +1711,5 @@ export async function startServer() {
   // Live stats push for the HUD.
   setInterval(async () => { if (uiSockets.size) broadcast({ type: 'stats', id: config().nodeId, stats: await stats() }); }, 5000).unref();
 
-  return { discovery, close: () => { for (const s of servers.values()) s.close(); discovery.stop(); } };
+  return { discovery, close: () => { for (const s of servers.values()) s.close(); discovery.stop(); sharedEngine?.stop(); } };
 }

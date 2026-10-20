@@ -7,9 +7,10 @@ import { tagCtx } from './ctx-tag.js';
 import { createDisposer } from './cleanup.js';
 import { dockableWindow, emitClosed, emitMinimized, emitOpened, emitRestored, emitTitle } from './open-events.js';
 import { buildChrome, cleanRect, isVisible, transition } from './window-state.js';
+import './tiling.js'; // drag a window to a screen edge or corner to tile it (macOS style); tileWindow / untile live there
 
 // Floating window manager: drag by the whole title bar (docking.js; buttons in it still click), resize from the
-// corner, click to raise. Every window has the same three title bar buttons, in this order: minimize (–),
+// corner, click to raise; dragged to a screen edge or corner it tiles into that half or quarter (tiling.js). Every window has the same three title bar buttons, in this order: minimize (–),
 // maximize / restore (□ / ❐; double-clicking the bar does the same) and close (✕). The state model is
 // window-state.js; each window's state and rect are kept in the dock layout store (rigs.dock `windows`, by a stable
 // key), so it reopens where and how it was. A minimized window is reached from the app dock (its applet or

@@ -2,20 +2,20 @@
 // strictly), so the UI fetches WAV audio from here, and JARVIS can talk through this machine's
 // speakers when no UI is open. Engines: macOS `say`, Windows SAPI (System.Speech via PowerShell),
 // Linux piper (persona.voice = path to an .onnx model) or espeak-ng / espeak.
-// JARVIS's own neural voice: when an App Cloud app "jarvis-voice" (persona.voiceApp, "id" or
-// "node/id") is up anywhere on the mesh, speech is rendered there — reached through this daemon's own
-// app proxy, so every machine gets the same voice — and comes back with a viseme timeline
-// (x-visemes) that the JARVIS face lip-syncs to. persona.neural = false opts out; any failure falls
-// back to the local engine. persona.tts = { engine: 'auto'|'neural'|'piper'|'local', piperUrl, trim } selects the engine
-// (tts-plan.js): 'piper' is the resident CPU voice (applets/piper-voice, default http://127.0.0.1:8210); whatever is
-// chosen, a failing engine falls through to the next one without an error, so speech never goes silent.
+// JARVIS's one voice is Kokoro: when an App Cloud app "jarvis-voice" (persona.voiceApp, "id" or "node/id") is up
+// anywhere on the mesh, speech is rendered there — reached through this daemon's own app proxy, so every machine gets
+// the same voice — and comes back with a viseme timeline (x-visemes) that the JARVIS face lip-syncs to.
+// persona.neural = false opts out. persona.tts = { engine: 'auto'|'neural'|'piper'|'local', piperUrl, trim } selects the
+// engine (tts-plan.js): 'auto' = Kokoro, then the resident CPU piper voice (applets/piper-voice, default
+// http://127.0.0.1:8210), then this machine's own engine. The engines after the first only stand in when it is down:
+// a failing engine falls through to the next one without an error, so speech never goes silent.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as appsReg from './apps.js';
 import { config } from './config.js';
-import { engineOrder, runChain, trimSilence } from './tts-plan.js';
+import { engineOrder, runChain, trimSilence, wantsDefaultVoice } from './tts-plan.js';
 import { expandHome, isMac, isWin, run, which } from './util.js';
 
 const PREFERRED = ['Daniel', 'Oliver', 'Arthur', 'Microsoft George', 'Microsoft Ryan', 'Microsoft David'];
@@ -66,11 +66,11 @@ export async function neuralBase() {
   return hit ? `http://127.0.0.1:${config().port}/api/nodes/${encodeURIComponent(hit.node)}/apps/${encodeURIComponent(id)}` : null;
 }
 
-const wantsNeural = (voice) => !voice || voice === 'neural' || String(voice).startsWith('neural:');
+let neuralDownUntil = 0;
 
 async function neuralSynth(base, text, voice) {
   const v = String(voice || '').startsWith('neural:') ? voice.slice(7) : undefined;
-  const r = await fetch(base + '/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: v }), signal: AbortSignal.timeout(45000) });
+  const r = await fetch(base + '/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: v }), signal: AbortSignal.timeout(20000) });
   if (r.status === 204) return null;
   if (!r.ok) throw new Error(`neural voice: HTTP ${r.status}`);
   return { audio: Buffer.from(await r.arrayBuffer()), visemes: r.headers.get('x-visemes') || '', engine: 'neural' };
@@ -182,17 +182,22 @@ function trimmed(r) {
 
 function logFail(name, e) { console.warn(`[tts] ${name} failed, falling back: ${e?.message || e}`); }
 
+// A failing Kokoro is left alone for 30 s, so the sentences after it go straight to the stand-in voice instead of each waiting out a timeout.
+async function neuralRunner(base, t, voice) {
+  try { const n = await neuralSynth(base, t, voice); neuralDownUntil = 0; return trimmed(n); } catch (e) { neuralDownUntil = Date.now() + 30000; throw e; }
+}
+
 /**
  * Render text to { audio: WAV Buffer, visemes: base64 JSON or '', engine }, or null when there is
- * nothing to say. The neural voice is used unless a specific local voice is requested; the engines
+ * nothing to say. Kokoro (the neural voice) is used unless a specific local voice is requested; the engines
  * are tried in tts-plan.js order and a failing one is skipped silently (logged only).
  */
 export async function synthesize(text, voice) {
   const t = speakable(text);
   if (!t) return null;
-  const named = !wantsNeural(voice);
+  const named = !wantsDefaultVoice(voice);
   const base = named ? null : await neuralBase();
-  const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base, up: { piper: !named && Date.now() >= piperDownUntil, local: !!engine() } });
+  const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { piper: !named && Date.now() >= piperDownUntil, local: !!engine() } });
   const local = async () => {
     const e = engine();
     if (!e) throw new Error('no text-to-speech engine on this machine (install espeak-ng or piper)');
@@ -204,7 +209,7 @@ export async function synthesize(text, voice) {
     });
   };
   const r = await runChain(order.length ? order : ['local'], {
-    neural: async () => trimmed(await neuralSynth(base, t, voice)),
+    neural: async () => neuralRunner(base, t, voice),
     piper: async () => {
       try { const p = await piperSynth(t); piperDownUntil = 0; return trimmed(p); } catch (e) { piperDownUntil = Date.now() + 30000; throw e; }
     },
@@ -221,15 +226,34 @@ function player() {
 }
 
 async function speakNow(text, voice) {
-  if (wantsNeural(voice) && (await neuralBase())) {
-    const p = player();
-    const r = p && await synthesize(text, voice).catch(() => null);
-    if (r?.engine === 'neural') {
+  // The engines that are served as WAV (Kokoro, then resident piper) come first when a WAV player exists. The text is
+  // rendered once, by the first engine that works, and that clip is played once; if none works, this machine's own
+  // engine speaks instead. Exactly one voice produces sound for one call: a failed or discarded render never plays.
+  const p = player();
+  if (p && wantsDefaultVoice(voice)) {
+    const t = speakable(text);
+    if (!t) return { ok: true, spoken: false };
+    const base = await neuralBase();
+    const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { piper: Date.now() >= piperDownUntil, local: !!engine() } });
+    const wav = order.slice(0, order.includes('local') ? order.indexOf('local') : order.length);
+    let r = null;
+    let rendered = false; // an engine answered (even "nothing to say"): the machine's own engine must not say it again
+    if (wav.length) {
+      try {
+        r = await runChain(wav, {
+          neural: async () => neuralRunner(base, t, voice),
+          piper: async () => { try { const x = trimmed(await piperSynth(t)); piperDownUntil = 0; return x; } catch (e) { piperDownUntil = Date.now() + 30000; throw e; } },
+        }, logFail);
+        rendered = true;
+      } catch { /* every WAV engine failed: the machine's own engine speaks below */ }
+    }
+    if (rendered && !r) return { ok: true, spoken: false };
+    if (r) {
       return withTemp(async (dir) => {
         const out = path.join(dir, 'out.wav');
         await fsp.writeFile(out, r.audio);
         await run(p, [out], { timeout: 5 * 60000 });
-        return { ok: true, spoken: true, engine: 'neural' };
+        return { ok: true, spoken: true, engine: r.engine };
       });
     }
   }
@@ -266,7 +290,11 @@ export function speakAloud(text, voice) {
 export async function info() {
   const e = engine();
   const local = e ? await voices() : [];
-  const neural = await neuralBase().catch(() => null);
-  if (neural) return { engine: 'neural', voice: 'neural', neural: true, voices: [{ name: 'neural', lang: 'en', label: "JARVIS's own voice (neural)" }, ...local] };
+  const neural = ttsCfg().engine === 'local' ? null : await neuralBase().catch(() => null);
+  if (neural) return { engine: 'neural', voice: 'neural', neural: true, voices: [{ name: 'neural', lang: 'en', label: "JARVIS's own voice (Kokoro)" }, ...local] };
+  if (!e && ttsCfg().engine !== 'local' && Date.now() >= piperDownUntil) {
+    // No engine of its own on this machine, but the resident piper voice can still speak for the UI.
+    try { const r = await fetch(piperBase() + '/healthz', { signal: AbortSignal.timeout(1500) }); if (r.ok) return { engine: 'piper', voice: '', voices: [] }; } catch { /* not running */ }
+  }
   return { engine: e, voice: e ? await pickVoice() : '', voices: local };
 }

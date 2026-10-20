@@ -61,7 +61,8 @@ export function mergeHistory(list) {
  * opts.baselineMs: { answer, work } configured baselines (0 = none); opts.history: historyFrom(…) for the estimate.
  */
 export function prerouteStats(records, { baselineMs = {}, history = {} } = {}) {
-  const reqs = records.filter((r) => (r.kind ? r.kind === 'request' : true) && latencyOf(r) != null);
+  // A YOLO run (route 'yolo', src/yolo.js) is a build shown live, not an answer: it would only skew the answer medians.
+  const reqs = records.filter((r) => (r.kind ? r.kind === 'request' : true) && timingOf(r).route !== 'yolo' && latencyOf(r) != null);
   const classes = {};
   for (const c of CLASSES) {
     const mine = reqs.filter((r) => routeClass(r) === c);

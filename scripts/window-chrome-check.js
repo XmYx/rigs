@@ -192,12 +192,13 @@ try {
   await sleep(300);
   const st = await stored(page);
   const keys = Object.keys(st?.windows || {});
-  check('window state is stored in rigs.dock (version 2, windows)', st?.version === 2 && keys.some((k) => k.startsWith('files:')) && keys.some((k) => k.startsWith('app:')), keys.join(', '));
+  check('window state is stored in rigs.dock (version 2 or later, windows)', st?.version >= 2 && keys.some((k) => k.startsWith('files:')) && keys.some((k) => k.startsWith('app:')), keys.join(', '));
   check('the stored file browser is maximized, the app at its new rect', Object.entries(st.windows).some(([k, r]) => k.startsWith('files:') && r.state === 'maximized') && Object.entries(st.windows).some(([k, r]) => k.startsWith('app:') && r.rect?.x === 200 && r.rect?.w === 700), JSON.stringify(st.windows));
   await ready(page); // reload
   const f2 = await openFiles(page);
   check('after a reload the file browser opens maximized', await page.evaluate((s) => document.querySelector(s).classList.contains('max'), f2.sel));
   const a2 = await openApp(page);
+  await settle(page, a2.sel); // read after the open animation (it scales the window from 96%)
   check('after a reload the app window opens at its remembered rect', near(await rectOf(page, a2.sel), { x: 200, y: 150, w: 700, h: 420 }), JSON.stringify(await rectOf(page, a2.sel)));
   check('no wm.js window id leaks into the stored layout', !JSON.stringify((await stored(page)).root || '').includes('win-'));
   await ctx.close();

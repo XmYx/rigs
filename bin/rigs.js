@@ -228,6 +228,31 @@ const commands = {
     const t = (x) => `${x.provider} ${x.model}${x.effort ? ` (${x.effort})` : ''}`;
     console.log(`quick fast path ${r.enabled ? 'on' : 'off'} · simple ${t(r.simple)} · standard ${t(r.standard)} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s`);
   },
+  /**
+   * rigs yolo [on|off|status|list] — YOLO mode (src/yolo.js): "yolo …" requests build a page live in a sandbox window,
+   * no project/review/commit/merge. on/off switch config.yolo.enabled (mesh-global); list shows the runs kept here.
+   */
+  async yolo() {
+    const [sub = 'status'] = argv;
+    const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    if (!['on', 'off', 'status', 'list'].includes(sub)) fail('usage: rigs yolo [on|off|status|list]');
+    if (sub === 'list') {
+      const r = await daemonFetch('/api/local/yolo').catch((e) => ({ error: e.message }));
+      if (!Array.isArray(r?.runs)) fail(r?.error);
+      if (!r.runs.length) { console.log('no YOLO runs on this machine yet'); return; }
+      const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+      for (const x of r.runs) {
+        const ff = x.firstFrameAt ? `first frame ${((x.firstFrameAt - x.startedAt) / 1000).toFixed(1)}s` : 'no frame';
+        console.log(`${x.runId}  ${String(x.status).padEnd(11)} ${ago(x.createdAt).padStart(8)}  ${ff.padEnd(18)} ${x.errors ? `${x.errors} errors  ` : ''}${x.title}`);
+        console.log(`    ${x.url}`);
+      }
+      return;
+    }
+    const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : null;
+    const r = await daemonFetch('/api/local/yolo/config', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
+    if (r?.error || r?.enabled === undefined) fail(r?.error);
+    console.log(`yolo mode ${r.enabled ? 'on' : 'off'} · ${r.provider} ${r.model}${r.effort ? ` (${r.effort})` : ''} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s · sandbox ${r.root} (keeps ${r.keep} runs)`);
+  },
   /** rigs linear [status] · rigs linear key [--clear] — the Linear connector (the key is read from stdin, never argv) */
   async linear() {
     const [sub = 'status'] = argv;
@@ -414,6 +439,27 @@ const commands = {
       console.log(`${n.self ? '*' : ' '} ${String(n.name).padEnd(18)} ${String(n.platform || '?').padEnd(8)} ${n.online ? 'online ' : 'offline'} ${n.rigs ? 'rigs ' + (n.version || '') : 'no-rigs'}  ${n.tailscale?.ip || n.url || ''}  ${tools}`);
     }
   },
+  async shared() {
+    // rigs shared status|sync|path — the shared folder synced across the mesh (src/shared.js, docs/shared-folder.md).
+    const sub = argv[0] || 'status';
+    const fail = (m) => { console.error(m); process.exit(1); };
+    if (sub === 'path') {
+      const r = await daemonFetch('/api/local/shared/path').catch(() => null);
+      if (r?.path) { console.log(r.path); return; }
+      const { sharedRoot } = await import('../src/files.js');
+      console.log(sharedRoot()); // daemon not running: the path it would use
+      return;
+    }
+    if (sub !== 'status' && sub !== 'sync') fail('usage: rigs shared [status|sync|path]');
+    const r = await daemonFetch(sub === 'sync' ? '/api/local/shared/sync' : '/api/local/shared', { method: sub === 'sync' ? 'POST' : 'GET', body: sub === 'sync' ? '{}' : undefined, timeout: 30 * 60 * 1000 })
+      .catch((e) => fail(`RIGS daemon is not running (rigs start): ${e.message}`));
+    if (!r || r.error || !r.path) fail(r?.error || 'RIGS daemon is not running (rigs start).');
+    const ago = (t) => (t ? `${Math.max(0, Math.round((Date.now() - t) / 1000))}s ago` : 'never');
+    console.log(`shared folder ${r.path}`);
+    console.log(`  ${r.files} file(s), ${(r.bytes / 1048576).toFixed(1)} MB · subfolders ${r.subfolders.map((x) => x.name + '/').join(' ')} · last sync ${ago(r.lastSync)}${r.syncing ? ' (syncing)' : ''}`);
+    for (const p of r.peers) console.log(`  ${String(p.node).padEnd(18)} ${String(p.state).padEnd(11)} ${ago(p.lastSync)}${p.pulled || p.trashed || p.conflicts ? ` · pulled ${p.pulled || 0}, trashed ${p.trashed || 0}, conflicts ${p.conflicts || 0}` : ''}${p.error ? ` · ${p.error}` : ''}`);
+    if (!r.peers.length) console.log('  no other RIGS node seen yet');
+  },
   async update() {
     const all = argv.includes('--all');
     const r = await daemonFetch(all ? '/api/mesh/update' : '/api/local/update', { method: 'POST', body: '{}', timeout: 20 * 60 * 1000 });
@@ -481,6 +527,7 @@ const commands = {
   rigs status          list machines in the mesh
   rigs open            open the JARVIS UI
   rigs ssh <machine>   ssh to another node
+  rigs shared [status|sync|path]  the shared folder synced across the mesh (apps/, files/, reports/): state per peer, sync now, or its path
   rigs update [--all]  pull the latest code from GitHub (this node or every node) and restart
   rigs notify <text>   speak a message on every open JARVIS UI
   rigs mcp             stdio MCP server for coding agents (registered by setup)
@@ -498,6 +545,7 @@ const commands = {
   rigs linear key [--clear]  set the Linear API key (asked for, or piped in on stdin) or remove it
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
   rigs quick local [on|off|status|warm|model <m>|node <machine>]  the local responder: a local Ollama model answers the fast path (read-only tools)
+  rigs yolo [on|off|status|list]  YOLO mode: "yolo …" requests build a page live in a sandbox window (no project, review, commit or merge)
   rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)

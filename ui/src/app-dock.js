@@ -43,7 +43,7 @@ const nameOf = (it, toolLabel) => `${it.kind === 'tool' ? toolLabel(it) || it.re
 /** Attributes a tool tile adds: its tooltip, aria-pressed for toggles. */
 const toolAttrs = (it, toolLabel) => (it.kind === 'tool' ? { title: toolLabel(it) || it.ref.hint || '', ...(it.ref.toggle ? { 'aria-pressed': String(!!it.pressed) } : {}) } : {});
 
-export function createAppDock({ storage = globalThis.localStorage, sources = () => ({}), open = () => {}, isOpen = () => false, appFor = () => null, nodeFor = () => null, toolLabel = () => '' } = {}) {
+export function createAppDock({ storage = globalThis.localStorage, sources = () => ({}), open = () => {}, isOpen = () => false, appFor = () => null, nodeFor = () => null, toolLabel = () => '', layoutSync = null } = {}) {
   let state = load();
   let phone = isPhone();
   let reduced = prefersReducedMotion();
@@ -540,6 +540,19 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     setTool: (id, patch) => act((s) => setToolState(s, id, patch)),
     sync,
     render,
+    /**
+     * The stored dock changed elsewhere (another machine through the mesh): load and draw it. `merge(next, prev)` can
+     * put back what belongs to this page (main.js keeps its window and terminal tiles); the merged dock is saved.
+     */
+    reload: (merge) => {
+      const prev = state;
+      state = load();
+      if (merge) { const m = merge(state, prev); if (m && m !== state) { state = m; save(); } }
+      if (popGroup && !state.groups[popGroup]) closePop();
+      if (!drag) render();
+    },
+    /** { status(), resetAll() } from main.js: the mesh sync line and 'Reset layout for all machines' in Dock settings. */
+    layoutSync,
     open: (it) => open(it),
     openGroup: (gid) => { reveal(); openPop(gid); },
     rename: (gid) => { reveal(); if (popGroup !== gid) openPop(gid); renderPop({ editName: true }); },
@@ -553,7 +566,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
 
 /** The dock's right-click / long-press menus, through the shared context-menu registry (ctx-providers.js). */
 export function registerAppDockProviders(reg, dock) {
-  const opts = () => ({ phone: dock.phone(), reducedMotion: dock.reducedMotion() });
+  const opts = () => ({ phone: dock.phone(), reducedMotion: dock.reducedMotion(), sync: dock.layoutSync });
   const settings = () => ({ label: 'Dock settings', icon: '⚙', submenu: () => settingsEntries(dock.state, dock.act, opts()) });
   reg.register('dockitem', (t) => [...itemEntries(dock.state, t.id, dock.act, { open: dock.open, phone: dock.phone() }), { sep: true }, settings()], { title: 'App dock' });
   reg.register('dockgroup', (t) => [...groupEntries(dock.state, t.id, dock.act, { openGroup: dock.openGroup, rename: dock.rename, phone: dock.phone() }), { sep: true }, settings()], { title: 'Group' });

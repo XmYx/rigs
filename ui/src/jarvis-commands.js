@@ -1,6 +1,9 @@
 import { api, h, toast } from './api.js';
-import { commands, formatShortcut } from './commands.js';
+import { commands, formatShortcut, isMac } from './commands.js';
 import { openWindow, listWindows } from './wm.js';
+import { isPhone } from './mobile.js';
+import { canTileActive, tileActive } from './tiling.js';
+import { tileShortcuts, zoneLabel } from './tiling-model.js';
 import {
   focusPanel, hideOthers, hidePanel, lastFocusedPanel, listPanels, listRemoved, openPanel, removePanel, removed, resetLayout, restorePanel, showAll,
 } from './layout-actions.js';
@@ -23,6 +26,14 @@ function undoLabel(word, step) {
 /** The text field the user was in before the menu took focus (copy/paste act on it). */
 const fieldOf = (ctx) => (ctx.field?.isConnected ? ctx.field : null);
 const hasSelection = (f) => !!f && typeof f.selectionStart === 'number' && f.selectionEnd > f.selectionStart;
+
+// Window › Tile: one command per zone (shortcuts from tiling-model.js TILE_KEYS), acting on the focused window, else
+// the frontmost one. Phones never tile.
+const TILE_ICONS = { left: '◧', right: '◨', top: '⬒', bottom: '⬓', 'top-left': '◰', 'top-right': '◳', 'bottom-left': '◱', 'bottom-right': '◲', fill: '■', restore: '↺' };
+const tile = (zone) => ({
+  label: zoneLabel(zone), icon: TILE_ICONS[zone], shortcut: tileShortcuts(zone, isMac()),
+  when: (ctx) => !ctx.phone, enabled: () => canTileActive(zone), run: () => tileActive(zone),
+});
 
 export function registerJarvisCommands(deps) {
   const machine = () => deps.machine?.() || null;
@@ -100,6 +111,16 @@ export function registerJarvisCommands(deps) {
       id: 'view.cloud', label: 'Show cloud — the 3D mesh galaxy', icon: '☁', when: () => !!deps.cloud,
       checked: () => !!deps.cloud?.visible(), run: () => deps.cloud.toggle(),
     },
+    { id: 'window.tileLeft', ...tile('left') },
+    { id: 'window.tileRight', ...tile('right') },
+    { id: 'window.tileTop', ...tile('top') },
+    { id: 'window.tileBottom', ...tile('bottom') },
+    { id: 'window.tileTopLeft', ...tile('top-left') },
+    { id: 'window.tileTopRight', ...tile('top-right') },
+    { id: 'window.tileBottomLeft', ...tile('bottom-left') },
+    { id: 'window.tileBottomRight', ...tile('bottom-right') },
+    { id: 'window.tileFill', ...tile('fill') },
+    { id: 'window.tileRestore', ...tile('restore') },
     { id: 'view.menubarFocus', label: 'Go to the menu bar', shortcut: 'F10', global: true, when: (ctx) => !ctx.phone, run: () => deps.menubar.focus() },
 
     // ------------------------------------------------------------ Tools
@@ -166,6 +187,11 @@ export function menuModel() {
       { sep: true }, { cmd: 'window.hideOthers' }, { cmd: 'window.showAll' }, { cmd: 'window.reset' },
     ] },
     { id: 'window', label: 'Window', items: () => [
+      ...(isPhone() ? [] : [{ id: 'tile', label: 'Tile', icon: '◫', submenu: () => [
+        { cmd: 'window.tileLeft' }, { cmd: 'window.tileRight' }, { cmd: 'window.tileTop' }, { cmd: 'window.tileBottom' }, { sep: true },
+        { cmd: 'window.tileTopLeft' }, { cmd: 'window.tileTopRight' }, { cmd: 'window.tileBottomLeft' }, { cmd: 'window.tileBottomRight' }, { sep: true },
+        { cmd: 'window.tileFill' }, { cmd: 'window.tileRestore' },
+      ] }, { sep: true }]),
       ...(apps.length ? [{ header: 'Apps' }, ...apps.map(perItem), { sep: true }] : []),
       ...(wins.length ? [{ header: 'Open windows' }, ...wins.map(perItem), { sep: true }] : []),
       { header: 'Ask JARVIS' }, { cmd: 'window.ask' }, { cmd: 'window.askTopbar' }, { cmd: 'window.askFloat' }, { cmd: 'window.askHide' },

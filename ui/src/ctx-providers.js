@@ -321,12 +321,20 @@ export function registerJarvisProviders(reg, deps = {}) {
 
   // ------------------------------------------------------------ files and traces
   reg.register('file', (t) => {
-    const { entry: e, actions: X = {}, machines = [] } = t.data || {};
+    // tools: [{ id, label, icon }] the built-in file tools for this file (file-tools-model.js toolsFor), default first;
+    // count: how many rows a zip covers (the multi-selection when this row is in it); zip: the row is a .zip archive.
+    // openLabel: what the first item says where "open" is not a preview (the desktop opens a file in its tool).
+    const { entry: e, actions: X = {}, machines = [], tools = [], count = 1, zip = false, openLabel = '' } = t.data || {};
     if (!e) return null;
     const dir = e.type === 'dir';
+    const openWith = !dir && tools.length && typeof X.openWith === 'function';
     return [
-      it(dir ? 'Open folder' : 'Preview', bind(X, 'open', e), { icon: dir ? '📁' : '👁' }),
+      it(openLabel || (dir ? 'Open folder' : 'Preview'), bind(X, 'open', e), { icon: dir ? '📁' : '👁' }),
+      openWith ? { label: 'Open with', icon: '↗', submenu: () => tools.map((x) => ({ label: x.label, icon: x.icon, run: () => X.openWith(e, x.id) })) } : null,
       dir ? null : it('Download', bind(X, 'download', e), { icon: '⇩' }),
+      it(count > 1 ? `Compress ${count} items to zip` : 'Compress to zip', bind(X, 'zip', e), { icon: '🗜' }),
+      zip && !dir ? it('Extract here', bind(X, 'unzip', e), { icon: '📦' }) : null,
+      it('Show in Files', bind(X, 'showInFiles', e), { icon: '↗' }),
       it('Copy path', copy(e.path, 'Path'), { icon: '⧉' }),
       it('Terminal here', bind(X, 'terminalHere', dir ? e.path : e.path.replace(/[\\/][^\\/]*$/, '') || '/'), { icon: '⌨' }),
       !dir && machines.length && typeof X.copyTo === 'function'
@@ -340,8 +348,11 @@ export function registerJarvisProviders(reg, deps = {}) {
     const { path, actions: X = {} } = t.data || {};
     return [
       it('New folder…', bind(X, 'newFolder'), { icon: '＋' }),
+      it('New text file…', bind(X, 'newTextFile'), { icon: '📝' }),
       it('Upload files here…', bind(X, 'upload'), { icon: '⇪' }),
       it('Refresh', bind(X, 'refresh'), { icon: '↻' }),
+      it('Show in Files', bind(X, 'showInFiles'), { icon: '↗' }),
+      it('Sync now', bind(X, 'syncNow'), { icon: '⟳' }),
       it('Terminal here', bind(X, 'terminalHere', path), { icon: '⌨' }),
       typeof X.toggleHidden === 'function' ? { label: 'Show hidden files', checked: !!X.showHidden?.(), run: X.toggleHidden } : null,
       SEP,

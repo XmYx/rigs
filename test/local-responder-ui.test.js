@@ -30,7 +30,7 @@ test('voice dot: red with a plain explanation when no speech engine answers', ()
   const v = responderView({ settings: { enabled: true }, status: { loaded: true }, tts: { engine: null } });
   assert.equal(v.voiceDot, 'bad');
   assert.match(v.voiceText, /browser voice/);
-  assert.match(responderView({ settings: {}, tts: { engine: 'neural' } }).voiceText, /Kokoro/);
+  assert.match(responderView({ settings: {}, tts: { engine: 'piper' } }).voiceText, /Piper/);
 });
 
 test('title names the host and the config location is shown', () => {
@@ -45,4 +45,9 @@ test('replyLabel marks only locally answered quick turns', () => {
   // the done event of a turn that fell back (model not loaded) carries the Haiku tier: no local label
   assert.equal(replyLabel({ type: 'done', lane: 'quick', tier: 'haiku', model: 'claude-haiku-5-5' }), null);
   assert.equal(replyLabel({ brain: 'claude' }), null);
+});
+
+test('voice dot names Kokoro as JARVIS\'s voice, and Piper when it is the stand-in', () => {
+  assert.equal(responderView({ settings: {}, tts: { engine: 'neural' } }).voiceText, 'JARVIS voice (Kokoro)');
+  assert.equal(responderView({ settings: {}, tts: { engine: 'piper' } }).voiceText, 'JARVIS voice (Piper)');
 });
