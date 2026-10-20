@@ -14,7 +14,6 @@ import WebSocket from 'ws';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-starnet-'));
 Object.assign(process.env, { RIGS_HOME: path.join(TMP, 'unit'), RIGS_NO_OPENRIG: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_MIGRATIONS: '1' });
-after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const S = await import('../src/starnet.js');
@@ -270,7 +269,17 @@ before(async () => {
   }
   throw new Error('server did not start:\n' + out);
 });
-after(() => server?.kill());
+// stop the scratch node and wait for it before removing its home, or it is still writing into TMP (ENOTEMPTY) and its pipes keep the run open
+after(async () => {
+  if (server && server.exitCode === null) {
+    const exited = new Promise((r) => server.once('exit', r));
+    server.kill();
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 10000))]);
+    if (server.exitCode === null) server.kill('SIGKILL');
+  }
+  server?.stdout?.destroy(); server?.stderr?.destroy();
+  fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+});
 
 const json = async (p, o) => { const r = await fetch(BASE + p, o && { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) }); return { status: r.status, body: await r.json() }; };
 const cli = (...a) => new Promise((resolve) => { const c = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'starnet', ...a], { env }); let o = ''; c.stdout.on('data', (d) => { o += d; }); c.stderr.on('data', (d) => { o += d; }); c.on('close', (code) => resolve({ code, out: o })); });
