@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vertex Cow</title>
+<link rel="icon" href="data:,">
+<style>
+  html,body{margin:0;height:100%;background:#020a04;overflow:hidden}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  #h{position:fixed;left:12px;bottom:10px;font:12px monospace;color:#2f8f4a;pointer-events:none}
+</style>
+<canvas id="c" aria-label="A spinning cow drawn as green points" role="img"></canvas>
+<div id="h"></div>
+<script type="module">
+import { buildCow, seeded } from './cow.js';
+
+const pts = buildCow(seeded(7));
+// The cow's reach from the centre: around the spin axis (sets the width) and in any direction (sets the height).
+let rAxis = 0, rAll = 0;
+for (const [x, y, z] of pts) { rAxis = Math.max(rAxis, Math.hypot(x, z)); rAll = Math.max(rAll, Math.hypot(x, y, z)); }
+
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const CAM = 9;
+let W, H, dpr, f;
+function resize() {
+  dpr = devicePixelRatio || 1;
+  W = cv.width = Math.round(innerWidth * dpr); H = cv.height = Math.round(innerHeight * dpr);
+  // Scale so the nearest point at any angle stays on screen, in a wide window and on a phone alike.
+  f = Math.min(0.44 * W / rAxis, 0.5 * H / rAll) * (CAM - rAll) / CAM;
+}
+addEventListener('resize', resize); resize();
+
+// Reduced motion: keep spinning (the spin is the point) but much slower.
+const calm = matchMedia('(prefers-reduced-motion: reduce)');
+const speed = () => (calm.matches ? 0.12 : 0.7);
+
+let yaw = 0, pitch = 0.25, auto = true, drag = null;
+cv.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; auto = false; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  yaw += (e.clientX - drag[0]) * 0.01;
+  pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - drag[1]) * 0.01));
+  drag = [e.clientX, e.clientY];
+});
+const release = () => { drag = null; auto = true; };
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+
+document.getElementById('h').textContent = pts.length + ' vertices · drag to turn';
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now; // no jump after a hidden tab
+  if (auto) yaw += dt * speed();
+  g.fillStyle = '#020a04'; g.fillRect(0, 0, W, H);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  g.fillStyle = '#39ff6a';
+  for (const [x, y, z] of pts) {
+    const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
+    const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+    const k = f * CAM / (CAM + z2);
+    const s = Math.max(1, 1.8 * dpr * CAM / (CAM + z2));
+    g.globalAlpha = Math.max(0.25, Math.min(1, 1.1 - z2 * 0.18));
+    g.fillRect(W / 2 + x1 * k, H / 2 - y2 * k, s, s);
+  }
+  g.globalAlpha = 1;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
