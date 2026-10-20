@@ -38,6 +38,7 @@
     </section>
     <section>
       <h2 class="sec-h">Display</h2>
+      <label class="check" title="The 3D mesh galaxy behind everything. Hidden, it is not drawn at all: no GPU or memory used"><input id="d-cloud" type="checkbox"> cloud (3D galaxy)</label>
       <label class="check"><input id="d-labels" type="checkbox"> labels</label>
       <label class="check"><input id="d-particles" type="checkbox"> traffic</label>
       <label class="check"><input id="d-rotate" type="checkbox"> orbit</label>
@@ -45,12 +46,14 @@
       <label class="check"><input id="d-notify" type="checkbox"> notifications</label>
       <label class="check"><input id="d-attnbanner" type="checkbox"> "agent needs you" banner</label>
       <label class="check">theme <select id="d-theme" class="mini" aria-label="UI theme"></select></label>
+      <label class="check">exhibit animations <select id="d-exanim" class="mini" aria-label="Exhibit animations" title="off: never · auto: only the stage running now · always: every card while work runs (never while idle, hidden, on reduced motion or low power)"><option value="off">off</option><option value="auto">auto</option><option value="always">always</option></select></label>
     </section>
   </aside>
 
   <nav id="topbar" aria-label="Graph view">
     <button id="fit" class="pill" title="Fit the whole mesh">◎ Fit</button>
     <button id="refresh" class="pill" title="Rescan the tailnet" aria-label="Rescan the tailnet">↻</button>
+    <button id="cloud-toggle" class="pill" aria-pressed="true" aria-label="Show the cloud (3D galaxy)" title="Hide the cloud — the 3D mesh galaxy">☁</button>
   </nav>
 
   <aside id="legend" class="panel" aria-label="Filters"><h2 class="sec-h">Filters</h2><div id="filters"></div></aside>

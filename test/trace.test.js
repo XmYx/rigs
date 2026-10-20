@@ -33,6 +33,8 @@ test('redaction: secret-looking strings and secret-named keys never reach a span
   assert.equal(v.authEnabled, true);
   const pk = T.redact('-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAB3Nza\n-----END OPENSSH PRIVATE KEY-----');
   assert.equal(pk, '[redacted private key]');
+  // header-style names with a hyphen: X-Api-Key, api-key
+  for (const s of ['curl -H "X-Api-Key: abcd1234efgh" x', 'X-API-KEY=abcd1234efgh', 'api-key: abcd1234efgh']) assert.ok(!T.redact(s).includes('abcd1234efgh'), s);
 });
 
 test('caps: oversized input/output fields are truncated and marked; small ones are kept as they are', () => {

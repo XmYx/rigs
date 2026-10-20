@@ -156,6 +156,6 @@ test('the page has the panel, its button (also in the phone sheet) and the WebSo
   assert.match(html, /<aside id="traces"/);
   assert.match(html, /<button id="btn-traces"[^>]*aria-label=/);
   assert.match(main, /createTraces\(\$\('#traces'\)\)/);
-  assert.match(main, /m\.type === 'trace-span'\) onTraceSpan\(m\.span\)/);
+  assert.match(main, /m\.type === 'trace-span'\) \{ onTraceSpan\(m\.span\);/);
   assert.match(mobile, /\['btn-traces', /);
 });

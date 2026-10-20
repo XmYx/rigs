@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { api, h, node, toast, wsUrl } from './api.js';
 import { openWindow } from './wm.js';
 import { currentTheme, onTheme } from './themes.js';
+import { CAPS } from './cleanup.js';
 
 /**
  * Terminal window on any machine. Either creates a new PTY (shell or a command) or attaches to an
@@ -23,7 +24,7 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
   let closed = false;
   const w = openWindow({ title: `${nodeName} — ${title || 'shell'}`, icon: '⌨', width: 900, height: 540, className: 'term-win', tools: [status], onClose: () => { closed = true; offTheme(); ws?.close(); term.dispose(); } });
   const term = new Terminal({
-    fontFamily: 'ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace', fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: 20000,
+    fontFamily: 'ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace', fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: CAPS.terminalScrollback,
     theme: currentTheme().terminal,
   });
   const offTheme = onTheme((t) => { term.options.theme = t.terminal; });
@@ -36,7 +37,10 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
   setTimeout(() => { try { fit.fit(); } catch {} term.focus(); }, 30);
 
   let retries = 0;
+  let retryTimer = null;
+  w.onCleanup(() => clearTimeout(retryTimer));
   function connect() {
+    if (closed) return; // closed while a reconnect was pending: no socket nobody would close
     ws = new WebSocket(wsUrl(`${node(nodeId)}/pty/${id}/ws`));
     ws.onopen = () => { retries = 0; status.textContent = 'live'; status.className = 'term-status live'; sendSize(); };
     ws.onmessage = (ev) => {
@@ -49,7 +53,7 @@ export async function openTerminal({ nodeId, nodeName, ptyId, command, cwd, titl
       if (closed) return;
       status.textContent = 'reconnecting…';
       status.className = 'term-status';
-      if (retries++ < 20) setTimeout(() => { term.reset(); connect(); }, Math.min(5000, 500 * retries));
+      if (retries++ < 20) retryTimer = setTimeout(() => { if (closed) return; term.reset(); connect(); }, Math.min(5000, 500 * retries));
     };
   }
   function sendSize() { if (ws?.readyState === 1) ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); }

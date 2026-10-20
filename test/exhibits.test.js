@@ -487,3 +487,149 @@ test('service: retention keeps at most maxDocs documents, oldest go first with t
   assert.equal(left.length, 10);
   assert.deepEqual(left, ids.slice(3).map((id) => `${id}.jsonl`));
 });
+
+// ---------------------------------------------------------------- the Exhibit window's activity (ui/src/exhibits-model.js)
+// Spans in → the files touched, the tool calls and the step progress the window shows; redaction, caps, scope, motion.
+
+const A = await import('../ui/src/exhibits-model.js');
+const T = await import('../src/trace.js');
+const at = (o) => span({ start: 1000, end: 1500, ...o });
+const tool = (n, name, input, output, extra = {}) => at({ id: String(n).padStart(12, 'c'), parentId: 'sp-000000000003', kind: 'tool-call', name, input, output, start: 3000 + n * 10, end: 3005 + n * 10, ...extra });
+const LIVE = [
+  at({ id: '000000000001', kind: 'intake', name: 'jarvis/send', end: null, status: 'running', input: 'add a dark mode toggle' }),
+  at({ id: '000000000002', parentId: 'sp-000000000001', kind: 'router', name: 'route', output: { route: 'answer' }, meta: { route: 'answer' } }),
+  at({ id: '000000000003', parentId: 'sp-000000000001', kind: 'brain-turn', name: 'claude claude-opus-5-5', start: 2000, end: null, status: 'running', meta: { model: 'claude-opus-5-5' } }),
+  tool(1, 'Read', { file_path: '/Users/mix/app/ui/src/themes.js' }, '     1\tline one\n     2\tline two\n     3\tline three'),
+  tool(2, 'Edit', { file_path: '/Users/mix/app/ui/src/themes.js', old_string: 'a', new_string: 'b' }, 'The file /Users/mix/app/ui/src/themes.js has been updated.'),
+  tool(3, 'Write', { file_path: '/Users/mix/app/ui/src/dark.css', content: 'x' }, 'File created successfully at: /Users/mix/app/ui/src/dark.css'),
+  tool(4, 'mcp__rigs__mesh_write_file', { node: 'linux-box', path: '/home/mix/notes.md', content: 'x' }, { ok: true }),
+  tool(5, 'Bash', { command: `curl -H "Authorization: Bearer ${SECRETS[0]}" https://x` }, `error: token=${SECRETS[2]} rejected`, { status: 'error' }),
+  tool(6, 'Grep', { pattern: 'theme' }, null, { end: null, status: 'running' }),
+];
+
+test('activity: files touched — read / edit / create marks, counts, mesh paths, newest first', () => {
+  const { files, total } = A.filesTouched(LIVE);
+  assert.equal(total, 3);
+  assert.deepEqual(files.map((f) => [f.node, f.name, f.mark, f.count]), [['linux-box', 'notes.md', 'create', 1], ['', 'dark.css', 'create', 1], ['', 'themes.js', 'edit', 2]]);
+  assert.equal(files[2].dir, '~/app/ui/src', 'the home folder is shown as ~');
+  // a Write over a file seen earlier (or that says "updated") is an edit; Codex file_change kinds map to create/edit/delete
+  const more = A.filesTouched([tool(1, 'Read', { file_path: '/a/x.js' }, 'x'), tool(2, 'Write', { file_path: '/a/x.js', content: '' }, 'ok'),
+    tool(3, 'file_change', [{ path: '/a/new.js', kind: 'add' }, { path: '/a/old.js', kind: { type: 'delete' } }], null)]).files;
+  assert.deepEqual(more.map((f) => [f.name, f.mark]), [['new.js', 'create'], ['old.js', 'delete'], ['x.js', 'edit']]);
+  // an input cut to the trace's field cap still yields its path (from the JSON preview)
+  const cut = A.filesTouched([tool(1, 'Edit', { truncated: true, chars: 99999, preview: '{"file_path":"/a/big.js","old_string":"' }, 'ok')]).files;
+  assert.equal(cut[0]?.name, 'big.js');
+});
+
+test('activity: tool calls — newest first, status, short redacted result summary', () => {
+  const { calls, total, running, errors } = A.toolCalls(LIVE);
+  assert.equal(total, 6); assert.equal(running, 1); assert.equal(errors, 1);
+  assert.deepEqual(calls.map((c) => c.name), ['Grep', 'Bash', 'mesh_write_file', 'Write', 'Edit', 'Read']);
+  assert.deepEqual(calls.map((c) => c.status), ['running', 'error', 'ok', 'ok', 'ok', 'ok']);
+  assert.equal(calls[0].summary, '', 'a running call has no result yet');
+  assert.equal(calls[0].target, 'theme');
+  assert.equal(calls[2].target, 'linux-box:~/notes.md');
+  assert.equal(calls[4].target, '…/ui/src/themes.js', 'a long path keeps its tail, so the file name shows');
+  assert.equal(calls[3].summary, 'created');
+  assert.equal(calls[4].summary, 'edited');
+  assert.equal(calls[5].summary, '3 lines');
+  assertClean(calls, 'tool calls'); // the Bearer token and the token= value in the error never show
+  assert.match(calls[1].summary, /^error: token=\*\*\*/);
+  assert.match(calls[1].target, /Authorization: \*\*\*/);
+  // a long result is one short line
+  const long = A.toolCalls([tool(1, 'Bash', { command: 'ls' }, `\n\n${'word '.repeat(80)}\nsecond line`)]).calls[0];
+  assert.ok(long.summary.length <= 100 && long.summary.endsWith('…') && !long.summary.includes('second'));
+  // stopped (no result recorded) is not shown as an error
+  assert.deepEqual(A.toolCalls([tool(1, 'Bash', { command: 'x' }, null, { status: 'stopped' })]).calls.map((c) => [c.status, c.summary]), [['stopped', 'no result recorded']]);
+});
+
+test('activity: the UI redacts exactly as trace.js does (one shared module)', () => {
+  for (const s of [...SECRETS, `--token ${SECRETS[1]}`, 'https://bob:hunter2@host/x', 'password: "abcdefgh"']) assert.equal(A.toolSummary(tool(1, 'Bash', 'x', s, { status: 'error' })), T.redact(s).replace(/\s+/g, ' ').trim().slice(0, 100));
+});
+
+test('activity: lists are capped', () => {
+  const many = Array.from({ length: 50 }, (_, i) => tool(i + 1, 'Read', { file_path: `/r/f${i}.js` }, 'x'));
+  const f = A.filesTouched(many);
+  assert.equal(f.files.length, A.ACTIVITY_LIMITS.files); assert.equal(f.total, 50);
+  assert.equal(f.files[0].name, 'f49.js', 'newest first');
+  const t = A.toolCalls(many, { max: 5 });
+  assert.equal(t.calls.length, 5); assert.equal(t.total, 50);
+  const a = A.activityOf(many);
+  assert.equal(a.tools.length, A.ACTIVITY_LIMITS.tools); assert.equal(a.files.length, A.ACTIVITY_LIMITS.files);
+  // the span store keeps at most N traces (least recently active go first) and M spans per trace
+  const store = new Map();
+  for (let i = 0; i < 20; i++) A.foldSpans(store, { traceId: `tr-20261020-${String(i).padStart(12, '0')}`, spanId: 'sp-x', kind: 'intake', start: 1000 + i, status: 'ok' }, { traces: 5 });
+  assert.equal(store.size, 5);
+  assert.ok(store.has('tr-20261020-000000000019') && !store.has('tr-20261020-000000000000'));
+  const one = new Map();
+  A.foldSpans(one, [LIVE[0], ...many], { spans: 10 });
+  assert.equal(one.get(TR).spans.size, 10);
+  assert.ok(one.get(TR).spans.has('sp-000000000001'), 'stage spans outlive finished tool calls');
+  // a stale fetch (the span still running) never undoes the live push that ended it
+  const race = new Map();
+  A.foldSpans(race, { ...LIVE[0], end: 5000, status: 'ok' });
+  A.foldSpans(race, LIVE[0]);
+  assert.equal(race.get(TR).spans.get('sp-000000000001').status, 'ok');
+});
+
+test('activity: steps and progress of a request and of a project with tasks', () => {
+  const a = A.activityOf(LIVE, { now: 4000 });
+  assert.equal(a.title, 'add a dark mode toggle');
+  assert.equal(a.kind, 'request');
+  assert.deepEqual(a.steps.map((s) => [s.label, s.status]), [['Request received', 'ok'], ['Routed: answer', 'ok'], ['Thinking · opus-5-5', 'running'], ['Reply', 'pending']]);
+  assert.equal(a.done, 2); assert.equal(a.total, 4); assert.equal(a.tasks, null);
+  assert.equal(a.current, 'Thinking · opus-5-5');
+  assert.equal(a.active, true);
+  const P = 'p1';
+  const proj = [
+    at({ id: '000000000001', kind: 'intake', name: 'jarvis/send', input: 'build the thing', status: 'ok', end: 9000 }),
+    at({ id: '000000000004', parentId: 'sp-000000000001', kind: 'handoff', name: 'project_create', start: 1200, meta: { projectId: P, taskIds: [] } }),
+    at({ id: '000000000005', kind: 'plan', name: 'plan Thing', start: 1300, meta: { projectId: P, routing: [{ task: 't1', title: 'Model' }, { task: 't2', title: 'UI' }] } }),
+    at({ id: '000000000006', kind: 'dispatch', name: 't1 → mac', start: 1400, meta: { projectId: P, taskId: 't1', target: 'mac' }, input: { task: { id: 't1', title: 'Model' } } }),
+    at({ id: '000000000007', parentId: 'sp-000000000006', kind: 'task', name: 't1 Model', start: 1500, end: 5000, meta: { projectId: P, projectName: 'Thing', taskId: 't1' } }),
+    at({ id: '000000000008', kind: 'dispatch', name: 't2 → linux', start: 5100, meta: { projectId: P, taskId: 't2', target: 'linux' }, input: { task: { id: 't2', title: 'UI' } } }),
+  ];
+  const b = A.activityOf(proj, { now: 6000 });
+  assert.equal(b.title, 'Thing'); assert.equal(b.kind, 'project'); assert.equal(b.request, 'build the thing');
+  assert.deepEqual(b.steps.map((s) => [s.label, s.status]), [['Request received', 'ok'], ['Created a project', 'ok'], ['Planned 2 tasks', 'ok'], ['t1 · Model', 'ok'], ['t2 · UI', 'running'], ['Reply', 'ok']]);
+  assert.deepEqual(b.tasks, { done: 1, total: 2 });
+  assert.equal(b.active, true, 'a task started on another machine keeps the project working until its run reports');
+  // the project scope gathers the spans that carry it, across traces
+  const store = new Map();
+  A.foldSpans(store, [...proj, { ...LIVE[0], traceId: 'tr-20261020-ffffffffffff' }]);
+  assert.equal(A.scopeSpans(store, A.docScope('pr-p1')).length, proj.length);
+  assert.equal(A.scopeSpans(store, A.docScope(TR)).length, proj.length);
+});
+
+test('activity: scope — a picked document wins, else the running work, else the most recent (idle fallback)', () => {
+  const store = new Map();
+  const old = 'tr-20261020-000000000aaa';
+  const live = 'tr-20261020-000000000bbb';
+  const now = Date.now();
+  A.foldSpans(store, [{ traceId: live, spanId: 'sp-1', kind: 'intake', start: now - 60000, end: null, status: 'running' }]);
+  A.foldSpans(store, [{ traceId: old, spanId: 'sp-2', kind: 'intake', start: now - 1000, end: now - 500, status: 'ok' }]);
+  assert.deepEqual(A.pickScope(store, { now }), { traceId: live }, 'running work beats a more recent finished one');
+  assert.deepEqual(A.pickScope(store, { pinned: { projectId: 'p9' }, now }), { projectId: 'p9' });
+  A.foldSpans(store, [{ traceId: live, spanId: 'sp-1', kind: 'intake', start: now - 60000, end: now - 100, status: 'ok' }]);
+  assert.deepEqual(A.pickScope(store, { now }), { traceId: live }, 'nothing running: the most recently active');
+  assert.equal(A.activityOf(A.scopeSpans(store, { traceId: live }), { now }).active, false);
+  assert.equal(A.pickScope(new Map()), null);
+  assert.equal(A.activityOf([]), null);
+  // a stage left "running" by a restart is not work going on forever
+  assert.equal(A.isActive([{ kind: 'brain-turn', status: 'running', start: now - 3600000, end: null }], now), false);
+});
+
+test('activity: animation only while work runs, never when off, hidden, reduced motion or low power', () => {
+  const base = { mode: 'auto', active: true, current: true };
+  assert.equal(A.shouldAnimate(base), true);
+  assert.equal(A.shouldAnimate({ ...base, current: false }), false, "auto moves only the running stage's card");
+  assert.equal(A.shouldAnimate({ ...base, mode: 'always', current: false }), true);
+  for (const k of ['hidden', 'reducedMotion', 'lowPower', 'documentView']) {
+    assert.equal(A.shouldAnimate({ ...base, [k]: true }), false, k);
+    assert.equal(A.shouldAnimate({ ...base, mode: 'always', [k]: true }), false, `always + ${k}`);
+  }
+  assert.equal(A.shouldAnimate({ ...base, active: false }), false, 'idle');
+  assert.equal(A.shouldAnimate({ ...base, mode: 'always', active: false }), false, 'always, but idle');
+  assert.equal(A.shouldAnimate({ ...base, mode: 'off' }), false);
+  assert.equal(A.animMode('bogus'), 'auto'); assert.equal(A.animMode(null), 'auto'); assert.equal(A.animMode('off'), 'off');
+});

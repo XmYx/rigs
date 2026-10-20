@@ -1,6 +1,6 @@
 // The internal p5.js animation library. The Exhibit window (exhibits.js) draws one small looping sketch per card
 // instead of a static picture; this file is the whole kit, so other surfaces can reuse it:
-//   mountSketch(host, { id, seed, info, reducedMotion, onReady, onError }) → { destroy, refresh(), setInfo(info) }
+//   mountSketch(host, { id, seed, info, reducedMotion, onReady, onError }) → { destroy, refresh(), setInfo(info), sync() }
 //   contextFrom(entry, doc)     what a card is ABOUT (keywords, numbers, steps, tone, position in the document, kind mix):
 //                               every sketch draws that as data (words riding the rings, one node per plan step, a progress
 //                               track, a ✓ or ✗ by outcome, the document's kind mix), so no two cards look or read alike
@@ -12,6 +12,9 @@
 //   - a sketch only runs while its card is on screen (IntersectionObserver → noLoop/loop) 
 //   - time is our own tick (`ctx.t`), not frameCount, so a still frame can be fast-forwarded to a settled composition:
 //     under prefers-reduced-motion (and in the plain Document view) a sketch draws STILL_STEPS ticks once and stops
+//   - `reducedMotion()` is the caller's whole motion gate (the Exhibit window also says "still" when nothing is working,
+//     the window is hidden, on lowPower() or with Exhibit animations off); `sync()` re-asks it after the gate changed, so a
+//     stopped sketch (noLoop: no requestAnimationFrame, no draw) starts again only when the caller wants motion
 //   - theme: colors are read from the CSS variables (--accent-rgb, --accent-2-rgb, --bg, --text) at mount and on every
 //     theme change; `--ex-pixel: N` (set by a theme's CSS, e.g. Atari) renders at 1/N resolution, scaled up pixelated
 //   - sketches are plain functions `(p, ctx) => void` that set p.draw (and `ctx.reset` to re-seed their state); they
@@ -432,7 +435,14 @@ export function mountSketch(host, { id, seed = 1, info = null, reducedMotion = (
   const size = () => ({ w: Math.max(1, Math.floor(host.clientWidth / ctx.pal.px)), h: Math.max(1, Math.floor(host.clientHeight / ctx.pal.px)) });
   const still = () => reducedMotion();
   const wantRun = () => !dead && visible && !still();
-  const sync = () => { if (!inst || !ready) return; if (wantRun()) inst.loop(); else inst.noLoop(); };
+  let settling = false;
+  // Stopped by the gate before the composition settled (motion ended a few ticks in): fast-forward to the still frame.
+  const sync = () => {
+    if (!inst || !ready) return;
+    if (wantRun()) { inst.loop(); return; }
+    inst.noLoop();
+    if (still() && ctx.t < STILL_STEPS && !settling) { settling = true; first = true; try { inst.redraw(); } finally { settling = false; } }
+  };
   const density = () => (ctx.pal.px > 1 ? 1 : Math.min(window.devicePixelRatio || 1, 2));
 
   function destroy() {
@@ -474,6 +484,8 @@ export function mountSketch(host, { id, seed = 1, info = null, reducedMotion = (
       ctx.info = next;
       if (inst && ready && !dead && !wantRun()) inst.redraw();
     },
+    /** The caller's motion gate changed: loop if it now wants motion, else stop at the current frame. */
+    sync,
   };
   live.add(handle);
 

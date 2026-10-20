@@ -1,5 +1,6 @@
 // Auto-open terminals for agent sessions started in the background anywhere on the mesh.
 // Pure bookkeeping (no DOM) so it can be unit-tested.
+import { CAPS, capMap } from './cleanup.js';
 
 export const STAGGER_MS = 350;
 
@@ -7,10 +8,11 @@ export function createPopups({ enabled = () => true, open, now = () => Date.now(
   const seen = new Set();
   let nextAt = 0;
   const keyOf = (nodeId, kind, id) => `${nodeId}:${kind}:${id}`;
+  const remember = (k) => { seen.delete(k); seen.add(k); capMap(seen, CAPS.popups); };
   return {
     keyOf,
     /** Remember a session the user already has a window for (attach/start from this UI). */
-    mark: (nodeId, kind, id) => { seen.add(keyOf(nodeId, kind, id)); },
+    mark: (nodeId, kind, id) => { remember(keyOf(nodeId, kind, id)); },
     has: (nodeId, kind, id) => seen.has(keyOf(nodeId, kind, id)),
     /** Handle a WS notify message; returns true when a window was (or will be) opened. */
     handle(m) {
@@ -18,7 +20,7 @@ export function createPopups({ enabled = () => true, open, now = () => Date.now(
       if (!s?.id || !s.nodeId || !enabled()) return false;
       const k = keyOf(s.nodeId, s.kind, s.id);
       if (seen.has(k)) return false;
-      seen.add(k);
+      remember(k);
       // Several arriving at once open one after another instead of all in the same frame.
       const t = now();
       nextAt = Math.max(nextAt, t);

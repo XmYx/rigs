@@ -1,6 +1,7 @@
 import { api, h, toast } from './api.js';
 import { prefersReducedMotion } from './a11y.js';
 import { isPhone } from './mobile.js';
+import { lowPower } from './perf.js';
 import { openWindow } from './wm.js';
 import { renderVisual } from './visual.js';
 import { contextFrom, mountSketch, refreshSketches, sketchFor } from './p5-anim.js';
@@ -21,12 +22,29 @@ import * as M from './exhibits-model.js';
 // themed from the CSS variables, paused off-screen, one settled frame under reduced motion or in Document view); the SVG
 // stays underneath as the fallback if p5 cannot load, and a ComfyUI picture replaces the sketch. Pure logic:
 // exhibits-model.js (tested in test/exhibits-ui.test.js). Styles: the "EXHIBITS" block of styles.css.
+//
+// The top of the window is the ACTIVITY of the work it is about, fed by the trace span stream (main.js forwards every
+// { type: 'trace-span' } push to onExhibitSpan; spans other machines hold are polled from /api/traces/<id>): the
+// project or request title, its steps and progress, the files touched (read / edit / create, with a count) and the
+// tool calls (newest first, status and a short redacted result). Its scope is the document picked from the picker,
+// else the work running now, else the most recent work (exhibits-model.js: foldSpans, pickScope, activityOf). This part
+// works whether or not the Exhibits feature (the storyboard) is on.
+// Motion is decoration and follows one rule (exhibits-model.js shouldAnimate): nothing moves while nothing is working,
+// while the window is hidden, under reduced motion, on lowPower() or with the Exhibit animations setting off; 'auto'
+// (the default) moves only the card of the stage running now, 'always' every card while work runs. A stopped p5 sketch
+// is noLoop (no requestAnimationFrame) and the window's looping CSS animations stop with it (the .ex-still class).
 
 const pref = (k, d) => { try { return localStorage.getItem('rigs.exhibits.' + k) ?? d; } catch { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem('rigs.exhibits.' + k, v); } catch { /* private mode */ } };
+// The Exhibit animations setting lives in the same store as the other display settings (main.js `store`: rigs.<key>, JSON).
+const ANIM_KEY = 'rigs.exhibitAnim';
+const readAnim = () => { try { return JSON.parse(localStorage.getItem(ANIM_KEY)); } catch { return null; } };
 const pad = (n) => String(n ?? 0).padStart(2, '0');
 const clock = (t) => (t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
 const MAX_DOCS = 40;
+const POLL_MS = 20000;
+const STATUS_ICON = { pending: '○', running: '◌', ok: '✓', error: '✗', stopped: '■' };
+const MARK = { read: ['R', 'read'], edit: ['E', 'edited'], create: ['C', 'created'], delete: ['D', 'deleted'] };
 
 const st = {
   enabled: false,
@@ -37,6 +55,8 @@ const st = {
   current: null,
   follow: true, // the window follows new work until the person picks an older document
   view: pref('view', 'cards'), // 'cards' | 'document'
+  spans: new Map(), // traceId → { traceId, spans, lastAt }: the live activity, bounded (exhibits-model.js foldSpans)
+  anim: M.animMode(readAnim()), // Exhibit animations: 'off' | 'auto' | 'always'
   ui: null,
 };
 
@@ -59,6 +79,54 @@ export async function setExhibitsEnabled(on) {
   } catch (e) { toast(`Could not change Exhibits: ${e.message}`, 'error'); }
   st.ui?.renderEmpty();
   return st.enabled;
+}
+
+/** The Exhibit animations setting: 'off' | 'auto' (only the stage running now) | 'always' (every card while work runs). */
+export const exhibitAnim = () => st.anim;
+
+/** Change the Exhibit animations setting (persisted with the other display settings) and apply it at once. */
+export function setExhibitAnim(mode) {
+  st.anim = M.animMode(mode);
+  try { localStorage.setItem(ANIM_KEY, JSON.stringify(st.anim)); } catch { /* private mode */ }
+  window.dispatchEvent(new CustomEvent('rigs:exhibit-anim', { detail: st.anim }));
+  st.ui?.motion();
+  return st.anim;
+}
+
+// ------------------------------------------------------------------ the activity (trace spans)
+
+/** Every { type: 'trace-span' } push, from main.js: kept (bounded) so the window can show what the work is doing. */
+export function onExhibitSpan(span) {
+  if (!span?.traceId) return;
+  M.foldSpans(st.spans, span);
+  st.ui?.activitySoon();
+}
+
+/** Fetch a trace's spans across the mesh (all of them, or those that moved since `after`) and fold them in. */
+async function loadTrace(traceId, after = 0) {
+  try {
+    const r = await api(`/api/traces/${encodeURIComponent(traceId)}${after ? `?after=${after}` : ''}`);
+    M.foldSpans(st.spans, r.spans || []);
+    st.ui?.activitySoon();
+  } catch { /* not traced, or the machines are away */ }
+}
+
+/** Nothing seen live yet (the page just loaded): the work running now, else the most recent request. */
+async function loadRecent() {
+  try {
+    const r = await api('/api/traces?since=24h&limit=5');
+    const t = (r.traces || []).find((x) => x.status === 'running') || r.traces?.[0];
+    if (t) await loadTrace(t.traceId);
+  } catch { /* an older daemon */ }
+}
+
+/** A project document picked to read: find its request trace through the project (p.trace, t.trace) and load it. */
+async function loadProject(projectId, node) {
+  try {
+    const p = await api(`/api/nodes/${encodeURIComponent(node || 'self')}/projects/${encodeURIComponent(projectId)}`);
+    const ids = new Set([p.trace, ...(p.tasks || []).map((t) => t.trace)].map((c) => String(c?.traceId || c || '').split(':')[0]).filter(Boolean));
+    await Promise.all([...ids].slice(0, 3).map((id) => loadTrace(id)));
+  } catch { /* gone, or its machine is away */ }
 }
 
 // ------------------------------------------------------------------ documents
@@ -114,10 +182,10 @@ export function onExhibitEvent(m) {
   if (!st.ui) return;
   st.ui.renderPicker();
   if (m.docId !== st.current) return;
-  if (kind === 'live') st.ui.renderTicker();
-  else if (kind === 'entry') { st.ui.put(r.entry, r.isNew); st.ui.renderHead(); st.ui.renderTicker(); }
+  if (kind === 'live') { st.ui.renderTicker(); st.ui.motion(); }
+  else if (kind === 'entry') { st.ui.put(r.entry, r.isNew); st.ui.renderHead(); st.ui.renderTicker(); st.ui.motion(); }
   else if (kind === 'image') { if (r.entry) st.ui.swapImage(r.entry); }
-  else if (kind === 'final') { st.ui.renderHead(); st.ui.renderTicker(); }
+  else if (kind === 'final') { st.ui.renderHead(); st.ui.renderTicker(); st.ui.motion(); }
 }
 
 // ------------------------------------------------------------------ the window
@@ -126,10 +194,11 @@ export function onExhibitEvent(m) {
 export function openExhibits({ docId = null, auto = false } = {}) {
   if (st.ui) { st.ui.win.raise(); if (docId) st.ui.show(docId); return st.ui; }
   let timer = null;
+  let actTimer = null;
   const sketches = new Map(); // entry id → { handle, host }: the p5 sketch drawing that card's picture
   const unmount = (id) => { const s = sketches.get(id); if (s) { s.handle.destroy(); s.host.remove(); sketches.delete(id); } };
   const unmountAll = () => { for (const id of [...sketches.keys()]) unmount(id); };
-  const win = openWindow({ title: 'Exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); unmountAll(); st.ui = null; } });
+  const win = openWindow({ title: 'Exhibits', icon: '🎞', width: 540, height: 720, className: 'win-exhibits', focus: !auto, onClose: () => { clearInterval(timer); clearTimeout(actTimer); document.removeEventListener('visibilitychange', motion); unmountAll(); st.ui = null; } });
   if (!isPhone()) { // beside the work: the right edge, under the menu bar
     const w = win.el.offsetWidth;
     Object.assign(win.el.style, { left: Math.max(16, window.innerWidth - w - 20) + 'px', top: (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mb-h')) || 0) + 56 + 'px' });
@@ -143,16 +212,29 @@ export function openExhibits({ docId = null, auto = false } = {}) {
   const htmlBtn = h('button', { class: 'tb ex-needs-final', title: 'Open the finished document as a web page', onclick: () => { const r = cur(); if (r) window.open(M.exportUrl(r.node, r.doc.docId, 'html'), '_blank', 'noopener'); } }, 'Export HTML');
   const mdBtn = h('a', { class: 'tb ex-needs-final', role: 'button', download: '', title: 'Download the finished document as Markdown' }, 'Export MD');
   const printBtn = h('button', { class: 'tb ex-needs-final', title: 'Print the document', onclick: () => window.print() }, 'Print');
+  const animSel = h('select', { class: 'ex-anim', 'aria-label': 'Exhibit animations', title: 'Exhibit animations — off: never · auto: only the stage running now · always: every card while work runs. Never while idle, hidden, on reduced motion or low power.', onchange: (e) => setExhibitAnim(e.target.value) },
+    ...M.ANIM_MODES.map((m) => h('option', { value: m, selected: m === st.anim }, `Motion: ${m}`)));
   const head = h('div', { class: 'ex-head' },
     h('div', { class: 'ex-titlebox' }, badge, title, count),
-    h('div', { class: 'ex-bar' }, picker, viewBtn, htmlBtn, mdBtn, printBtn));
+    h('div', { class: 'ex-bar' }, picker, viewBtn, animSel, htmlBtn, mdBtn, printBtn));
+  // The activity of the work this window is about (trace spans): title, steps, files touched, tool calls.
+  const act = {
+    kind: h('span', { class: 'ex-act-kind' }), title: h('h3', { class: 'ex-act-title' }), prog: h('span', { class: 'ex-act-prog' }),
+    bar: h('i'), now: h('div', { class: 'ex-act-now' }), steps: h('ol', { class: 'ex-steps', 'aria-label': 'Steps' }),
+    filesHead: h('h4', {}), files: h('ul', { class: 'ex-files', 'aria-label': 'Files touched' }),
+    toolsHead: h('h4', {}), tools: h('ul', { class: 'ex-tools', 'aria-label': 'Tool calls' }),
+  };
+  const activity = h('section', { class: 'ex-act', 'aria-label': 'What the work is doing' },
+    h('div', { class: 'ex-act-head' }, act.kind, act.title, act.prog),
+    h('div', { class: 'ex-act-bar', 'aria-hidden': 'true' }, act.bar), act.now, act.steps,
+    h('div', { class: 'ex-act-cols' }, h('div', { class: 'ex-act-col' }, act.filesHead, act.files), h('div', { class: 'ex-act-col' }, act.toolsHead, act.tools)));
   const nowTrail = h('div', { class: 'ex-trail' });
   const nowText = h('div', { class: 'ex-now-text' });
   const ticker = h('div', { class: 'ex-ticker', 'aria-hidden': 'true' }, h('span', { class: 'ex-pulse' }), h('div', { class: 'ex-now' }, nowTrail, nowText), h('span', { class: 'ex-scan' }));
   const ghost = h('div', { class: 'ex-ghost', 'aria-hidden': 'true' }, h('i', { class: 'ex-g-fig' }), h('i', {}), h('i', { class: 'short' }));
   const empty = h('div', { class: 'ex-empty' });
   const list = h('div', { class: 'ex-list', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions', 'aria-label': 'Exhibit storyboard', tabindex: '0' }, empty, ghost);
-  win.body.append(head, ticker, list);
+  win.body.append(head, ticker, activity, list);
 
   const cur = () => st.docs.get(st.current) || null;
   const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 90;
@@ -163,6 +245,105 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     viewBtn.setAttribute('aria-pressed', String(st.view === 'document'));
     viewBtn.classList.toggle('on', st.view === 'document');
     for (const { handle } of sketches.values()) handle.refresh(); // Document view is motionless: each sketch settles to one still frame
+    motion();
+  }
+
+  // ---- motion: one cached gate, re-evaluated when the work, the document, the setting or the visibility changes (a
+  // sketch asks it on every frame, so it must be cheap: no span scans there)
+  const gate = { active: false, hidden: false, current: null };
+  const docSpans = () => M.scopeSpans(st.spans, M.docScope(st.current));
+  /** Is the shown document's work running? Its spans say so; without spans, a live "now" line in the last 2 minutes. */
+  function docActive() {
+    const d = cur()?.doc;
+    if (!d || d.final) return false;
+    const spans = docSpans();
+    if (spans.length) return M.isActive(spans);
+    return Date.now() - (st.ticker.get(d.docId)?.at(-1)?.at || 0) < 120000;
+  }
+  const moves = (id) => M.shouldAnimate({ mode: st.anim, active: gate.active, hidden: gate.hidden || document.hidden, reducedMotion: prefersReducedMotion(), lowPower: lowPower(), documentView: st.view === 'document', current: id === gate.current });
+  function motion() {
+    const d = cur()?.doc;
+    gate.active = docActive();
+    gate.hidden = !win.el.isConnected || !win.el.getClientRects().length;
+    gate.current = d && !d.final ? d.entries.at(-1)?.id ?? null : null;
+    const any = M.shouldAnimate({ mode: st.anim, active: gate.active || !!st.ui?.workActive, hidden: gate.hidden || document.hidden, reducedMotion: prefersReducedMotion(), lowPower: lowPower(), documentView: false, current: true });
+    win.el.classList.toggle('ex-still', !any); // the looping CSS animations (pulse, sweep, shimmer, drift) stop with the sketches
+    win.el.classList.toggle('ex-motion-all', any && st.anim === 'always');
+    for (const [id, c] of cards) c.classList.toggle('ex-current', id === gate.current);
+    if (animSel.value !== st.anim) animSel.value = st.anim;
+    for (const { handle } of sketches.values()) handle.sync();
+  }
+  document.addEventListener('visibilitychange', motion);
+
+  // ---- the activity: the scope's spans → title, steps, files, tool calls
+  let actScope = null;
+  let actPending = false;
+  const scopeKey = (s) => (s ? s.traceId || 'pr-' + s.projectId : '');
+  const fetched = new Set(); // scopes fetched in full once (spans pushed before this page connected are only there)
+  function activityScope() {
+    const pinned = !st.follow && st.current ? M.docScope(st.current) : null;
+    return M.pickScope(st.spans, { pinned });
+  }
+  function activitySoon() {
+    if (actPending) return;
+    actPending = true;
+    actTimer = setTimeout(() => { actPending = false; renderActivity(); }, 200);
+  }
+  function ensureScope(scope) {
+    const k = scopeKey(scope);
+    if (!scope || fetched.has(k)) return;
+    fetched.add(k);
+    if (scope.traceId) loadTrace(scope.traceId); else loadProject(scope.projectId, cur()?.node);
+  }
+  function renderActivity() {
+    if (!st.ui) return;
+    actScope = activityScope();
+    ensureScope(actScope);
+    const a = M.activityOf(M.scopeSpans(st.spans, actScope));
+    st.ui.workActive = !!a?.active;
+    activity.classList.toggle('live', !!a?.active);
+    if (!a) {
+      act.kind.textContent = 'IDLE';
+      act.kind.className = 'ex-act-kind idle';
+      act.title.title = '';
+      act.title.textContent = 'Nothing running';
+      act.prog.textContent = '';
+      act.bar.style.width = '0';
+      act.now.textContent = 'The next request or task shows here: its steps, the files it touches and the tools it calls.';
+      act.steps.replaceChildren();
+      act.filesHead.textContent = 'Files'; act.files.replaceChildren(h('li', { class: 'ex-none' }, '—'));
+      act.toolsHead.textContent = 'Tool calls'; act.tools.replaceChildren(h('li', { class: 'ex-none' }, '—'));
+      motion();
+      return;
+    }
+    act.kind.textContent = a.active ? 'NOW' : 'LAST';
+    act.kind.className = `ex-act-kind ${a.active ? 'live' : 'idle'}`;
+    act.title.textContent = a.title;
+    act.title.title = a.request || a.title;
+    act.prog.textContent = [a.tasks ? `${a.tasks.done}/${a.tasks.total} tasks` : null, `${a.done}/${a.total} steps`].filter(Boolean).join(' · ');
+    act.bar.style.width = `${Math.round((a.tasks ? a.tasks.done / a.tasks.total : a.done / Math.max(1, a.total)) * 100)}%`;
+    act.now.textContent = a.active ? (a.current ? `Working: ${a.current}` : 'Working…') : `Finished ${clock(a.lastAt)}${a.toolErrors ? ` · ${a.toolErrors} tool error${a.toolErrors === 1 ? '' : 's'}` : ''}`;
+    act.steps.replaceChildren(...a.steps.map((s) => h('li', { class: `ex-step ${s.status}`, title: `${s.label} — ${s.status}` }, h('b', { 'aria-hidden': 'true' }, STATUS_ICON[s.status] || '·'), h('span', {}, s.label))));
+    act.filesHead.textContent = `Files · ${a.filesTotal}`;
+    act.files.replaceChildren(...(a.files.length ? a.files.map((f) => h('li', { class: `ex-file m-${f.mark}${f.error ? ' err' : ''}`, title: `${(f.node ? f.node + ':' : '') + f.path} — ${MARK[f.mark]?.[1] || f.mark}, ${f.count}×` },
+      h('b', { class: 'ex-mark', 'aria-label': MARK[f.mark]?.[1] || f.mark }, MARK[f.mark]?.[0] || '?'), h('span', { class: 'ex-fname' }, f.name), h('span', { class: 'ex-fdir' }, `\u200e${f.node ? f.node + ':' : ''}${f.dir}\u200e`), f.count > 1 ? h('span', { class: 'ex-fcount' }, `×${f.count}`) : null))
+      : [h('li', { class: 'ex-none' }, 'No files touched yet')]),
+    ...(a.filesTotal > a.files.length ? [h('li', { class: 'ex-none' }, `+${a.filesTotal - a.files.length} more`)] : []));
+    act.toolsHead.textContent = `Tool calls · ${a.toolsTotal}${a.toolsRunning ? ` · ${a.toolsRunning} running` : ''}`;
+    act.tools.replaceChildren(...(a.tools.length ? a.tools.map((t) => h('li', { class: `ex-tool ${t.status}`, title: [t.name, t.target, t.summary].filter(Boolean).join('\n') },
+      h('b', { class: 'ex-tst', 'aria-label': t.status }, STATUS_ICON[t.status] || '·'), h('span', { class: 'ex-tname' }, t.name), h('span', { class: 'ex-ttarget' }, t.target),
+      h('span', { class: 'ex-tsum' }, t.status === 'running' ? 'running…' : t.summary)))
+      : [h('li', { class: 'ex-none' }, 'No tool calls yet')]),
+    ...(a.toolsTotal > a.tools.length ? [h('li', { class: 'ex-none' }, `+${a.toolsTotal - a.tools.length} earlier`)] : []));
+    motion();
+  }
+  /** Spans other machines write (task runs, their tool calls) are not pushed here: poll the scope while it works. */
+  function pollActivity() {
+    if (!st.spans.size) { loadRecent(); return; }
+    const spans = M.scopeSpans(st.spans, actScope);
+    if (!spans.length || !M.isActive(spans)) { motion(); return; }
+    const since = spans.reduce((x, s) => Math.max(x, s.start || 0, s.end || 0), 0) - 5000;
+    for (const id of new Set(spans.map((s) => s.traceId))) loadTrace(id, since);
   }
 
   /** Draw the card's picture live with the p5 sketch for its kind, over the built-in SVG (kept as the fallback). */
@@ -175,7 +356,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     const handle = mountSketch(host, {
       id: sketchFor(entry.kind), seed: `${rec?.doc.title || ''}|${entry.id}`, // the document's title too: the same step in two tasks looks different
       info: contextFrom(entry, docInfo()), // what the card is about, drawn as data
-      reducedMotion: () => prefersReducedMotion() || st.view === 'document',
+      reducedMotion: () => !moves(entry.id), // the whole motion gate: still unless shouldAnimate says so
       onReady: () => host.classList.add('in'),
       onError: () => { sketches.delete(entry.id); host.remove(); },
     });
@@ -237,6 +418,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     unmount(entry.id);
     if (old) { old.replaceWith(el); el.classList.add('ex-updated'); } else place(el, entry.seq ?? 0);
     cards.set(entry.id, el);
+    el.classList.toggle('ex-current', entry.id === gate.current);
     mountFor(entry, el); // after the card is in the list: the sketch sizes itself from its host
     if (isNew) refreshInfo();
     if (isNew && stick) toBottom();
@@ -331,7 +513,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     st.current = docId;
     renderAll();
     empty.hidden = !!rec.doc.entries.length;
-    renderHead(); renderTicker(); renderPicker();
+    renderHead(); renderTicker(); renderPicker(); renderActivity();
     hydrate(rec);
   }
 
@@ -342,11 +524,13 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     show(docId);
   }
 
-  timer = setInterval(loadList, 20000);
-  st.ui = { win, show, put: (e, isNew) => put(e, isNew, cards.size), swapImage, sync, renderHead, renderTicker, renderPicker, renderEmpty };
+  timer = setInterval(() => { loadList(); pollActivity(); }, POLL_MS);
+  st.ui = { win, show, put: (e, isNew) => put(e, isNew, cards.size), swapImage, sync, renderHead, renderTicker, renderPicker, renderEmpty, activitySoon, motion, workActive: false };
   applyView();
   renderEmpty();
   renderPicker();
+  renderActivity();
+  if (!st.spans.size) loadRecent();
   // Start on the given document, else the newest on the list.
   if (docId) show(docId);
   loadList().then(() => {

@@ -189,8 +189,13 @@ export function createGraph(el, { onSelect, onBackground }) {
     Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
     Graph.width(el.clientWidth).height(el.clientHeight);
   }
+  // Everything this graph hooks outside its own canvas, undone by destroy() (a graph in a closed window, a hidden cloud).
+  const offs = [];
+  const listen = (target, ev, fn, opts) => { target?.addEventListener?.(ev, fn, opts); offs.push(() => target?.removeEventListener?.(ev, fn, opts)); };
+  let dead = false;
+  let paused = false; // pause() / resume(): the owner closed or collapsed the window this graph is in
   // Nothing to draw while the tab is hidden: stop the render loop and the layout simulation, resume on return.
-  document.addEventListener('visibilitychange', () => { if (document.hidden) Graph.pauseAnimation(); else { asleep = false; lastActive = performance.now(); Graph.resumeAnimation(); } });
+  listen(document, 'visibilitychange', () => { if (document.hidden) Graph.pauseAnimation(); else if (!paused) { asleep = false; lastActive = performance.now(); Graph.resumeAnimation(); kick(); } });
 
   // On a low-power device a galaxy that is not moving (no orbit, no alerts, no pulsing nodes, no input for a
   // few seconds) is not redrawn: the render loop sleeps until the next touch, key press or data change.
@@ -198,9 +203,9 @@ export function createGraph(el, { onSelect, onBackground }) {
   let lastActive = performance.now();
   function wake() {
     lastActive = performance.now();
-    if (asleep && !document.hidden) { asleep = false; Graph.resumeAnimation(); }
+    if (asleep && !document.hidden && !paused && !dead) { asleep = false; Graph.resumeAnimation(); kick(); }
   }
-  for (const ev of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) el.addEventListener(ev, wake, { passive: true });
+  for (const ev of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) listen(el, ev, wake, { passive: true });
   function maybeSleep() {
     if (asleep || document.hidden || !lowPower() || state.rotate || state.attention.size || performance.now() - lastActive < 6000) return;
     asleep = true;
@@ -214,9 +219,9 @@ export function createGraph(el, { onSelect, onBackground }) {
   stars.setAttribute('position', new THREE.BufferAttribute(pts, 3));
   const starMat = new THREE.PointsMaterial({ color: currentTheme().graph.stars, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.7 });
   Graph.scene().add(new THREE.Points(stars, starMat));
-  onTheme((t) => { Graph.backgroundColor(t.graph.background); starMat.color.set(t.graph.stars); });
+  offs.push(onTheme((t) => { Graph.backgroundColor(t.graph.background); starMat.color.set(t.graph.stars); }));
   applyBudget();
-  onPowerChange(applyBudget);
+  offs.push(onPowerChange(applyBudget));
 
   function colorFor(n) {
     const base = state.types[n.type]?.color || '#94a3b8';
@@ -311,10 +316,15 @@ export function createGraph(el, { onSelect, onBackground }) {
   // prefers-reduced-motion: no spinning rings, pulsing, blinking halos, orbit or link particles
   const calmMq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
   const calm = () => !!calmMq?.matches;
-  calmMq?.addEventListener?.('change', () => Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()));
-  (function loop() {
-    if (document.hidden || asleep) { setTimeout(() => requestAnimationFrame(loop), 500); return; }
+  listen(calmMq, 'change', () => Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()));
+  // The decoration loop runs only while the graph itself renders: paused, asleep, in a hidden tab or destroyed it
+  // ends, and kick() (resume, wake, the tab coming back) starts it again — no frame is requested for a graph nobody sees.
+  let looping = false;
+  function kick() { if (!looping && !dead && !paused && !asleep && !document.hidden) { looping = true; requestAnimationFrame(loop); } }
+  function loop() {
+    if (dead || paused || asleep || document.hidden) { looping = false; return; }
     maybeSleep();
+    if (asleep) { looping = false; return; }
     const still = calm();
     const low = lowPower(); // low power: active nodes stay at rest instead of pulsing, so an idle galaxy can sleep
     const t = performance.now() / 1000;
@@ -342,7 +352,8 @@ export function createGraph(el, { onSelect, onBackground }) {
     const controls = Graph.controls();
     if (controls) controls.autoRotate = state.rotate && !still && !state.focus && !state.hover;
     requestAnimationFrame(loop);
-  })();
+  }
+  kick();
 
   function neighbors(id, depth) {
     const adj = new Map();
@@ -393,7 +404,7 @@ export function createGraph(el, { onSelect, onBackground }) {
       const changed = sig({ nodes, links: data.links }) !== state.sig;
       state.sig = sig({ nodes, links: data.links });
       if (changed) wake();
-      for (const old of state.data.nodes) if (!state.byId.has(old.id)) old.__label?.remove();
+      for (const old of state.data.nodes) if (!state.byId.has(old.id)) { old.__label?.remove(); old.__group?.userData.halo?.userData.tag?.element.remove(); } // CSS2D only removes the removed object's own element, not a nested halo tag's
       state.data = { nodes, links: data.links };
       if (changed) Graph.graphData(state.data);
       if (state.focus && !state.byId.has(state.focus)) api.clearFocus();
@@ -450,9 +461,33 @@ export function createGraph(el, { onSelect, onBackground }) {
     /** The palette (type → { label, color }) nodes are drawn with: the mesh's TYPES by default, the structure view's own in Graphify. */
     setTypes(types) { state.types = types || TYPES; Graph.nodeColor(Graph.nodeColor()).nodeLabel(Graph.nodeLabel()); },
     /** Stop / restart the render loop and layout simulation (a graph in a closed window draws nothing). */
-    pause() { Graph.pauseAnimation(); },
-    resume() { asleep = false; lastActive = performance.now(); if (!document.hidden) Graph.resumeAnimation(); },
-    resize() { Graph.width(el.clientWidth).height(el.clientHeight); bloom.setSize(el.clientWidth, el.clientHeight); },
+    pause() { paused = true; Graph.pauseAnimation(); },
+    resume() { if (dead) return; paused = false; asleep = false; lastActive = performance.now(); if (!document.hidden) { Graph.resumeAnimation(); kick(); } },
+    resize() { if (dead) return; Graph.width(el.clientWidth).height(el.clientHeight); bloom.setSize(el.clientWidth, el.clientHeight); },
+    /**
+     * Free everything for good: render loop and simulation stopped, listeners removed, three.js geometries,
+     * materials and render targets disposed, the WebGL context released and the canvas removed from `el`.
+     */
+    destroy() {
+      if (dead) return;
+      dead = true;
+      paused = true;
+      for (const off of offs.splice(0)) { try { off(); } catch {} }
+      const gl = Graph.renderer();
+      try { Graph.pauseAnimation(); } catch {}
+      for (const n of state.data.nodes) { n.__label?.remove(); n.__group?.userData.halo?.userData.tag?.element.remove(); n.__label = null; n.__group = null; }
+      try { Graph._destructor(); } catch {} // empties and disposes the scene, controls, renderer and composer
+      try { bloom.dispose(); } catch {}
+      stars.dispose();
+      starMat.dispose();
+      try { gl.forceContextLoss(); } catch {} // hand the GPU memory back now instead of whenever the canvas is collected
+      labelRenderer.domElement.remove();
+      el.replaceChildren();
+      state.data = { nodes: [], links: [] };
+      state.byId = new Map();
+      state.attention = new Set();
+    },
+    get destroyed() { return dead; },
     /** The visible node under a point in client pixels (right-click / long-press), or null: nearest centre within the node's drawn radius. */
     nodeAt(clientX, clientY) {
       const box = el.getBoundingClientRect();
@@ -474,9 +509,9 @@ export function createGraph(el, { onSelect, onBackground }) {
     get focused() { return state.focus; },
     get depth() { return state.depth; },
   };
-  window.addEventListener('resize', () => api.resize());
+  listen(window, 'resize', () => api.resize());
   // Anything that changes the scene (every API method) or touches the galaxy wakes the idle sleep below.
-  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['Graph', 'get', 'nodes', 'neighbors', 'setAttention', 'setData', 'nodeAt', 'pause', 'resume'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
+  for (const [k, fn] of Object.entries(Object.getOwnPropertyDescriptors(api))) if (typeof fn.value === 'function' && !['Graph', 'get', 'nodes', 'neighbors', 'setAttention', 'setData', 'nodeAt', 'pause', 'resume', 'destroy'].includes(k)) { const f = fn.value; api[k] = (...a) => { wake(); return f(...a); }; }
   return api;
 }
 

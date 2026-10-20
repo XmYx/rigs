@@ -81,6 +81,10 @@ export function registerJarvisCommands(deps) {
       id: 'view.menubar', shortcut: 'Mod+Shift+M', global: true, when: (ctx) => !ctx.phone, checked: (ctx) => !ctx.menubarHidden,
       label: (ctx) => (ctx.menubarHidden ? 'Show menu bar' : 'Hide menu bar'), run: () => deps.menubar.toggle(),
     },
+    {
+      id: 'view.cloud', label: 'Show cloud — the 3D mesh galaxy', icon: '☁', when: () => !!deps.cloud,
+      checked: () => !!deps.cloud?.visible(), run: () => deps.cloud.toggle(),
+    },
     { id: 'view.menubarFocus', label: 'Go to the menu bar', shortcut: 'F10', global: true, when: (ctx) => !ctx.phone, run: () => deps.menubar.focus() },
 
     // ------------------------------------------------------------ Tools
@@ -150,7 +154,7 @@ export function menuModel() {
       { id: 'removed', label: `Removed items${gone.length ? ` (${gone.length})` : ''}`, submenu: () => (gone.length
         ? [...gone.map((g) => ({ cmd: 'window.restore', args: g })), { sep: true }, { cmd: 'window.restoreAll' }]
         : [{ label: 'Nothing removed', disabled: true }]) },
-      { sep: true }, { cmd: 'view.menubar' },
+      { sep: true }, { cmd: 'view.cloud' }, { cmd: 'view.menubar' },
     ] },
     { id: 'tools', label: 'Tools', items: () => [
       { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.graphify' }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },

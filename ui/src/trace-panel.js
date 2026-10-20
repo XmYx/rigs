@@ -8,6 +8,7 @@ import { lowPower, pixelRatio } from './perf.js';
 import { currentTheme } from './themes.js';
 import { openWindow } from './wm.js';
 import { tagCtx } from './ctx-tag.js';
+import { CAPS, capArray, capMap } from './cleanup.js';
 import {
   CRITICAL_COLOR, ERROR_COLOR, GROUPS, filterList, fmtMs, fmtNum, fmtUsd, isError, kindGroup, layoutTrace, mergeSpans, present,
   replayEvents, selfTimes, spanDur, spanTokens, stateAt, summarize, treeOrder,
@@ -120,6 +121,8 @@ export function openActivity() { return openTrace(ALL); }
 
 /** Open the explorer for one trace (summary = its list row, shown while the spans load). */
 export function openTrace(traceId, summary = null) {
+  // One explorer per trace: another click raises it instead of opening a second window (and WebGL context).
+  for (const ex of explorers.get(traceId) || []) if (ex.handle) { ex.handle.raise(); return ex.handle; }
   const phone = isPhone();
   const all = traceId === ALL;
   const S = {
@@ -170,6 +173,7 @@ export function openTrace(traceId, summary = null) {
     add: (spans) => {
       const known = new Set(S.spans.map((s) => s.traceId));
       S.spans = mergeSpans(S.spans, spans);
+      capArray(S.spans, CAPS.traceSpans); // oldest out: a trace that runs for hours does not grow the window without end
       if (all) { keepLatest(); if (spans.some((s) => !known.has(s.traceId))) S.fitted = false; } // a new request: fit it in
       scheduleRedraw();
     },
@@ -179,12 +183,16 @@ export function openTrace(traceId, summary = null) {
 
   function destroy() {
     destroyed = true;
-    clearInterval(pollTimer); clearInterval(playTimer); clearTimeout(redrawTimer);
+    clearInterval(pollTimer); clearInterval(playTimer); clearTimeout(redrawTimer); clearTimeout(S.sizeTimer);
     explorers.get(traceId)?.delete(me);
     if (!explorers.get(traceId)?.size) explorers.delete(traceId);
     for (const n of S.layout?.nodes || []) n.__parts?.label?.element.remove();
+    const gl = S.graph?.renderer();
     try { S.graph?._destructor(); } catch { /* already gone */ }
+    try { gl?.forceContextLoss(); } catch { /* no context */ } // give the GPU memory back now: Chrome keeps only ~16 live contexts and drops the oldest (the galaxy) past that
+    stage3d.replaceChildren();
     S.graph = null;
+    S.spans = []; S.layout = null; S.requests = new Map();
   }
 
   // ------------------------------------------------------------ data
@@ -226,7 +234,8 @@ export function openTrace(traceId, summary = null) {
     try {
       const list = await api(`/api/traces?${new URLSearchParams({ since: '24h', limit: String(S.limit) })}`);
       const fresh = (list.traces || []).filter((t) => !S.requests.has(t.traceId) || t.status === 'running' || S.requests.get(t.traceId).status === 'running');
-      for (const t of list.traces || []) S.requests.set(t.traceId, t);
+      for (const t of list.traces || []) { S.requests.delete(t.traceId); S.requests.set(t.traceId, t); } // re-insert: newest last
+      capMap(S.requests, Math.max(S.limit, CAPS.traceRequests));
       const after = S.lastPoll - 5000;
       S.lastPoll = Date.now();
       const got = await Promise.all(fresh.map((t) => api(`/api/traces/${encodeURIComponent(t.traceId)}${S.spans.some((s) => s.traceId === t.traceId) ? `?after=${after}` : ''}`).catch(() => null)));
@@ -404,7 +413,8 @@ export function openTrace(traceId, summary = null) {
   }
 
   function renderGraph() {
-    if (!stage3d.clientWidth || !stage3d.clientHeight) { requestAnimationFrame(() => { if (!destroyed && S.view === '3d') renderGraph(); }); return; }
+    // Not laid out yet (or a hidden docked tab): look again in a moment, not every frame.
+    if (!stage3d.clientWidth || !stage3d.clientHeight) { clearTimeout(S.sizeTimer); S.sizeTimer = setTimeout(() => { if (!destroyed && S.view === '3d') renderGraph(); }, 400); return; }
     const g = ensureGraph();
     g.width(stage3d.clientWidth).height(stage3d.clientHeight);
     const L = layoutTrace(S.spans, { now: now(), lane: S.lane, size: S.size, even: S.even, width: phone ? 300 : Math.max(500, Math.min(1600, S.spans.length * 40)), flat: phone, depthGap: phone ? 16 : 56, laneGap: phone ? 90 : 130 });
@@ -623,5 +633,6 @@ export function openTrace(traceId, summary = null) {
 
   load();
   pollTimer = setInterval(poll, 4000);
-  return { traceId, close: win.close, select };
+  me.handle = { traceId, close: win.close, select, raise: () => { win.raise(); win.el.classList.remove('panel-closed'); } };
+  return me.handle;
 }

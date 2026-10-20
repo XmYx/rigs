@@ -11,7 +11,8 @@ export function lowPower() {
   return !!(mq?.matches || c?.saveData || (globalThis.navigator?.deviceMemory && globalThis.navigator.deviceMemory <= 2));
 }
 
-export function onPowerChange(fn) { mq?.addEventListener?.('change', fn); }
+/** Call fn when the viewport changes power class; returns the unsubscribe. */
+export function onPowerChange(fn) { mq?.addEventListener?.('change', fn); return () => mq?.removeEventListener?.('change', fn); }
 
 /** Pixel ratio for WebGL canvases: the screen's, capped (1 on a low-power device, 2 otherwise). */
 export function pixelRatio() { return lowPower() ? 1 : Math.min(2, globalThis.devicePixelRatio || 1); }

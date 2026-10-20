@@ -145,3 +145,22 @@ test('the Experimental menu, the main.js wiring and the stylesheet rules are in 
   assert.match(block, /@media print/, 'print view');
   assert.doesNotMatch(block.replace(/@media print[\s\S]*$/, ''), /#[0-9a-f]{3,6}\b/i, 'theme variables only outside the print rules');
 });
+
+test('the activity and the motion gate are wired: trace spans reach the window, the setting persists, idle stops every loop', () => {
+  const main = read('ui/src/main.js');
+  assert.match(main, /m\.type === 'trace-span'\) \{ onTraceSpan\(m\.span\); onExhibitSpan\(m\.span\);/, 'trace spans reach the Exhibit activity');
+  assert.match(main, /setExhibitAnim\(exAnim\.value\)/, 'the display setting changes the mode');
+  assert.match(main, /function wire\(\) \{(?:(?!\n\}\n)[^])*const exAnim = \$\('#d-exanim'\);/, 'wired inside wire(), not stranded in another function');
+  assert.match(read('ui/index.html'), /<h2 class="sec-h">Display<\/h2>(?:(?!<\/section>)[^])*id="d-exanim"/, 'the select is inside the Display section');
+  assert.doesNotMatch(read('ui/src/styles.css'), /@media print \{(?:(?!\n\}\n)[^])*\.ex-act-cols \{ grid/, 'activity layout rules are not inside the print block');
+  assert.match(read('ui/index.html'), /id="d-exanim"[^>]*>(?=.*value="off")(?=.*value="auto")(?=.*value="always")/, 'off / auto / always in the display settings');
+  const ex = read('ui/src/exhibits.js');
+  assert.match(ex, /'rigs\.exhibitAnim'/, 'kept under rigs.<key>, like the other display settings');
+  assert.match(ex, /reducedMotion: \(\) => !moves\(entry\.id\)/, 'every sketch asks the gate');
+  assert.match(ex, /M\.shouldAnimate\(\{ mode: st\.anim, active: gate\.active, hidden: gate\.hidden \|\| document\.hidden, reducedMotion: prefersReducedMotion\(\), lowPower: lowPower\(\)/);
+  assert.match(ex, /handle\.sync\(\)/, 'a gate change stops (noLoop) or restarts the sketches');
+  assert.match(read('ui/src/p5-anim.js'), /inst\.noLoop\(\)/);
+  const css = read('ui/src/styles.css');
+  assert.match(css, /\.win-exhibits\.ex-still \.ex-img\.in, [^{]*\.ex-pulse[^{]*\.ex-ghost i[^{]*\.ex-vis \*[^{]*\{ animation: none; \}/, 'looping CSS stops with the sketches, the cards\' embedded visuals too');
+  assert.match(css, /\.win-exhibits:not\(\.ex-motion-all\) \.ex-card:not\(\.ex-current\) \.ex-img\.in, [^{]*\.ex-card:not\(\.ex-current\) \.ex-vis \* \{ animation: none; \}/);
+});

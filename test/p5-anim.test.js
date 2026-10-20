@@ -155,7 +155,8 @@ test('the Exhibit window mounts sketches over SVG pictures only, cleans them up 
   assert.match(win, /from '\.\/p5-anim\.js'/);
   assert.match(win, /entry\.image\?\.source === 'svg'/, 'a ComfyUI picture is never covered');
   assert.match(win, /onTheme\(refreshSketches\)/);
-  assert.match(win, /reducedMotion: \(\) => prefersReducedMotion\(\) \|\| st\.view === 'document'/);
+  assert.match(win, /reducedMotion: \(\) => !moves\(entry\.id\)/); // the motion gate: reduced motion, Document view, idle, hidden, lowPower, the setting
+  assert.match(win, /reducedMotion: prefersReducedMotion\(\), lowPower: lowPower\(\), documentView: st\.view === 'document'/);
   assert.match(win, /onClose: \(\) => \{[^}]*unmountAll\(\)/, 'closing the window ends every sketch');
   assert.match(win, /function renderAll\(\) \{\s*unmountAll\(\)/);
   assert.match(win, /unmount\(entry\.id\); \}; \/\/ the picture replaces the sketch/);

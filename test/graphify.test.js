@@ -46,7 +46,9 @@ test('the Graphify panel is registered: page element, panel, toolbar button, pho
   const src = read('ui/src/graphify.js');
   assert.match(src, /setActive\(on\)/);
   assert.match(src, /graph\??\.pause\(\)/, 'the render loop sleeps while the window is closed');
-  assert.match(read('ui/src/graph.js'), /pause\(\) \{ Graph\.pauseAnimation\(\); \}/);
+  assert.match(read('ui/src/graph.js'), /pause\(\) \{ paused = true; Graph\.pauseAnimation\(\); \}/);
+  assert.match(src, /dropTimer = setTimeout\(drop, DROP_AFTER_MS\)/, 'closed for a while, the graph itself is freed');
+  assert.match(src, /graph\.destroy\(\)/);
 });
 
 function memStorage() {

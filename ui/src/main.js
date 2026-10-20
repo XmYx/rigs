@@ -1,4 +1,5 @@
-import { bannerVisible, prefs } from './toasts.js';
+import { bannerVisible, closedTexts, prefs } from './toasts.js';
+import { CAPS, capMap, createSweeper } from './cleanup.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -21,10 +22,11 @@ import { createUsage } from './usage-panel.js';
 import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
-import { exhibitsEnabled, initExhibits, onExhibitEvent, openExhibits, setExhibitsEnabled } from './exhibits.js';
+import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
+import { cloudCommand, createCloud } from './cloud.js';
 import { createGraphify } from './graphify.js';
 import { openMesh } from './mesh.js';
 import { controlEvent, openControl } from './control.js';
@@ -50,13 +52,24 @@ const store = {
 };
 
 let snap = [];
-// Agent sessions started in the background pop up here as terminals (deduped per node:kind:id).
+// Agent sessions started in the background pop up here as terminals (deduped per node:kind:id). At most
+// CAPS.popupWindows of them stay open: past that the oldest one the user is not typing in closes (a busy mesh would
+// otherwise stack up a terminal, with its scrollback and socket, for every agent it ever started).
+const popupWins = [];
 const popups = createPopups({
   enabled: () => store.get('autoOpenSessions', true),
   open: async (s) => {
     try {
       const r = await api(`${node(s.nodeId)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id } });
-      openTerminal({ nodeId: s.nodeId, nodeName: s.nodeName, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+      const t = await openTerminal({ nodeId: s.nodeId, nodeName: s.nodeName, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+      if (!t?.window) return;
+      popupWins.push(t.window);
+      t.window.onCleanup(() => { const i = popupWins.indexOf(t.window); if (i >= 0) popupWins.splice(i, 1); });
+      while (popupWins.length > CAPS.popupWindows) {
+        const old = popupWins.find((w) => !w.el.contains(document.activeElement));
+        if (!old) break;
+        old.close();
+      }
     } catch (e) { toast(e.message, 'error'); }
   },
 });
@@ -71,7 +84,23 @@ let chatTarget = store.get('chatTarget', null);
 let busy = null;
 
 // ------------------------------------------------------------------ boot
-const graph = createGraph($('#graph'), { onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {} });
+// The cloud (the galaxy on #graph) can be hidden for good — graph destroyed, GPU memory released (cloud.js). Hidden by
+// default on low-power devices; Display › cloud, ☁ in the top bar, Window › Show cloud or "hide the cloud" switch it.
+const graph = createCloud($('#graph'), {
+  createGraph, visible: store.get('cloud', !lowPower()),
+  onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {},
+  onChange: (on) => { store.set('cloud', on); syncCloud(); },
+});
+function syncCloud() {
+  const on = graph.visible;
+  document.body.classList.toggle('cloud-off', !on);
+  const box = document.getElementById('d-cloud');
+  if (box) box.checked = on;
+  const pill = document.getElementById('cloud-toggle');
+  if (pill) { pill.setAttribute('aria-pressed', String(on)); pill.title = on ? 'Hide the cloud — the 3D mesh galaxy (saves GPU and memory)' : 'Show the cloud — the 3D mesh galaxy'; pill.classList.toggle('off', !on); }
+}
+/** Show or hide the cloud (a fresh galaxy frames the whole mesh by itself once its layout settles). */
+function setCloud(on) { graph.setVisible(on); }
 const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 /** The launch recipe an app's host runs on its own OS (launchHere); older peers send only launch. */
 const launchOf = (a) => (a.launchHere !== undefined ? a.launchHere : a.launch);
@@ -85,7 +114,13 @@ function makeFace() {
 }
 { const pref = localStorage.getItem('rigs.face'); if (pref === '1' || (pref == null && !lowPower())) makeFace(); else $('#face').classList.add('off'); }
 $('#face').onclick = () => $('#face').classList.toggle('big');
-function showFace(on) { if (on && !face) makeFace(); $('#face').classList.toggle('off', !on); localStorage.setItem('rigs.face', on ? '1' : '0'); }
+// Hidden, the face is disposed (no render loop, WebGL context released); showing it builds a new one.
+function showFace(on) {
+  if (on && !face) makeFace();
+  if (!on && face) { face.dispose(); face = null; window.jarvisFace = null; }
+  $('#face').classList.toggle('off', !on);
+  localStorage.setItem('rigs.face', on ? '1' : '0');
+}
 // The face's emotion for each line JARVIS says (LocalJev on the mesh decides; see src/senses.js)
 let feelSeq = 0;
 function feel(text) {
@@ -94,7 +129,7 @@ function feel(text) {
   api('/api/local/emotion', { method: 'POST', body: { text: text.slice(0, 600) } }).then((r) => {
     if (seq !== feelSeq) return; // a newer line already decided
     const words = text.split(/\s+/).length;
-    face.setEmotion(r.emotion, { hold: Math.max(4500, words * 420 + 2500) });
+    face?.setEmotion(r.emotion, { hold: Math.max(4500, words * 420 + 2500) });
   }).catch(() => {});
 }
 
@@ -275,7 +310,7 @@ function connectEvents() {
     if (m.type === 'apps') refresh();
     if (m.type === 'notify' && m.session) popups.handle(m);
     if (m.type === 'control') controlEvent(m);
-    if (m.type === 'trace-span') onTraceSpan(m.span);
+    if (m.type === 'trace-span') { onTraceSpan(m.span); onExhibitSpan(m.span); } // the Exhibit window's activity follows the same stream
     if (m.type?.startsWith('exhibit')) onExhibitEvent(m); // experimental Exhibit window (exhibits.js)
     if (m.type === 'starnet-config') onStarnetConfig(m); // experimental space-station view switched (starnet/index.js)
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
@@ -594,6 +629,8 @@ let sessWin = null;
 let ctxMenu = null; // installContextMenu()'s handle (wireContextMenus); the station frame opens menus through it
 function sessionsWindow(filter = '', show = null) {
   sessWin = openSessions({ snapshot: () => snap, focus: (n, s) => select(`s:${n.id}:${s.kind}:${s.id}`), onContinueChat: continueChat, onAttachChat: attachChat, onAttached: popups.mark });
+  const mine = sessWin;
+  sessWin.window.onCleanup(() => { if (sessWin === mine) sessWin = null; }); // a closed Sessions window is not kept alive until the next one
   if (filter) { const i = sessWin.window.body.querySelector('input'); i.value = filter; i.dispatchEvent(new Event('input')); }
   if (show) sessWin.showSession(show.node, show.s);
 }
@@ -607,7 +644,7 @@ async function attachSession(m, s) {
     const r = await api(`${node(m.id)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id, cwd: s.cwd } });
     popups.mark(m.id, s.kind, s.id);
     const t = await openTerminal({ nodeId: m.id, nodeName: m.name, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
-    if (t?.window) attached.set(key, t.window);
+    if (t?.window) { attached.set(key, t.window); t.window.onCleanup(() => { if (attached.get(key) === t.window) attached.delete(key); }); } // a closed terminal is not kept alive by this map
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -707,8 +744,7 @@ function desktopTo(m, { viewer } = {}) {
   }
 
   loadPairings();
-  const t = setInterval(loadPairings, 3000);
-  w.el.querySelector('.win-btn.close').addEventListener('click', () => clearInterval(t));
+  w.interval(loadPairings, 3000); // cleared on every close path (Esc, phone back, close others), not only ✕
   if (hostReady && viewers.some((x) => x.id === (viewer || self?.id))) go();
 }
 
@@ -868,6 +904,13 @@ async function intent(text) {
   const t = text.trim().replace(/^(jarvis[, ]+|please |can you |could you )+/i, '');
   let m;
   const say = (s) => { showSubtitle(s); voice.say(s); };
+  const cloudCmd = cloudCommand(t);
+  if (cloudCmd != null) {
+    const on = cloudCmd === 'toggle' ? !graph.visible : cloudCmd;
+    setCloud(on);
+    say(on ? `The cloud is back, ${persona.address}.` : 'Cloud hidden. Nothing of it renders until you ask for it again.');
+    return true;
+  }
   if ((m = t.match(/^(?:open |start |launch |give me )?(?:a |new )*(?:terminal|shell|console|command line)(?: on| for| at| to)?\s+(.+)$/i))) {
     const n = findMachine(m[1]);
     if (n?.rigs) { openTerminal({ nodeId: n.id, nodeName: n.name }); say(`Terminal on ${n.name}, ${persona.address}.`); return true; }
@@ -1153,15 +1196,22 @@ async function sendToSession(text) {
   } catch (e) { toast(e.message, 'error', 9000); showSubtitle(e.message, 'error'); }
 }
 
+let convWin = null; // the one Conversation window: clicking the subtitle again raises and reloads it
 async function conversationWindow() {
   if (chatTarget) { const m = machineById(chatTarget.nodeId); if (m) sessionsWindow('', { node: m, s: chatTarget }); return; }
   if (!chatRef) { toast('No conversation yet — ask me something.'); return; }
-  const w = openWindow({ title: 'Conversation', icon: '◆', width: 640, height: 520 });
-  const list = h('div', { class: 'transcript' });
-  w.body.append(h('div', { class: 'toolbar' }, h('button', { class: 'tb', onclick: () => { chatRef = null; store.set('chat', null); w.close(); toast('New conversation'); } }, '＋ New conversation')), list);
+  let w = convWin;
+  if (w?.el.isConnected && !w.el.classList.contains('win-leave')) { w.raise(); w.el.classList.remove('panel-closed'); }
+  else {
+    w = convWin = openWindow({ title: 'Conversation', icon: '◆', width: 640, height: 520 });
+    w.onCleanup(() => { if (convWin === w) convWin = null; });
+    w.body.append(h('div', { class: 'toolbar' }, h('button', { class: 'tb', onclick: () => { chatRef = null; store.set('chat', null); w.close(); toast('New conversation'); } }, '＋ New conversation')), h('div', { class: 'transcript' }));
+  }
+  const list = w.body.querySelector('.transcript');
   try {
     const c = await api(`${node(chatRef.nodeId)}/chats/${chatRef.chatId}`);
-    list.replaceChildren(...c.messages.map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}`), h('div', { class: 'mt' }, x.text))));
+    const older = Math.max(0, c.messages.length - CAPS.chatMessages); // a long conversation shows its latest messages, not thousands of nodes
+    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...c.messages.slice(older).map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
 }
@@ -1287,6 +1337,10 @@ function wire() {
   graph.setForces({ repel: Number(repel.value), linkLength: Number(len.value) });
   repel.oninput = () => { store.set('repel', Number(repel.value)); graph.setForces({ repel: Number(repel.value) }); };
   len.oninput = () => { store.set('linklen', Number(len.value)); graph.setForces({ linkLength: Number(len.value) }); };
+  const cloudBox = $('#d-cloud');
+  cloudBox.onchange = () => setCloud(cloudBox.checked);
+  $('#cloud-toggle').onclick = () => setCloud(!graph.visible);
+  syncCloud();
   for (const k of ['labels', 'particles', 'rotate']) {
     const el = $('#d-' + k);
     el.checked = store.get('d-' + k, k === 'particles' || k === 'rotate' ? !lowPower() : true);
@@ -1300,6 +1354,10 @@ function wire() {
   const auto = $('#d-autosess');
   auto.checked = store.get('autoOpenSessions', true);
   auto.onchange = () => store.set('autoOpenSessions', auto.checked);
+  const exAnim = $('#d-exanim'); // Exhibit animations: off | auto | always (exhibits.js keeps it under rigs.exhibitAnim, like `store`)
+  exAnim.value = exhibitAnim();
+  exAnim.onchange = () => setExhibitAnim(exAnim.value);
+  window.addEventListener('rigs:exhibit-anim', (e) => { exAnim.value = e.detail; });
   const themeSel = $('#d-theme');
   themeSel.replaceChildren(...Object.entries(THEMES).map(([id, t]) => h('option', { value: id }, t.name)));
   themeSel.value = themeId();
@@ -1343,6 +1401,21 @@ initStarnet({
 });
 setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 setInterval(() => { if (!document.hidden) refreshAttention(); }, 4000);
+
+// Idle-time sweep (cleanup.js): every few minutes, when the browser has nothing better to do, prune what a tab left
+// open for days accumulates. Each task returns how much it dropped; window.__rigsCleanup shows the last run.
+const sweeper = createSweeper({ everyMs: 180000 });
+sweeper.add('attachedTerminals', () => { let n = 0; for (const [k, w] of attached) if (!w.el.isConnected) { attached.delete(k); n++; } return n; });
+sweeper.add('dismissedToasts', () => capMap(closedTexts, CAPS.dismissed));
+sweeper.add('resourceTimings', () => { const n = performance.getEntriesByType?.('resource')?.length || 0; performance.clearResourceTimings?.(); return n; }); // one entry per API poll
+sweeper.add('cloudLabels', () => { // CSS2D labels left in the galaxy's label layer by nodes that are gone
+  const ids = new Set(graph.nodes().map((n) => n.__label).filter(Boolean));
+  let n = 0;
+  for (const el of document.querySelectorAll('#graph .nlabel')) if (!ids.has(el) && !el.classList.contains('attn-tag')) { el.remove(); n++; }
+  return n;
+});
+sweeper.start();
+window.__rigsCleanup = { stats: sweeper.stats, run: () => sweeper.run() };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshAttention(); } });
 refreshAttention();
 setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLine()}`; showSubtitle(s); }, 1200);
@@ -1386,6 +1459,7 @@ function wireMenus() {
     menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
     exhibits: { enabled: exhibitsEnabled, toggle: () => setExhibitsEnabled(!exhibitsEnabled()), open: () => openExhibits() },
     starnet: { enabled: starnetEnabled, toggle: () => setStarnetEnabled(!starnetEnabled()) },
+    cloud: { visible: () => graph.visible, toggle: () => setCloud(!graph.visible) },
   });
   bar = initMenubar({
     menus: menuModel,

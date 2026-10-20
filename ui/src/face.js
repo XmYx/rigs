@@ -384,6 +384,16 @@ export function createFace(container) {
       exprUntil = hold ? performance.now() + hold : 0;
     },
     get emotion() { return Object.keys(EXPRESSIONS).find((k) => EXPRESSIONS[k] === exprTarget) || 'neutral'; },
-    dispose() { disposed = true; ro.disconnect(); window.removeEventListener('pointermove', onPointer); renderer.dispose(); renderer.domElement.remove(); },
+    /** Free it for good: render loop, listeners, geometries, materials and the WebGL context. */
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      ro.disconnect();
+      window.removeEventListener('pointermove', onPointer);
+      scene.traverse((o) => { o.geometry?.dispose?.(); for (const m of [].concat(o.material || [])) m.dispose?.(); });
+      renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.remove();
+    },
   };
 }
