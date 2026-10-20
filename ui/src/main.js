@@ -7,6 +7,7 @@ import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, 
 import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, openPanel, resetPanel, toggleCollapse } from './layout-actions.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
 import { sourcesFromSnapshot } from './app-dock-model.js';
+import { TOOLS } from './app-dock-state.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
 import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
@@ -207,6 +208,19 @@ function updateQuestionCount(n) {
   const label = n ? `Questions — ${n} agent${n > 1 ? 's' : ''} waiting for your answer` : 'Questions — agents waiting for your answer';
   $('#btn-ask').title = label;
   $('#btn-ask').setAttribute('aria-label', label);
+  askCount = n;
+  syncToolBadges();
+}
+
+// The dock's tools show the toolbar's live state: the questions count, the agents badge and the voice toggle.
+const TOOL_PANEL = { ask: 'questions', agents: 'agents', work: 'work', usage: 'usage', desktops: 'desktops', traces: 'traces', graphify: 'graphify' };
+let askCount = 0;
+let agentCount = 0;
+function syncToolBadges() {
+  if (!appDock) return;
+  appDock.setTool('tool:ask', { badge: askCount });
+  appDock.setTool('tool:agents', { badge: agentCount });
+  appDock.setTool('tool:mute', { pressed: !!voice.muted });
 }
 
 // Bring the Questions panel up (on a phone the two panels are sheets in the same place, so Active projects steps aside).
@@ -298,6 +312,7 @@ async function refresh() {
     renderHubs();
     renderAppList();
     appDock?.sync();
+    syncToolBadges();
     renderFilters();
     renderBrainBadge();
     if (graph.focused) renderInspector(graph.focused);
@@ -1314,23 +1329,24 @@ function wire() {
   { const st = panelState('traces'); tracesPanel.setActive(!st.closed && !st.collapsed); }
   agentsPanel = createAgents($('#agents'), {
     snapshot: () => snap, onAttach: attachSession, onChat: attachChat,
-    onCount: (n, waiting) => { const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
+    onCount: (n, waiting) => { agentCount = n; syncToolBadges(); const b = $('#agents-badge'); b.textContent = String(n); b.hidden = !n; b.classList.toggle('warn', waiting > 0); $('#btn-agents').setAttribute('aria-label', `Active agents — ${n} live${waiting ? `, ${waiting} waiting for you` : ''}`); },
   });
   makeFloating($('#agents'), { id: 'agents', title: 'Active agents', into: $('#agents .ag-head'), keep: [$('#agents .ag-head')], closedByDefault: true, onToggle: () => agentsPanel.update() });
   agentsPanel.update();
   graphifyPanel = createGraphify($('#graphify'), { createGraph, types: TYPES, data: () => buildGraph(visibleSnap()), hidden: () => [...hiddenTypes], attention: attentionGraphIds, onSelect: (n) => { select(n.id); revealInspector(); } });
   makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
   { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
-  makeFloating($('#bar'), { id: 'bar', title: 'Toolbar', keep: [$('#ask')] });
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   appDock = createAppDock({ // the app dock only calls the existing open / focus / launch paths
-    sources: () => sourcesFromSnapshot(snap, { isRemoved: isAppRemoved }),
+    sources: () => ({ ...sourcesFromSnapshot(snap, { isRemoved: isAppRemoved }), tools: TOOLS }),
+    toolLabel: (it) => document.getElementById(it.ref.button)?.getAttribute('aria-label') || '',
     appFor: (ref) => meshApps().find((a) => a.nodeId === ref.node && a.id === ref.id) || null,
     nodeFor: (id) => machineById(id) || null,
     isOpen: (it) => {
       if (it.kind === 'panel') return !panelState(it.ref.id).closed;
+      if (it.kind === 'tool') { const p = TOOL_PANEL[it.ref.action]; return !!p && !panelState(p).closed; }
       if (it.kind === 'window') return it.live;
       if (it.kind === 'terminal') return it.live;
       if (it.kind !== 'applet') return false;
@@ -1344,8 +1360,10 @@ function wire() {
       } else if (it.kind === 'rig') { select(`m:${it.ref.nodeId}`); revealInspector(); }
       else if (it.kind === 'panel' || it.kind === 'window') openPanel({ kind: it.kind, id: it.ref.id });
       else if (it.kind === 'terminal') focusTerminal(it.ref.ptyId);
+      else if (it.kind === 'tool') document.getElementById(it.ref.button)?.click(); // exactly what the old toolbar button does
     },
   });
+  syncToolBadges();
   // Auto-docking: panels and floating windows (wm.js) and terminals (terminal.js) announce open / close on the bus; the
   // dock turns them into items only when its autoDock / autoTabTerminals settings are on (both off by default).
   appDock.act((s) => reconcileOnLoad(s, listPanels())); // a reload leaves no window or terminal open: drop their stale items
@@ -1378,7 +1396,7 @@ function wire() {
   $('#btn-mesh').onclick = meshWindow;
   $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-apps').onclick = () => openApps();
-  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); };
+  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); syncToolBadges(); };
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
   $('#btn-mute').setAttribute('aria-label', 'Mute voice output');

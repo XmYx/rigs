@@ -114,7 +114,7 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 #dock-choices { padding: 0 14px 10px; }
 #dock-choices .dock-q { font-size: 12px; color: #f0abfc; margin-bottom: 6px; }
 #dock-choices .dock-opts { display: flex; flex-wrap: wrap; gap: 6px; }
-#bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; z-index: 10; }
+#bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: none; /* desktop: its functions are dock tools (app-dock.js); the buttons stay in it for their handlers. Phones show it (below) */ gap: 6px; align-items: center; z-index: 10; }
 #ask { width: min(420px, calc(100vw - 680px)); min-width: 220px; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); outline: none; }
 #ask:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .08); }
 .round { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); font-size: 15px; display: grid; place-items: center; transition: border-color .2s, box-shadow .2s; }
@@ -323,7 +323,6 @@ a.link { color: var(--accent); cursor: pointer; }
   #orb-wrap { top: auto; bottom: 120px; transform: none; width: 110px; right: 8px; }
   #orb { width: 96px; height: 96px; }
   #topbar { top: auto; bottom: 170px; }
-  #bar { width: calc(100vw - 16px); flex-wrap: wrap; justify-content: center; bottom: 10px; }
   #ask { width: 100%; min-width: 0; }
   #chat-dock { width: calc(100vw - 32px); min-width: 0; bottom: 110px; }
   .files-split, .sess-split { grid-template-columns: 1fr; }
@@ -396,7 +395,7 @@ a.link { color: var(--accent); cursor: pointer; }
 #legend, #orb-wrap, #footer { position: fixed; }
 #orb-wrap > .pctl { top: -6px; right: -4px; }
 #footer > .pctl { position: static; margin-right: 6px; }
-#topbar > .pctl, #bar > .pctl { padding: 4px 2px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+#topbar > .pctl { padding: 4px 2px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
 #panels-btn { position: fixed; right: 12px; bottom: 10px; z-index: 30; width: 28px; height: 28px; font-size: 13px; opacity: .55; }
 #panels-btn:hover { opacity: 1; }
 #panels-menu { position: fixed; right: 12px; bottom: 46px; z-index: 31; padding: 10px 12px; min-width: 170px; display: flex; flex-direction: column; gap: 6px; }
@@ -416,8 +415,6 @@ a.link { color: var(--accent); cursor: pointer; }
 @keyframes panel-reveal { from { opacity: 0; translate: 0 -3px; } to { opacity: 1; translate: 0 0; } }
 .pcollapse { font-size: 10px; }
 #orb-wrap.panel-collapsed #face { display: none !important; }
-#bar.panel-collapsed { gap: 4px; }
-#bar.panel-collapsed #ask { width: 220px; }
 .win { transition: opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
 .win.win-enter, .win.win-leave { opacity: 0; scale: .96; translate: 0 8px; }
 .win.win-leave { pointer-events: none; }
@@ -626,8 +623,8 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #work > .wk-head > .pctl, #questions > .wk-head > .pctl, #chat-dock .pctl { display: inline-flex !important; opacity: 1; }
   #work .pctl > :not(.pclose:last-child), #usage .pctl > :not(.pclose:last-child), #questions .pctl > :not(.pclose:last-child), #chat-dock .pctl > :not(.pclose:last-child) { display: none; }
   .pclose { min-width: 44px; min-height: 44px; font-size: 16px; display: inline-grid; place-items: center; }
-  #bar.floating.panel-closed, #topbar.floating.panel-closed { display: flex !important; } /* the only way back to ☰ Layout */
-  #bar.floating.panel-out, #topbar.floating.panel-out { opacity: 1; pointer-events: auto; scale: none; translate: none; filter: none; }
+  #topbar.floating.panel-closed { display: flex !important; } /* the only way back to ☰ Layout */
+  #topbar.floating.panel-out { opacity: 1; pointer-events: auto; scale: none; translate: none; filter: none; }
 
   /* Header */
   #topbar { top: calc(var(--sat) + var(--gap)) !important; left: calc(var(--sal) + var(--gap)) !important; right: auto !important; bottom: auto !important; transform: none !important; width: auto !important; height: auto !important; align-items: center; }
@@ -651,13 +648,14 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   body.drawer-open #drawer-backdrop { opacity: 1; pointer-events: auto; }
 
   /* Toolbar: ask · 🎙 · ⋯, above the home indicator and the keyboard */
-  #bar { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: var(--bar-bottom) !important; top: auto !important; transform: none !important; width: auto !important; height: auto !important; flex-wrap: nowrap; justify-content: stretch; gap: 8px; }
-  #ask, #bar.panel-collapsed #ask { flex: 1 1 auto; width: auto; min-width: 0; height: 44px; }
+  #bar { display: flex; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: var(--bar-bottom) !important; top: auto !important; transform: none !important; width: auto !important; height: auto !important; flex-wrap: nowrap; justify-content: stretch; gap: 8px; }
+  #ask { flex: 1 1 auto; width: auto; min-width: 0; height: 44px; }
   .round { width: 44px; height: 44px; flex: none; }
   #btn-more { display: grid; font-size: 20px; }
   #more-sheet.open { display: grid; position: fixed; left: calc(var(--sal) + var(--gap)); right: calc(var(--sar) + var(--gap)); bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px); max-height: var(--room); overflow-y: auto; z-index: 35;
     grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; padding: 10px; background: var(--panel-solid); backdrop-filter: none; box-shadow: 0 -8px 30px rgba(0, 0, 0, .5); animation: panel-reveal .18s ease both; }
   #more-sheet .round, #more-sheet #panels-btn { position: static; width: 100%; height: 64px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 20px; opacity: 1; }
+  #more-sheet #btn-ask, #more-sheet #btn-agents { position: relative; } /* their count badges sit on the button, not the sheet's corner */
   #more-sheet .round::after { content: attr(data-label); font: 12px var(--sans); color: #b9c8d2; }
   #more-sheet .round.dim { opacity: .6; }
   #panels-menu { left: calc(var(--sal) + var(--gap)); right: calc(var(--sar) + var(--gap)); bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px); max-height: var(--room); overflow-y: auto; z-index: 36; background: var(--panel-solid); }
@@ -1253,7 +1251,7 @@ body.dock-dragging iframe, body.dock-resizing iframe { pointer-events: none; } /
 .win.docked { resize: none; box-shadow: none; animation: none; background: var(--panel-solid); }
 .win.docked::after { display: none; }
 body.dock-resizing .docked { transition: none !important; }
-#topbar.docked, #bar.docked { align-items: center; flex-wrap: wrap; align-content: flex-start; padding: 6px; }
+#topbar.docked { align-items: center; flex-wrap: wrap; align-content: flex-start; padding: 6px; }
 
 #dock-layer { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
 #dock-layer[hidden] { display: none; }
@@ -1717,6 +1715,10 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .adock-mini.k-rig { font: 700 calc(var(--ad-icon) * var(--s, 1) * .12)/1 var(--mono); color: #eafffb; background: #0b141c; border: 1px solid rgba(var(--accent-rgb), .45); }
 .adock-count { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center;
   font: 700 10px/1 var(--sans); color: #022; background: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .5); pointer-events: none; }
+.adock-count.alert { right: auto; left: -4px; background: #f59e0b; color: #1c1103; }
+.adock-pop-tile { position: relative; }
+.adock-pop-tile .adock-count { top: 2px; right: 8px; }
+.adock-tile[aria-pressed="true"] .adock-icon { opacity: .7; }
 .adock-run { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); opacity: 0; transition: opacity .2s; pointer-events: none; }
 .adock-tile.open .adock-run { opacity: 1; }
 .adock.pos-bottom .adock-run { left: 50%; bottom: -5px; margin-left: -2.5px; }
@@ -1786,8 +1788,7 @@ html.adock-dragging, html.adock-dragging * { cursor: grabbing !important; user-s
 .adock-pop .adock-empty { grid-column: 1 / -1; white-space: normal; text-align: center; padding: 10px; max-width: 300px; }
 
 /* Panels anchored to the dock's edge keep clear of it (only while it stays on screen; phones use --bar-bottom below). */
-html.adock-rb #bar { bottom: calc(22px + var(--ad-b)); } /* a bottom dock is centred: it only meets the toolbar and the chat strip */
-html.adock-rb #chat-dock { bottom: calc(74px + var(--ad-b)); }
+html.adock-rb #chat-dock { bottom: calc(74px + var(--ad-b)); } /* a bottom dock is centred: it only meets the chat strip */
 html.adock-rb .win.max { bottom: calc(8px + var(--ad-b)) !important; }
 html.adock-rl #left { left: calc(12px + var(--ad-l)); }
 html.adock-rl #traces { left: calc(294px + var(--ad-l)); }
@@ -1799,7 +1800,6 @@ html.adock-rr #orb-wrap, html.adock-rr #activity { right: calc(16px + var(--ad-r
 html.adock-rr #footer { right: calc(48px + var(--ad-r)); }
 html.adock-rr .win.max { right: calc(8px + var(--ad-r)) !important; }
 @media (max-width: 900px) {
-  html.adock-rb #bar { bottom: calc(10px + var(--ad-b)); }
   html.adock-rb #chat-dock { bottom: calc(110px + var(--ad-b)); }
   html.adock-rb #orb-wrap { bottom: calc(120px + var(--ad-b)); }
   html.adock-rb #topbar { bottom: calc(170px + var(--ad-b)); }

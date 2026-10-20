@@ -25,7 +25,9 @@ function check(s) {
   return s;
 }
 
-const seeded = () => S.mergeSources(S.emptyState(), { applets: [applet('krea'), applet('files'), applet('notes')], rigs: [rig('mac'), rig('linux')] });
+// Layout mechanics are tested on a flat dock (autoGroup off); the default groups have their own tests below.
+const flat = () => S.setSettings(S.emptyState(), { autoGroup: false });
+const seeded = () => S.mergeSources(flat(), { applets: [applet('krea'), applet('files'), applet('notes')], rigs: [rig('mac'), rig('linux')] });
 const topIds = (s) => s.order.map((e) => e.id);
 
 test('defaults: bottom, no auto-hide, magnification on, auto-dock and auto-tab OFF', () => {
@@ -140,7 +142,7 @@ test('settings: position (left/right/bottom only), autoHide, magnification, stre
 });
 
 test('merge: new applets and online rigs are appended; offline or agent-less rigs are not docked', () => {
-  const s = S.mergeSources(S.emptyState(), { applets: [applet('krea')], rigs: [rig('a'), rig('b', false), rig('c', true, false)] });
+  const s = S.mergeSources(flat(), { applets: [applet('krea')], rigs: [rig('a'), rig('b', false), rig('c', true, false)] });
   assert.deepEqual(topIds(s), [A('krea'), 'rig:a']);
   check(s);
 });
@@ -256,14 +258,14 @@ test('deserialize: a polluted __proto__ key in stored JSON does not leak onto th
   assert.deepEqual(s.groups, {});
 });
 
-test('deserialize migrates the unversioned v0 shape (flat settings, group list) to v1', () => {
+test('deserialize migrates the unversioned v0 shape (flat settings, group list) through v1 to the current version', () => {
   const v0 = {
     position: 'left', autoHide: true,
     items: [{ id: 'applet:mac/krea', title: 'Krea' }, { id: 'applet:mac/files', title: 'Files', pinned: true }, { id: 'rig:mac' }],
     groups: [{ id: 'g1', name: 'Work', items: ['applet:mac/files'] }],
   };
   const s = check(S.deserialize(JSON.stringify(v0)));
-  assert.equal(s.v, 1);
+  assert.equal(s.v, S.VERSION);
   assert.equal(s.settings.position, 'left');
   assert.equal(s.settings.autoHide, true);
   assert.equal(s.settings.autoDock, false);

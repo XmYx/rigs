@@ -25,7 +25,7 @@ import {
 // Menu bar hidden (Ctrl/⌘+Shift+M): an Ask docked in the top bar stays there and peeks with the bar — hover the top
 // edge, press ⌘/Ctrl+K (peeks the bar and focuses the field) or F10; the bar stays out while the field has focus.
 //
-// Phones keep today's layout: the field and 🎙 sit in the bottom toolbar (#bar), 👂 in the ⋯ sheet (mobile.js); no
+// Phones keep today's layout: the field and 🎙 sit in the bottom toolbar (#bar, shown on phones only; on a desktop its functions are app-dock tools), 👂 in the ⋯ sheet (mobile.js); no
 // panel, no top bar, no floating.
 
 const ID = 'ask';

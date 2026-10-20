@@ -3,16 +3,16 @@
 // (persisted with its serializer in localStorage `rigs.appdock`); app-dock-model.js holds the render-side logic.
 // The dock never changes a panel, window or the top bar: it only calls the open/focus/launch functions main.js hands in.
 //
-//   const dock = createAppDock({ sources, open, isOpen, appFor, nodeFor });   dock.sync() after each snapshot
+//   const dock = createAppDock({ sources, open, isOpen, appFor, nodeFor, toolLabel });   dock.sync() after each snapshot
 //   registerAppDockProviders(providers, dock)                                   its right-click / long-press menus
 import { h } from './api.js';
 import { tagCtx } from './ctx-tag.js';
 import { isPhone, PHONE_QUERY } from './mobile.js';
 import { prefersReducedMotion } from './a11y.js';
 import { contextMenuOpen } from './menubar.js';
-import { deserialize, dockView, magnifyScales, mergeSources, serialize } from './app-dock-state.js';
+import { deserialize, dockView, magnifyScales, mergeSources, serialize, setToolState } from './app-dock-state.js';
 import {
-  applyDrop, axisOf, canOpen, dropAt, easeScales, fitIcon, groupEntries, ICON, itemEntries, PAD, PHONE_ICON, RADIUS,
+  applyDrop, axisOf, canOpen, dropAt, easeScales, fitIcon, groupBadge, groupEntries, ICON, itemEntries, PAD, PHONE_ICON, RADIUS,
   rename, reserve, restCentres, settingsEntries, STORAGE_KEY,
 } from './app-dock-model.js';
 
@@ -32,10 +32,18 @@ const inside = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.
 function iconFor(it) {
   return it.kind === 'rig'
     ? h('span', { class: 'adock-icon mono', 'data-mono': monogram(it.title), style: { '--h': hue(it.id) } }) // letters drawn by CSS, so the tile's name stays the machine's name
-    : h('span', { class: 'adock-icon', style: { '--h': hue(it.id) } }, it.icon || '▦');
+    : h('span', { class: 'adock-icon', style: { '--h': hue(it.id) } }, toolIcon(it));
 }
 
-export function createAppDock({ storage = globalThis.localStorage, sources = () => ({}), open = () => {}, isOpen = () => false, appFor = () => null, nodeFor = () => null } = {}) {
+/** A toggle tool shows its "on" face: the voice tool is 🔇 while muted. */
+const toolIcon = (it) => (it.kind === 'tool' && it.pressed && it.ref.action === 'mute' ? '🔇' : it.icon || '▦');
+const badgeText = (b) => (typeof b === 'number' ? (b > 99 ? '99+' : String(b)) : String(b));
+/** Accessible name: a tool keeps the label of the toolbar button it replaces (with its live count). */
+const nameOf = (it, toolLabel) => `${it.kind === 'tool' ? toolLabel(it) || it.ref.hint || it.title : it.title}${it.live ? '' : ' (offline)'}`;
+/** Attributes a tool tile adds: its tooltip, aria-pressed for toggles. */
+const toolAttrs = (it, toolLabel) => (it.kind === 'tool' ? { title: toolLabel(it) || it.ref.hint || '', ...(it.ref.toggle ? { 'aria-pressed': String(!!it.pressed) } : {}) } : {});
+
+export function createAppDock({ storage = globalThis.localStorage, sources = () => ({}), open = () => {}, isOpen = () => false, appFor = () => null, nodeFor = () => null, toolLabel = () => '' } = {}) {
   let state = load();
   let phone = isPhone();
   let reduced = prefersReducedMotion();
@@ -112,20 +120,21 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     const hit = h('span', { class: 'adock-hit' }, iconFor(it));
     const el = h('button', {
       class: `adock-tile k-${it.kind}${it.live ? '' : ' off'}${it.pinned ? ' pinned' : ''}`, type: 'button', 'data-id': it.id,
-      'aria-label': `${it.title}${it.live ? '' : ' (offline)'}`, tabindex: '-1',
-    }, hit, h('i', { class: 'adock-run', 'aria-hidden': 'true' }));
+      'aria-label': nameOf(it, toolLabel), tabindex: '-1', ...toolAttrs(it, toolLabel),
+    }, hit, ...(it.badge ? [h('b', { class: 'adock-count', 'aria-hidden': 'true' }, badgeText(it.badge))] : []), h('i', { class: 'adock-run', 'aria-hidden': 'true' }));
     tagItem(el, it);
     el.addEventListener('click', (e) => { if (!consumeClick(e)) launch(el, it); });
     return el;
   }
 
   function groupTile({ group, items }) {
-    const minis = items.slice(0, 4).map((it) => (it.kind === 'rig' ? h('span', { class: 'adock-mini k-rig', 'data-mono': monogram(it.title), style: { '--h': hue(it.id) } }) : h('span', { class: `adock-mini k-${it.kind}`, style: { '--h': hue(it.id) } }, it.icon || '▦')));
+    const minis = items.slice(0, 4).map((it) => (it.kind === 'rig' ? h('span', { class: 'adock-mini k-rig', 'data-mono': monogram(it.title), style: { '--h': hue(it.id) } }) : h('span', { class: `adock-mini k-${it.kind}`, style: { '--h': hue(it.id) } }, toolIcon(it))));
+    const waiting = groupBadge(state, group.id);
     const hit = h('span', { class: 'adock-hit' }, h('span', { class: 'adock-icon stack' }, ...minis));
     const el = h('button', {
       class: 'adock-tile adock-group', type: 'button', 'data-gid': group.id, tabindex: '-1',
-      'aria-label': `${group.name} — group of ${items.length}`, 'aria-haspopup': 'dialog', 'aria-expanded': String(popGroup === group.id),
-    }, hit, h('b', { class: 'adock-count', 'aria-hidden': 'true' }, String(items.length)));
+      'aria-label': `${group.name} — group of ${items.length}${waiting ? `, ${waiting === '•' ? 'needs attention' : `${badgeText(waiting)} waiting`}` : ''}`, 'aria-haspopup': 'dialog', 'aria-expanded': String(popGroup === group.id),
+    }, hit, h('b', { class: 'adock-count', 'aria-hidden': 'true' }, String(items.length)), ...(waiting ? [' ', h('b', { class: 'adock-count alert', 'aria-hidden': 'true' }, badgeText(waiting))] : [])); // the space keeps the two counts apart in the tile's text ("5 7", not "57"), so it matches the label
     tagCtx(el, 'dockgroup', group.id, { id: group.id });
     el.addEventListener('click', (e) => { if (consumeClick(e)) return; if (popGroup === group.id) closePop(); else openPop(group.id); });
     return el;
@@ -174,6 +183,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
   /** Running dots (an applet with a window open here) — cheap, also polled. */
   function refreshRunning() {
     for (const { el, entry } of tiles) if (entry.type === 'item') el.classList.toggle('open', !!isOpen(entry.item));
+    for (const el of pop.querySelectorAll('.adock-pop-tile')) { const it = state.items[el.dataset.id]; if (it) el.classList.toggle('open', !!isOpen(it)); }
   }
 
   /** Tell the page how much of each edge the dock keeps (styles.css shifts the panels anchored there). */
@@ -342,7 +352,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     const grid = h('div', { class: 'adock-pop-grid', role: 'group', 'aria-label': g.name, style: { '--cols': String(Math.max(1, Math.min(4, items.length))) } });
     for (const it of items) {
       const hit = h('span', { class: 'adock-hit' }, iconFor(it), h('span', { class: 'adock-pop-label' }, it.title));
-      const el = tagItem(h('button', { class: `adock-pop-tile k-${it.kind}${it.live ? '' : ' off'}`, type: 'button', 'data-id': it.id, 'aria-label': `${it.title}${it.live ? '' : ' (offline)'}` }, hit), it);
+      const el = tagItem(h('button', { class: `adock-pop-tile k-${it.kind}${it.live ? '' : ' off'}`, type: 'button', 'data-id': it.id, 'aria-label': nameOf(it, toolLabel), ...toolAttrs(it, toolLabel) }, hit, ...(it.badge ? [h('b', { class: 'adock-count', 'aria-hidden': 'true' }, badgeText(it.badge))] : [])), it);
       el.addEventListener('click', (e) => { if (consumeClick(e) || !canOpen(it)) return; closePop(); open(it); setTimeout(refreshRunning, 300); });
       grid.append(el);
     }
@@ -526,6 +536,8 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
   const dock = {
     get state() { return state; },
     act,
+    /** Live state of a tool (badge count, toggle on/off): shown on its tile, never saved. */
+    setTool: (id, patch) => act((s) => setToolState(s, id, patch)),
     sync,
     render,
     open: (it) => open(it),
