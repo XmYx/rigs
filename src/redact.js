@@ -17,7 +17,7 @@ export const SECRET_PATTERNS = [
   [/(bearer\s+)[^\s"']+/gi, '$1***'],
   [/(\b(?:x-rigs-token|authorization|cookie)\s*[:=]\s*)[^\s"',}]+/gi, '$1***'],
   [/((?:--token|--password|--api-key|--secret)[= ])[^\s&"']+/gi, '$1***'],
-  [/(\b[\w-]*(?:token|password|passwd|secret|api_?key)\s*[=:]\s*["']?)[^\s&"',}*]{4,}/gi, '$1***'],
+  [/(\b[\w-]*(?:token|password|passwd|secret|api[_-]?key)\s*[=:]\s*["']?)[^\s&"',}*]{4,}/gi, '$1***'],
   [/(\/\/[^/\s:@]+:)[^@\s/]+@/g, '$1***@'],
 ];
 
