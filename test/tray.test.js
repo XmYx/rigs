@@ -106,3 +106,40 @@ test('tray registry: sorted by order then id, replace by id, phone filter, unreg
   assert.deepEqual(seen, [1]);
   assert.deepEqual(r.items().map((i) => i.id), ['b']);
 });
+
+// ---- JARVIS tray menu mapping
+import { brainSummary, effortChoices, modelChoices, pickBrain, providerChoices } from '../ui/src/tray-brain-model.js';
+const BRAINS = [
+  { id: 'claude', label: 'Claude Code', models: ['opus', 'sonnet'], default: 'opus', efforts: ['low', 'high'], defaultEffort: 'high' },
+  { id: 'codex', label: 'Codex', models: ['gpt-6'], efforts: ['low'] },
+  { id: 'claude-ollama', label: 'Claude via Ollama', models: ['qwen', 'llama'], toolModels: ['qwen'], efforts: [], available: false, reason: 'Ollama not reachable' },
+  { id: 'ollama', label: 'Ollama (local)', models: ['llama'], efforts: ['off', 'on'], defaultEffort: 'off' },
+];
+const ENTRY = { node: { id: 'n1', name: 'mac' }, brains: BRAINS };
+
+test('tray brain menu: codex is never offered, unavailable providers are disabled with their reason, current is checked', () => {
+  const p = providerChoices(BRAINS, { brain: 'claude' });
+  assert.deepEqual(p.map((x) => x.id), ['claude', 'claude-ollama', 'ollama']);
+  assert.equal(p[0].checked, true);
+  assert.deepEqual([p[1].disabled, p[1].reason], [true, 'Ollama not reachable']);
+});
+
+test('tray brain menu: models and efforts mark the selection, falling back to the provider default', () => {
+  assert.deepEqual(modelChoices(BRAINS[0], { brain: 'claude', model: 'sonnet' }).map((m) => m.checked), [false, true]);
+  assert.deepEqual(modelChoices(BRAINS[0], { brain: 'claude', model: '' }).map((m) => m.checked), [true, false]);
+  assert.equal(modelChoices(BRAINS[2], {})[0].label, 'qwen · tools');
+  assert.deepEqual(effortChoices(BRAINS[0], { brain: 'claude', effort: 'low' }).map((m) => m.checked), [true, false]);
+  assert.deepEqual(effortChoices(BRAINS[2], {}), []);
+});
+
+test('tray brain menu: picks keep the choice within a provider and reset it on a provider switch', () => {
+  const cur = { brain: 'claude', model: 'sonnet', effort: 'low' };
+  assert.deepEqual(pickBrain(ENTRY, BRAINS[0], { effort: 'high' }, cur), { nodeId: 'n1', nodeName: 'mac', brain: 'claude', model: 'sonnet', effort: 'high' });
+  assert.deepEqual(pickBrain(ENTRY, BRAINS[3], {}, cur), { nodeId: 'n1', nodeName: 'mac', brain: 'ollama', model: 'llama', effort: 'off' });
+  assert.equal(pickBrain(ENTRY, BRAINS[2], {}, cur).effort, '');
+});
+
+test('tray brain menu: tooltip and badge show model and effort', () => {
+  assert.deepEqual(brainSummary({ brain: 'claude', model: 'claude-opus-5-5', effort: 'high', nodeName: 'mac' }), { badge: 'opus-5-5', title: 'JARVIS brain: opus-5-5 · high on mac' });
+  assert.equal(brainSummary(null).badge, '');
+});
