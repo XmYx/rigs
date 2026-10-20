@@ -253,8 +253,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
 
   renderMachines();
   renderChanges();
-  const changesTimer = setInterval(() => { if (changesEl.style.display !== 'none' && document.body.contains(changesEl)) renderChanges(); }, 5000);
-  w.el.querySelector('.win-btn.close').addEventListener('click', () => clearInterval(changesTimer));
+  w.interval(() => { if (changesEl.style.display !== 'none' && document.body.contains(changesEl)) renderChanges(); }, 5000); // cleared on every close path
   renderTools();
   renderRouting();
   createConnectors(connectorsEl);

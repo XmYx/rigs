@@ -58,12 +58,14 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
   function renderProjects(w) {
     const rows = [];
     const waiting = getWaiting();
+    const live = new Set();
     for (const n of w.nodes || []) {
       for (const pj of n.projects || []) {
         const key = `${n.node}/${pj.id}`;
         const line = `${pj.pct}% done${pj.blocked ? ', stuck' : ''}`;
         if (seenStatus.has(key) && seenStatus.get(key) !== line) announce(`Project ${pj.name}: ${line}`);
         seenStatus.set(key, line);
+        live.add(key);
         const asks = waiting.filter((q) => q.project?.id === pj.id);
         rows.push(tagCtx(h('div', { class: 'wk-row' + (pj.running.length ? ' busy' : '') + (pj.blocked ? ' stuck' : '') + (asks.length ? ' asks' : ''), title: `Open ${pj.name}`, onclick: () => onOpenProject?.(n, pj) },
           h('div', { class: 'wk-rtitle' }, h('i', { class: 'wk-dot' }), pj.name,
@@ -72,6 +74,7 @@ export function createWork(el, { onOpenProject, onOpenQuestions, getWaiting = ()
           progress(pj.pct)), 'project', pj.id, { id: pj.id, name: pj.name, ownerId: n.nodeId, blocked: pj.blocked, running: pj.running }));
       }
     }
+    for (const k of seenStatus.keys()) if (!live.has(k)) seenStatus.delete(k); // finished projects are forgotten
     if (!rows.length) rows.push(h('div', { class: 'muted small pad' }, 'No projects running.'));
     list.replaceChildren(...rows);
     head.lastChild.textContent = `${(w.nodes || []).reduce((c, n) => c + (n.projects || []).filter((p) => p.running.length).length, 0)} active`;

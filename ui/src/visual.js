@@ -67,7 +67,8 @@ function code(s) {
   const cap = h('div', { class: 'vz-cap' }, h('span', {}, s.file || s.language || 'code'), s.language && s.file ? h('i', {}, s.language) : '');
   let i = 0;
   const still = prefersReducedMotion();
-  const type = () => { if (i < lines.length) { body.append(h('div', { class: `vz-line ${markLine(lines[i])}` }, lines[i] || ' ')); i++; if (still) type(); else setTimeout(type, 35); } };
+  // A newer reply delta replaced the card: stop typing into it (the timer chain would keep the detached card alive).
+  const type = () => { if (!still && !body.isConnected) return; if (i < lines.length) { body.append(h('div', { class: `vz-line ${markLine(lines[i])}` }, lines[i] || ' ')); i++; if (still) type(); else setTimeout(type, 35); } };
   if (still) type(); else setTimeout(type, 120);
   return h('div', { class: 'vz-card vz-codecard' }, cap, body);
 }

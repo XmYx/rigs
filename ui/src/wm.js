@@ -3,6 +3,7 @@ import { isPhone } from './mobile.js';
 import { dialogify } from './a11y.js';
 import { registerDockable, unregisterDockable, setDockTitle } from './docking.js';
 import { tagCtx } from './ctx-tag.js';
+import { createDisposer } from './cleanup.js';
 
 // Minimal floating window manager: drag by the whole title bar (docking.js; buttons in it still click),
 // double-click the bar to maximise/restore, resize from the corner, click to raise, close. With the
@@ -21,6 +22,7 @@ window.addEventListener('popstate', () => { if (skipPop) { skipPop--; return; } 
 
 export function openWindow({ title, icon = '', width = 760, height = 480, className = '', onClose, tools = [], focus = true }) {
   const body = h('div', { class: 'win-body' });
+  const bin = createDisposer(); // what the window's owner hooked up (timers, sockets, listeners): undone on every close path
   const titleEl = h('span', { class: 'win-title-text' }, title);
   const win = h('div', { class: `win ${className}`, 'data-win-id': String(nextId++) },
     h('div', { class: 'win-bar' },
@@ -73,14 +75,19 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     ro.disconnect();
     windows.delete(win);
     unregisterDockable(id);
-    onClose?.();
+    try { onClose?.(); } catch (e) { console.error(e); }
+    bin.dispose();
     dlg.release();
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { win.remove(); return; }
     win.classList.add('win-leave'); // fade/scale out, then gone
     setTimeout(() => win.remove(), 180);
   }
   if (isPhone()) { history.pushState({ rigsWin: true }, ''); backStack.push(close); }
-  return { el: win, body, close, setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
+  return {
+    el: win, body, close,
+    /** Run fn when the window closes (✕, Esc, phone back, close others, hide). interval/listen: the same, pre-wired. */
+    onCleanup: (fn) => bin.add(fn), interval: (fn, ms) => bin.interval(fn, ms), listen: (t, ev, fn, o) => bin.listen(t, ev, fn, o),
+    setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }
 
 /** Open windows, topmost first: { id, title, icon, raise(), close(), el }. */

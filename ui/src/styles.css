@@ -22,6 +22,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 button { font: inherit; color: inherit; cursor: pointer; }
 input, select, textarea { font: inherit; color: var(--text); }
 #graph { position: fixed; inset: 0; }
+/* The cloud hidden (cloud.js): no canvas at all, just a still, faint glow over the page background. */
+#graph.cloud-off { background: radial-gradient(ellipse at 50% 42%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%); pointer-events: none; }
+body.cloud-off #fit { display: none; }
+#cloud-toggle.off { opacity: 0.6; }
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 .pad { padding: 12px 14px; }

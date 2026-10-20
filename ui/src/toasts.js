@@ -39,5 +39,5 @@ export function prefs(storage = globalThis.localStorage) {
 export const bannerVisible = (items, p) => items.length > 0 && p.notifications && p.attnBanner;
 
 /** A toast Sir closed with × stays closed: the same text is not shown again in this page. */
-export const closedTexts = new Set();
+export const closedTexts = new Set(); // capped by the idle sweep (main.js, CAPS.dismissed)
 export const toastAllowed = (text, p) => p.notifications && !closedTexts.has(String(text));

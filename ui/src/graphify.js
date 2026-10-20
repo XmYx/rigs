@@ -18,6 +18,8 @@ import { GRID, LANES, S_LINKS, S_TYPES, buildStructure, connections } from './gr
  * snapshot, hidden() → mesh node types to hide, onSelect(node) when a mesh node is clicked, attention() → mesh node ids
  * that need the user.
  */
+const DROP_AFTER_MS = 20000; // a closed or collapsed Graphify keeps its graph this long (quick reopen), then frees it
+
 export function createGraphify(el, deps) {
   const store = {
     get() { try { return localStorage.getItem(VIEW_KEY); } catch { return null; } },
@@ -115,6 +117,16 @@ export function createGraphify(el, deps) {
     canvas.dataset.lod = px >= 85 ? 'near' : px >= 44 ? 'mid' : 'far';
   }
   let lodTimer = null;
+  let dropTimer = null;
+  function drop() {
+    if (active || !graph) return;
+    ro?.disconnect();
+    ro = null;
+    graph.destroy();
+    graph = null;
+    fitted = false;
+    hideDetail();
+  }
 
   function chrome() {
     for (const [v, b] of viewBtns) b.setAttribute('aria-pressed', String(v === view));
@@ -162,10 +174,14 @@ export function createGraphify(el, deps) {
         graph.resize();
         draw();
         lodTimer ||= setInterval(lod, 250);
+        clearTimeout(dropTimer);
       } else {
         graph?.pause();
         clearInterval(lodTimer);
         lodTimer = null;
+        // Closed for a while: free the graph itself (WebGL context, scene, listeners); opening builds a fresh one.
+        clearTimeout(dropTimer);
+        dropTimer = setTimeout(drop, DROP_AFTER_MS);
       }
     },
     /** New mesh snapshot (or filters changed): redraw if the window is showing the mesh. The structure does not change with it. */
@@ -174,6 +190,6 @@ export function createGraphify(el, deps) {
     get view() { return view; },
     get active() { return active; },
     shouldRun,
-    destroy() { ro?.disconnect(); clearInterval(lodTimer); },
+    destroy() { clearInterval(lodTimer); clearTimeout(dropTimer); drop(); },
   };
 }
