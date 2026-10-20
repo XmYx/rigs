@@ -326,7 +326,7 @@ export function openExhibits({ docId = null, auto = false } = {}) {
     act.steps.replaceChildren(...a.steps.map((s) => h('li', { class: `ex-step ${s.status}`, title: `${s.label} — ${s.status}` }, h('b', { 'aria-hidden': 'true' }, STATUS_ICON[s.status] || '·'), h('span', {}, s.label))));
     act.filesHead.textContent = `Files · ${a.filesTotal}`;
     act.files.replaceChildren(...(a.files.length ? a.files.map((f) => h('li', { class: `ex-file m-${f.mark}${f.error ? ' err' : ''}`, title: `${(f.node ? f.node + ':' : '') + f.path} — ${MARK[f.mark]?.[1] || f.mark}, ${f.count}×` },
-      h('b', { class: 'ex-mark', 'aria-label': MARK[f.mark]?.[1] || f.mark }, MARK[f.mark]?.[0] || '?'), h('span', { class: 'ex-fname' }, f.name), h('span', { class: 'ex-fdir' }, (f.node ? f.node + ':' : '') + f.dir), f.count > 1 ? h('span', { class: 'ex-fcount' }, `×${f.count}`) : null))
+      h('b', { class: 'ex-mark', 'aria-label': MARK[f.mark]?.[1] || f.mark }, MARK[f.mark]?.[0] || '?'), h('span', { class: 'ex-fname' }, f.name), h('span', { class: 'ex-fdir' }, `\u200e${f.node ? f.node + ':' : ''}${f.dir}\u200e`), f.count > 1 ? h('span', { class: 'ex-fcount' }, `×${f.count}`) : null))
       : [h('li', { class: 'ex-none' }, 'No files touched yet')]),
     ...(a.filesTotal > a.files.length ? [h('li', { class: 'ex-none' }, `+${a.filesTotal - a.files.length} more`)] : []));
     act.toolsHead.textContent = `Tool calls · ${a.toolsTotal}${a.toolsRunning ? ` · ${a.toolsRunning} running` : ''}`;

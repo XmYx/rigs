@@ -161,6 +161,6 @@ test('the activity and the motion gate are wired: trace spans reach the window, 
   assert.match(ex, /handle\.sync\(\)/, 'a gate change stops (noLoop) or restarts the sketches');
   assert.match(read('ui/src/p5-anim.js'), /inst\.noLoop\(\)/);
   const css = read('ui/src/styles.css');
-  assert.match(css, /\.win-exhibits\.ex-still \.ex-img\.in, [^{]*\.ex-pulse[^{]*\.ex-ghost i[^{]*\{ animation: none; \}/, 'looping CSS stops with the sketches');
-  assert.match(css, /\.win-exhibits:not\(\.ex-motion-all\) \.ex-card:not\(\.ex-current\) \.ex-img\.in \{ animation: none; \}/);
+  assert.match(css, /\.win-exhibits\.ex-still \.ex-img\.in, [^{]*\.ex-pulse[^{]*\.ex-ghost i[^{]*\.ex-vis \*[^{]*\{ animation: none; \}/, 'looping CSS stops with the sketches, the cards\' embedded visuals too');
+  assert.match(css, /\.win-exhibits:not\(\.ex-motion-all\) \.ex-card:not\(\.ex-current\) \.ex-img\.in, [^{]*\.ex-card:not\(\.ex-current\) \.ex-vis \* \{ animation: none; \}/);
 });

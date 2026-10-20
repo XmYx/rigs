@@ -1459,9 +1459,10 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 
 /* motion is decoration (exhibits.js motion): nothing loops while no work runs, the window is hidden, on low power or with
    Exhibit animations off (.ex-still); 'auto' drifts only the card of the stage running now (.ex-current) */
-.win-exhibits.ex-still .ex-img.in, .win-exhibits.ex-still .ex-pulse, .win-exhibits.ex-still .ex-badge.live::before, .win-exhibits.ex-still .ex-ghost i, .win-exhibits.ex-still .ex-type { animation: none; }
+.win-exhibits.ex-still .ex-img.in, .win-exhibits.ex-still .ex-pulse, .win-exhibits.ex-still .ex-badge.live::before, .win-exhibits.ex-still .ex-ghost i, .win-exhibits.ex-still .ex-type, .win-exhibits.ex-still .ex-vis * { animation: none; }
 .win-exhibits.ex-still .ex-scan { display: none; }
-.win-exhibits:not(.ex-motion-all) .ex-card:not(.ex-current) .ex-img.in { animation: none; }
+/* a card's embedded visual (visual.js: a running step's spinner, a live tile's pulse) loops only with its card */
+.win-exhibits:not(.ex-motion-all) .ex-card:not(.ex-current) .ex-img.in, .win-exhibits:not(.ex-motion-all) .ex-card:not(.ex-current) .ex-vis * { animation: none; }
 .ex-anim { background: rgba(var(--accent-rgb), .06); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: 11px var(--mono); }
 
 /* the activity: what the work is doing, from its trace spans */
@@ -1492,6 +1493,7 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .ex-file.m-edit .ex-mark { color: var(--accent); border-color: var(--accent); }
 .ex-file.m-create .ex-mark { color: var(--accent-2); border-color: var(--accent-2); }
 .ex-fname { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+/* rtl clips the folder from the left; exhibits.js wraps it in LRMs so its leading ~/ or / stays in front */
 .ex-fdir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--muted); font-size: 10.5px; }
 .ex-fcount { flex: none; color: var(--muted); font-size: 10.5px; }
 .ex-tst { flex: none; width: 12px; color: var(--muted); }
