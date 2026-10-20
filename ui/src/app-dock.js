@@ -133,8 +133,8 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     const hit = h('span', { class: 'adock-hit' }, h('span', { class: 'adock-icon stack' }, ...minis));
     const el = h('button', {
       class: 'adock-tile adock-group', type: 'button', 'data-gid': group.id, tabindex: '-1',
-      'aria-label': `${group.name} — group of ${items.length}${waiting ? `, ${waiting === '•' ? 'needs attention' : `${waiting} waiting`}` : ''}`, 'aria-haspopup': 'dialog', 'aria-expanded': String(popGroup === group.id),
-    }, hit, h('b', { class: 'adock-count', 'aria-hidden': 'true' }, String(items.length)), ...(waiting ? [h('b', { class: 'adock-count alert', 'aria-hidden': 'true' }, badgeText(waiting))] : []));
+      'aria-label': `${group.name} — group of ${items.length}${waiting ? `, ${waiting === '•' ? 'needs attention' : `${badgeText(waiting)} waiting`}` : ''}`, 'aria-haspopup': 'dialog', 'aria-expanded': String(popGroup === group.id),
+    }, hit, h('b', { class: 'adock-count', 'aria-hidden': 'true' }, String(items.length)), ...(waiting ? [' ', h('b', { class: 'adock-count alert', 'aria-hidden': 'true' }, badgeText(waiting))] : [])); // the space keeps the two counts apart in the tile's text ("5 7", not "57"), so it matches the label
     tagCtx(el, 'dockgroup', group.id, { id: group.id });
     el.addEventListener('click', (e) => { if (consumeClick(e)) return; if (popGroup === group.id) closePop(); else openPop(group.id); });
     return el;
