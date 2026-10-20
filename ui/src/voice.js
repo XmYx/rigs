@@ -208,7 +208,8 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     });
   }
   function cachePhrase(text) {
-    const p = fetchAudio(text).then((r) => { if (!r || r === 'empty') phraseAudio.delete(text); return r; });
+    // A failed or empty render is not kept (the next request tries again), and only if no newer render replaced it.
+    const p = fetchAudio(text).catch(() => null).then((r) => { if ((!r || r === 'empty') && phraseAudio.get(text) === p) phraseAudio.delete(text); return r; });
     phraseAudio.set(text, p);
     return p;
   }

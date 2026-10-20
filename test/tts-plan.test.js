@@ -1,7 +1,7 @@
 // Pure speech planning: engine order, silent fallback, silence trimming, sentence chunking for streamed speech.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { engineOrder, runChain, trimSilence } from '../src/tts-plan.js';
+import { engineOrder, notifyVoice, runChain, trimSilence } from '../src/tts-plan.js';
 import { drain, nextChunk } from '../ui/src/sentences.js';
 
 test('engineOrder: auto prefers resident piper, then the machine engine; unreachable engines are left out; never neural', () => {
@@ -84,4 +84,24 @@ test('the first chunk of a reply may end at a comma once it is long; later chunk
   assert.equal(first.chunks.join('') + first.rest, long);
   assert.deepEqual(drain(long, { first: false }).chunks, [long]);
   assert.deepEqual(drain('Yes, sir, right away, as you wish. ', { first: true }).chunks, ['Yes, sir, right away, as you wish. ']);
+});
+
+test('notifyVoice: one notification is voiced once — by the open UIs, or by the speakers here, never both', () => {
+  // aloud: the speakers say it, the UIs only show it (even when a UI is open)
+  const a = notifyVoice({ text: 'Done, sir.', aloud: true });
+  assert.equal(a.ui.speak, false);
+  assert.equal(a.ui.text, 'Done, sir.');
+  assert.equal(a.speakers(true), true);
+  assert.equal(a.speakers(false, 'never'), true); // asked for explicitly
+  // default: the UIs speak it; the speakers only when no UI received it, unless persona.speakAloud is 'never'
+  const d = notifyVoice({ text: 'Done.', speak: true });
+  assert.notEqual(d.ui.speak, false);
+  assert.equal(d.speakers(true), false);
+  assert.equal(d.speakers(false), true);
+  assert.equal(d.speakers(false, 'never'), false);
+  // speak: false wins over aloud: nobody says it
+  const s = notifyVoice({ text: 'Quiet.', speak: false, aloud: true });
+  assert.equal(s.ui.speak, false);
+  assert.equal(s.speakers(false), false);
+  assert.equal(s.speakers(true), false);
 });

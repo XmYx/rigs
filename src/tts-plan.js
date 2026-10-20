@@ -22,6 +22,19 @@ export function engineOrder({ voice = '', choice = 'auto', up = {} } = {}) {
 }
 
 /**
+ * One notification, one voice (server.js broadcastNotify). `ui` is the body every open JARVIS UI gets: with
+ * `aloud: true` this machine's speakers say it, so the UIs only show it. `speakers(seen, speakAloud)` says whether the
+ * speakers here say it, given whether any UI received it and persona.speakAloud ('auto' | 'never').
+ */
+export function notifyVoice(b = {}) {
+  const aloud = b.aloud === true && b.speak !== false;
+  return {
+    ui: aloud ? { ...b, speak: false } : b,
+    speakers: (seen, speakAloud = 'auto') => aloud || (b.speak !== false && !seen && speakAloud !== 'never'),
+  };
+}
+
+/**
  * Try each engine in order; the first that does not throw wins (a null result means "nothing to say" and also wins).
  * Failures are reported through onFail(engine, error) so they reach the log, never the user. Throws only when every
  * engine failed (or there were none).
