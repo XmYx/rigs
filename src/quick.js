@@ -17,8 +17,44 @@ const DEFAULT_QUICK = {
 /** The fast brain says it needs the full brain with this marker (then a short reason); the request re-runs there. */
 export const ESCALATE_MARKER = '[[ESCALATE]]';
 
+/**
+ * The local first responder (config.quick.local, src/responder.js, design in docs/local-responder.md): a model on a
+ * machine's own Ollama answers the fast path's tiers it lists, with read-only tools only. Off by default.
+ * READ_ONLY_TOOLS is the hard limit: config can narrow it, never widen it.
+ */
+export const READ_ONLY_TOOLS = ['mesh_status', 'mesh_sessions', 'mesh_apps', 'project_list', 'mesh_processes', 'usage_report', 'trace_list'];
+const DEFAULT_LOCAL = {
+  enabled: false, node: '', model: 'qwen3:8b', tiers: ['haiku'], tools: READ_ONLY_TOOLS,
+  think: false, numCtx: 16384, keepAlive: '30m', maxRounds: 4, guard: true, firstTokenMs: 2500, timeoutMs: 30000,
+};
+
 const bool = (v, d) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1' ? true : v === false || v === 'false' || v === 'off' || v === 0 || v === '0' ? false : d);
 const clampNum = (v, d, lo, hi) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : d);
+const KEEP_ALIVE = /^(?:-1|0|\d+(?:\.\d+)?(?:ms|s|m|h)?)$/;
+
+/**
+ * config.quick.local, validated: { enabled, node ('' = the machine running the fast path), model, tiers, tools (only
+ * names in READ_ONLY_TOOLS survive), think, numCtx, keepAlive, maxRounds, guard, firstTokenMs, timeoutMs }. Pure.
+ */
+export function localSettings(l = {}) {
+  const d = DEFAULT_LOCAL;
+  const tiers = Array.isArray(l?.tiers) ? [...new Set(l.tiers.map((x) => String(x).trim().toLowerCase()).filter((x) => TIERS.includes(x)))] : d.tiers;
+  const tools = Array.isArray(l?.tools) ? [...new Set(l.tools.map(String).filter((x) => READ_ONLY_TOOLS.includes(x)))] : d.tools;
+  return {
+    enabled: bool(l?.enabled, d.enabled),
+    node: typeof l?.node === 'string' ? l.node.trim() : d.node,
+    model: String(l?.model || '').trim() || d.model,
+    tiers,
+    tools,
+    think: bool(l?.think, d.think),
+    numCtx: clampNum(l?.numCtx, d.numCtx, 2048, 131072),
+    keepAlive: KEEP_ALIVE.test(String(l?.keepAlive ?? '')) ? String(l.keepAlive) : d.keepAlive,
+    maxRounds: clampNum(l?.maxRounds, d.maxRounds, 1, 10),
+    guard: bool(l?.guard, d.guard),
+    firstTokenMs: clampNum(l?.firstTokenMs, d.firstTokenMs, 200, 60000),
+    timeoutMs: clampNum(l?.timeoutMs, d.timeoutMs, 2000, 600000),
+  };
+}
 
 function tierSettings(t, d) {
   const provider = QUICK_PROVIDERS.includes(t?.provider) ? t.provider : d.provider;
@@ -35,6 +71,8 @@ export function quickSettings(q = {}) {
     standard: tierSettings(q?.standard, d.standard),
     maxTurns: clampNum(q?.maxTurns, d.maxTurns, 1, 50),
     timeoutMs: clampNum(q?.timeoutMs, d.timeoutMs, 5000, 600000),
+    // only when configured: a config without it reads exactly as before (the responder's defaults: localSettings())
+    ...(q?.local !== undefined && q?.local !== null ? { local: localSettings(q.local) } : {}),
   };
 }
 
@@ -55,14 +93,32 @@ export function applyQuickPatch(current = {}, b = {}) {
     if (t.model !== undefined && !String(t.model).trim()) throw new Error(`${k}.model must not be empty`);
   }
   for (const k of ['maxTurns', 'timeoutMs']) if (b[k] !== undefined && !Number.isFinite(Number(b[k]))) throw new Error(`${k} must be a number`);
-  return quickSettings({ ...cur, ...b, simple: { ...cur.simple, ...(b.simple || {}) }, standard: { ...cur.standard, ...(b.standard || {}) } });
+  const local = b.local === undefined ? undefined : checkLocalPatch(b.local);
+  return quickSettings({ ...cur, ...b, simple: { ...cur.simple, ...(b.simple || {}) }, standard: { ...cur.standard, ...(b.standard || {}) },
+    ...(local ? { local: { ...localSettings(cur.local), ...local } } : {}) });
 }
 
-/** The per-request override (jarvis/send `quick`): true | false | 'haiku' | 'sonnet', or undefined (use config). Pure. */
+/** A `local` patch, checked: throws on a value it can't take. Pure. */
+function checkLocalPatch(l) {
+  if (!l || typeof l !== 'object' || Array.isArray(l)) throw new Error('local must be { enabled, node, model, … }');
+  for (const k of ['enabled', 'think', 'guard']) if (l[k] !== undefined && bool(l[k], null) === null) throw new Error(`local.${k} must be true or false`);
+  if (l.model !== undefined && !String(l.model).trim()) throw new Error('local.model must not be empty');
+  if (l.node !== undefined && typeof l.node !== 'string') throw new Error('local.node must be a machine name (or "" for this machine)');
+  if (l.tiers !== undefined && (!Array.isArray(l.tiers) || l.tiers.some((t) => !TIERS.includes(String(t).toLowerCase())))) throw new Error(`local.tiers must be a list of ${TIERS.join(', ')}`);
+  if (l.tools !== undefined && (!Array.isArray(l.tools) || l.tools.some((t) => !READ_ONLY_TOOLS.includes(t)))) throw new Error(`local.tools must be among the read-only tools: ${READ_ONLY_TOOLS.join(', ')}`);
+  for (const k of ['numCtx', 'maxRounds', 'firstTokenMs', 'timeoutMs']) if (l[k] !== undefined && !Number.isFinite(Number(l[k]))) throw new Error(`local.${k} must be a number`);
+  if (l.keepAlive !== undefined && !KEEP_ALIVE.test(String(l.keepAlive))) throw new Error('local.keepAlive must be an Ollama duration like "30m", "1h" or -1');
+  return l;
+}
+
+/**
+ * The per-request override (jarvis/send `quick`): true | false | 'haiku' | 'sonnet' | 'local', or undefined (use
+ * config). 'local' = the fast path on the local responder for this request. Pure.
+ */
 export function quickOverride(v) {
   if (v === undefined || v === null || v === '') return undefined;
   const s = String(v).toLowerCase();
-  if (TIERS.includes(s)) return s;
+  if (TIERS.includes(s) || s === 'local') return s;
   if (s === 'simple') return 'haiku';
   if (s === 'standard') return 'sonnet';
   return bool(v, undefined);
@@ -131,7 +187,26 @@ export function resolveQuick({ text = '', route = '', override, brain = '', rout
   if (o === undefined && brain && !['auto', 'claude'].includes(brain)) return { on: false, reason: `the ${brain} brain was asked for` };
   const t = TIERS.includes(o) ? { tier: o, why: `quick: ${o} on this request` } : quickTierWhy(text, routeInfo);
   const cfg = t.tier === 'haiku' ? s.simple : s.standard;
-  return { on: true, tier: t.tier, why: t.why, provider: cfg.provider, model: cfg.model, effort: cfg.effort, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, forced: o !== undefined };
+  return { on: true, tier: t.tier, why: t.why, provider: cfg.provider, model: cfg.model, effort: cfg.effort, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, forced: o !== undefined,
+    // a tier named on the request means that Claude model; 'local' means the local responder (localResponder)
+    ...(TIERS.includes(o) ? { forcedTier: o } : {}), ...(o === 'local' ? { local: true } : {}) };
+}
+
+/**
+ * Does this fast-path turn (`q` from resolveQuick) run on the local responder? → { on: true, ...localSettings, node }
+ * (node '' resolves to `self`) or { on: false, reason }. On when config.quick.local is enabled and lists the turn's tier,
+ * or when the request asked for it (quick: 'local'); never when the request named a Claude tier. Pure.
+ */
+export function localResponder(q, quick = {}, { self = '' } = {}) {
+  if (!q?.on) return { on: false, reason: 'not on the fast path' };
+  if (q.forcedTier) return { on: false, reason: `quick: ${q.forcedTier} on this request` };
+  const l = localSettings(quick?.local);
+  if (!q.local) {
+    if (!l.enabled) return { on: false, reason: 'config.quick.local.enabled is false' };
+    if (!l.tiers.includes(q.tier)) return { on: false, reason: `the ${q.tier} tier is not in quick.local.tiers` };
+  }
+  if (!l.tools.length) return { on: false, reason: 'quick.local.tools is empty' };
+  return { on: true, ...l, node: l.node || self, forced: !!q.local };
 }
 
 /**
