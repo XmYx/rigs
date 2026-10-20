@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HOME, readJsonSync, shortHost } from './util.js';
+import { applyGlobal, globalSettings, isNewer, nextRev, revOf, touchesGlobal } from './globalbrain.js';
 
 export const RIGS_HOME = process.env.RIGS_HOME ? path.resolve(process.env.RIGS_HOME) : path.join(HOME, '.rigs');
 export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
@@ -206,8 +207,40 @@ export function patchConfig(patch) {
   // publicConfig masks the LocalJev key; a settings form saving that mask back must not overwrite the real one.
   if (patch?.router?.jev?.apiKey === '••••') delete patch.router.jev.apiKey;
   const next = merge(cfg, patch);
+  if (touchesGlobal(patch)) next.globalRev = nextRev(cfg, next.name);
   saveConfig(next);
+  if (touchesGlobal(patch)) emitGlobal();
   return next;
+}
+
+// ── Global JARVIS settings (src/globalbrain.js): one brain configuration for the whole mesh ────────────────────────
+const globalListeners = new Set();
+/** Called with { rev, by, settings } whenever this machine changes a global setting (the server pushes it to peers). */
+export function onGlobalChange(fn) { globalListeners.add(fn); return () => globalListeners.delete(fn); }
+function emitGlobal() { const g = currentGlobal(); for (const fn of globalListeners) { try { fn(g); } catch { /* a listener never breaks a save */ } } }
+
+/** This machine's global settings and their revision. */
+export function currentGlobal() {
+  const c = config();
+  return { ...revOf(c), settings: globalSettings(c) };
+}
+
+/** A setting saved without patchConfig (e.g. the router endpoint) that is global: stamp it and tell the peers. */
+export function markGlobalChanged() {
+  const c = config();
+  c.globalRev = nextRev(c, c.name);
+  saveConfig(c);
+  emitGlobal();
+}
+
+/** Adopt a peer's global settings when they are newer than ours. Returns true when adopted (never re-broadcasts). */
+export function adoptGlobal(g) {
+  const c = config();
+  if (!g?.settings || !isNewer(g, revOf(c))) return false;
+  applyGlobal(c, g.settings);
+  c.globalRev = { rev: Number(g.rev) || 0, by: String(g.by || '') };
+  saveConfig(c);
+  return true;
 }
 
 /** Config without secrets, safe to send to peers and the UI. */

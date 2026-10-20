@@ -104,13 +104,13 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
     hint,
     effortRow,
     h('label', { class: 'bm-pre' }, h('div', {}, h('b', {}, 'Pre-routing'), preNote), h('span', { class: 'ctl-switch' }, preBox, h('span', { class: 'ctl-knob' }))),
-    h('label', { class: 'check bm-core' }, core, ` Core brain — default for JARVIS and project planning on ${gatewayName}`),
+    h('label', { class: 'check bm-core' }, core, ` Also the core brain — project planning for the whole mesh`),
     h('div', { class: 'actions' }, Object.assign(useBtn, { onclick: async () => {
       const e = entry();
       const b = provider();
       const out = { nodeId: e.node.id, nodeName: e.node.name, brain: b.id, model: chosenModel(), effort: b.id === 'claude-ollama' ? '' : effortSel.value };
       if (core.checked) {
-        try { await api('/api/local/brain/core', { method: 'POST', body: { provider: out.brain, model: out.model, effort: out.effort, node: e.node.self ? '' : e.node.name } }); }
+        try { await api('/api/local/brain/core', { method: 'POST', body: { provider: out.brain, model: out.model, effort: out.effort, node: e.node.name } }); }
         catch (err) { toast('Could not save core brain: ' + err.message, 'error'); }
       }
       onSave(out);

@@ -268,6 +268,7 @@ function connectEvents() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'mesh') refresh();
+    if (m.type === 'global') { globalBrain = { ...m, home: m.settings?.['brain.home'] || m.settings?.['brain.core']?.node || '' }; renderBrainBadge(); }
     onAppsEvent(m);
     if (m.type === 'appstore') onAppStoreEvent(m);
     if (m.type === 'apps') refresh();
@@ -736,9 +737,18 @@ function allBrains() {
 
 let coreDefault = null; // this gateway's core brain from the server
 let chatDefault = null; // this gateway's conversational brain (Haiku by default): casual chat and replies
+let globalBrain = null; // mesh-wide JARVIS settings (src/globalbrain.js): { home, settings: { 'brain.chat', 'brain.core', … } }
 
 function currentBrain() {
   const has = (nodeId, brain) => snap.find((e) => e.node.id === nodeId && e.node.online)?.brains?.some((b) => b.id === brain);
+  // One JARVIS for the mesh: every screen talks to the main-brain machine with the global conversational brain. Only when
+  // that machine is offline (or none is set) does this screen fall back to the per-machine choices below.
+  if (globalBrain?.home) {
+    const node = snap.find((e) => e.node.name === globalBrain.home && e.node.online)?.node;
+    const pick = [globalBrain.settings?.['brain.chat'], globalBrain.settings?.['brain.core']].find((x) => x?.provider && x.provider !== 'auto' && node && has(node.id, x.provider));
+    if (node && pick) return { nodeId: node.id, nodeName: node.name, brain: pick.provider, model: pick.model || '', effort: pick.effort || '', global: true };
+    if (node) { const b = snap.find((e) => e.node.id === node.id)?.brains?.[0]; if (b) return { nodeId: node.id, nodeName: node.name, brain: b.id, model: b.default || '', effort: b.defaultEffort || '', global: true }; }
+  }
   if (brainSel && has(brainSel.nodeId, brainSel.brain)) return brainSel;
   if (chatDefault?.model) {
     const node = snap.find((e) => e.node.self)?.node;
@@ -768,10 +778,14 @@ function setBrain(b, { quiet = false } = {}) {
   const prevNode = currentBrain()?.nodeId;
   brainSel = { nodeId: b.nodeId, nodeName: b.nodeName, brain: b.brain, model: b.model || '', effort: b.effort || '' };
   store.set('brain', brainSel);
+  // The pick is JARVIS's main brain on every machine and screen of the mesh, not just this one.
+  globalBrain = { ...(globalBrain || {}), home: b.nodeName, settings: { ...(globalBrain?.settings || {}), 'brain.chat': { provider: b.brain, model: b.model || '', effort: b.effort || '' } } };
+  api('/api/local/brain/home', { method: 'POST', body: { node: b.nodeName, provider: b.brain, model: b.model || '', effort: b.effort || '' } })
+    .then((g) => { globalBrain = g; renderBrainBadge(); }).catch((e) => toast('Could not make it the main brain for the mesh: ' + e.message, 'error'));
   if (prevNode !== b.nodeId) { chatRef = null; store.set('chat', null); }
   renderBrainBadge();
   $('#brain-menu').classList.remove('open');
-  if (!quiet) toast(`Brain → ${b.brain}${b.model ? ' ' + b.model : ''}${b.effort ? ' · ' + b.effort : ''} on ${b.nodeName}`);
+  if (!quiet) toast(`Main brain for the whole mesh → ${b.brain}${b.model ? ' ' + b.model : ''}${b.effort ? ' · ' + b.effort : ''} on ${b.nodeName}`);
 }
 
 function pickBrainOn(m) { toggleBrainMenu(m.id); }
@@ -1303,6 +1317,7 @@ initPopovers();
 setOrb('online');
 api('/api/local/brain/core').then((c) => { coreDefault = c; renderBrainBadge(); }).catch(() => {});
 api('/api/local/brain/chat').then((c) => { chatDefault = c; renderBrainBadge(); }).catch(() => {});
+api('/api/local/global').then((g) => { globalBrain = g; renderBrainBadge(); }).catch(() => {});
 api('/api/local/config').then((c) => { persona = c.persona; $('#ask').placeholder = `Ask ${c.persona.name.replace(/\./g, '')} — "status", "terminal on ubuntu", "files on mac", "start claude on windows"…`; }).catch(() => {});
 await refresh();
 graph.fit();
