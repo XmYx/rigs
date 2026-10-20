@@ -7,10 +7,11 @@ const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
 const TEXT = /\.(txt|md|json|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|c|h|cpp|cs|sh|zsh|ps1|yml|yaml|toml|ini|cfg|conf|log|csv|html|css|xml|sql|env|gitignore|dockerfile)$/i;
 
 /** File browser for any machine, with upload, download, rename, trash, and copy-to-another-machine. */
-export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], onTerminalHere } = {}) {
+export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidden: hidden = false, machines = () => [], onTerminalHere } = {}) {
   let cur = { path, entries: [], parent: null, sep: '/' };
-  let showHidden = false;
+  let showHidden = !!hidden;
   let selected = null;
+  let closed = false;
 
   const pathInput = h('input', { class: 'path-input', 'aria-label': 'Folder path', value: path, spellcheck: 'false' });
   const list = h('div', { class: 'file-list' });
@@ -20,8 +21,9 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
 
   const w = openWindow({
     title: `${nodeName} — files`, icon: '📁', width: 980, height: 560, className: 'files-win',
-    tools: [rootsSel],
+    tools: [rootsSel], onClose: () => { closed = true; },
   });
+  const hiddenBox = h('input', { type: 'checkbox', checked: showHidden, onchange: (e) => { showHidden = e.target.checked; load(cur.path); } });
   const toolbar = h('div', { class: 'toolbar' },
     h('button', { class: 'tb', title: 'Up', onclick: () => cur.parent && load(cur.parent) }, '↑'),
     h('button', { class: 'tb', title: 'Home', onclick: () => load('~') }, '⌂'),
@@ -30,7 +32,7 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
     h('button', { class: 'tb', title: 'New folder', onclick: newFolder }, '＋📁'),
     h('button', { class: 'tb', title: 'Upload files here', onclick: () => upload.click() }, '⇪ Upload'),
     h('button', { class: 'tb', title: 'Terminal here', onclick: () => onTerminalHere?.(cur.path) }, '⌨'),
-    h('label', { class: 'tb check' }, h('input', { type: 'checkbox', onchange: (e) => { showHidden = e.target.checked; load(cur.path); } }), ' hidden'),
+    h('label', { class: 'tb check' }, hiddenBox, ' hidden'),
     upload);
   w.body.append(toolbar, h('div', { class: 'files-split' }, list, preview));
 
@@ -87,7 +89,21 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
       rootsSel.replaceChildren(...r.roots.map((x) => h('option', { value: x.path }, x.name)));
       rootsSel.value = '';
       render();
-    } catch (e) { toast(`${nodeName}: ${e.message}`, 'error'); }
+      return true;
+    } catch (e) { toast(`${nodeName}: ${e.message}`, 'error'); return false; }
+  }
+
+  /** Go to a folder (ui_open): load it, then select and preview `sel` (a file or folder in it) when given. */
+  async function navigate(p, { select: sel = '', showHidden: hid } = {}) {
+    if (hid && !showHidden) { showHidden = true; hiddenBox.checked = true; }
+    if (!(await load(p))) return false;
+    const e = sel && cur.entries.find((x) => x.path === sel);
+    if (!e) { selected = null; render(); return true; }
+    selected = e.path;
+    render();
+    list.querySelector('.file-row.sel')?.scrollIntoView?.({ block: 'nearest' });
+    if (e.type === 'dir') showDirActions(e); else showPreview(e);
+    return true;
   }
 
   function render() {
@@ -166,7 +182,10 @@ export function openFiles({ nodeId, nodeName, path = '~', machines = () => [], o
     catch (err) { toast(err.message, 'error'); }
   }
 
-  load(path);
+  navigate(path, { select });
+  w.navigate = navigate;
+  w.nodeId = nodeId;
+  Object.defineProperties(w, { closed: { get: () => closed }, path: { get: () => cur.path } });
   return w;
 }
 

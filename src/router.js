@@ -99,6 +99,19 @@ export function isImperative(text) {
   return IMPERATIVE.test(rest);
 }
 
+// "open my Downloads folder", "show me the files in ~/x on magix-system", "show it in Files": a one-step ui_open call.
+const BROWSE = /^(?:open(?: up)?|show(?: me)?|browse(?: to)?|bring up|pull up|take me to|go to|navigate to|reveal|jump to)\b/i;
+const BROWSE_TARGET = /(?:^|[\s"'(])(?:~|\/|[a-z]:\\)|\b(?:folders?|director(?:y|ies)|dir|files?|downloads|desktop|documents?|home|pdfs?|images?|photos?|pictures?|screenshots?|videos?)\b|\w\.[a-z0-9]{2,5}\b/i;
+const NOT_BROWSE = /\b(?:should|so that|instead|make sure|fix|bug|feature|implement|handled?|code|pull request|issue|ticket|apps?|terminal|session|window|dashboard|panel)\b/i;
+
+/** A request to open / show / browse a folder or file in the JARVIS file browser (never work). Pure. */
+export function isBrowseRequest(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 200 || isImperative(t)) return false;
+  const rest = t.replace(OPENERS, '');
+  return BROWSE.test(rest) && BROWSE_TARGET.test(rest) && !NOT_BROWSE.test(rest);
+}
+
 /** Does the request spell out several parts (a list, several sentences, a very long ask)? Then it is a plan. */
 function hasSeveralParts(text) {
   const t = String(text || '').trim();
@@ -143,6 +156,7 @@ export function heuristicRoute(text, threads = []) {
   if (best && !newGoal && (best.n >= 3 || (best.n >= 2 && best.share >= 0.5))) {
     return { route: 'continue', threadId: best.th.id, title: best.th.title, reason: 'shares its subject with an ongoing thread' };
   }
+  if (isBrowseRequest(t)) return { route: 'answer', reason: 'opens a folder or file in the file browser' };
   if (newGoal || /\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
@@ -245,7 +259,7 @@ function routerPrompt(text, { rules, threads, projects, catalog = [] }) {
     'Operating rules:',
     rules,
     '',
-    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". But building or using a helper script or tool to get something done ("build a script to check disk on every machine") is NOT a change to RIGS: give it the workspace it is for, or none — never "rigs" (agents file such a tool in the ad-hoc store with tool_register; only changes to RIGS code, UI, router or agents are workspace "rigs"). A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Polite or casual phrasing does not make a request a question: "can you …", "please …", "lets …", "I want you to …", "make sure …" followed by make/build/add/fix/change/improve/update/run/create/separate are work. Talk ("answer") is only for real questions, status checks, chat and one-step actions like opening a window or reading a file; never answer a work request with a description of what you would do.',
+    'A request that asks to implement, build, fix, improve or change something is "implement" (or "plan" when it has several parts), even when it names JARVIS, RIGS or the router itself — "JARVIS feature: …" is work on RIGS, give it workspace "rigs". But building or using a helper script or tool to get something done ("build a script to check disk on every machine") is NOT a change to RIGS: give it the workspace it is for, or none — never "rigs" (agents file such a tool in the ad-hoc store with tool_register; only changes to RIGS code, UI, router or agents are workspace "rigs"). A request naming a workspace flow ("Mad Mike update" = the flow madmikeupdate) means: run that flow — "implement", bound to that workspace. Polite or casual phrasing does not make a request a question: "can you …", "please …", "lets …", "I want you to …", "make sure …" followed by make/build/add/fix/change/improve/update/run/create/separate are work. Talk ("answer") is only for real questions, status checks, chat and one-step actions like opening a window or reading a file; never answer a work request with a description of what you would do. Opening, showing or browsing a folder or a file ("open the Downloads folder", "open ~/rigs-dev on magix-system", "show me the files in my home folder", "show it in Files") is always "answer": JARVIS opens its file browser there in one step. Only a request to change how that works (fix, make sure, should have…) is work.',
     '',
     'Ongoing threads (continue ONLY if the request clearly belongs to one; otherwise do not pick one):',
     threads.length ? threads.map((t) => `- ${t.id} · ${t.title} · project ${t.project || '—'}`).join('\n') : '(none)',
@@ -277,7 +291,7 @@ export async function modelRoute(text, ctx, { timeoutMs = 25000, model = DEFAULT
 }
 
 const ROUTE_CRITERIA = {
-  answer: 'a real question, a status check, chat, or a one-step action like opening a window or reading a file',
+  answer: 'a real question, a status check, chat, or a one-step action like opening a window, opening or showing a folder or file, or reading a file',
   implement: 'one piece of work: asks to make, build, add, fix, change, improve, update or run something (polite phrasing like "can you", "please", "lets" is still work)',
   plan: 'a goal with several parts or several projects that needs planning first',
   continue: 'clearly belongs to one of the ongoing threads listed in the state',
@@ -394,6 +408,12 @@ export async function route(text, ctx, { settings = routerSettings(config().rout
 /** Second opinion on the decision + work items bound to folders. Pure given the decision (tested). */
 export function withWork(d, text, { catalog = [], selfNode = '' } = {}) {
   d = Object.assign(d, guardRoute(d, text));
+  // Opening a folder or file is a one-step ui_open call: never filed as work, whatever the model said.
+  if ((d.route === 'implement' || d.route === 'plan') && isBrowseRequest(text)) {
+    Object.assign(d, { route: 'answer', reason: 'opens a folder or file in the file browser (ui_open), not work', work: undefined, guarded: true });
+    delete d.work;
+    return d;
+  }
   // Requests that are clearly work never stay as talk: a named flow, or "JARVIS feature: …".
   if (d.route === 'answer' || d.route === 'continue') {
     const flow = !QUESTION.test(text) && namedFlow(text, catalog);

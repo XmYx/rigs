@@ -30,6 +30,7 @@ import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
+import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
 import { createGraphify } from './graphify.js';
@@ -323,10 +324,20 @@ async function refresh() {
   }
 }
 
+// Requests this UI sent (their trace ids), told to the gateway so ui-open pushes for them come here first.
+let eventsWs = null;
+let tracesClaimed = [];
+function claimTrace(traceId) {
+  tracesClaimed = addClaim(tracesClaimed, traceId);
+  if (eventsWs?.readyState === 1 && tracesClaimed.includes(traceId)) eventsWs.send(JSON.stringify({ type: 'claim-trace', traceId }));
+}
+
 function connectEvents() {
   const ws = new WebSocket(wsUrl('/ws'));
+  eventsWs = ws;
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.type === 'ui-open') onUiOpen(m);
     if (m.type === 'mesh') refresh();
     if (m.type === 'global') { globalBrain = { ...m, home: m.settings?.['brain.home'] || m.settings?.['brain.core']?.node || '' }; renderBrainBadge(); }
     onAppsEvent(m);
@@ -351,7 +362,10 @@ function connectEvents() {
       if (m.speak) voice.say(spokenText(m.text, true));
     }
   };
-  ws.onopen = () => { if (orb.state === 'offline') setOrb('online'); };
+  ws.onopen = () => {
+    if (orb.state === 'offline') setOrb('online');
+    for (const traceId of tracesClaimed) ws.send(JSON.stringify({ type: 'claim-trace', traceId }));
+  };
   ws.onclose = () => { setOrb('offline'); setTimeout(connectEvents, 3000); };
 }
 
@@ -641,8 +655,27 @@ async function installDesktop(d) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function filesOn(m, path = '~') {
-  openFiles({ nodeId: m.id, nodeName: m.name, path, machines, onTerminalHere: (p) => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: p }) });
+// The latest file-browser window per machine: a ui_open push for that machine navigates it instead of opening another.
+const filesWins = new Map();
+function filesOn(m, path = '~', { select = '', showHidden = false } = {}) {
+  const w = openFiles({ nodeId: m.id, nodeName: m.name, path, select, showHidden, machines, onTerminalHere: (p) => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: p }) });
+  filesWins.set(m.id, w);
+  w.onCleanup(() => { if (filesWins.get(m.id) === w) filesWins.delete(m.id); });
+  return w;
+}
+
+/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — today the file browser at a folder. */
+const uiOpenSeen = new Set();
+function onUiOpen(m) {
+  const a = uiOpenAction(m, { machines: snap.map((e) => e.node) });
+  if (!a || (a.id && uiOpenSeen.has(a.id))) return;
+  if (a.id) { uiOpenSeen.add(a.id); if (uiOpenSeen.size > 50) uiOpenSeen.delete(uiOpenSeen.values().next().value); }
+  if (a.view === 'files') {
+    const w = filesTarget(filesWins, a.nodeId);
+    if (w) { w.navigate(a.path, { select: a.select, showHidden: a.showHidden }); w.raise(); }
+    else filesOn({ id: a.nodeId, name: a.nodeName }, a.path, { select: a.select, showHidden: a.showHidden });
+  }
+  if (a.toast) toast(a.toast, 'info', 7000);
 }
 
 // Active agents panel (agents.js): live agent sessions, one click to attach
@@ -951,7 +984,8 @@ async function intent(text) {
     const n = findMachine(m[1]);
     if (n) { desktopTo(n); say(`Connecting to ${n.name}'s desktop.`); return true; }
   }
-  if ((m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
+  const browse = isBrowseAsk(t); // a folder or file: JARVIS opens it in the file browser (ui_open), not a pin or graph node
+  if (!browse && (m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
     const q = m[1].toLowerCase().replace(/[?.!]$/, '').trim();
     const pin = allPins().find((p) => p.name.toLowerCase() === q) || allPins().find((p) => q.length > 2 && p.name.toLowerCase().includes(q));
     if (pin) { projectWindow(pin); say(`${pin.name}, on ${pin.node.name}.`); return true; }
@@ -973,7 +1007,7 @@ async function intent(text) {
     const b = pref(pool.filter((x) => x.model && (words.includes(x.model.toLowerCase().split(':')[0]) || x.model.toLowerCase().includes(words.trim())))) || pref(pool.filter((x) => what.includes(x.brain)));
     if (b) { setBrain(b); say(`Switching my brain to ${b.label} on ${b.nodeName}.`); return true; }
   }
-  if ((m = t.match(/^(?:focus|zoom(?: in)?(?: on)?|go to|show me)\s+(.+)$/i))) {
+  if (!browse && (m = t.match(/^(?:focus|zoom(?: in)?(?: on)?|go to|show me)\s+(.+)$/i))) {
     const q = m[1].toLowerCase();
     const hit = graph.nodes().find((x) => x.name?.toLowerCase() === q) || graph.nodes().find((x) => x.name?.toLowerCase().includes(q));
     if (hit) { select(hit.id); say(`${hit.name}.`); return true; }
@@ -1058,6 +1092,7 @@ async function ask(text, { spoken = false } = {}) {
   try {
     // Every request is routed on the server: a new conversation, or the ongoing thread it belongs to
     await stream(`${node(b.nodeId)}/jarvis/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
+      if (e.type === 'trace') claimTrace(e.traceId);
       if (e.type === 'route') {
         chatRef = { nodeId: b.nodeId, chatId: e.chatId };
         store.set('chat', chatRef);
