@@ -1334,7 +1334,7 @@ function processesWindow(m) {
 
 // ------------------------------------------------------------------ wiring
 function wire() {
-  // Every panel floats: drag by its title bar (or ⠿), close with ✕, bring back from ☰; ☰ also switches the docking layout (panels.js, docking.js)
+  // Every panel floats: drag by its title bar (or ⠿), close with ✕, bring back from the top menu's Panels item, which also switches the docking layout (panels.js, docking.js, jarvis-commands.js)
   makeFloating($('#left'), { id: 'left', title: 'Side panel', into: $('#left .brand'), keep: [$('#left .brand')] });
   makeFloating($('#legend'), { id: 'legend', title: 'Filters', handle: $('#legend .sec-h'), keep: [$('#legend .sec-h')] });
   makeFloating($('#topbar'), { id: 'topbar', title: 'Top bar' });

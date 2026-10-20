@@ -454,7 +454,7 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
   setInterval(updateStatus, 5000); // cheap; the node's name/version arrive with the first snapshot
 
   // Phone: one ⋮ button in the header opens the whole menu.
-  phoneBtn = h('button', { id: 'mb-phone', class: 'round', title: 'Menu — File, Edit, Window, Tools, Help', 'aria-label': 'JARVIS menu', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+  phoneBtn = h('button', { id: 'mb-phone', class: 'round', title: 'Menu — File, Edit, Panels, Window, Tools, Help', 'aria-label': 'JARVIS menu', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     onclick: (e) => { e.stopPropagation(); if (openTop === -2) closeMenus({ restore: false }); else openPhoneMenu(); } }, '⋮');
   const placePhone = () => {
     const topbar = document.getElementById('topbar');

@@ -19,7 +19,7 @@ const root = document.documentElement;
 const SHEET = [
   ['btn-hands', 'Hands-free'], ['btn-term', 'Terminal'], ['btn-files', 'Files'], ['btn-desk', 'Desktop'],
   ['btn-sess', 'Sessions'], ['btn-proj', 'Projects'], ['btn-ask', 'Questions'], ['btn-agents', 'Active agents'], ['btn-work', 'Active projects'], ['btn-usage', 'Tokens & time'], ['btn-desktops', 'Desktops'], ['btn-graphify', 'Graphify'], ['btn-traces', 'Traces'], ['btn-apps', 'Apps'],
-  ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'], 
+  ['btn-mesh', 'Mesh'], ['btn-mute', 'Voice'],
 ];
 
 let drawerBtn;
@@ -100,7 +100,7 @@ function trackViewport() {
 }
 
 // ------------------------------------------------------------------ setup
-/** Call once after the panels and the ☰ menu exist (main.js wire()). */
+/** Call once after the panels exist (main.js wire()). */
 export function initMobile() {
   const left = $('#left');
   drawerBtn = h('button', { id: 'drawer-btn', class: 'round', title: 'Side panel — search, inspector, hubs', 'aria-label': 'Side panel', 'aria-controls': 'left', 'aria-expanded': 'false',

@@ -16,7 +16,7 @@ import { tagCtx } from './ctx-tag.js';
 const panels = new Map(); // id → { el, title, collapseBtn, onToggle, listed }
 const startHidden = new Set(); // panels closed by default (also after Reset layout)
 const inherited = new Set(); // inheritPanel: start closed because the panel it was split from is closed
-const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of ☰
+const removedIds = new Set(); // panels in the Removed list (layout-actions.js): kept closed, left out of the Panels menu
 let topZ = 12; // focusPanel raises a floating panel above the others, still under windows (z 100+)
 
 const NO_RECT = { x: null, y: null, w: null, h: null, vw: null, vh: null };

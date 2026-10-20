@@ -381,7 +381,7 @@ a.link { color: var(--accent); cursor: pointer; }
 #subtitle .spoken { font-size: 14px; font-weight: 500; }
 #subtitle .written { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); color: #b9c8d2; font-size: 12.5px; white-space: pre-wrap; }
 
-/* Floating panels (panels.js): ⠿ drag grip + ✕ on every panel, ☰ menu to restore */
+/* Floating panels (panels.js): ⠿ drag grip + ✕ on every panel, the top menu's Panels item to restore */
 .pctl { display: inline-flex; align-items: center; gap: 2px; flex: none; opacity: .35; transition: opacity .15s; }
 .floating:hover .pctl, .floating.dragging .pctl { opacity: 1; }
 .pgrip { cursor: grab; padding: 0 3px; font-size: 13px; line-height: 1; color: var(--muted); user-select: none; touch-action: none; }
@@ -608,7 +608,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #work > .wk-head > .pctl, #questions > .wk-head > .pctl, #chat-dock .pctl { display: inline-flex !important; opacity: 1; }
   #work .pctl > :not(.pclose:last-child), #usage .pctl > :not(.pclose:last-child), #questions .pctl > :not(.pclose:last-child), #chat-dock .pctl > :not(.pclose:last-child) { display: none; }
   .pclose { min-width: 44px; min-height: 44px; font-size: 16px; display: inline-grid; place-items: center; }
-  #topbar.floating.panel-closed { display: flex !important; } /* the only way back to ☰ Layout */
+  #topbar.floating.panel-closed { display: flex !important; } /* it holds ⋮, the only way to the Panels menu on a phone */
   #topbar.floating.panel-out { opacity: 1; pointer-events: auto; scale: none; translate: none; filter: none; }
 
   /* Header */
@@ -1284,7 +1284,6 @@ body.dock-dragging .dock-stage { opacity: 1; }
 .dock-pad[data-zone="bottom"] i::after { left: 0; right: 0; bottom: 0; height: 45%; }
 .dock-pad[data-zone="center"] i::after { left: 0; right: 0; top: 0; height: 28%; } /* a tab strip */
 .dock-pad.on { background: rgba(var(--accent-rgb), .4); border-color: var(--accent); scale: 1.14; }
-
 
 @media (prefers-reduced-motion: reduce) {
   .docked, .dock-tabs, .dock-tab, .dock-split::after, .dock-preview, .dock-label, .dock-compass, .dock-pad, .dock-stage { transition: none !important; }
