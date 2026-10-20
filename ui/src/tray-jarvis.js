@@ -12,16 +12,19 @@ import { brainSummary, effortChoices, modelChoices, pickBrain, providerChoices }
 export function registerJarvisTray(deps) {
   let router = null;
   let quick = null;
-  let btn = null;
+  const btns = new Set(); // one per mounted tray (menu bar + phone header)
   let rerender = null;
 
   const entry = () => { const c = deps.current(); return c && deps.entries().find((e) => e.node.id === c.nodeId); };
-  const paint = (el = btn) => {
-    if (!el) return;
-    const s = brainSummary(deps.current());
+  const paintOne = (el, s) => {
     el.title = s.title;
     el.setAttribute('aria-label', s.title);
     el.querySelector('.tray-jv-badge').textContent = s.badge;
+  };
+  const paint = (el) => {
+    const s = brainSummary(deps.current());
+    if (el) return paintOne(el, s);
+    for (const b of btns) if (b.isConnected) paintOne(b, s); else btns.delete(b);
   };
 
   async function load() {
@@ -81,9 +84,10 @@ export function registerJarvisTray(deps) {
   registerTrayItem({
     id: 'jarvis', order: 0, phone: true, label: 'JARVIS brain', popover,
     render() {
-      btn = h('button', { class: 'tray-item tray-jarvis', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: () => load() },
+      const btn = h('button', { class: 'tray-item tray-jarvis', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: () => load() },
         h('img', { src: '/icon.svg', alt: '', width: 16, height: 16 }), h('span', { class: 'tray-jv-badge' }));
-      paint();
+      btns.add(btn);
+      paint(btn);
       return btn;
     },
     update: paint,

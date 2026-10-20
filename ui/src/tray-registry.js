@@ -12,9 +12,10 @@ export function createTrayRegistry() {
   return {
     register(item) {
       if (!item?.id || typeof item.render !== 'function') throw new Error('a tray item needs an id and render()');
-      map.set(item.id, { order: 100, ...item });
+      const entry = { order: 100, ...item };
+      map.set(item.id, entry);
       emit();
-      return () => { if (map.get(item.id) === item) { map.delete(item.id); emit(); } };
+      return () => { if (map.get(item.id) === entry) { map.delete(item.id); emit(); } };
     },
     unregister(id) { if (map.delete(id)) emit(); },
     items({ phone = false } = {}) {

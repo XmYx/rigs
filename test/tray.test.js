@@ -105,6 +105,16 @@ test('tray registry: sorted by order then id, replace by id, phone filter, unreg
   r.unregister('a');
   assert.deepEqual(seen, [1]);
   assert.deepEqual(r.items().map((i) => i.id), ['b']);
+  // register()'s returned function removes its own item, but not a later replacement under the same id
+  const offD = r.register({ id: 'd', render() {} });
+  const items = r.items();
+  assert.strictEqual(r.items().find((i) => i.id === 'd'), items.find((i) => i.id === 'd'), 'entries are stable (the tray keeps nodes by identity)');
+  offD();
+  assert.deepEqual(r.items().map((i) => i.id), ['b']);
+  const offB = r.register({ id: 'b', render() {} });
+  r.register({ id: 'b', order: 5, render() {} });
+  offB();
+  assert.deepEqual(r.items().map((i) => i.id), ['b']);
 });
 
 // ---- JARVIS tray menu mapping

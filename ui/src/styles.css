@@ -1417,10 +1417,15 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   #menubar, #mb-zone { display: none !important; }
   #mb-phone { display: grid; place-items: center; font-size: 20px; }
   #mb-tray-phone { display: flex; position: fixed; z-index: 30; top: calc(var(--sat) + var(--gap)); right: calc(var(--sar) + var(--gap)); height: 44px; max-width: 45vw; padding: 0 2px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
-  #mb-tray-phone .tray-item { min-height: 44px; }
+  #mb-tray-phone .tray-item { min-height: 44px; padding: 0 5px; }
+  /* three items must clear the header's ↻ button at 390px: the meter alone (its % is in the label and the popover) */
+  #mb-tray-phone .tray-pct { display: none; }
+  #mb-tray-phone .tray-meter { width: 32px; }
   #brain-badge { display: none; } /* its header slot is the tray's now; the brain stays reachable in ⋮ › Tools › Pre-routing & brain… */
   .tray-pop { position: fixed; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); width: auto; top: var(--hdr) !important; }
   .tray-pop .tray-cal td { height: 38px; }
+  .tray-pop { max-height: var(--room); overflow-y: auto; }
+  .tray-pop .tray-jv-item, .tray-pop .tray-link { min-height: 44px; }
   .tray-btn { width: 44px; height: 44px; }
   #brain-badge { max-width: calc(100vw - 300px - var(--sal) - var(--sar)); }
   .mb-menu.mb-phone-menu { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); top: var(--hdr) !important; width: auto; max-width: none; max-height: var(--room) !important; }
@@ -1557,7 +1562,7 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .tray-jv-badge { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--mono); color: var(--muted); }
 .tray-jv-grp + .tray-jv-grp { margin-top: 6px; }
 .tray-jv-scroll { max-height: 160px; overflow-y: auto; }
-.tray-jv-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; }
+.tray-jv-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: transparent; font: inherit; }
 .tray-jv-item:disabled { opacity: .5; cursor: not-allowed; }
 .tray-jv-ck { width: 1em; flex: none; color: var(--accent); }
 .tray-jv-lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

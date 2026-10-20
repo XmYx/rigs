@@ -68,23 +68,25 @@ export function openTrayPopover(anchor, build, { label = 'Details' } = {}) {
 // ------------------------------------------------------------------ mounting
 
 function renderMount(m) {
-  m.els = m.els || new Map();
+  m.els = m.els || new Map(); // id → { item, el }
   const ctx = (item) => ({
     phone: m.phone,
     refresh: () => renderMount(m),
     openPopover: (anchor) => item.popover && openTrayPopover(anchor, (c) => item.popover({ phone: m.phone, ...c }), { label: item.label || item.id }),
   });
   const els = registry.items({ phone: m.phone }).map((item) => {
-    let el = m.els.get(item.id);
-    if (el && item.update) { item.update(el); return el; } // keep the node (and an open popover's anchor) across refreshes
-    el = item.render(ctx(item));
-    if (!el) return null;
+    const kept = m.els.get(item.id);
+    // keep the node (keyboard focus, an open popover's anchor) across refreshes; only a re-registered item renders anew
+    if (kept?.item === item) { item.update?.(kept.el); return kept.el; }
+    const el = item.render(ctx(item));
+    if (!el) { m.els.delete(item.id); return null; }
     el.dataset.trayItem = item.id;
     if (item.popover) el.addEventListener('click', (e) => { e.stopPropagation(); ctx(item).openPopover(el); });
-    m.els.set(item.id, el);
+    m.els.set(item.id, { item, el });
     return el;
   }).filter(Boolean);
-  m.host.replaceChildren(...els);
+  const cur = m.host.children;
+  if (cur.length !== els.length || els.some((el, i) => cur[i] !== el)) m.host.replaceChildren(...els); // moving a focused node blurs it
 }
 
 /** Render the tray into `host`; returns an unmount function. */
@@ -194,7 +196,8 @@ registerTrayItem({
 registerTrayItem({
   id: 'clock', order: 30, phone: true, label: 'Calendar', popover: calendarPopover,
   render() {
-    return h('button', { class: 'tray-item tray-clock', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Clock and calendar' },
+    // named by the time it shows (an aria-label that left it out fails axe's label-content-name-mismatch)
+    return h('button', { class: 'tray-item tray-clock', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Clock · open the calendar' },
       h('span', { 'data-clock': '1' }, formatClock(new Date(), hour12)));
   },
 });
