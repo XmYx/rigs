@@ -38,7 +38,6 @@ export function onYoloEvent(m) {
 }
 
 /** For tests and the context menu: the runs with an open window. */
-
 export const openYoloRuns = () => [...runs.keys()];
 
 function postReload(r) {

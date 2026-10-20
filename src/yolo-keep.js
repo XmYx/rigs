@@ -15,7 +15,7 @@ import * as appsReg from './apps.js';
 import { config, RIGS_HOME } from './config.js';
 import { sharedRoot } from './files.js';
 import { run as runCmd, which } from './util.js';
-import { confinePath, getRun, isLive, isPlaceholder, markKept, MIME_TYPES, yoloRoot } from './yolo.js';
+import { confinePath, getRun, isLive, isPlaceholder, markKept, MIME_TYPES, SANDBOX_HEADERS, yoloRoot } from './yolo.js';
 
 /** The App Cloud id rule (src/apps.js ID_RE). */
 export const APP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -86,11 +86,21 @@ export function candidatePorts(taken = [], { from = KEEP_PORTS.from, to = KEEP_P
 /** The port in an app target ('http://127.0.0.1:8787' → 8787), or null. Pure. */
 export const targetPort = (target) => { const m = /:(\d+)(?:\/|$)/.exec(String(target || '')); return m ? Number(m[1]) : null; };
 
+/** Headers on every answer of a kept app's server (see staticServerSource). */
+export const KEPT_HEADERS = Object.freeze({
+  'content-security-policy': SANDBOX_HEADERS['content-security-policy'],
+  'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, HEAD, OPTIONS', 'access-control-allow-headers': 'content-type',
+  'x-content-type-options': 'nosniff',
+});
+
 /**
  * The kept app's server (apps/<id>/server.mjs): node:http only, serves its own folder with the right content types,
  * GET /healthz → 200, '' and folders → index.html, refuses '..', dot-files and anything whose real path leaves the
  * folder (symlinks), never serves itself. Binds 127.0.0.1 (HOST to change) on PORT (env) or the first argument, 0 =
  * any free port. Exports `server` and `listening` (a promise of the port) so it can run in process. Pure.
+ * Every answer carries KEPT_HEADERS: the page is still untrusted agent output, so it keeps the YOLO window's CSP sandbox
+ * (an opaque origin: no JARVIS API, no access to the parent window, even though JARVIS frames apps same-origin) and
+ * Access-Control-Allow-Origin: * so the sandboxed page can still fetch its own files, exactly as in the YOLO window.
  */
 export function staticServerSource({ name = 'app', runId = '', file = SERVER_FILE } = {}) {
   return `// Static server for the RIGS App Cloud app ${JSON.stringify(String(name))}${runId ? ` (kept from YOLO run ${runId})` : ''}.
@@ -103,15 +113,18 @@ import { fileURLToPath } from 'node:url';
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.dirname(SELF);
 const TYPES = ${JSON.stringify(MIME_TYPES)};
+// The YOLO sandbox stays on: the page runs in an opaque origin (no RIGS API, no parent window), CORS lets it load its files.
+const HEADERS = ${JSON.stringify(KEPT_HEADERS)};
 const port = Number(process.env.PORT ?? process.argv[2] ?? 0) || 0;
 const host = process.env.HOST || '127.0.0.1';
 
 function send(res, status, body, type = 'text/plain; charset=utf-8', extra = {}) {
-  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...extra });
+  res.writeHead(status, { ...HEADERS, 'content-type': type, 'cache-control': 'no-cache', ...extra });
   res.end(body);
 }
 
 export const server = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') return send(res, 204, '');
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed', undefined, { allow: 'GET, HEAD' });
   let rel;
   try { rel = decodeURIComponent(new URL(req.url, 'http://app').pathname); } catch { return send(res, 400, 'bad path'); }
@@ -130,7 +143,7 @@ export const server = http.createServer((req, res) => {
         if (err3) return send(res, 404, 'not found');
         if (st.isDirectory()) return send(res, 301, '', undefined, { location: encodeURIComponent(segs.at(-1)) + '/' });
         if (!st.isFile()) return send(res, 404, 'not found');
-        res.writeHead(200, { 'content-type': TYPES[path.extname(real).toLowerCase()] || 'application/octet-stream', 'content-length': st.size, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+        res.writeHead(200, { ...HEADERS, 'content-type': TYPES[path.extname(real).toLowerCase()] || 'application/octet-stream', 'content-length': st.size, 'cache-control': 'no-cache' });
         if (req.method === 'HEAD') return res.end();
         fs.createReadStream(real).on('error', () => res.destroy()).pipe(res);
       });

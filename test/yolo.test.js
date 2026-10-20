@@ -817,5 +817,17 @@ test('the generated static server: /healthz, index.html and assets with their ty
     if (posix) assert.equal((await fetch(`${B}/leak.txt`)).status, 404, 'a symlink out of the folder');
     assert.equal((await fetch(`${B}/`, { method: 'POST' })).status, 405);
     assert.equal(mod.server.address().address, '127.0.0.1');
+    // still untrusted agent output: the YOLO window's CSP sandbox (opaque origin) on every answer, CORS for its own files
+    const csp = Y.SANDBOX_HEADERS['content-security-policy'];
+    assert.match(csp, /^sandbox /);
+    assert.doesNotMatch(csp, /allow-same-origin/);
+    for (const p of ['/', '/sketch.js', '/data/planets.json', '/nope.html', '/healthz']) {
+      const res = await fetch(`${B}${p}`);
+      assert.equal(res.headers.get('content-security-policy'), csp, p);
+      assert.equal(res.headers.get('access-control-allow-origin'), '*', p);
+    }
+    const pre = await fetch(`${B}/data/planets.json`, { method: 'OPTIONS' });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), '*');
   } finally { await new Promise((res) => mod.server.close(res)); }
 });

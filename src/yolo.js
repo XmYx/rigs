@@ -45,7 +45,8 @@
 //   POST yolo/<runId>/keep {id?, name?, icon?, description?, tags?}  (src/yolo-keep.js) → { ok, already, keptAs, app,
 //                                       health, files, skipped, steps }: the finished run becomes an App Cloud app —
 //                                       the sandbox copied to <shared>/apps/<id>/ (no dot-files, symlinks or __yolo/,
-//                                       the client never in the stored HTML), a static server.mjs (/healthz) beside it,
+//                                       the client never in the stored HTML), a static server.mjs (/healthz) beside it
+//                                       that serves the page under the same CSP sandbox as here (KEPT_HEADERS),
 //                                       a systemd --user unit on Linux else a launch command, registered with a per-OS
 //                                       recipe. A second keep returns the same app (already: true). 409 while the run is
 //                                       live, before its first frame, or for a taken id / existing folder (never
