@@ -1,7 +1,7 @@
 // The app dock's render-side logic, pure (no DOM): which sources go in, where icons sit, what a drop does and what the
 // menus offer. app-dock.js draws the dock from app-dock-state.js through these; tests in test/app-dock-ui.test.js.
 import {
-  createGroup, dockView, moveItem, reorder, renameGroup, setHidden, setPinned, setSettings, ungroup, POSITIONS,
+  applyDefaultGroups, createGroup, dockView, moveItem, reorder, renameGroup, setHidden, setPinned, setSettings, ungroup, POSITIONS,
 } from './app-dock-state.js';
 
 export const STORAGE_KEY = 'rigs.appdock';
@@ -13,7 +13,10 @@ export const PAD = 6; // px between the icons and the shelf's edge
 export const EDGE = 6; // px between the shelf and the screen edge
 export const RADIUS = 120; // magnification radius (px) at ICON size; scales with the icon size
 
-/** The live sources mergeSources() takes, from the mesh snapshot: every app on the mesh (minus removed ones) and every machine. */
+/**
+ * The live sources mergeSources() takes, from the mesh snapshot: every app on the mesh (minus removed ones, with its App
+ * Cloud category when it has one and its machine's name — both pick the app's default group) and every machine.
+ */
 export function sourcesFromSnapshot(snap, { isRemoved = () => false } = {}) {
   const applets = [];
   const rigs = [];
@@ -23,7 +26,7 @@ export function sourcesFromSnapshot(snap, { isRemoved = () => false } = {}) {
     rigs.push({ id: n.id, name: n.name || n.id, online: !!n.online, rigs: !!n.rigs });
     for (const a of e.apps || []) {
       if (!a?.id || isRemoved({ ...a, node: n.name, nodeId: n.id })) continue;
-      applets.push({ node: n.id, id: a.id, name: a.name || a.id, icon: a.icon || '' });
+      applets.push({ node: n.id, nodeName: n.name || n.id, id: a.id, name: a.name || a.id, icon: a.icon || '', ...(a.category ? { category: String(a.category) } : {}) });
     }
   }
   return { applets, rigs };
@@ -82,7 +85,7 @@ export function dropAt(slots, pos, dragged = null) {
 
 /** A name for a group made by dropping one item onto another: same kind → 'Applets' / 'Rigs'; else 'Group'. */
 export function groupNameFor(a, b) {
-  const names = { applet: 'Applets', rig: 'Rigs', panel: 'Panels', window: 'Windows', terminal: 'Terminals' };
+  const names = { applet: 'Applets', rig: 'Rigs', panel: 'Panels', window: 'Windows', terminal: 'Terminals', tool: 'Tools' };
   return a && b && a.kind === b.kind ? names[a.kind] || 'Group' : 'Group';
 }
 
@@ -118,6 +121,22 @@ export function applyDrop(state, dragged, drop, view = dockView(state)) {
   if (isItem && (dragged.group || from < 0)) return moveItem(state, dragged.id, { group: null, index: at });
   if (from < 0) return state;
   return reorder(state, dragged.type, dragged.id, at > from ? at - 1 : at);
+}
+
+/**
+ * What a group's tile shows for the badges inside it (questions waiting, live agents): the sum of its visible items'
+ * numeric badges, '•' when only text badges are set, null when none is.
+ */
+export function groupBadge(state, gid) {
+  const g = state.groups[gid];
+  if (!g) return null;
+  let sum = 0; let text = false;
+  for (const id of g.items) {
+    const b = state.items[id]?.hidden ? null : state.items[id]?.badge;
+    if (typeof b === 'number' && b > 0) sum += b;
+    else if (typeof b === 'string' && b) text = true;
+  }
+  return sum || (text ? '•' : null);
 }
 
 /** Move a top-level entry one step back (-1) or forward (+1) among the visible entries. */
@@ -174,6 +193,8 @@ export function settingsEntries(state, act, { phone = false, reducedMotion = fal
     SEP,
     { label: 'Dock new panels and windows', hint: 'automatic', checked: st.autoDock, run: () => act((s) => setSettings(s, { autoDock: !s.settings.autoDock })) },
     { label: 'Tab auto-opened terminals together', hint: 'automatic', checked: st.autoTabTerminals, run: () => act((s) => setSettings(s, { autoTabTerminals: !s.settings.autoTabTerminals })) },
+    { label: 'Group new apps and machines', hint: 'automatic', checked: st.autoGroup, run: () => act((s) => setSettings(s, { autoGroup: !s.settings.autoGroup })) },
+    { label: 'Sort into default groups', icon: '🗂', run: () => act((s) => applyDefaultGroups(s)) },
     SEP,
     { label: `Hidden items${hidden.length ? ` (${hidden.length})` : ''}`, submenu: () => (hidden.length
       ? [...hidden.map((it) => ({ label: `Show ${it.title}`, icon: it.icon || '', run: () => act((s) => setHidden(s, it.id, false)) })), SEP,

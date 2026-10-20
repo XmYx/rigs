@@ -13,7 +13,8 @@ const snap = [
   { node: { id: 'n-lin', name: 'linux', online: true, rigs: true }, apps: [{ id: 'fuel', name: 'Fuel', icon: '⛽' }] },
   { node: { id: 'n-off', name: 'iphone', online: false, rigs: false } },
 ];
-const seeded = () => S.mergeSources(S.emptyState(), M.sourcesFromSnapshot(snap, { isRemoved: (a) => a.id === 'notes' }));
+const flat = () => S.setSettings(S.emptyState(), { autoGroup: false }); // drag/drop and menus on a flat dock; default groups below
+const seeded = () => S.mergeSources(flat(), M.sourcesFromSnapshot(snap, { isRemoved: (a) => a.id === 'notes' }));
 const A = (node, id) => `applet:${node}/${id}`;
 const view = (s) => S.dockView(s).map((v) => (v.type === 'group' ? `[${v.group.name}:${v.items.map((i) => i.id).join(',')}]` : v.item.id));
 const slotsOf = (s, size = 40) => S.dockView(s).map((v, i) => ({ type: v.type, id: v.type === 'group' ? v.group.id : v.item.id, start: i * (size + 6), end: i * (size + 6) + size }));
@@ -22,7 +23,7 @@ test('snapshot → sources: every app (by node id) minus removed ones, every mac
   const src = M.sourcesFromSnapshot(snap, { isRemoved: (a) => a.nodeId === 'n-mac' && a.id === 'notes' });
   assert.deepEqual(src.applets.map((a) => `${a.node}/${a.id}`), ['n-mac/krea', 'n-lin/fuel']);
   assert.deepEqual(src.rigs.map((r) => r.id), ['n-mac', 'n-lin', 'n-off']);
-  const s = S.mergeSources(S.emptyState(), src);
+  const s = S.mergeSources(flat(), src);
   assert.deepEqual(view(s), [A('n-mac', 'krea'), A('n-lin', 'fuel'), 'rig:n-mac', 'rig:n-lin'], 'offline machine is not shown');
   assert.equal(s.items[A('n-mac', 'krea')].icon, '🎨');
   assert.deepEqual(M.sourcesFromSnapshot(null), { applets: [], rigs: [] });
