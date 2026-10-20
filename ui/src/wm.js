@@ -5,11 +5,12 @@ import { registerDockable, unregisterDockable, setDockTitle } from './docking.js
 import { tagCtx } from './ctx-tag.js';
 import { createDisposer } from './cleanup.js';
 import { dockableWindow, emitClosed, emitOpened, emitTitle } from './open-events.js';
+import './tiling.js'; // drag a window to a screen edge or corner to tile it (macOS style); tileWindow / untile live there
 
 // Minimal floating window manager: drag by the whole title bar (docking.js; buttons in it still click),
-// double-click the bar to maximise/restore, resize from the corner, click to raise, close. With the
-// docking layout on, a window docks beside a panel or another window, or as a tab. Terminals, file
-// browsers and session viewers live here.
+// double-click the bar to maximise/restore, resize from the corner, click to raise, close. Dragged to a screen
+// edge or corner it tiles into that half or quarter (tiling.js). With the docking layout on, a window docks
+// beside a panel or another window, or as a tab. Terminals, file browsers and session viewers live here.
 
 let z = 100;
 let cascade = 0;

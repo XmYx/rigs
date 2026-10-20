@@ -7,6 +7,7 @@ import {
 } from './dock-layout.js';
 import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion } from './scaling.js';
 import { syncedStorage, readOnlyWhen, prepareKey, onRemoteKey } from './synced-storage.js';
+import { usableArea } from './tiling-model.js';
 
 // The DOM side of the dock layout engine (dock-layout.js holds the model; this module draws it).
 //
@@ -21,6 +22,11 @@ import { syncedStorage, readOnlyWhen, prepareKey, onRemoteKey } from './synced-s
 //
 // Other modules can add drop targets outside the layout (addDropTarget: the top menu bar's Ask JARVIS slot). They
 // are checked first on every drag move, with or without the docking mode, and drawn with the same preview.
+//
+// Window tiling (tiling.js) plugs into window drags with setWindowSnap(): near a screen edge or corner the drag
+// shows the tile preview instead, and letting go there tiles the window. Precedence with the docking layout on:
+// the docking layout keeps the screen edges (ROOT_EDGE, dock against the whole layout, exactly as before), the
+// corners still tile into quarters. With docking off every edge, corner and the top-centre (fill) tile.
 //
 // Smart scaling (scaling.js, off by default) adds the fit pass at the top of render(): the solver in
 // dock-layout.js (solveFit) places every visible floating panel, window and the docked tree so all of them stay
@@ -60,6 +66,11 @@ const splitters = new Map(); // split key → separator element
 let drag = null; // the drag in progress
 let splitDrag = null;
 let stageEl = null;
+let windowSnap = null; // tiling.js: { zone(it, x, y, docking), lift(it, grab, rect), drop(it, zone, start), moved(it), refit() }
+const SNAP_DWELL = 150; // ms the pointer rests in a tile zone before its preview shows (and letting go tiles)
+
+/** Tiling hooks into window drags (tiling.js calls this once). */
+export function setWindowSnap(handler) { windowSnap = handler; }
 
 function readMode() { return syncedStorage.getItem(MODE_KEY) === '1'; }
 
@@ -193,11 +204,15 @@ const topInset = () => cssPx('--mb-h');
 /** The edges the app dock keeps while it stays on screen (app-dock.js sets --ad-l/--ad-r/--ad-b; 0 when auto-hidden or absent). */
 const appDockInsets = () => ({ l: cssPx('--ad-l'), r: cssPx('--ad-r'), b: cssPx('--ad-b') });
 
-/** The docked area: the whole window minus a small margin, below the top menu bar and clear of the app dock's edge. */
-function dockArea() {
-  const t = topInset();
-  const { l, r, b } = appDockInsets();
-  return { x: PAD + l, y: PAD + t, w: Math.max(1, window.innerWidth - 2 * PAD - l - r), h: Math.max(1, window.innerHeight - 2 * PAD - t - b) };
+/** The docked area: the whole window minus a small margin, below the top menu bar and clear of the app dock's edge. Tiling uses it too. */
+export function dockArea() {
+  return usableArea({ vw: window.innerWidth, vh: window.innerHeight, top: topInset(), insets: appDockInsets(), pad: PAD });
+}
+
+/** A window that is in the layout (smart scaling adopted it) keeps `rect` as its home; others only have their inline place. */
+export function setFloatingRect(id, rect) {
+  if (panelStatus(dockManager.getLayout(), id) !== 'floating') return;
+  dockManager.floatPanel(id, { ...rect, vw: window.innerWidth, vh: window.innerHeight });
 }
 const inset = (r) => ({ x: r.x + GAP / 2, y: r.y + GAP / 2, w: Math.max(0, r.w - GAP), h: Math.max(0, r.h - GAP) });
 
@@ -276,6 +291,7 @@ export function render() {
   for (const g of geo.groups) for (const id of g.panels) tabbed.set(id, g);
   for (const it of items.values()) applyItem(it, L, active, tabbed.get(it.id), fit);
   drawLayer(active);
+  windowSnap?.refit();
   if (fitMoved) eased();
   if (scaling) recordFit(performance.now() - t0, t1 - t0);
 }
@@ -632,10 +648,15 @@ function startDrag(it, hd, ev, { sx, sy, fromTab = false }) {
     offX = Math.min(Math.max(16, offX * (w / (r.width || w))), w - 16);
     offY = fromTab ? 14 : Math.min(Math.max(8, offY), 40);
     el.classList.remove('docked', 'dock-tab-hidden');
+  } else if (it.kind === 'window' && windowSnap) {
+    // A tiled window gets its pre-tile size back, the grab point kept under the pointer.
+    const back = windowSnap.lift(it, { x: sx, y: sy }, { x: r.left, y: r.top, w: r.width, h: r.height });
+    if (back) ({ w, h: hh, offX, offY } = back);
   }
   // Freeze the size so panels anchored to two edges (e.g. top + bottom) don't stretch while moving.
   Object.assign(el.style, { width: w + 'px', height: hh + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
-  drag = { it, hd, el, docking, snapshot, offX, offY, w, h: hh, target: null, pointerId: ev.pointerId, moved: false };
+  const start = { x: r.left, y: r.top, w: r.width, h: r.height }; // where it was before the drag (tiling returns there)
+  drag = { it, hd, el, docking, snapshot, start, offX, offY, w, h: hh, target: null, pointerId: ev.pointerId, moved: false, snap: null };
   try { hd.setPointerCapture(ev.pointerId); } catch { /* the press target is gone (a re-rendered tab) */ }
   el.classList.add('dragging');
   if (docking) { el.classList.add('dock-lifted'); el.style.zIndex = '1000'; }
@@ -658,10 +679,38 @@ function onDragMove(ev) {
   const hadExt = drag.ext;
   if (hadExt && hadExt.target !== ext?.target) hadExt.target.leave?.();
   drag.ext = ext;
-  if (ext) { drag.target = null; showExtOverlay(ext); return; }
+  if (ext) { clearSnap(); drag.target = null; showExtOverlay(ext); return; }
+  const zone = it.kind === 'window' ? windowSnap?.zone(it, ev.clientX, ev.clientY, drag.docking) : null;
+  if (zone) { drag.target = null; snapTo(zone); return; }
+  if (clearSnap()) hideOverlay();
   if (!drag.docking) { if (hadExt) hideOverlay(); return; }
   drag.target = hitTest(ev.clientX, ev.clientY);
   showOverlay(drag.target);
+}
+
+/**
+ * The pointer is in a tile zone ({ zone, rect }): after SNAP_DWELL in the same zone its preview shows. A quick pass
+ * over an edge shows nothing and does not tile.
+ */
+function snapTo(z) {
+  if (drag.snap?.zone === z.zone) return;
+  clearSnap();
+  hideOverlay();
+  const snap = { ...z, shown: false };
+  snap.timer = setTimeout(() => {
+    if (drag?.snap !== snap) return;
+    snap.shown = true;
+    showTileOverlay(snap);
+  }, SNAP_DWELL);
+  drag.snap = snap;
+}
+/** Leave the tile zone: returns whether a preview was up (the caller hides the overlay). */
+function clearSnap() {
+  const s = drag?.snap;
+  if (!s) return false;
+  clearTimeout(s.timer);
+  drag.snap = null;
+  return s.shown;
 }
 
 const containsPt = (r, x, y) => r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
@@ -752,7 +801,20 @@ function showExtOverlay({ target, rect: r }) {
   o.label.classList.add('show');
 }
 
+/** The tile preview: a translucent rect where the window will go, with a small label (no compass). */
+function showTileOverlay({ rect: r, label }) {
+  const o = ensureOverlay();
+  o.compass.classList.remove('show');
+  o.el.classList.add('tile');
+  Object.assign(o.preview.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+  o.preview.classList.add('show');
+  o.label.textContent = label || '';
+  o.label.classList.toggle('show', !!label);
+  Object.assign(o.label.style, { left: r.x + r.w / 2 + 'px', top: r.y + Math.min(r.h / 2, 60) + 'px' });
+}
+
 function hideOverlay() {
+  overlay?.el.classList.remove('tile');
   if (!overlay) return;
   for (const el of [overlay.preview, overlay.compass, overlay.label]) el.classList.remove('show');
 }
@@ -769,6 +831,7 @@ function onDragUp(ev) { if (drag && ev.pointerId === drag.pointerId) endDrag(fal
 function endDrag(cancel) {
   const d = drag;
   if (!d) return;
+  if (d.snap) clearTimeout(d.snap.timer);
   drag = null;
   window.removeEventListener('pointermove', onDragMove, true);
   window.removeEventListener('pointerup', onDragUp, true);
@@ -800,6 +863,19 @@ function endDrag(cancel) {
   const b = el.getBoundingClientRect();
   el.classList.remove('dragging', 'dock-lifted');
   if (d.docking) el.style.zIndex = /z-index:\s*(\d+)/.exec(d.snapshot.css)?.[1] || '';
+  if (d.snap?.shown) {
+    // Let go in a tile zone (its preview was showing): the window glides into the zone's rect. One lifted out of the
+    // docked tree leaves it first (else render() docks it again), and untiling returns it to its lifted size there.
+    const wasDocked = panelStatus(dockManager.getLayout(), it.id) === 'docked';
+    const lifted = { x: b.left, y: b.top, w: b.width, h: b.height };
+    if (wasDocked) dockManager.floatPanel(it.id, { ...d.snap.rect, vw: window.innerWidth, vh: window.innerHeight });
+    windowSnap.drop(it, d.snap.zone, wasDocked ? lifted : d.start);
+    if (d.docking) it.raise?.();
+    announce(`${it.title} tiled: ${d.snap.label || d.snap.zone}.`);
+    render();
+    return;
+  }
+  if (it.kind === 'window') windowSnap?.moved(it); // moved or docked anywhere else: no longer tiled
   const t = d.target;
   if (d.docking && t?.zone) {
     dropOnto(it, t);
