@@ -62,6 +62,7 @@ import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 import * as uiOpen from './ui-open.js';
 import * as yolo from './yolo.js';
+import * as yoloKeep from './yolo-keep.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -966,20 +967,7 @@ export async function startServer() {
     }
     if (sub === 'apps' && method === 'POST') {
       // Register / update / remove one app in this node's config ({ ...app } or { id, remove: true }).
-      const b = await body();
-      const cfg = config();
-      const id = String(b.id || '').trim().toLowerCase();
-      const rest = (appsReg.declaredApps() || []).filter((a) => String(a.id || '').toLowerCase() !== id);
-      if (!b.remove) {
-        const { app, errors } = appsReg.validateApp(b);
-        if (!app) throw new HttpError(400, errors.join('; '));
-        const { remove, ...raw } = b;
-        rest.push({ ...raw, id });
-      }
-      cfg.apps = rest;
-      saveConfig(cfg);
-      appsReg.checkAll().catch(() => {});
-      return appsReg.localApps();
+      try { return await appsReg.upsertApp(await body()); } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
     // App Store (src/appstore.js): the catalog with fit + install state, and install jobs on this machine.
     if (sub === 'appstore' && method === 'GET') return appstore.list();
@@ -1035,6 +1023,11 @@ export async function startServer() {
       saveConfig(cfg);
       markGlobalChanged(); // mesh-global: requests run on the main-brain machine, which must see the switch
       return yolo.yoloSettings(next);
+    }
+    if ((mm = m(/^yolo\/(y-\d{8}-\d{6}-[0-9a-f]{6})\/keep$/)) && method === 'POST') {
+      // Keep as app (src/yolo-keep.js): the finished run → <shared>/apps/<id>/ + a static server, published to the App
+      // Cloud. A YOLO page (Origin: null) never gets here: opaqueOriginRefused answered 403 already.
+      try { return await yoloKeep.keepRun(mm[1], await body().catch(() => ({}))); } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
     if ((mm = m(/^yolo\/([^/]+)(?:\/([\s\S]*))?$/))) {
       try { return await yolo.handle(req, res, mm[1], mm[2], { query: q, body }); } catch (e) { throw new HttpError(e.status || 500, e.message); }

@@ -11,7 +11,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -73,6 +73,8 @@ after(() => { daemon?.kill(); Y._resetRuns(); fs.rmSync(TMP, { recursive: true, 
 
 const { config, saveConfig } = await import('../src/config.js');
 const Y = await import('../src/yolo.js');
+const K = await import('../src/yolo-keep.js');
+const A = await import('../src/apps.js');
 const R = await import('../src/router.js');
 const chat = await import('../src/chat.js');
 const usage = await import('../src/usage.js');
@@ -195,7 +197,7 @@ test('confinePath: stays inside the sandbox — no .., encoded .., dot-files, NU
 test('opaqueOriginRefused: a YOLO page (Origin: null) may read, report its errors and use apps — never write blind or open a socket', () => {
   const R = (o) => Y.opaqueOriginRefused({ origin: 'null', ...o });
   const id = 'y-20261020-120000-abcdef';
-  for (const p of ['/api/local/jarvis/send', '/api/local/yolo/config', '/api/local/config', `/api/local/yolo/${id}/stop`, '/api/nodes/peer/jarvis/send', `/api/local/yolo/${id}/errors/x`]) {
+  for (const p of ['/api/local/jarvis/send', '/api/local/yolo/config', '/api/local/config', `/api/local/yolo/${id}/stop`, `/api/local/yolo/${id}/keep`, `/api/nodes/peer/yolo/${id}/keep`, '/api/nodes/peer/jarvis/send', `/api/local/yolo/${id}/errors/x`]) {
     assert.equal(R({ method: 'POST', pathname: p }), true, p);
   }
   assert.equal(R({ method: 'PUT', pathname: '/api/local/x' }), true);
@@ -525,6 +527,18 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     const nullPost = (u, body) => fetch(BASE + u, { method: 'POST', headers: { origin: 'null', 'content-type': 'text/plain' }, body: JSON.stringify(body) });
     assert.equal((await nullPost(`${start.localUrl}errors`, { type: 'console', message: 'from the page' })).status, 200);
     assert.equal((await nullPost('/api/local/yolo/config', { keep: 7 })).status, 403);
+    // Keep as app: only JARVIS may keep a run — never the page itself (Origin: null), locally or through the node path
+    for (const u of [`${start.localUrl}keep`, `${start.url}keep`]) {
+      const k = await nullPost(u, { name: 'From the page' });
+      assert.equal(k.status, 403, u);
+      assert.match((await k.json()).error, /opaque origin/);
+    }
+    assert.equal((await (await fetch(`${BASE}${start.localUrl}meta`)).json()).keptAs, undefined, 'nothing was kept');
+    const unknownKeep = await fetch(`${BASE}/api/local/yolo/y-20200101-000000-abcdef/keep`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(unknownKeep.status, 404);
+    assert.match((await unknownKeep.json()).error, /no such YOLO run/);
+    const badKeep = await fetch(`${BASE}${start.localUrl}keep`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'Not Valid!' }) });
+    assert.equal(badKeep.status, 400, 'an invalid explicit id');
     assert.equal((await nullPost('/api/nodes/test-node/jarvis/send', { text: 'implement something' })).status, 403);
     assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).keep, 50, 'config unchanged');
     const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { origin: 'null' } });
@@ -547,4 +561,273 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     const st = await new Promise((resolve) => { const c = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'yolo', 'status'], { env }); let o = ''; c.stdout.on('data', (d) => { o += d; }); c.on('close', () => resolve(o)); });
     assert.match(st, /^yolo mode on · claude claude-sonnet-5-5 \(low\) · max 20 turns, 180 s/);
   } finally { ws.close(); daemon.kill(); daemon = null; }
+});
+
+// ---------------------------------------------------------------- Keep as app (src/yolo-keep.js)
+
+const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+
+test('keepAppId: a valid App Cloud id from the title, unique against apps and folders, never a taken one', () => {
+  assert.equal(K.keepAppId('A p5 sketch of orbiting planets'), 'p5-sketch-of-orbiting-planets');
+  assert.equal(K.keepAppId('Orbit test'), 'orbit-test');
+  assert.equal(K.keepAppId('Ünïcode — Ärger!!'), 'unicode-arger');
+  assert.equal(K.keepAppId('🚀🚀'), 'yolo-app', 'nothing usable → yolo-app');
+  assert.equal(K.keepAppId('', ['yolo-app']), 'yolo-app-2');
+  assert.equal(K.keepAppId('Orbit test', ['orbit-test', 'Orbit-Test-2']), 'orbit-test-3', 'case-insensitive');
+  const long = 'a p5 sketch of the whole mesh as orbiting planets around a bright sun';
+  const first = K.keepAppId(long);
+  assert.ok(first.length <= 40 && ID_RE.test(first), first);
+  const taken = [first];
+  for (let i = 0; i < 30; i++) {
+    const next = K.keepAppId(long, taken);
+    assert.ok(ID_RE.test(next) && next.length <= 40, next);
+    assert.ok(!taken.includes(next), `never a taken id: ${next}`);
+    taken.push(next);
+  }
+  for (const t of ['--', '___', '9 lives', 'x'.repeat(80), 'Ünï', '  the  ']) assert.ok(ID_RE.test(K.keepAppId(t)), t);
+});
+
+test('keepSkip / stripYoloClient / keepRequest: what is copied, what is never stored, what a body may say', () => {
+  assert.equal(K.keepSkip('index.html', 'file'), null);
+  assert.equal(K.keepSkip('data/cpu.json', 'file'), null);
+  assert.equal(K.keepSkip('data', 'dir'), null);
+  assert.equal(K.keepSkip('.env', 'file'), 'dot-file');
+  assert.equal(K.keepSkip('assets/.git', 'dir'), 'dot-file');
+  assert.equal(K.keepSkip('__yolo', 'dir'), 'yolo-client');
+  assert.equal(K.keepSkip('__yolo/client.js', 'file'), 'yolo-client');
+  assert.equal(K.keepSkip('link.txt', 'symlink'), 'symlink');
+  assert.equal(K.keepSkip('sock', 'other'), 'special');
+  assert.equal(K.keepSkip('index.html~', 'file'), 'temp');
+  assert.equal(K.keepSkip('../x', 'file'), 'outside');
+  const served = Y.injectClient('<!doctype html><html><head><title>P</title></head><body><script src="sketch.js"></script></body></html>', { step: 3 });
+  assert.match(served, /__yolo\/client\.js/);
+  const stored = K.stripYoloClient(served);
+  assert.doesNotMatch(stored, /__yolo/);
+  assert.match(stored, /<title>P<\/title>/);
+  assert.match(stored, /<script src="sketch\.js"/, 'the page\'s own scripts stay');
+  assert.doesNotMatch(K.stripYoloClient(Y.placeholderHtml({ title: 'x' })), /rigs-yolo/);
+  const meta = { title: 'Orbiting planets', task: 'a p5 sketch of orbiting planets' };
+  assert.deepEqual(K.keepRequest({}, meta), { id: '', name: 'Orbiting planets', icon: '⚡', description: 'Kept from a YOLO run: a p5 sketch of orbiting planets', tags: ['yolo'] });
+  assert.deepEqual(K.keepRequest({ id: 'Orbit', name: '  Orbit   test ', icon: '🪐', tags: ['p5', 'yolo', 'Space'] }, meta), { id: 'orbit', name: 'Orbit test', icon: '🪐', description: 'Kept from a YOLO run: a p5 sketch of orbiting planets', tags: ['yolo', 'p5', 'space'] });
+  for (const b of [{ id: 'Not valid!' }, { id: '-x' }, { tags: 'p5' }, { tags: ['two words'] }, []]) assert.throws(() => K.keepRequest(b, meta), (e) => e.status === 400, JSON.stringify(b));
+});
+
+test('keepLaunch / keepUnitText / candidatePorts: a per-OS recipe the App Cloud accepts, an enabled unit, a free port', () => {
+  const dir = path.join(os.homedir(), 'RIGS-Shared', 'apps', 'orbit');
+  for (const unit of ['rigs-orbit.service', '']) {
+    const launch = K.keepLaunch({ dir, port: 8901, unit });
+    const { app, errors } = A.validateApp({ id: 'orbit', port: 8901, healthPath: '/healthz', launch, tags: ['yolo'] }, 'test-node');
+    assert.deepEqual(errors, []);
+    assert.deepEqual(A.launchFor(app.launch, 'linux'), unit ? { systemd: unit } : { command: 'node server.mjs 8901', cwd: '~/RIGS-Shared/apps/orbit', env: {} });
+    assert.deepEqual(A.launchFor(app.launch, 'darwin'), { command: 'node server.mjs 8901', cwd: '~/RIGS-Shared/apps/orbit', env: {} });
+    assert.deepEqual(A.launchFor(app.launch, 'win32'), { command: 'node server.mjs 8901', cwd: '~\\RIGS-Shared\\apps\\orbit', env: {} });
+  }
+  const unit = K.keepUnitText({ id: 'orbit', name: 'Orbit "test" 100%', dir, port: 8901, runId: 'y-20261020-120000-abcdef', node: '/usr/bin/node' });
+  assert.match(unit, /^# Managed by RIGS: a kept YOLO run \(y-20261020-120000-abcdef\)/);
+  assert.match(unit, new RegExp(`ExecStart="/usr/bin/node" "${dir.replace(/[\\/.]/g, '\\$&')}/server\\.mjs" 8901`));
+  assert.match(unit, /WantedBy=default\.target/);
+  assert.match(unit, /Environment="HOST=127\.0\.0\.1"/);
+  assert.deepEqual(K.candidatePorts([8900, 8902], { from: 8900, to: 8903 }), [8901, 8903]);
+  assert.equal(K.targetPort('http://127.0.0.1:8787'), 8787);
+  assert.equal(K.homeRel(path.join(os.homedir(), 'a', 'b')), '~/a/b');
+});
+
+/** A finished run in `root` whose agent wrote a page, assets, and things that must never be kept. */
+async function keptFixture(root, { task = 'a p5 sketch of orbiting planets', finish = true } = {}) {
+  const run = await Y.createRun({ text: `yolo ${task}`, task, node: 'test-node', root });
+  const w = (rel, body) => { fs.mkdirSync(path.dirname(path.join(run.dir, rel)), { recursive: true }); fs.writeFileSync(path.join(run.dir, rel), body); };
+  // the agent saved a page with the client in it (as served), plus its assets
+  w('index.html', Y.injectClient('<!doctype html><html><head><title>Orbits</title></head><body><script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script><script src="sketch.js"></script></body></html>', { step: 2 }));
+  w('sketch.js', 'function setup(){createCanvas(400,400)}');
+  w('data/planets.json', '[{"name":"earth"}]');
+  w('.env', 'SECRET=1');
+  w('.cache/x.json', '{}');
+  w('__yolo/client.js', '/* stale client */');
+  if (posix) { fs.symlinkSync('/etc/hostname', path.join(run.dir, 'host-link')); fs.symlinkSync(path.join(run.dir, 'data'), path.join(run.dir, 'data-link')); }
+  if (finish) await Y.finishRun(run.runId, { ok: true, summary: 'Planets, sir.' });
+  return run;
+}
+
+/** Stand-ins for the I/O: a fake App Cloud, systemd and shared folder (never the real ones). */
+function keepDeps(base, { systemd = true, failRegister = false } = {}) {
+  const apps = [];
+  const calls = { systemctl: [], register: [], startApp: [] };
+  const deps = {
+    systemd: () => systemd,
+    unitDir: () => path.join(base, 'systemd-user'),
+    systemctl: async (a) => { calls.systemctl.push(a.join(' ')); return { code: 0, stdout: '', stderr: '' }; },
+    register: async (app) => {
+      calls.register.push(app);
+      if (failRegister) throw new Error('registry is read-only');
+      const { app: valid, errors } = A.validateApp(app, 'test-node');
+      if (!valid) throw Object.assign(new Error(errors.join('; ')), { status: 400 });
+      apps.splice(0, apps.length, ...apps.filter((a) => a.id !== valid.id), { ...valid, health: { status: 'unknown' } });
+    },
+    localApps: () => apps,
+    startApp: async (id) => { calls.startApp.push(id); return { started: true }; },
+    probe: async () => ({ ok: true }),
+    sharedRoot: () => path.join(base, 'RIGS-Shared'),
+    node: () => 'test-node',
+    trashDir: () => path.join(base, 'trash'),
+    sleep: async () => {},
+  };
+  return { deps, apps, calls };
+}
+
+test('keepRun: copies the sandbox (no __yolo, dot-files or symlinks; no client in the HTML), writes a server, publishes it, records keptAs — once', async () => {
+  const base = path.join(TMP, 'keep-a');
+  const root = path.join(base, 'yolo');
+  const { deps, apps, calls } = keepDeps(base);
+  const seen = [];
+  const listen = (e) => { if (e.type === 'yolo-kept') seen.push(e); };
+  Y.events.on('event', listen);
+  try {
+    const run = await keptFixture(root);
+    const r = await K.keepRun(run.runId, { name: 'Orbit test', icon: '🪐', tags: ['p5'] }, { root, deps });
+    const dir = path.join(base, 'RIGS-Shared', 'apps', 'orbit-test');
+    assert.equal(r.ok, true);
+    assert.equal(r.already, false);
+    assert.deepEqual(r.keptAs && [r.keptAs.id, r.keptAs.node, r.keptAs.path, r.keptAs.dir], ['orbit-test', 'test-node', '/api/nodes/test-node/apps/orbit-test/', dir]);
+    // the copy
+    const files = [];
+    const walk = (d, rel = '') => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const r2 = rel ? `${rel}/${e.name}` : e.name; if (e.isDirectory()) walk(path.join(d, e.name), r2); else files.push(r2); } };
+    walk(dir);
+    assert.deepEqual(files.sort(), ['data/planets.json', 'index.html', 'server.mjs', 'sketch.js']);
+    const why = Object.fromEntries(r.skipped.map((x) => [x.path, x.why]));
+    assert.equal(why['.env'], 'dot-file');
+    assert.equal(why['.cache'], 'dot-file');
+    assert.equal(why.__yolo, 'yolo-client');
+    if (posix) { assert.equal(why['host-link'], 'symlink'); assert.equal(why['data-link'], 'symlink'); }
+    const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
+    assert.doesNotMatch(html, /__yolo/, 'the YOLO client is not in the stored page');
+    assert.match(html, /<script src="sketch\.js"/);
+    // published: an enabled unit, the registration with a per-OS recipe, description + tags
+    const unitFile = path.join(base, 'systemd-user', 'rigs-orbit-test.service');
+    assert.match(fs.readFileSync(unitFile, 'utf8'), /^# Managed by RIGS: a kept YOLO run/);
+    assert.deepEqual(calls.systemctl, ['daemon-reload', 'enable --now rigs-orbit-test.service']);
+    assert.equal(calls.startApp.length, 0, 'systemd started it');
+    const reg = calls.register[0];
+    assert.deepEqual([reg.id, reg.name, reg.icon, reg.healthPath, reg.description, reg.tags], ['orbit-test', 'Orbit test', '🪐', '/healthz', 'Kept from a YOLO run: a p5 sketch of orbiting planets', ['yolo', 'p5']]);
+    assert.ok(reg.port >= 8900 && reg.port <= 8999);
+    assert.deepEqual(Object.keys(reg.launch).sort(), ['darwin', 'systemd', 'windows']);
+    assert.equal(r.health, 'up');
+    // recorded in the run meta and pushed
+    assert.deepEqual((await Y.getRun(run.runId, root)).keptAs.id, 'orbit-test');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, `${run.runId}.json`), 'utf8')).keptAs.path, '/api/nodes/test-node/apps/orbit-test/');
+    assert.deepEqual(seen.map((e) => [e.runId, e.keptAs.id]), [[run.runId, 'orbit-test']]);
+    // a second keep: the same app, nothing written again
+    const again = await K.keepRun(run.runId, { name: 'Another name' }, { root, deps });
+    assert.equal(again.already, true);
+    assert.equal(again.app.id, 'orbit-test');
+    assert.equal(again.keptAs.id, 'orbit-test');
+    assert.equal(calls.register.length, 1);
+    assert.equal(apps.length, 1);
+    assert.equal(fs.readdirSync(path.join(base, 'RIGS-Shared', 'apps')).length, 1);
+    // also after a daemon restart (the meta from disk)
+    Y._resetRuns();
+    assert.equal((await K.keepRun(run.runId, {}, { root, deps })).already, true);
+  } finally { Y.events.off('event', listen); }
+});
+
+test('keepRun refuses a live run, an unknown run, a run without a first frame, a taken id and an existing folder — and never overwrites', async () => {
+  const base = path.join(TMP, 'keep-b');
+  const root = path.join(base, 'yolo');
+  const { deps, apps, calls } = keepDeps(base, { systemd: false });
+  const live = await keptFixture(root, { finish: false });
+  await assert.rejects(K.keepRun(live.runId, {}, { root, deps }), (e) => e.status === 409 && /still live/.test(e.message));
+  assert.equal(Y.isLive(live.runId), true);
+  await Y.finishRun(live.runId, { ok: true });
+  assert.equal(Y.isLive(live.runId), false);
+  await assert.rejects(K.keepRun('y-20200101-000000-abcdef', {}, { root, deps }), (e) => e.status === 404);
+  const blank = await Y.createRun({ task: 'nothing drawn', root });
+  await Y.finishRun(blank.runId, { ok: false });
+  await assert.rejects(K.keepRun(blank.runId, {}, { root, deps }), (e) => e.status === 409 && /first frame/.test(e.message));
+  // someone else's folder of that name: an explicit id is refused, a derived one is suffixed; neither touches it
+  const appsDir = path.join(base, 'RIGS-Shared', 'apps');
+  fs.mkdirSync(path.join(appsDir, 'orbit'), { recursive: true });
+  fs.writeFileSync(path.join(appsDir, 'orbit', 'index.html'), 'mine');
+  await assert.rejects(K.keepRun(live.runId, { id: 'orbit' }, { root, deps }), (e) => e.status === 409 && /never overwritten/.test(e.message));
+  const r = await K.keepRun(live.runId, { name: 'Orbit' }, { root, deps });
+  assert.equal(r.keptAs.id, 'orbit-2');
+  assert.equal(fs.readFileSync(path.join(appsDir, 'orbit', 'index.html'), 'utf8'), 'mine', 'the existing folder is untouched');
+  assert.deepEqual(calls.startApp, ['orbit-2'], 'no systemd: started through its launch command');
+  assert.equal(apps.find((a) => a.id === 'orbit-2').launch.command, `node server.mjs ${r.keptAs.port}`);
+  // an id another app already has
+  const other = await keptFixture(root, { task: 'a clock' });
+  await assert.rejects(K.keepRun(other.runId, { id: 'orbit-2' }, { root, deps }), (e) => e.status === 409 && /already taken/.test(e.message));
+  // a unit file RIGS did not write
+  const sysd = keepDeps(base, { systemd: true });
+  fs.mkdirSync(path.join(base, 'systemd-user'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'systemd-user', 'rigs-clock.service'), '[Unit]\nDescription=mine\n');
+  await assert.rejects(K.keepRun(other.runId, {}, { root, deps: sysd.deps }), (e) => e.status === 409 && /not written by RIGS/.test(e.message));
+  assert.equal(fs.existsSync(path.join(appsDir, 'clock')), false, 'nothing copied before the refusal');
+  assert.equal(fs.readFileSync(path.join(base, 'systemd-user', 'rigs-clock.service'), 'utf8'), '[Unit]\nDescription=mine\n', 'the foreign unit is untouched');
+});
+
+test('keepRun undoes only what it made when publishing fails: its folder and unit go to the trash', async () => {
+  const base = path.join(TMP, 'keep-c');
+  const root = path.join(base, 'yolo');
+  const { deps, calls } = keepDeps(base, { failRegister: true });
+  const run = await keptFixture(root);
+  await assert.rejects(K.keepRun(run.runId, { name: 'Broken' }, { root, deps }), (e) => /registry is read-only/.test(e.message));
+  assert.equal(fs.existsSync(path.join(base, 'RIGS-Shared', 'apps', 'broken')), false);
+  assert.equal(fs.existsSync(path.join(base, 'systemd-user', 'rigs-broken.service')), false);
+  assert.ok(calls.systemctl.includes('disable --now rigs-broken.service'));
+  assert.equal(fs.readdirSync(path.join(base, 'trash')).length, 2, 'folder + unit in the trash, never unlinked');
+  assert.equal((await Y.getRun(run.runId, root)).keptAs, undefined);
+});
+
+test('the generated static server: /healthz, index.html and assets with their types, no .., dot-files, symlinks or itself', async () => {
+  const base = path.join(TMP, 'keep-d');
+  const root = path.join(base, 'yolo');
+  const { deps } = keepDeps(base);
+  const run = await keptFixture(root);
+  const r = await K.keepRun(run.runId, { name: 'Served' }, { root, deps });
+  const dir = r.keptAs.dir;
+  fs.writeFileSync(path.join(dir, '.secret'), 'no');
+  if (posix) fs.symlinkSync('/etc/hostname', path.join(dir, 'leak.txt'));
+  const before = process.env.PORT;
+  process.env.PORT = '0';
+  const mod = await import(`${pathToFileURL(path.join(dir, 'server.mjs')).href}?t=${Date.now()}`);
+  if (before === undefined) delete process.env.PORT; else process.env.PORT = before;
+  const port = await mod.listening;
+  const B = `http://127.0.0.1:${port}`;
+  try {
+    const hz = await fetch(`${B}/healthz`);
+    assert.equal(hz.status, 200);
+    const idx = await fetch(`${B}/`);
+    assert.equal(idx.status, 200);
+    assert.match(idx.headers.get('content-type'), /^text\/html/);
+    const page = await idx.text();
+    assert.match(page, /<title>Orbits<\/title>/);
+    assert.doesNotMatch(page, /__yolo/);
+    assert.match((await fetch(`${B}/sketch.js`)).headers.get('content-type'), /^text\/javascript/);
+    assert.match((await fetch(`${B}/data/planets.json`)).headers.get('content-type'), /^application\/json/);
+    const folder = await fetch(`${B}/data`, { redirect: 'manual' });
+    assert.equal(folder.status, 301);
+    assert.equal(folder.headers.get('location'), 'data/', 'relative');
+    assert.equal((await fetch(`${B}/.secret`)).status, 403);
+    // raw paths (fetch would normalise them first)
+    const raw = (p) => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject));
+    fs.writeFileSync(path.join(dir, '..', 'outside.txt'), 'outside the app folder');
+    for (const p of ['/../outside.txt', '/%2e%2e/outside.txt', '/..%2foutside.txt', '/data/..%2f..%2foutside.txt']) assert.ok([403, 404].includes(await raw(p)), p);
+    assert.equal(await raw('/..%2foutside.txt'), 403, 'an encoded .. is refused outright');
+    assert.equal((await fetch(`${B}/server.mjs`)).status, 404, 'never serves itself');
+    assert.equal((await fetch(`${B}/__yolo/client.js`)).status, 404);
+    if (posix) assert.equal((await fetch(`${B}/leak.txt`)).status, 404, 'a symlink out of the folder');
+    assert.equal((await fetch(`${B}/`, { method: 'POST' })).status, 405);
+    assert.equal(mod.server.address().address, '127.0.0.1');
+    // still untrusted agent output: the YOLO window's CSP sandbox (opaque origin) on every answer, CORS for its own files
+    const csp = Y.SANDBOX_HEADERS['content-security-policy'];
+    assert.match(csp, /^sandbox /);
+    assert.doesNotMatch(csp, /allow-same-origin/);
+    for (const p of ['/', '/sketch.js', '/data/planets.json', '/nope.html', '/healthz']) {
+      const res = await fetch(`${B}${p}`);
+      assert.equal(res.headers.get('content-security-policy'), csp, p);
+      assert.equal(res.headers.get('access-control-allow-origin'), '*', p);
+    }
+    const pre = await fetch(`${B}/data/planets.json`, { method: 'OPTIONS' });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), '*');
+  } finally { await new Promise((res) => mod.server.close(res)); }
 });

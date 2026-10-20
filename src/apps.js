@@ -233,6 +233,27 @@ export function declaredApps() {
   return cfg.apps;
 }
 
+/**
+ * Register / update / remove one app in this node's config (POST /api/local/apps, mesh_app_register, a kept YOLO run):
+ * `{ ...app }` or `{ id, remove: true }`. Throws { status: 400 } on an invalid app. → localApps().
+ */
+export async function upsertApp(b = {}) {
+  const { saveConfig } = await import('./config.js');
+  const cfg = config();
+  const id = String(b.id || '').trim().toLowerCase();
+  const rest = (declaredApps() || []).filter((a) => String(a.id || '').toLowerCase() !== id);
+  if (!b.remove) {
+    const { app, errors } = validateApp(b);
+    if (!app) throw Object.assign(new Error(errors.join('; ')), { status: 400 });
+    const { remove, ...raw } = b;
+    rest.push({ ...raw, id });
+  }
+  cfg.apps = rest;
+  saveConfig(cfg);
+  checkAll().catch(() => {});
+  return localApps();
+}
+
 /** Validate the whole "apps" array. Invalid and duplicate entries are dropped and reported. */
 export function loadApps(list = declaredApps(), node = config().name) {
   const apps = [];
