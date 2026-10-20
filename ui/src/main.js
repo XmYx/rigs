@@ -1445,7 +1445,7 @@ function wire() {
   syncToolBadges();
   // Auto-docking: panels and floating windows (wm.js) and terminals (terminal.js) announce open / close on the bus; the
   // dock turns them into items only when its autoDock / autoTabTerminals settings are on (both off by default).
-  appDock.act((s) => reconcileOnLoad(s, listPanels())); // a reload leaves no window or terminal open: drop their stale items
+  appDock.act((s) => reconcileOnLoad(s, listPanels()), { auto: true }); // a reload leaves no window or terminal open: drop their stale items (this page only)
   bindDock(openBus, appDock);
   onRemoteKey(APPDOCK_KEY, () => syncedStorage.quiet(() => appDock.reload(keepTransient))); // changed on another machine: redraw live
   trackPanels({ list: listPanels, subscribe: (fn) => dockManager.subscribe(fn) });

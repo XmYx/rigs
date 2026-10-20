@@ -1012,9 +1012,12 @@ export function initDocking({ defaults }) {
   checkFormat(syncedStorage.getItem(STORAGE_KEY));
   readOnlyWhen(STORAGE_KEY, () => isPhone() || newerFormat); // phones never dock; a page too old for the synced format never overwrites it
   prepareKey(STORAGE_KEY, withoutWindows); // windows belong to this page, not to the mesh
-  dockManager.attach({ storage: syncedStorage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
-  // Windows never outlive the page; the galaxy always has its place in the tree.
-  dockManager.setLayout(withStage(stripWindows(dockManager.getLayout())));
+  // Loading writes the layout back (defaults on a fresh page): this page's cache only, never over the one on the mesh.
+  syncedStorage.auto(() => {
+    dockManager.attach({ storage: syncedStorage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
+    // Windows never outlive the page; the galaxy always has its place in the tree.
+    dockManager.setLayout(withStage(stripWindows(dockManager.getLayout())));
+  });
   dockManager.subscribe((_L, cause) => { if (cause !== 'windows') render(); }); // a wm.js window saving its state record moves nothing
   onRemoteKey(STORAGE_KEY, (raw) => { if (!checkFormat(raw)) reloadLayout(); });
   onRemoteKey(MODE_KEY, (raw) => setDocking(raw === '1'));

@@ -285,6 +285,51 @@ test('defaults written before the daemon answered never overwrite the mesh layou
   assert.equal(daemon.puts.length, 0);
 });
 
+test('… also when the page is reloaded before the daemon answered: the mark that it was early is kept', async () => {
+  const daemon = fakeDaemon({ keys: { 'rigs.appdock': { value: { v: 2, saved: true }, rev: 5000, by: 'A' } } });
+  const clock = timers();
+  await clock.tick(100000);
+  const local = memStorage();
+  const first = make({ daemon, clock, local }).s; // its refresh never answers
+  first.setItem('rigs.appdock', '{"v":2,"defaults":true}');
+  assert.equal(JSON.parse(local.getItem('rigs.sync'))['rigs.appdock'].early, true);
+  const { s } = make({ daemon, clock, local }); // reload
+  await s.refresh();
+  await clock.tick(600);
+  assert.deepEqual(JSON.parse(local.getItem('rigs.appdock')), { v: 2, saved: true });
+  assert.equal(daemon.puts.length, 0, 'the early dock is not taken for a newer edit');
+});
+
+test('auto() writes stay in the cache: never sent, never uploaded as a migration, while a saved value still is', async () => {
+  const daemon = fakeDaemon();
+  const clock = timers();
+  const local = memStorage();
+  let { s } = make({ daemon, clock, local });
+  await s.refresh();
+  s.getItem('rigs.appdock');
+  s.auto(() => s.setItem('rigs.appdock', '{"v":2,"defaults":true}')); // a fresh page's dock on an empty daemon
+  await clock.tick(600);
+  assert.equal(daemon.puts.length, 0);
+  assert.equal(s.status().state, 'synced');
+  ({ s } = make({ daemon, clock, local })); // reload: the daemon still has none, the cache holds only those defaults
+  await s.refresh();
+  s.getItem('rigs.appdock');
+  await clock.tick(600);
+  assert.equal(daemon.puts.length, 0, 'automatic content is never uploaded');
+  s.setItem('rigs.appdock', '{"v":2,"chosen":true}'); // a person's change is
+  await clock.tick(600);
+  assert.deepEqual(daemon.puts.map((p) => p.value), [{ v: 2, chosen: true }]);
+  // on a key with a saved value, auto() changes stay local; if the daemon later lacks the key the cache is restored
+  s.auto(() => s.setItem('rigs.appdock', '{"v":2,"chosen":true,"derived":1}'));
+  await clock.tick(600);
+  assert.equal(daemon.puts.length, 1);
+  delete daemon.keys['rigs.appdock'];
+  ({ s } = make({ daemon, clock, local }));
+  await s.refresh();
+  await clock.tick(600);
+  assert.deepEqual(daemon.keys['rigs.appdock'].value, { v: 2, chosen: true, derived: 1 });
+});
+
 test('an edit left unsent by an earlier session goes up when it is newer than the daemon value; offline retries', async () => {
   const daemon = fakeDaemon({ keys: { 'rigs.appdock': { value: { v: 2, old: true }, rev: 5000, by: 'A' } } });
   const clock = timers();
