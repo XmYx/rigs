@@ -188,7 +188,7 @@ test('structure: the routing algorithm shown is the one in router.js, the tool f
   const nodes = S.buildStructure().nodes.filter(S.isComponent);
   const router = read('src/router.js');
   const routes = JSON.parse(router.match(/export const ROUTES = (\[[^\]]*\])/)[1].replace(/'/g, '"'));
-  assert.deepEqual(routes, ['answer', 'implement', 'plan', 'continue']);
+  assert.deepEqual(routes, ['answer', 'implement', 'plan', 'continue', 'yolo']);
   const shown = nodes.filter((n) => n.type === 's-route').map((n) => n.name).sort();
   assert.deepEqual(shown, [...routes].sort(), 'one route node per router route');
   const out = links.filter((l) => l.source === 'd-route').map((l) => l.target).sort();

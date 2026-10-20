@@ -61,6 +61,7 @@ import * as work from './work.js';
 import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 import * as uiOpen from './ui-open.js';
+import * as yolo from './yolo.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -371,7 +372,7 @@ export async function startServer() {
       result: (aborted) => ({
         status: aborted ? 'stopped' : error && !done?.text ? 'error' : 'ok',
         // jarvisSend's measurement (pre-routing on/off, routerMs, timeToFiledMs, timeToReplyMs) on the root span too.
-        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy, ...(timing.lane ? { lane: timing.lane, tier: timing.tier, ...(timing.escalated ? { escalated: timing.escalated } : {}) } : {}) } } } : {}),
+        ...(timing ? { meta: { timing: { preroute: timing.preroute, route: timing.route, via: timing.via, routerMs: timing.routerMs, timeToFiledMs: timing.timeToFiledMs, timeToReplyMs: timing.timeToReplyMs, filedBy: timing.filedBy, ...(timing.lane === 'yolo' ? { lane: 'yolo', runId: timing.runId, timeToFirstFrameMs: timing.timeToFirstFrameMs } : timing.lane ? { lane: timing.lane, tier: timing.tier, ...(timing.escalated ? { escalated: timing.escalated } : {}) } : {}) } } } : {}),
         output: done ? { text: done.text, chatId: done.chatId, brain: done.brain, model: done.model, ...(error ? { error } : {}) } : { error: error || 'no reply' },
       }),
     };
@@ -791,7 +792,7 @@ export async function startServer() {
       if (relay) res.write(JSON.stringify({ type: 'status', text: `The main brain on ${relay} is unreachable — answering on ${config().name}.` }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -1021,6 +1022,22 @@ export async function startServer() {
         if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
       }
       return { ...next, local: localSettings(next.local) };
+    }
+    // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files
+    // (path-confined, served as an opaque-origin sandbox), live-reload events, the page's runtime errors, stop.
+    if (sub === 'yolo' && method === 'GET') return { settings: yolo.yoloSettings(config().yolo), runs: await yolo.listRuns({ limit: Number(q.get('limit')) || 50 }) };
+    if (sub === 'yolo/config' && method === 'GET') return yolo.yoloSettings(config().yolo);
+    if (sub === 'yolo/config' && method === 'POST') {
+      let next;
+      try { next = yolo.applyYoloPatch(config().yolo, await body()); } catch (e) { throw new HttpError(400, e.message); }
+      const cfg = config();
+      cfg.yolo = next;
+      saveConfig(cfg);
+      markGlobalChanged(); // mesh-global: requests run on the main-brain machine, which must see the switch
+      return yolo.yoloSettings(next);
+    }
+    if ((mm = m(/^yolo\/([^/]+)(?:\/([\s\S]*))?$/))) {
+      try { return await yolo.handle(req, res, mm[1], mm[2], { query: q, body }); } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
     // The local responder on this machine (src/responder.js): status, warm-up, busy (for the GPU overseer), and the
     // host side of a turn another machine's fast path streams from here (NDJSON).
@@ -1380,6 +1397,9 @@ export async function startServer() {
     if (route) { await appHttp(req, res, url, route); return undefined; }
     if ((mm = p.match(/^\/api\/nodes\/([^/]+)\/(.+)$/))) {
       const node = discovery.get(decodeURIComponent(mm[1]));
+      // This machine is known from config alone: its own URLs (a YOLO window opened right after start) answer while the
+      // first discovery scan still runs, as the App Cloud routes do.
+      if (!node && appsReg.isSelfRef(decodeURIComponent(mm[1]))) return localApi(req, res, mm[2], url.searchParams);
       if (!node) throw new HttpError(404, 'unknown node ' + mm[1]);
       const rest = mm[2] + url.search;
       if (node.self) return localApi(req, res, mm[2], url.searchParams);
@@ -1430,6 +1450,8 @@ export async function startServer() {
       if (url.pathname === '/starnet' || url.pathname.startsWith('/starnet/')) return await starnet.serve(req, res, url.pathname); // 404 unless experimental.starnet is on
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
       if (starnet.blockedApiCall(req)) throw new HttpError(403, 'the StarNet station frame has no RIGS API access');
+      // A YOLO page (opaque origin) can't read the API, and must not change it blind either (src/yolo.js).
+      if (yolo.opaqueOriginRefused({ method: req.method, pathname: url.pathname, origin: req.headers.origin })) throw new HttpError(403, 'a page in an opaque origin (a YOLO sandbox) may not change anything here');
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
       req.rigsAuth = a;
@@ -1467,6 +1489,7 @@ export async function startServer() {
 
   async function onUpgrade(req, socket, head) {
     const url = new URL(req.url, 'http://localhost');
+    if (yolo.opaqueOriginRefused({ pathname: url.pathname, origin: req.headers.origin, upgrade: true })) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     const a = await authorize(req);
     if (!a.ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     req.rigsAuth = a;
@@ -1664,6 +1687,7 @@ export async function startServer() {
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
   // Request traces: each span written here goes to the open UIs as it happens (live view); old day files are pruned.
   trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
+  yolo.events.on('event', (e) => broadcast(e)); // yolo-start · yolo-update · yolo-done (src/yolo.js)
   // Exhibits: fed from the same span stream and the planner's saves; each new entry is pushed live ('exhibit').
   trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
   planner.onProjectSaved((p) => exhibitSvc.handleProject(p));

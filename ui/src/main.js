@@ -28,6 +28,7 @@ import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { replyLabel } from './local-responder-model.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
+import { onYoloEvent } from './yolo.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
@@ -363,6 +364,7 @@ function connectEvents() {
     const m = JSON.parse(ev.data);
     if (m.type === 'ui-open') onUiOpen(m);
     if (m.type === 'ui-layout') receiveLayout(m); // the dock layout / app dock changed on this or another machine (synced-storage.js)
+    if (m.type?.startsWith('yolo-')) onYoloEvent(m); // a YOLO run's window (yolo.js); the same events also come in the jarvis/send stream
     if (m.type === 'mesh') refresh();
     if (m.type === 'global') { globalBrain = { ...m, home: m.settings?.['brain.home'] || m.settings?.['brain.core']?.node || '' }; renderBrainBadge(); }
     onAppsEvent(m);
@@ -1123,6 +1125,7 @@ async function ask(text, { spoken = false } = {}) {
     // Every request is routed on the server: a new conversation, or the ongoing thread it belongs to
     await stream(`${node(b.nodeId)}/jarvis/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
       if (e.type === 'trace') claimTrace(e.traceId);
+      if (e.type?.startsWith('yolo-')) onYoloEvent(e);
       if (e.type === 'route') {
         chatRef = { nodeId: b.nodeId, chatId: e.chatId };
         store.set('chat', chatRef);

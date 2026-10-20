@@ -9,6 +9,7 @@ import { bin } from './tools.js';
 import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
+import * as yolo from './yolo.js';
 import * as trace from './trace.js';
 import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn, recordRequest } from './usage.js';
 import { APP_DIR, HOME, augmentedPath, readJson, spawnCmd, truncate, writeJsonAtomic } from './util.js';
@@ -221,29 +222,34 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal, env = {} }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false, quick = null } = {}) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false, quick = null, yolo: yo = null } = {}) {
   const cfg = config().brain;
   // The local-model variant is the same harness, stream and tools on another endpoint; it keeps its own Claude session
   // and usage totals (a session started against Anthropic's API is not resumed against Ollama, or the other way round).
   // A fast-path turn (quick = { maxTurns }, src/quick.js) is a fresh session every time with the last few messages as
   // context: it never resumes or replaces the JARVIS thread's own Claude session.
+  // A YOLO turn (yolo = { maxTurns, cwd, note }, src/yolo.js) is a fresh session too, run in the run's sandbox folder with
+  // the tools that file work, plan, propose or touch git taken away.
+  const fresh = quick || yo;
   const key = viaOllama ? CLAUDE_OLLAMA : 'claude';
-  const sessionKey = viaOllama ? 'claudeOllamaSessionId' : quick ? 'quickSessionId' : 'claudeSessionId';
-  const usageKey = viaOllama ? 'claudeOllamaUsage' : quick ? 'quickUsage' : 'claudeUsage';
-  const system = personaPrompt(meshSummary, projects) + (quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
-  const args = ['-p', (quick ? recentContext(chat) : unseenContext(chat, key)) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+  const sessionKey = viaOllama ? 'claudeOllamaSessionId' : yo ? 'yoloSessionId' : quick ? 'quickSessionId' : 'claudeSessionId';
+  const usageKey = viaOllama ? 'claudeOllamaUsage' : yo ? 'yoloUsage' : quick ? 'quickUsage' : 'claudeUsage';
+  const system = personaPrompt(meshSummary, projects) + (yo ? '\n\n' + yo.note : quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
+  const args = ['-p', (fresh ? recentContext(chat) : unseenContext(chat, key)) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', system, '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
+  if (yo) args.push('--disallowedTools', yolo.YOLO_BLOCKED_TOOLS.join(','));
   args.push('--add-dir', workRoot());
-  args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort, ...(quick ? { maxTurns: quick.maxTurns } : {}) })));
-  const resumed = !quick && !!chat[sessionKey];
+  const maxTurns = yo?.maxTurns || quick?.maxTurns;
+  args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort, ...(maxTurns ? { maxTurns } : {}) })));
+  const resumed = !fresh && !!chat[sessionKey];
   if (resumed) args.push('--resume', chat[sessionKey]);
   if (viaOllama) env = { ...env, ...claudeOllamaEnv({ url: claudeOllamaUrl(cfg), model }) };
   let full = '';
   let error = null;
   let usage = null;
   const res = await streamProcess(bin('claude'), args, {
-    cwd: chat.cwd || HOME, signal, env,
+    cwd: yo?.cwd || chat.cwd || HOME, signal, env,
     onLine: (line) => {
       let e;
       try { e = JSON.parse(line); } catch { return; }
@@ -265,7 +271,7 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
           chat[usageKey] = usage.cumulative; delete usage.cumulative;
           if (viaOllama) usage.costUsd = 0; // local model: nothing is billed (Claude Code would price it as a Claude model)
         } catch {}
-        // --max-turns (the fast path) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
+        // --max-turns (the fast path, YOLO) ends with is_error, no result and errors: ['Reached maximum number of turns (8)']
         if (e.is_error) error = e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error';
         else if (!full && e.result) { full = e.result; emit({ type: 'delta', text: e.result }); }
       }
@@ -410,6 +416,11 @@ const HANDOFF_TOOL = /(?:^|[_.])(?:jarvis_task|project_create)$/;
  * re-runs on the normal JARVIS thread, told what the fast turn already ran; the fast turn and the full turn never run
  * at the same time. The measurement carries lane 'quick', the tier and the escalation reason. opts.sendQuick
  * replaces the fast turn (tests).
+ *
+ * YOLO (src/yolo.js, config.yolo, opts.yolo per request): a YOLO marker in the text ("yolo …", "… yolo it", "in yolo
+ * mode") or yolo: true takes route 'yolo' before any router engine runs — yoloTurn: a sandbox window shows the agent's
+ * page live while it works; nothing is filed, planned, committed or merged. yolo: false on the request beats the text.
+ * The measurement carries lane 'yolo', the run id and timeToFirstFrameMs. opts.sendYolo replaces the run (tests).
  */
 export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts = {}) {
   const t0 = opts.startedAt || Date.now();
@@ -418,6 +429,14 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   let out;
   let failed = false;
   try {
+    const y = yolo.resolveYolo({ text, override: opts.yolo, settings: config().yolo });
+    if (y.on) {
+      Object.assign(m, { route: 'yolo', via: y.via, lane: 'yolo' });
+      m.chatId = await yoloRoute(text, y, emit, opts, m);
+      out = await (opts.sendYolo || yoloTurn)(m.chatId, text, y, emit, { ...opts, startedAt: t0 });
+      Object.assign(m, { runId: out?.runId || '', firstFrameAt: out?.firstFrameAt || 0 });
+      return out;
+    }
     const { chatId, hint, decision } = m.preroute ? await preroutedTurn(text, { brain, model, effort }, emit, opts, m) : await directTurn(text, emit, opts);
     m.chatId = chatId;
     const onTool = (name, r) => { if (!m.filedAt && r.status === 'ok' && HANDOFF_TOOL.test(name || '')) Object.assign(m, { filedAt: r.end || Date.now(), filedBy: 'brain' }); };
@@ -448,11 +467,27 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
       preroute: m.preroute, route: m.route, via: m.via, routerMs: m.routerMs,
       timeToFiledMs: m.filedAt ? Math.max(0, m.filedAt - t0) : null, filedBy: m.filedBy,
       timeToReplyMs: !failed && !opts.signal?.aborted && out && !out.error ? end - t0 : null,
-      ...(m.lane ? { lane: m.lane, tier: m.tier, ...(m.escalated ? { escalated: m.escalated } : {}), ...(m.fallback ? { fallback: m.fallback } : {}) } : {}),
+      ...(m.lane === 'yolo' ? { lane: 'yolo', runId: m.runId || '', timeToFirstFrameMs: m.firstFrameAt ? Math.max(0, m.firstFrameAt - t0) : null }
+        : m.lane ? { lane: m.lane, tier: m.tier, ...(m.escalated ? { escalated: m.escalated } : {}), ...(m.fallback ? { fallback: m.fallback } : {}) } : {}),
     };
     emit({ type: 'timing', ...timing });
     await recordRequest({ tsStart: t0, tsEnd: end, chatId: m.chatId, model: m.model, traceId: opts.trace?.traceId || '', status: opts.signal?.aborted ? 'stopped' : failed || out?.error ? 'failed' : 'done', ...timing });
   }
+}
+
+/**
+ * A YOLO request (yolo.resolveYolo said so): the router span records route 'yolo' — decided by its marker or the
+ * request's `yolo: true`, no engine asked — and the JARVIS thread keeps the conversation. Returns its chat id.
+ */
+async function yoloRoute(text, y, emit, opts, m) {
+  const r0 = Date.now();
+  const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text }, meta: { preroute: m.preroute } }) : null;
+  const chat = await mainChat();
+  m.routerMs = Date.now() - r0;
+  rspan?.end({ status: 'ok', output: { route: 'yolo', reason: y.reason, task: y.task, work: [] },
+    meta: { preroute: m.preroute, route: 'yolo', via: y.via, chatId: chat.id, reason: y.reason, routerMs: m.routerMs, lane: 'yolo' } });
+  emit({ type: 'route', route: 'yolo', reason: y.reason, via: y.via, preroute: m.preroute, chatId: chat.id, title: chat.title, projectId: '', continued: false, work: [], unclear: [] });
+  return chat.id;
 }
 
 /** Pre-routing off: straight to the JARVIS thread. The trace keeps a router span, marked skipped. */
@@ -474,7 +509,7 @@ async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
   const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) }, meta: { preroute: true } }) : null;
   let decision;
   const r0 = Date.now();
-  try { decision = await (opts.router || routeRequest)(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name, capture }); }
+  try { decision = await (opts.router || routeRequest)(text, { rules: agentsRules(), threads, projects, catalog, selfNode: config().name, capture, yolo: opts.yolo }); }
   catch (e) { m.routerMs = Date.now() - r0; rspan?.end({ status: 'error', output: { error: e.message, prompt: capture.prompt, reply: capture.reply } }); throw e; }
   Object.assign(m, { routerMs: Date.now() - r0, route: decision.route, via: decision.via || '', model: decision.via && decision.via !== 'rules' ? capture.model || '' : '' });
   // Work the router bound to real folders is filed by RIGS itself (one planned project + agent team each);
@@ -645,6 +680,69 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
   if (out.error) emit({ type: 'error', message: out.error });
   emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'quick', tier });
   return local.on ? Object.assign(out, lanes) : out;
+}
+
+/**
+ * A YOLO run (src/yolo.js; `y` from resolveYolo): the sandbox RIGS_HOME/yolo/<runId>/ with its placeholder page is made
+ * and 'yolo-start' (with the window URL) emitted BEFORE the model starts; then one bounded `claude -p` turn on
+ * config.yolo's model (Sonnet, effort low by default) in a fresh session whose cwd is the sandbox: the persona, the rigs
+ * MCP, Bash (python3 helpers, internal tools), WebFetch — and none of the tools that file work, plan, propose or touch
+ * git (yolo.YOLO_BLOCKED_TOOLS). Every sandbox write becomes a debounced 'yolo-update' (the window reloads), the page's
+ * runtime errors reach the agent through GET …/errors, and 'yolo-done' closes the run. Its own timeout (yolo.timeoutMs)
+ * and POST …/stop end it early. No escalation: whatever happened, the window shows how far it got. The request and the
+ * reply go into the given thread with lane 'yolo'; the work dashboard lists it in activeTurns with lane 'yolo'.
+ */
+export async function yoloTurn(id, text, y, emit, { meshSummary = '', projects = '', signal, trace: tctx = null, startedAt = Date.now(), onTool = null } = {}) {
+  const chat = await getChat(id);
+  if (!chat) throw new Error('chat not found');
+  const s = y?.settings || yolo.yoloSettings(config().yolo);
+  const resolved = quickBrain(s, await availableBrains());
+  if (!resolved) {
+    const error = `YOLO mode needs ${s.provider === 'claude' ? 'Claude Code' : s.provider} on ${config().name}, and it is not available here.`;
+    emit({ type: 'error', message: error });
+    return { text: '', error };
+  }
+  const task = y?.task || text;
+  const run = await yolo.createRun({ text, task, node: config().name, chatId: id, traceId: tctx?.traceId || '', startedAt, keep: s.keep });
+  emit(run.startEvent);
+  const off = yolo.onRun(run.runId, (e) => emit(e));
+  chat.messages.push({ role: 'user', text, ts: Date.now() });
+  emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'yolo', runId: run.runId });
+  // keyed by the run: a YOLO run may share the JARVIS thread with another turn
+  activeTurns.set(run.runId, { id, title: chat.title, brain: resolved.brain, model: resolved.model, startedAt: Date.now(), text: truncate(text, 120), lane: 'yolo', runId: run.runId, url: run.meta.url });
+  const ac = new AbortController();
+  let timedOut = false;
+  const stop = () => ac.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  const timer = setTimeout(() => { timedOut = true; ac.abort(); }, s.timeoutMs);
+  yolo.attachAbort(run.runId, ac);
+  const base = `http://127.0.0.1:${config().port}/api/local/yolo/${run.runId}/`;
+  const note = yolo.yoloPrompt({ dir: run.dir, base, model: resolved.model, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs });
+  const steps = (e) => {
+    if (e?.type === 'tool') yolo.setActivity(run.runId, `${e.name}${e.input ? ' ' + truncate(String(e.input), 100) : ''}`);
+    emit(e);
+  };
+  let out;
+  try {
+    out = await tracedRun({ chat, runner: runClaude, resolved, sent: task, emit: steps, meshSummary, projects, signal: ac.signal, tctx, onTool, usage: null,
+      sessionKey: 'yoloSessionId', lane: 'yolo', meta: { lane: 'yolo', runId: run.runId, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, sandbox: run.dir },
+      runOpts: { yolo: { maxTurns: s.maxTurns, cwd: run.dir, note } } });
+  } catch (e) { out = { text: '', error: e.message }; } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+    activeTurns.delete(run.runId);
+  }
+  const stopped = !timedOut && ac.signal.aborted;
+  const reason = timedOut ? `ran past ${Math.round(s.timeoutMs / 1000)} s` : stopped ? 'stopped' : out.error ? truncate(out.error, 200) : '';
+  const reply = String(out.text || '').trim() || (stopped ? 'Stopped, sir. The window shows how far it got.'
+    : reason ? `The YOLO run ${timedOut ? 'ran out of time' : 'hit a snag'}, sir. The window shows how far it got.` : 'Done, sir.');
+  const done = await yolo.finishRun(run.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200) });
+  off();
+  chat.messages.push({ role: 'assistant', text: reply, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'yolo', runId: run.runId, ts: Date.now() });
+  await saveChat(chat);
+  if (out.error && !stopped) emit({ type: 'error', message: timedOut ? `YOLO run ${reason}` : out.error });
+  emit({ type: 'done', text: reply, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'yolo', runId: run.runId });
+  return { ...out, text: reply, runId: run.runId, ok: !reason, firstFrameAt: done?.firstFrameAt || 0, ...(timedOut ? { error: out.error || `YOLO run ${reason}` } : {}) };
 }
 
 /**

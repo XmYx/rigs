@@ -1,6 +1,6 @@
 // One JARVIS brain for the whole mesh. The settings that decide how JARVIS thinks and delegates — the conversational and
-// core brains (provider · model · effort), the main-brain machine, the router / pre-routing, the routing rules and the quick
-// path — are global: changing them on any machine stamps a revision (config.globalRev) and every peer adopts the newest
+// core brains (provider · model · effort), the main-brain machine, the router / pre-routing, the routing rules, the quick
+// path and YOLO mode — are global: changing them on any machine stamps a revision (config.globalRev) and every peer adopts the newest
 // revision (pushed at once, pulled again whenever a peer comes back). Machine-bound bits stay local: brain.ollamaUrl,
 // workRoot, permission modes, the LocalJev url and API key. Requests that reach any machine are relayed to the main-brain
 // machine (homeNode), which answers and delegates work across the mesh; when it is unreachable the machine answers itself.
@@ -14,6 +14,7 @@ export const GLOBAL_PATHS = [
   ['router', ['jev.url', 'jev.apiKey']],
   ['routing', []],
   ['quick', []],
+  ['yolo', []], // YOLO mode (src/yolo.js): on/off and its model; the sandbox root is fixed per machine, not a setting
 ];
 
 const get = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
