@@ -192,6 +192,23 @@ test('confinePath: stays inside the sandbox — no .., encoded .., dot-files, NU
   assert.equal(Y.isRunId('../etc'), false);
 });
 
+test('opaqueOriginRefused: a YOLO page (Origin: null) may read, report its errors and use apps — never write blind or open a socket', () => {
+  const R = (o) => Y.opaqueOriginRefused({ origin: 'null', ...o });
+  const id = 'y-20261020-120000-abcdef';
+  for (const p of ['/api/local/jarvis/send', '/api/local/yolo/config', '/api/local/config', `/api/local/yolo/${id}/stop`, '/api/nodes/peer/jarvis/send', `/api/local/yolo/${id}/errors/x`]) {
+    assert.equal(R({ method: 'POST', pathname: p }), true, p);
+  }
+  assert.equal(R({ method: 'PUT', pathname: '/api/local/x' }), true);
+  for (const p of ['/ws', '/api/local/pty/abc/ws', '/api/local/screen/stream']) assert.equal(R({ upgrade: true, pathname: p }), true, p);
+  assert.equal(R({ method: 'POST', pathname: `/api/local/yolo/${id}/errors` }), false, 'its own error reports');
+  assert.equal(R({ method: 'POST', pathname: `/api/nodes/peer/yolo/${id}/errors` }), false, 'through the node path too');
+  assert.equal(R({ method: 'GET', pathname: '/api/local/config' }), false, 'reads: CORS already blocks them');
+  assert.equal(R({ method: 'POST', pathname: '/api/nodes/peer/apps/krea/run' }), false, 'App Cloud apps decide for themselves');
+  assert.equal(R({ upgrade: true, pathname: '/api/nodes/peer/apps/krea/ws' }), false);
+  // any real origin, or none (CLI, MCP, peers), is not this check's business
+  for (const origin of [undefined, '', 'http://127.0.0.1:4719', 'https://evil.example']) assert.equal(Y.opaqueOriginRefused({ origin, method: 'POST', pathname: '/api/local/jarvis/send' }), false, String(origin));
+});
+
 test('injectClient: first in <head>, prefix per folder, relative scripts get crossorigin, CDN scripts do not', () => {
   const page = '<!doctype html><html><head><title>x</title><script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script></head><body><script src="sketch.js"></script><script>1</script></body></html>';
   const out = Y.injectClient(page, { prefix: '', step: 3 });
@@ -504,6 +521,14 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     }
     assert.equal((await fetch(BASE + start.localUrl.replace(/\/$/, ''), { redirect: 'manual' })).status, 308);
     assert.equal((await fetch(`${BASE}${start.localUrl}..%2F..%2Fconfig.json`)).status, 403);
+    // the page runs in an opaque origin: it may report its errors, but not change anything else blind
+    const nullPost = (u, body) => fetch(BASE + u, { method: 'POST', headers: { origin: 'null', 'content-type': 'text/plain' }, body: JSON.stringify(body) });
+    assert.equal((await nullPost(`${start.localUrl}errors`, { type: 'console', message: 'from the page' })).status, 200);
+    assert.equal((await nullPost('/api/local/yolo/config', { keep: 7 })).status, 403);
+    assert.equal((await nullPost('/api/nodes/test-node/jarvis/send', { text: 'implement something' })).status, 403);
+    assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).keep, 50, 'config unchanged');
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { origin: 'null' } });
+    assert.match(await new Promise((r) => { sock.on('open', () => r('open')); sock.on('error', (e) => r(e.message)); }), /403/);
     const [agent] = fakeRuns();
     assert.equal(agent.errors?.total, 1, `the agent read the page error back: ${JSON.stringify(agent)}`);
     assert.equal(agent.errors.errors[0].message, 'ReferenceError: p5 is not defined');

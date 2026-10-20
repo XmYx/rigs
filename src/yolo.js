@@ -31,6 +31,9 @@
 //                                       `Content-Security-Policy: sandbox allow-scripts …` (no allow-same-origin: the page
 //                                       runs in an opaque origin and can't read the JARVIS API) and
 //                                       `Access-Control-Allow-Origin: *` (so its own relative fetches still work).
+//                                       The server also refuses every write and WebSocket from that opaque origin
+//                                       (Origin: null) but the page's own POST errors (opaqueOriginRefused): it can't
+//                                       drive the API blind either.
 //   GET  yolo/<runId>/__yolo/client.js  the injected client: reloads the page on 'update', reports errors (below)
 //   GET  yolo/<runId>/__yolo/events   → text/event-stream: 'hello' {step, status}, 'update' (as yolo-update), 'done'
 //   POST yolo/<runId>/errors {type, message, source, line, col, stack, url} → { ok, seq }   (the page's own reports)
@@ -495,6 +498,21 @@ export const SANDBOX_HEADERS = {
   'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type',
   'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
 };
+
+/**
+ * Must the server refuse this request because it comes from an opaque origin (`Origin: null`: a YOLO page under the CSP
+ * sandbox, also a file:// page or a sandboxed frame) and could change something? CORS keeps such a page from READING the
+ * JARVIS API, but a text/plain POST, a form post or a WebSocket needs no preflight — without this a YOLO page could still
+ * drive the API blind (jarvis/send, config, terminals). Refused: every WebSocket and every method but GET/HEAD/OPTIONS.
+ * Allowed: the page's own error reports (POST …/yolo/<runId>/errors) and App Cloud paths (their apps decide). Pure.
+ */
+export function opaqueOriginRefused({ method = 'GET', pathname = '', origin, upgrade = false } = {}) {
+  if (String(origin ?? '').trim().toLowerCase() !== 'null') return false;
+  if (/^\/api\/nodes\/[^/]+\/apps\//.test(pathname)) return false;
+  if (upgrade) return true;
+  if (['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase())) return false;
+  return !/^\/api\/(?:local|nodes\/[^/]+)\/yolo\/y-\d{8}-\d{6}-[0-9a-f]{6}\/errors$/.test(pathname);
+}
 
 function send(res, status, body, type = 'application/json; charset=utf-8', extra = {}) {
   res.writeHead(status, { ...SANDBOX_HEADERS, 'content-type': type, ...extra });

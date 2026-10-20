@@ -1416,6 +1416,8 @@ export async function startServer() {
       if (url.pathname === '/starnet' || url.pathname.startsWith('/starnet/')) return await starnet.serve(req, res, url.pathname); // 404 unless experimental.starnet is on
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
       if (starnet.blockedApiCall(req)) throw new HttpError(403, 'the StarNet station frame has no RIGS API access');
+      // A YOLO page (opaque origin) can't read the API, and must not change it blind either (src/yolo.js).
+      if (yolo.opaqueOriginRefused({ method: req.method, pathname: url.pathname, origin: req.headers.origin })) throw new HttpError(403, 'a page in an opaque origin (a YOLO sandbox) may not change anything here');
       const a = await authorize(req);
       if (!a.ok) throw new HttpError(403, `forbidden (${a.via}: ${a.who})`);
       req.rigsAuth = a;
@@ -1453,6 +1455,7 @@ export async function startServer() {
 
   async function onUpgrade(req, socket, head) {
     const url = new URL(req.url, 'http://localhost');
+    if (yolo.opaqueOriginRefused({ pathname: url.pathname, origin: req.headers.origin, upgrade: true })) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     const a = await authorize(req);
     if (!a.ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     req.rigsAuth = a;
