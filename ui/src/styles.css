@@ -218,6 +218,9 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .msg.r-tool .mt { font: 11px var(--mono); color: #8aa0ae; background: transparent; border-style: dashed; max-height: 140px; overflow: auto; }
 .msg.r-terminal { max-width: 100%; }
 .msg.r-terminal .mt { font: 11.5px/1.4 var(--mono); background: #05090e; }
+.compact-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0; font: 10px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; cursor: help; }
+.compact-divider::before, .compact-divider::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), .35), transparent); }
+.compact-divider span { white-space: nowrap; }
 .sess-input { padding: 8px; border-top: 1px solid var(--line); display: flex; }
 
 .tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }

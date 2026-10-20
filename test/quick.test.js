@@ -302,7 +302,8 @@ test('quickTurn runs one bounded claude turn on the tier model; brain-turn span 
   assert.ok(!a.includes('--resume'), 'a fresh session');
   assert.match(a[a.indexOf('--append-system-prompt') + 1], /# Fast path[\s\S]*\[\[ESCALATE\]\]/);
   assert.match(a[a.indexOf('--append-system-prompt') + 1], /J\.A\.R\.V\.I\.S\./, 'in character');
-  assert.match(a[1], /Recently in this conversation:\nUser: earlier question\nJARVIS: earlier answer/);
+  // (the work request an earlier test routed to implement is mirrored into the thread before these)
+  assert.match(a[1], /Recently in this conversation:\n(?:.*\n)*User: earlier question\nJARVIS: earlier answer\n\nNow the user says:\n/);
   assert.equal(events.filter((e) => e.type === 'delta').map((e) => e.text).join(''), 'It is 9 pm in Tokyo, sir.');
   assert.equal(events.find((e) => e.type === 'start').lane, 'quick');
   await trace.flush();
@@ -315,7 +316,7 @@ test('quickTurn runs one bounded claude turn on the tier model; brain-turn span 
   assert.deepEqual([after.brain, after.model, after.effort, after.claudeSessionId], ['claude', 'claude-opus-5-5', 'high', 'main-session'], 'the thread keeps its full brain');
   assert.equal(after.quickSessionId, 'quick-sess-1');
   assert.deepEqual(after.messages.slice(-2).map((m) => [m.role, m.text, m.lane || '']), [['user', 'what time is it in Tokyo', ''], ['assistant', 'It is 9 pm in Tokyo, sir.', 'quick']]);
-  assert.equal(after.seen.claude, 2, 'the full brain will be told about the fast answer next turn');
+  assert.equal(after.seen.claude, after.messages.length - 2, 'the full brain will be told about the fast answer next turn');
   const turn = (await usage.readRecords()).filter((r) => r.kind === 'chat-turn').at(-1);
   assert.deepEqual([turn.lane, turn.model, turn.effort], ['quick', 'claude-haiku-5-5', 'low']);
 });

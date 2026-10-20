@@ -45,6 +45,7 @@ import * as exhibits from './exhibits.js';
 import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyQuickPatch, localSettings, quickSettings } from './quick.js';
+import { applyCompactPatch } from './compact.js';
 import * as responder from './responder.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
@@ -994,6 +995,25 @@ export async function startServer() {
       return routerView();
     }
     if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
+    // Self-compaction of the JARVIS thread (src/compact.js). The thread lives on the main-brain machine: relayed there
+    // like jarvis/send. GET = context size, threshold, last compaction (read-only); POST = settings (mesh-global);
+    // POST compact/now = compact it now (rigs compact now).
+    if (sub === 'compact' || sub === 'compact/now') {
+      const relay = relayTarget(config(), config().name, { via: req?.headers?.['x-rigs-relayed'] || '' });
+      const home = relay ? discovery.get(relay) : null;
+      if (home && !home.self && home.online && home.rigs && res) { req.headers['x-rigs-relayed'] = config().name; forwardHttp(home, req, res, sub); return undefined; }
+      if (sub === 'compact' && method === 'GET') return chat.mainCompactStatus();
+      if (sub === 'compact' && method === 'POST') {
+        let next;
+        try { next = applyCompactPatch(config().brain?.compact, await body()); } catch (e) { throw new HttpError(400, e.message); }
+        const cfg = config();
+        cfg.brain = { ...cfg.brain, compact: next };
+        saveConfig(cfg);
+        markGlobalChanged();
+        return chat.mainCompactStatus();
+      }
+      if (sub === 'compact/now' && method === 'POST') return chat.compactMainNow();
+    }
     // Quick-task fast path (src/quick.js): on/off and the model per tier; `local` = the local responder (src/responder.js).
     if (sub === 'quick' && method === 'GET') return { ...quickSettings(config().quick), local: localSettings(config().quick?.local) };
     if (sub === 'quick' && method === 'POST') {

@@ -45,6 +45,10 @@ function defaults() {
       claudePermissionMode: 'auto',
       claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'WebSearch', 'WebFetch'],
       codexSandbox: 'workspace-write',
+      // Self-compaction of the JARVIS main thread (src/compact.js): when the full brain's context (the last API call's
+      // input + cache tokens) reaches atTokens, one summarisation call on `model` replaces everything but the last
+      // keepMessages conversation messages, and the next turn starts a fresh session from that summary. Mesh-global.
+      compact: { enabled: true, atTokens: 100000, keepMessages: 12, model: 'claude-sonnet-5-5', timeoutMs: 180000 },
     },
     // How agents RIGS starts (terminal agents, project tasks, OpenRig seats) handle permissions. "auto" = work
     // unattended: Claude's auto mode (a classifier approves safe actions), Codex in its workspace-write sandbox

@@ -1,5 +1,6 @@
 import { bannerVisible, closedTexts, prefs } from './toasts.js';
 import { CAPS, capMap, createSweeper } from './cleanup.js';
+import { compactedLabel, transcriptRows } from './compact-model.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -1331,7 +1332,10 @@ async function conversationWindow() {
   try {
     const c = await api(`${node(chatRef.nodeId)}/chats/${chatRef.chatId}`);
     const older = Math.max(0, c.messages.length - CAPS.chatMessages); // a long conversation shows its latest messages, not thousands of nodes
-    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...c.messages.slice(older).map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`), h('div', { class: 'mt' }, x.text))));
+    // a divider where the brain's context was compacted (src/compact.js): the messages above are kept, JARVIS goes on from their summary
+    const divider = (k) => { const l = compactedLabel(k); return h('div', { class: 'compact-divider', title: l.title, role: 'separator' }, h('span', {}, l.text)); };
+    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...transcriptRows(c.messages, c.compactions, older).map(({ kind, m: x, c: k }) => kind === 'compacted' ? divider(k)
+      : h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, `${x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`}${x.mirror ? ` · ${x.route || 'work'} thread` : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
 }

@@ -4,9 +4,10 @@ JARVIS's operating rules (AGENTS.md). Read by the router (deciding where a reque
 -->
 # How JARVIS works
 
-Every request starts a **fresh conversation** that carries only three things: JARVIS's character (SOUL.md), the
-state of the mesh, and the list of active projects. Earlier conversations are not replayed. A request is
-continued in an older conversation only when the router finds that it belongs to an ongoing thread.
+The **JARVIS thread is one continuous conversation**: every request carries JARVIS's character (SOUL.md), the
+mesh state, the active projects and the thread so far, whichever lane answers. Work routed to its own thread
+(implement, plan, continue) runs there, but the request and reply are mirrored into the JARVIS thread, so "that"
+or "it" means what was just said. Only clearing the thread (`chats/main/clear`) starts afresh.
 
 ## The four routes
 
