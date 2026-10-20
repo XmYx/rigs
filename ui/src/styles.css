@@ -1808,3 +1808,28 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
   .adock-tile.launch .adock-hit { animation: none !important; }
 }
 /* === END APP DOCK === */
+
+/* YOLO window (ui/src/yolo.js): status strip on top, the run's page below. Window chrome, docking and the phone sheet are the wm.js ones. */
+.win.yolo-win .win-body { padding: 0; }
+.yolo-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: rgba(var(--accent-rgb), .04); font: 12px var(--mono); }
+.yolo-status { display: flex; align-items: center; gap: 8px; flex: 1 1 280px; min-width: 0; }
+.yolo-step { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text, inherit); }
+.yolo-time, .yolo-errs { color: var(--muted); white-space: nowrap; }
+.yolo-errs.bad { color: #f87171; }
+.yolo-label { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+.yolo-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--muted); }
+.yolo-dot.live { background: #4ade80; box-shadow: 0 0 8px #4ade80; animation: yolo-pulse 1.1s ease-in-out infinite; }
+.yolo-dot.done { background: #4ade80; }
+.yolo-dot.failed { background: #f87171; }
+@keyframes yolo-pulse { 50% { opacity: .35; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .yolo-dot.live { animation: none; } }
+.yolo-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.yolo-btn { padding: 3px 9px; font-size: 12px; }
+.yolo-btn:disabled { opacity: .45; cursor: not-allowed; }
+.yolo-stage { background: #fff; }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .yolo-strip { padding: 6px 8px; gap: 6px; }
+  .yolo-status { flex-basis: 100%; }
+  .yolo-btns { width: 100%; }
+  .yolo-btn { flex: 1 1 0; min-height: 44px; padding: 4px 6px; }
+}
