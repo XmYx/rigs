@@ -114,7 +114,7 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 #dock-choices { padding: 0 14px 10px; }
 #dock-choices .dock-q { font-size: 12px; color: #f0abfc; margin-bottom: 6px; }
 #dock-choices .dock-opts { display: flex; flex-wrap: wrap; gap: 6px; }
-#bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; z-index: 10; }
+#bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: none; /* desktop: its functions are dock tools (app-dock.js); the buttons stay in it for their handlers. Phones show it (below) */ gap: 6px; align-items: center; z-index: 10; }
 #ask { width: min(420px, calc(100vw - 680px)); min-width: 220px; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); outline: none; }
 #ask:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .08); }
 .round { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); font-size: 15px; display: grid; place-items: center; transition: border-color .2s, box-shadow .2s; }
@@ -651,7 +651,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   body.drawer-open #drawer-backdrop { opacity: 1; pointer-events: auto; }
 
   /* Toolbar: ask · 🎙 · ⋯, above the home indicator and the keyboard */
-  #bar { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: var(--bar-bottom) !important; top: auto !important; transform: none !important; width: auto !important; height: auto !important; flex-wrap: nowrap; justify-content: stretch; gap: 8px; }
+  #bar { display: flex; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: var(--bar-bottom) !important; top: auto !important; transform: none !important; width: auto !important; height: auto !important; flex-wrap: nowrap; justify-content: stretch; gap: 8px; }
   #ask, #bar.panel-collapsed #ask { flex: 1 1 auto; width: auto; min-width: 0; height: 44px; }
   .round { width: 44px; height: 44px; flex: none; }
   #btn-more { display: grid; font-size: 20px; }
@@ -1717,6 +1717,10 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .adock-mini.k-rig { font: 700 calc(var(--ad-icon) * var(--s, 1) * .12)/1 var(--mono); color: #eafffb; background: #0b141c; border: 1px solid rgba(var(--accent-rgb), .45); }
 .adock-count { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center;
   font: 700 10px/1 var(--sans); color: #022; background: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .5); pointer-events: none; }
+.adock-count.alert { right: auto; left: -4px; background: #f59e0b; color: #1c1103; }
+.adock-pop-tile { position: relative; }
+.adock-pop-tile .adock-count { top: 2px; right: 8px; }
+.adock-tile[aria-pressed="true"] .adock-icon { opacity: .7; }
 .adock-run { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); opacity: 0; transition: opacity .2s; pointer-events: none; }
 .adock-tile.open .adock-run { opacity: 1; }
 .adock.pos-bottom .adock-run { left: 50%; bottom: -5px; margin-left: -2.5px; }
