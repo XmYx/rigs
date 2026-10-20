@@ -6,7 +6,7 @@ import { HOME, readJsonSync, shortHost } from './util.js';
 export const RIGS_HOME = process.env.RIGS_HOME ? path.resolve(process.env.RIGS_HOME) : path.join(HOME, '.rigs');
 export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
 export const DEFAULT_PORT = 4719;
-const RULES_VERSION = 3;
+const RULES_VERSION = 4;
 
 function defaults() {
   return {
@@ -117,6 +117,8 @@ function defaults() {
         { kind: 'reverse-engineer', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'research', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
         { kind: 'media', tool: 'comfyui', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+        // Large docs (a wiki, a guide written from code) need code reading and long prose: Sonnet. Small docs stay on Haiku.
+        { kind: 'docs', size: 'L', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
         { kind: 'docs', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
         { kind: 'text', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
         { kind: 'private', provider: 'ollama', model: '', effort: 'off' },
