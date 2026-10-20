@@ -576,8 +576,8 @@ export const TOOLS = [
     },
   },
   {
-    name: 'mesh_notify', description: 'Show (and speak) a message in every open JARVIS UI across the mesh — use it to report finished work. Keep it to one or two spoken sentences; put any longer description after a line containing only "---" (shown, never spoken). When no UI is open anywhere, it is spoken aloud on this machine\'s speakers instead; aloud: true always speaks it here too.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' }, aloud: { type: 'boolean', description: 'Also speak through this machine\'s speakers' } }, required: ['text'] },
+    name: 'mesh_notify', description: 'Show (and speak) a message in every open JARVIS UI across the mesh — use it to report finished work. Keep it to one or two spoken sentences; put any longer description after a line containing only "---" (shown, never spoken). When no UI is open anywhere, it is spoken aloud on this machine\'s speakers instead; aloud: true speaks it on this machine\'s speakers and the UIs only show it (one voice, never twice).',
+    inputSchema: { type: 'object', properties: { text: { type: 'string' }, speak: { type: 'boolean' }, aloud: { type: 'boolean', description: 'Speak it through this machine\'s speakers instead of the open UIs (they still show it)' } }, required: ['text'] },
     run: (a) => api('/api/mesh/notify', { method: 'POST', body: { ...a, from: `${config().name} agent` } }),
   },
   ...slackTools((p) => api(p)),

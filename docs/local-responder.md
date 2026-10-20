@@ -71,6 +71,12 @@ What this means for a local model:
 
 ## 2. How JARVIS speaks and hears today
 
+> **Update (single voice engine).** JARVIS no longer speaks with Kokoro. The `jarvis-voice` applet's text-to-speech is
+> not used by RIGS any more (its Whisper speech-to-text still is); speech comes from the bundled voices only: resident
+> Piper (`applets/piper-voice`), then the machine's own engine (`say`, SAPI, piper, espeak), with the browser voice as the
+> UI's last resort. Kokoro is described below as it was measured, and the Kokoro voice recommendations in §3–§6 are
+> historical. One notification is voiced once: with `aloud: true` the machine's speakers speak and open UIs stay silent.
+
 **Speaking.** JARVIS's voice is **Kokoro-82M** on magix-system's GPU, served by the App Cloud applet `jarvis-voice`
 (port 8197, loopback only; source `~/apps/jarvis-voice/server.py`, outside this repo; unit
 `~/.config/systemd/user/jarvis-voice.service`). Its default voice is the blend `bm_george*0.7+bm_fable*0.3` at speed
@@ -619,9 +625,9 @@ with Piper-generated speech through `POST /api/local/stt`.
 
 Implemented on the existing path (§2, §5.8); nothing replaces the current voice.
 
-- `persona.tts.engine`: `auto` (default: neural Kokoro → resident Piper → the machine's own engine) | `neural` | `piper` | `local`. The chosen engine goes first, the others stay as silent fallback (`src/tts-plan.js`, wired in `src/tts.js`; failures are logged `[tts] <engine> failed, falling back`, never sent to the UI). `persona.tts.piperUrl` (default `http://127.0.0.1:8210`), `persona.tts.trim: false` disables trimming.
+- `persona.tts.engine`: `auto` (default: resident Piper → the machine's own engine) | `piper` | `local` (the former `neural` choice is gone and reads as `auto`). The chosen engine goes first, the others stay as silent fallback (`src/tts-plan.js`, wired in `src/tts.js`; failures are logged `[tts] <engine> failed, falling back`, never sent to the UI). `persona.tts.piperUrl` (default `http://127.0.0.1:8210`), `persona.tts.trim: false` disables trimming.
 - Resident Piper `en_GB-alan-medium`: `applets/piper-voice/server.py` (unit `jarvis-piper.service`, `~/apps/jarvis-piper`, port 8210, `/healthz`, `POST /tts`), registered as App Cloud app `piper-voice`; reachable from other nodes at `/api/nodes/magix-system/apps/piper-voice/tts`. ~60 ms per sentence.
-- Silence trim in the daemon (`trimSilence`): the neural clip loses its lead/tail silence (30 ms lead, 150 ms tail kept) and the viseme cues are shifted: "Good evening, sir." 2.00 s → 1.35 s.
+- Silence trim in the daemon (`trimSilence`): a clip loses its lead/tail silence (30 ms lead, 150 ms tail kept) and the viseme cues are shifted: "Good evening, sir." 2.00 s → 1.35 s.
 - UI: chunking moved to `ui/src/sentences.js` (fixes a dropped-prefix bug on "3.5 …"); the first chunk of a reply may end at a comma after 80 chars.
 - Follow-up (not built): speech input is Web Speech / mesh Whisper, already local; nothing cloud-dependent to swap.
 

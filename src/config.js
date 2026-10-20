@@ -57,7 +57,9 @@ function defaults() {
     autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60 },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
-    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto' },
+    // thinkingPhrases: the UI says a short pre-rendered line ("One moment, sir.") the moment a request is sent
+    // (src/thinking-phrases.js); false = nothing is said before the reply.
+    persona: { name: 'J.A.R.V.I.S.', address: 'sir', humor: 60, voice: '', speakAloud: 'auto', thinkingPhrases: true },
     // Pre-routing (src/router.js): each JARVIS request is classified (answer · implement · plan · continue) before any brain
     // sees it, and work bound to a folder is filed by RIGS itself. preroute: false = no router; the brain decides and files
     // work itself (jarvis_task / project_create). engine: 'jev' = a Jev-compatible typed-decision API (LocalJev,

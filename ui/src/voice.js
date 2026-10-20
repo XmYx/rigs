@@ -1,5 +1,5 @@
 // Voice in (Web Speech recognition, wake word "Jarvis", barge-in) and voice out, sentence-by-sentence
-// while the reply streams. Output prefers the server's TTS (/api/local/tts → WAV through one
+// while the reply streams (speech-queue.js keeps it in order; think() says a pre-rendered thinking phrase first). Output prefers the server's TTS (/api/local/tts → WAV through one
 // AudioContext), because Safari and Chrome silently drop speechSynthesis started outside a user
 // gesture — and streamed replies and notifications always arrive later. The AudioContext is unlocked
 // on the first click/key; speechSynthesis stays as the fallback. Recognition needs a secure context:
@@ -10,6 +10,7 @@
 // transcribed by the mesh's own Whisper (hearing.js). localStorage rigs.stt = "server" | "browser" forces one.
 import { createHearing } from './hearing.js';
 import { drain } from './sentences.js';
+import { createSpeechQueue } from './speech-queue.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AC = window.AudioContext || window.webkitAudioContext;
@@ -22,7 +23,9 @@ function preferServerHearing() {
   return !SR || (/Linux/.test(navigator.platform || navigator.userAgent) && !/Android/.test(navigator.userAgent));
 }
 
-export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeech, wakeWord = 'jarvis' }) {
+// onAudio({ kind: 'thinking'|'speech', text }) fires as each clip starts playing (timing logs); onSkip(text) when a
+// thinking phrase is dropped because the reply was already ready.
+export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeech, onAudio, onSkip, wakeWord = 'jarvis' }) {
   let serverHearing = preferServerHearing();
   const canRecord = !!navigator.mediaDevices?.getUserMedia;
   const supported = window.isSecureContext && (!!SR || canRecord);
@@ -39,12 +42,9 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
   let ctx = null;
   let analyser = null;
   let server = { engine: null, voice: '', voices: [] };
-  let gen = 0; // bumped by stop(): anything from an older generation is dropped
-  const pending = []; // [{ text, audio: Promise<AudioBuffer|null> }] in speaking order
   let source = null;
-  let pumping = false;
   let levelRaf = 0;
-  let abort = new AbortController(); // aborts in-flight TTS fetches on stop()
+  const phraseAudio = new Map(); // thinking phrase → Promise<rendered audio>, pre-rendered from the bundled voice
   let finishCurrent = null; // resolves the sentence that is playing right now (stop() never fires onended)
   const utterances = new Set(); // Safari garbage-collects utterances (and drops onend) unless referenced
 
@@ -100,8 +100,8 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
 
   function clean(text) { return text.replace(/[*_`#>]/g, '').replace(/\[(.*?)\]\(.*?\)/g, '$1'); }
 
-  function speakBrowser(text, g) {
-    if (!window.speechSynthesis || g !== gen) return Promise.resolve();
+  function speakBrowser(text) {
+    if (!window.speechSynthesis) return Promise.resolve();
     return new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(clean(text));
       const v = browserVoice();
@@ -119,17 +119,18 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     });
   }
 
-  function fetchAudio(text, g) {
+  // → { buffer, cues } | 'empty' (nothing to say) | null (no server voice: the browser voice speaks it instead)
+  function fetchAudio(text, signal) {
     return (async () => {
       await ready;
-      if (!useServer() || g !== gen) return null;
-      const r = await fetch('/api/local/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: pref.name || undefined }), signal: abort.signal });
+      if (!useServer() || signal?.aborted) return null;
+      const r = await fetch('/api/local/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: pref.name || undefined }), signal });
       if (r.status === 204) return 'empty';
       if (!r.ok) throw new Error('tts ' + r.status);
-      let cues = null; // lipsync timeline from the neural voice: [[start, end, viseme], …]
+      let cues = null; // lipsync timeline when the engine sends one (x-visemes): [[start, end, viseme], …]
       try { const v = r.headers.get('x-visemes'); if (v) cues = JSON.parse(atob(v)).cues || null; } catch { cues = null; }
       const data = await r.arrayBuffer();
-      if (g !== gen) return null;
+      if (signal?.aborted) return null;
       const c = ensureCtx();
       // Safari's webkitAudioContext only has the callback form of decodeAudioData.
       const buffer = await new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p?.then) p.then(res, rej); });
@@ -151,8 +152,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     tick();
   }
 
-  function playBuffer({ buffer, cues }, g) {
-    if (g !== gen) return Promise.resolve();
+  function playBuffer({ buffer, cues }) {
     return new Promise((resolve) => {
       const c = ensureCtx();
       const s = c.createBufferSource();
@@ -170,51 +170,8 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     });
   }
 
-  async function pump() {
-    if (pumping) return;
-    pumping = true;
-    const g = gen;
-    try {
-      while (pending.length && g === gen) {
-        const item = pending[0];
-        // Prefetch: the next sentence renders on the server while this one plays.
-        if (pending[1] && !pending[1].audio && useServer()) pending[1].audio = fetchAudio(pending[1].text, g);
-        const audio = await (item.audio || (useServer() ? (item.audio = fetchAudio(item.text, g)) : null));
-        if (g !== gen) break;
-        if (audio && audio !== 'empty') await playBuffer(audio, g);
-        else if (!audio) await speakBrowser(item.text, g);
-        if (g === gen) pending.shift();
-      }
-    } finally {
-      pumping = false;
-      if (g === gen) setSpeaking(false);
-      else if (pending.length) pump();
-    }
-  }
-
-  function speakNow(text) {
-    if (muted || !text.trim()) return;
-    pending.push({ text, audio: null });
-    if (useServer() && pending.length <= 2) pending[pending.length - 1].audio = fetchAudio(text, gen);
-    pump();
-  }
-
-  /** Feed streaming text; complete sentences are spoken as they arrive. */
-  function feed(delta, final = false) {
-    queue += delta;
-    const d = drain(queue, { first: !spokeFirst });
-    for (const c of d.chunks) { speakNow(c); spokeFirst = true; }
-    queue = d.rest;
-    if (final) { speakNow(queue); queue = ''; spokeFirst = false; }
-  }
-
-  function stopSpeaking() {
-    queue = '';
-    spokeFirst = false;
-    gen++;
-    pending.length = 0;
-    abort.abort();
-    abort = new AbortController();
+  // Stop whatever clip is playing right now (the queue decides what plays next).
+  function cutAudio() {
     if (source) { try { source.onended = null; source.stop(); } catch {} source = null; }
     onSpeech?.(null);
     cancelAnimationFrame(levelRaf);
@@ -223,7 +180,69 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     const f = finishCurrent;
     finishCurrent = null;
     f?.();
+  }
+
+  // One clip at a time, in order (speech-queue.js): the next sentence renders on the server while this one plays.
+  const q = createSpeechQueue({
+    render: (text, signal) => fetchAudio(text, signal),
+    play: (audio, item) => {
+      if (audio === 'empty') return undefined;
+      onAudio?.({ kind: item.kind, text: item.text });
+      return audio ? playBuffer(audio) : speakBrowser(item.text);
+    },
+    cut: cutAudio,
+    onIdle: () => setSpeaking(false),
+    onSkip: (item) => onSkip?.(item.text),
+  });
+
+  function speakNow(text) {
+    if (muted || !text.trim()) return;
+    q.push(text);
+  }
+
+  /** Thinking phrases: render each once from the bundled voice so think() plays at once. */
+  function prewarm(list) {
+    ready.then(() => {
+      if (!useServer()) return;
+      for (const t of list) if (!phraseAudio.has(t)) cachePhrase(t);
+    });
+  }
+  function cachePhrase(text) {
+    // A failed or empty render is not kept (the next request tries again), and only if no newer render replaced it.
+    const p = fetchAudio(text).catch(() => null).then((r) => { if ((!r || r === 'empty') && phraseAudio.get(text) === p) phraseAudio.delete(text); return r; });
+    phraseAudio.set(text, p);
+    return p;
+  }
+
+  /** Say a thinking phrase now, unless JARVIS is already speaking or muted. → true when queued. */
+  function think(text) {
+    if (muted || !String(text || '').trim()) return false;
+    return q.think(text, phraseAudio.get(text) || cachePhrase(text));
+  }
+
+  /** Feed streaming text; complete sentences are spoken as they arrive. */
+  // keepTail false at the end drops an unfinished last sentence (the reply ran past the spoken-length cap).
+  function feed(delta, final = false, keepTail = true) {
+    queue += delta;
+    const d = drain(queue, { first: !spokeFirst });
+    for (const c of d.chunks) { speakNow(c); spokeFirst = true; }
+    queue = d.rest;
+    if (final) { if (keepTail) speakNow(queue); queue = ''; spokeFirst = false; }
+  }
+
+  function stopSpeaking() {
+    queue = '';
+    spokeFirst = false;
+    q.stop();
+    cutAudio();
     speaking = false;
+  }
+
+  /** The fast turn handed over (status reset): drop its queued speech and half-fed text; a thinking phrase plays on. */
+  function resetSpeech() {
+    queue = '';
+    spokeFirst = false;
+    q.reset();
   }
 
   async function startMeter() {
@@ -380,7 +399,10 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     feed,
     say(text) { stopSpeaking(); feed(text, true); },
     stop: stopSpeaking,
-    get speaking() { return speaking || pending.length > 0 || !!window.speechSynthesis?.speaking; },
+    think,
+    reset: resetSpeech,
+    prewarm,
+    get speaking() { return speaking || q.busy || !!window.speechSynthesis?.speaking; },
     setMuted(v) { muted = v; localStorage.setItem('rigs.muted', v ? '1' : '0'); if (v) stopSpeaking(); },
     /** Server voices first (this machine's TTS), then this browser's voices: [{ id, label }]. */
     voices() {
@@ -396,6 +418,12 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
       if (pref.kind === 'browser') return 'browser:' + (browserVoice()?.name || pref.name);
       return server.engine ? 'system:' + pref.name : 'browser:' + (browserVoice()?.name || '');
     },
-    setVoice(id) { pref = parsePref(id || ''); localStorage.setItem('rigs.voice', id || ''); },
+    setVoice(id) {
+      pref = parsePref(id || '');
+      localStorage.setItem('rigs.voice', id || '');
+      const phrases = [...phraseAudio.keys()];
+      phraseAudio.clear(); // rendered in the old voice
+      prewarm(phrases);
+    },
   };
 }
