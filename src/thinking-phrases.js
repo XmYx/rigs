@@ -1,6 +1,6 @@
 // JARVIS's thinking phrases: a short line he says the moment a request is sent, so he answers at once while the
 // router and the brain work. Shared by the server (config default) and the UI (voice.js pre-renders their audio
-// from the bundled voice, main.js speaks one per request). Pure, tested in test/thinking-phrases.test.js.
+// in JARVIS's voice (Kokoro), main.js speaks one per request). Pure, tested in test/thinking-phrases.test.js.
 // persona.thinkingPhrases: true (default) | false = today's behaviour, nothing is said before the reply.
 
 /** The curated set, in JARVIS's register. `{address}` becomes persona.address ("sir"). Keep them short: under ~1.5 s. */

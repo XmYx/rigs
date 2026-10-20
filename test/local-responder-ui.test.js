@@ -46,3 +46,8 @@ test('replyLabel marks only locally answered quick turns', () => {
   assert.equal(replyLabel({ type: 'done', lane: 'quick', tier: 'haiku', model: 'claude-haiku-5-5' }), null);
   assert.equal(replyLabel({ brain: 'claude' }), null);
 });
+
+test('voice dot names Kokoro as JARVIS\'s voice, and Piper when it is the stand-in', () => {
+  assert.equal(responderView({ settings: {}, tts: { engine: 'neural' } }).voiceText, 'JARVIS voice (Kokoro)');
+  assert.equal(responderView({ settings: {}, tts: { engine: 'piper' } }).voiceText, 'JARVIS voice (Piper)');
+});

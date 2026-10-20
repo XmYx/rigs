@@ -1,5 +1,5 @@
 // JARVIS's senses, served by App Cloud apps anywhere on the mesh (reached through this daemon's app proxy,
-// like the bundled voice in tts.js, which no longer uses this app):
+// like JARVIS's Kokoro voice in tts.js):
 //  - hearing: speech-to-text by the "jarvis-voice" app (POST /stt, Whisper). Browsers record the
 //    microphone and send the audio here, so it works where Web Speech recognition does not (Firefox,
 //    Chromium on Linux).

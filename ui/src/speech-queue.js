@@ -1,5 +1,5 @@
 // The order JARVIS speaks in: one thing at a time, never overlapping, never twice. voice.js gives it `render` (text →
-// audio, e.g. a WAV from the bundled voice; null = "use the browser voice"), `play` (plays one rendered item and
+// audio, e.g. a WAV from JARVIS's voice; null = "use the browser voice"), `play` (plays one rendered item and
 // resolves when it ends) and `cut` (stops whatever is playing at once). No DOM here, so it is unit-tested
 // (test/speech-queue.test.js).
 //

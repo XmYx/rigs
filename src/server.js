@@ -1273,7 +1273,7 @@ export async function startServer() {
       const r = await tts.synthesize(b.text, b.voice);
       if (!res) return { bytes: r ? r.audio.length : 0, engine: r?.engine };
       if (!r) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
-      // x-visemes: base64 JSON lipsync timeline when the engine provides one (empty for the bundled voices: the face follows the audio)
+      // x-visemes: base64 JSON lipsync timeline when the engine provides one (Kokoro sends one; empty for the stand-in voices: the face follows the audio)
       res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': r.audio.length, 'cache-control': 'no-store', 'x-tts-engine': r.engine, ...(r.visemes ? { 'x-visemes': r.visemes } : {}) });
       res.end(r.audio);
       return undefined;
