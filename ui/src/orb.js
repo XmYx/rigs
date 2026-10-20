@@ -58,6 +58,7 @@ export function createOrb(canvas, label = 'J.A.R.V.I.S.') {
     const cx = w / 2;
     const cy = hgt / 2;
     const R = Math.min(w, hgt) / 2 - 4;
+    if (R <= 0) { setTimeout(() => requestAnimationFrame(frame), 500); return; } // not laid out (hidden, or mid phone ⇄ desktop switch): a negative radius would throw and stop the loop
     ctx.clearRect(0, 0, w, hgt);
     const speed = still ? 0 : state === 'thinking' ? 3.2 : state === 'speaking' ? 1.6 : state === 'listening' ? 1.2 : 0.5;
     const pulse = still ? 0.15 : state === 'speaking' || state === 'listening' ? level : 0.15 + Math.sin(t * 1.6) * 0.05;

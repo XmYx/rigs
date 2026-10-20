@@ -3,7 +3,7 @@ import { isClosed, showPanel } from './panels.js';
 
 // Phone layout (t2). Below 640px wide, or a short touch screen in landscape, the screen becomes:
 // a header (side-panel button, Fit/↻, orb + brain badge), the galaxy, the chat dock and a one-row toolbar
-// (ask, mic, ⋯). The side panel is a slide-over drawer with a backdrop, the other toolbar buttons live in
+// (ask, mic, ⋯ — ask-panel.js keeps the Ask field there). The side panel is a slide-over drawer with a backdrop, the other toolbar buttons live in
 // the ⋯ sheet, windows open full-screen (wm.js) and the browser/OS back gesture closes them.
 // Geometry is CSS (the "MOBILE LAYOUT (t2)" block in styles.css); this module only moves a few nodes,
 // opens/closes the drawer and the sheet, and keeps the bottom bar above the on-screen keyboard.
@@ -75,6 +75,7 @@ function placeButtons() {
     b.dataset.label = label;
     if (phone) { if (b.parentElement !== sheet) sheet.append(b); continue; }
     if (id === 'panels-btn') { if (b.parentElement !== document.body) document.body.insertBefore(b, $('#panels-menu')); continue; }
+    if (id === 'btn-hands') continue; // back into the Ask JARVIS row: ask-panel.js
     if (b.parentElement !== bar) bar.insertBefore(b, moreBtn);
   }
   if (!phone) { closeSheet(); closeDrawer({ restore: false }); }

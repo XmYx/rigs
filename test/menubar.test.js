@@ -1,6 +1,7 @@
 // Top menu bar: the command registry's when/enabled logic and shortcut matching, and the Removed-items store's
 // remove → restore round trip (pure UI modules, no DOM).
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { createRegistry, formatShortcut, inTextField, matchShortcut, parseShortcut } from '../ui/src/commands.js';
 import { createRemovedStore } from '../ui/src/removed-store.js';
@@ -161,4 +162,20 @@ test('reload() re-reads storage written by another tab', () => {
   assert.equal(b.isRemoved('app', 'n/x'), false);
   b.reload();
   assert.equal(b.isRemoved('app', 'n/x'), true);
+});
+
+// ------------------------------------------------------------------ jarvis-commands.js menus (source: it needs the DOM)
+
+test('Window menu: the Ask JARVIS group is there and every menu entry is a registered command', () => {
+  const src = fs.readFileSync(new URL('../ui/src/jarvis-commands.js', import.meta.url), 'utf8');
+  const known = new Set([...src.matchAll(/id: '([\w.]+)'/g)].map((m) => m[1]));
+  const used = new Set([...src.matchAll(/cmd: '([\w.]+)'/g)].map((m) => m[1]));
+  for (const c of used) assert.ok(known.has(c), `${c} is in a menu but not registered`);
+  for (const c of ['window.ask', 'window.askTopbar', 'window.askFloat', 'window.askHide']) assert.ok(used.has(c) && known.has(c), c);
+  const shortcuts = [...src.matchAll(/shortcut: '([^']+)'/g)].map((m) => m[1]);
+  assert.equal(new Set(shortcuts).size, shortcuts.length, 'no shortcut is bound twice');
+  assert.ok(shortcuts.includes('Mod+K'), '⌘/Ctrl+K opens or focuses Ask JARVIS');
+  assert.match(src, /id: 'window\.ask',[^\n]*global: true/, 'it works while typing in a field, as before');
+  assert.ok(matchShortcut('Mod+K', key('k', { metaKey: true }), { mac: true }));
+  assert.ok(matchShortcut('Mod+K', key('k', { ctrlKey: true }), { mac: false }));
 });

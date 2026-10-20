@@ -77,6 +77,17 @@ export function registerJarvisCommands(deps) {
     { id: 'window.reset', label: 'Reset layout', run: () => resetLayout() },
     { id: 'window.restore', label: (c, a) => `Restore ${a?.icon ? a.icon + ' ' : ''}${a?.label || a?.id}`, run: (c, a) => restorePanel(a) },
     { id: 'window.restoreAll', label: 'Restore all', enabled: () => removed.size > 0, run: () => removed.restoreAll() },
+    // Ask JARVIS (ask-panel.js): its own panel, or docked into the top menu bar
+    { id: 'window.ask', label: 'Ask JARVIS', icon: '◆', shortcut: 'Mod+K', global: true, when: () => !!deps.ask, run: () => deps.ask.focus() },
+    {
+      id: 'window.askTopbar', label: 'Dock Ask JARVIS to top bar', when: (ctx) => !!deps.ask && !ctx.phone,
+      checked: () => deps.ask.mode() === 'topbar', run: () => deps.ask.topbar(),
+    },
+    {
+      id: 'window.askFloat', label: 'Float Ask JARVIS', when: (ctx) => !!deps.ask && !ctx.phone,
+      checked: () => deps.ask.mode() === 'floating', run: () => deps.ask.float(),
+    },
+    { id: 'window.askHide', label: 'Hide Ask JARVIS', when: (ctx) => !!deps.ask && !ctx.phone, enabled: () => deps.ask.mode() !== 'hidden', run: () => deps.ask.hide() },
     {
       id: 'view.menubar', shortcut: 'Mod+Shift+M', global: true, when: (ctx) => !ctx.phone, checked: (ctx) => !ctx.menubarHidden,
       label: (ctx) => (ctx.menubarHidden ? 'Show menu bar' : 'Hide menu bar'), run: () => deps.menubar.toggle(),
@@ -123,7 +134,7 @@ export function registerJarvisCommands(deps) {
 /** The menus, built from the registry each time one opens (so lists and labels are current). */
 export function menuModel() {
   const items = listPanels();
-  const panels = items.filter((x) => x.kind === 'panel');
+  const panels = items.filter((x) => x.kind === 'panel' && x.id !== 'ask'); // Ask JARVIS has its own group
   const apps = items.filter((x) => x.kind === 'app');
   const wins = items.filter((x) => x.kind === 'window');
   const gone = listRemoved();
@@ -150,6 +161,8 @@ export function menuModel() {
       ...(apps.length ? [{ sep: true }, { header: 'Apps' }, ...apps.map(perItem)] : []),
       ...(wins.length ? [{ sep: true }, { header: 'Open windows' }, ...wins.map(perItem)] : []),
       { sep: true },
+      { header: 'Ask JARVIS' }, { cmd: 'window.ask' }, { cmd: 'window.askTopbar' }, { cmd: 'window.askFloat' }, { cmd: 'window.askHide' },
+      { sep: true },
       { cmd: 'window.hideOthers' }, { cmd: 'window.showAll' }, { cmd: 'window.reset' },
       { id: 'removed', label: `Removed items${gone.length ? ` (${gone.length})` : ''}`, submenu: () => (gone.length
         ? [...gone.map((g) => ({ cmd: 'window.restore', args: g })), { sep: true }, { cmd: 'window.restoreAll' }]
@@ -172,7 +185,7 @@ export function menuModel() {
 function openShortcuts(ctx) {
   const rows = commands.list().filter((c) => (c.shortcut || c.hint) && commands.isVisible(c.id, ctx))
     .map((c) => h('tr', {}, h('td', {}, h('kbd', {}, formatShortcut(c.shortcut || c.hint, ctx.mac))), h('td', {}, commands.label(c.id, ctx))));
-  rows.push(h('tr', {}, h('td', {}, h('kbd', {}, formatShortcut('Mod+K', ctx.mac))), h('td', {}, 'Ask JARVIS (focus the ask field)')));
+  rows.push(h('tr', {}, h('td', {}, h('kbd', {}, '↑ / ↓')), h('td', {}, 'In the Ask field: earlier requests')));
   rows.push(h('tr', {}, h('td', {}, h('kbd', {}, 'Esc')), h('td', {}, 'Close a menu, window or selection')));
   const w = openWindow({ title: 'Keyboard shortcuts', icon: '⌨', width: 460, height: 480 });
   w.body.append(h('table', { class: 'kbd-table' }, h('tbody', {}, ...rows)),

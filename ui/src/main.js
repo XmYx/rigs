@@ -7,6 +7,7 @@ import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, 
 import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, resetPanel, toggleCollapse } from './layout-actions.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
+import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
 import { copyText, installContextMenu } from './contextmenu.js';
 import { createProviders, galaxyTarget, registerJarvisProviders } from './ctx-providers.js';
 import { tagCtx } from './ctx-tag.js';
@@ -817,7 +818,7 @@ function renderBrainBadge() {
 jarvisTray = registerJarvisTray({
   current: currentBrain, entries: () => snap,
   setBrain: (b) => { setBrain(b); api('/api/local/brain/core').then((c) => { coreDefault = c; }).catch(() => {}); },
-  openAsk: () => $('#ask').focus(), openBrainPanel: () => toggleBrainMenu(),
+  openAsk: () => focusAsk(), openBrainPanel: () => toggleBrainMenu(),
 });
 
 function setBrain(b, { quiet = false } = {}) {
@@ -1085,6 +1086,15 @@ async function continueChat(m, s) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+/** Send what is in the Ask field (Enter, or ➤ in the Ask panel). */
+function submitAsk() {
+  const el = $('#ask');
+  const v = el.value;
+  el.value = '';
+  rememberAsk(v);
+  ask(v);
+}
+
 // ------------------------------------------------------------------ chat dock ↔ any session
 const TARGET_ICON = { claude: '✳', codex: '◎', tmux: '▣', rig: '⛭', pty: '⌨' };
 let targetPoll = null;
@@ -1171,7 +1181,7 @@ function attachChat(m, s) {
   targetPoll = setInterval(() => pollTarget(), 2500);
   pollTarget(true);
   toast(`Chat attached to ${s.kind} session “${chatTarget.title}” on ${m.name}. Say “detach” to talk to JARVIS again.`);
-  $('#ask').focus();
+  focusAsk(); // wherever Ask is: reopens it when hidden, peeks a hidden menu bar
 }
 
 function detachChat() {
@@ -1305,7 +1315,7 @@ function wire() {
   $('#dock-detach').onclick = detachChat;
   renderDock();
   if (chatTarget) { targetPoll = setInterval(() => pollTarget(), 2500); pollTarget(true); }
-  $('#ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; ask(v); } });
+  $('#ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAsk(); });
   $('#btn-mic').onclick = () => { if (!voice.pushToTalk()) toast(window.isSecureContext ? 'This browser cannot record the microphone.' : 'Microphone needs https or localhost — run `rigs setup --https` or open http://localhost:4719 on this machine.', 'error', 8000); };
   $('#btn-hands').onclick = () => {
     const on = voice.toggleHandsFree();
@@ -1373,7 +1383,6 @@ function wire() {
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') results.firstChild?.click(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { $('#brain-menu').classList.remove('open'); if (graph.focused) clearSelection(); }
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); $('#ask').focus(); }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#brain-menu,#brain-badge')) $('#brain-menu').classList.remove('open'); });
   if (!voice.supported) { $('#btn-hands').classList.add('dim'); $('#btn-mic').classList.add('dim'); }
@@ -1457,6 +1466,7 @@ function wireMenus() {
     self: () => machineById(selfId),
     machines,
     menubar: { toggle: () => bar?.toggle(), focus: () => bar?.focus() },
+    ask: { mode: askMode, focus: focusAsk, topbar: () => dockAskToTopbar(), float: floatAsk, hide: hideAsk },
     exhibits: { enabled: exhibitsEnabled, toggle: () => setExhibitsEnabled(!exhibitsEnabled()), open: () => openExhibits() },
     starnet: { enabled: starnetEnabled, toggle: () => setStarnetEnabled(!starnetEnabled()) },
     cloud: { visible: () => graph.visible, toggle: () => setCloud(!graph.visible) },
@@ -1465,6 +1475,7 @@ function wireMenus() {
     menus: menuModel,
     status: () => { const me = machineById(selfId); return me ? `${me.name} · ${me.version || ''}` : ''; },
   });
+  initAskPanel({ onSend: submitAsk }); // after the menu bar: its slot is one of Ask's places
   wireContextMenus();
 }
 

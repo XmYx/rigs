@@ -142,9 +142,9 @@ export function restorePanel(ref) {
   return !!removed.restore(r.kind, r.id);
 }
 
-/** Hide every panel except `keep` (default: the last one used) and the toolbar. */
+/** Hide every panel except `keep` (default: the last one used), the toolbar and Ask JARVIS. */
 export function hideOthers(keep = lastFocusedPanel()) {
-  for (const p of engine.panels()) if (p.id !== keep && p.id !== 'bar' && !p.closed) engine.hide(p.id);
+  for (const p of engine.panels()) if (p.id !== keep && p.id !== 'bar' && p.id !== 'ask' && !p.closed) engine.hide(p.id);
 }
 
 /** Show every panel that is not removed. */

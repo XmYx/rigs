@@ -1417,8 +1417,37 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 :root[data-theme="atari"] .tray-item { font-family: var(--pixel); font-size: 9px; }
 
 @media (prefers-reduced-motion: reduce) { #menubar, .mb-menu,   .mb-top, .tray-item { transition: none; } .floating.panel-flash { animation: none; } }
+/* ===================================================================== ASK JARVIS (ask-panel.js)
+   Its own panel (#ask-panel: field, 🎙, 👂, ➤; floats, docks, tabs, resizes in width) or, docked into the top bar, an
+   inline field in #menubar-ask-slot that grows on focus. Dragging the panel over the menu bar lights the slot up. */
+#ask-panel { position: fixed; top: calc(60px + var(--mb-h)); left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); min-width: 260px; padding: 8px 10px 10px; z-index: 11; }
+#ask-panel > .ask-head { margin-bottom: 8px; }
+#ask-panel .wk-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ask-panel > .ask-head > .pctl { order: 2; }
+#ask-panel .ask-pin { order: 3; }
+#ask-panel .presize-n, #ask-panel .presize-s { display: none; } /* one row: it resizes in width */
+.ask-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#ask-panel .ask-row { flex-wrap: wrap; } /* narrow (docked in a slim column): the field takes its own line */
+#ask-panel #ask { flex: 1 1 140px; width: auto; min-width: 0; }
+#ask-send { font-size: 13px; color: var(--accent); }
+#menubar-ask-slot { display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; height: 26px; margin: 0 6px; padding: 0 2px; border-radius: 999px; user-select: text; }
+#menubar-ask-slot[hidden] { display: none; }
+/* A crowded bar (field + tray at ~1024px): the brand and menus keep their size, the status text gives way first. */
+#menubar .mb-brand, #menubar .mb-tops { flex-shrink: 0; white-space: nowrap; }
+#menubar .mb-status { flex: 0 4 auto; min-width: 0; }
+#menubar-ask-slot .ask-row { gap: 3px; flex: 0 1 auto; }
+#menubar-ask-slot #ask { width: clamp(140px, 22vw, 300px); min-width: 64px; height: 24px; padding: 2px 11px; font-size: 12px; transition: width .2s cubic-bezier(.2, .8, .2, 1), border-color .2s, box-shadow .2s; }
+#menubar-ask-slot #ask:focus { width: clamp(220px, 34vw, 520px); }
+#menubar-ask-slot .round { width: 24px; height: 24px; font-size: 12px; }
+#menubar-ask-slot #ask-send { display: none; } /* Enter sends */
+.mb-ask-undock { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; transition: background .12s, color .12s; }
+.mb-ask-undock:hover, .mb-ask-undock:focus-visible { color: var(--text); background: rgba(var(--accent-rgb), .14); }
+#menubar-ask-slot.mb-ask-target { min-width: 240px; background: rgba(var(--accent-rgb), .12); box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .7), 0 0 14px rgba(var(--accent-rgb), .3); }
+@media (prefers-reduced-motion: reduce) { #menubar-ask-slot #ask { transition: none; } }
+
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   #menubar, #mb-zone { display: none !important; }
+  #ask-panel { display: none !important; } /* phones: the Ask field stays in the bottom toolbar */
   #mb-phone { display: grid; place-items: center; font-size: 20px; }
   #mb-tray-phone { display: flex; position: fixed; z-index: 30; top: calc(var(--sat) + var(--gap)); right: calc(var(--sar) + var(--gap)); height: 44px; max-width: 45vw; padding: 0 2px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
   #mb-tray-phone .tray-item { min-height: 44px; padding: 0 5px; }
