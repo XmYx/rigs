@@ -85,3 +85,16 @@ test('withWork and heuristicRoute apply the guard', () => {
   assert.equal(heuristicRoute('can you fix the router?', []).route, 'implement');
   assert.equal(heuristicRoute('what does the router do', []).route, 'answer');
 });
+
+test('heuristicRoute: a new multi-part goal is not swallowed by a thread that shares a few words', () => {
+  const th = [{ id: 'old', title: 'on magix-system, rigs is running, but macbookpro (this mach…' }];
+  const wiki = "Create a wiki for the public_procurement_pipeline by going through the repo and algorithmically collecting all md's, and also using sonnet to fill the gaps in the documentation. It has to result in a local version of the wiki, browsable, containing both country specific and pipeline specific information. Build it in a separate folder on macbookpro; this round nothing is committed.";
+  assert.equal(heuristicRoute(wiki, th).route, 'plan');
+  // Common words ("this", "machine", "rigs") alone never make a thread match.
+  assert.notEqual(heuristicRoute('make this machine faster in rigs', th).route, 'continue');
+  // A short follow-up that names the thread's subject still continues it.
+  assert.equal(heuristicRoute('magix-system macbookpro still disconnecting', th).route, 'continue');
+  // A long request that says it follows on still continues.
+  const docking = [{ id: 'dock', title: 'dockable panels and windows in jarvis' }];
+  assert.equal(heuristicRoute('continue the dockable panels work: windows should snap to the side, panels should tab together, and the layout should persist across reloads', docking).route, 'continue');
+});

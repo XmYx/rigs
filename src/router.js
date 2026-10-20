@@ -112,14 +112,30 @@ export function guardRoute(d, text) {
   return { ...d, route, reason: `an imperative work request, not a question (${route})`, guarded: true };
 }
 
+// Words too common to say two requests share a subject.
+const STOP = new Set('this that these those with from into onto have been were will would should could does done make sure also just only then than them they their there what when where which while about after before again other some such very more most need want lets please jarvis rigs machine machines thing things work working round test'.split(' '));
+const SUBJECT = (s) => new Set([...WORDS(s)].filter((w) => !STOP.has(w)));
+// Phrases that tie a request to earlier work.
+const FOLLOW_ON = /\b(continue|carry on|keep going|pick (it|that|this) up|resume|follow[- ]up|as before|same (task|project|thread|thing)|(that|the) (last|previous|earlier) (task|project|request|one)|again)\b/i;
+
+/** How much of an ongoing thread's subject a request shares: n words, and that as a share of the thread title's words. */
+export function threadOverlap(text, title) {
+  const a = SUBJECT(text), b = SUBJECT(title);
+  const n = [...a].filter((w) => b.has(w)).length;
+  return { n, share: b.size ? n / b.size : 0 };
+}
+
 /** Keyword rules: the fallback when no model answers, and a sanity check on model output. */
 export function heuristicRoute(text, threads = []) {
   const t = String(text || '');
-  const best = threads
-    .map((th) => ({ th, n: [...WORDS(t)].filter((w) => WORDS(th.title).has(w)).length }))
-    .sort((a, b) => b.n - a.n)[0];
-  if (best && best.n >= 2) return { route: 'continue', threadId: best.th.id, title: best.th.title, reason: 'shares its subject with an ongoing thread' };
-  if (/\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
+  const best = threads.map((th) => ({ th, ...threadOverlap(t, th.title) })).sort((a, b) => b.n - a.n)[0];
+  // A long, several-part goal is new work unless it says it follows on; sharing a few words with an old thread title
+  // ("this", a machine name) is not enough to swallow it into that thread's brain without a project.
+  const newGoal = hasSeveralParts(t) && !FOLLOW_ON.test(t);
+  if (best && !newGoal && (best.n >= 3 || (best.n >= 2 && best.share >= 0.5))) {
+    return { route: 'continue', threadId: best.th.id, title: best.th.title, reason: 'shares its subject with an ongoing thread' };
+  }
+  if (newGoal || /\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
   if (isImperative(t)) return { route: 'implement', reason: 'an imperative work request' };
