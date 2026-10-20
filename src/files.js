@@ -103,14 +103,16 @@ export function parseRange(header, size) {
  * Stream a file: 200 with the whole file, or 206 Partial Content for a `range` header (seeking in <video>/<audio>, and
  * Safari/iOS, which will not play media without it); 416 + `Content-Range: bytes *\/size` when the range starts past
  * the end. `head` sends the headers only. A client that hangs up mid-file (a media element seeking) is not an error.
+ * `no-cache`: Last-Modified alone would let a browser reuse a stale copy heuristically (an edited image or text file);
+ * an `ifRange` that is not the current Last-Modified (the file changed since the client cached part of it) = the whole file.
  */
-export async function sendFile(p, res, { download = false, range, head = false } = {}) {
+export async function sendFile(p, res, { download = false, range, ifRange, head = false } = {}) {
   const file = resolvePath(p);
   const st = await fsp.stat(file);
   if (st.isDirectory()) throw Object.assign(new Error('is a directory'), { status: 400 });
-  const headers = { 'content-type': mimeOf(file), 'accept-ranges': 'bytes', 'last-modified': st.mtime.toUTCString() };
+  const headers = { 'content-type': mimeOf(file), 'accept-ranges': 'bytes', 'last-modified': st.mtime.toUTCString(), 'cache-control': 'no-cache' };
   if (download) headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`;
-  const r = parseRange(range, st.size);
+  const r = ifRange && ifRange !== headers['last-modified'] ? null : parseRange(range, st.size);
   if (r === 'unsatisfiable') {
     res.writeHead(416, { ...headers, 'content-range': `bytes */${st.size}`, 'content-length': 0 });
     res.end();

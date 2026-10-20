@@ -718,7 +718,7 @@ export async function startServer() {
     if (sub === 'files/read') return files.readText(q.get('path'));
     if (sub === 'files/raw') { // GET or HEAD; Range → 206 (media seeking), see files.sendFile
       if (!res) throw new HttpError(400, 'stream only');
-      await files.sendFile(q.get('path'), res, { download: q.get('download') === '1', range: req.headers?.range, head: method === 'HEAD' });
+      await files.sendFile(q.get('path'), res, { download: q.get('download') === '1', range: req.headers?.range, ifRange: req.headers?.['if-range'], head: method === 'HEAD' });
       return undefined;
     }
     if (sub === 'files/write' && method === 'PUT') return files.writeStream(q.get('path'), req);

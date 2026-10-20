@@ -269,6 +269,7 @@ function placeVideo() {
 function onKey(e) {
   const t = e.target;
   if (t?.closest?.('select, textarea, input:not([type=range])')) return;
+  if (t?.classList?.contains('mp-vol') && /^Arrow|^(Home|End|PageUp|PageDown)$/.test(e.key)) return; // the focused volume slider moves itself
   const a = keyAction(e, { kind: session?.kind || 'audio' });
   if (!a || !session?.el) return;
   e.preventDefault();

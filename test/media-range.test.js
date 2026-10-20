@@ -158,6 +158,19 @@ for (const base of Object.keys(BASES)) {
     assert.equal(part.status, 206);
     assert.equal(part.headers.get('content-range'), `bytes 10-19/${SIZE}`);
   });
+
+  test(`${base}: Cache-Control no-cache (no stale heuristic reuse); If-Range other than Last-Modified → the whole file`, async () => {
+    const r = await get(base);
+    await r.arrayBuffer();
+    assert.equal(r.headers.get('cache-control'), 'no-cache', 'Last-Modified alone lets a browser serve an edited file stale');
+    const lm = r.headers.get('last-modified');
+    const same = await fetch(url(base), { headers: { range: 'bytes=0-9', 'if-range': lm } });
+    assert.equal(same.status, 206);
+    await same.arrayBuffer();
+    const changed = await fetch(url(base), { headers: { range: 'bytes=0-9', 'if-range': 'Thu, 01 Jan 1970 00:00:00 GMT' } });
+    assert.equal(changed.status, 200, 'the file changed since the client cached part of it');
+    assert.equal((await changed.arrayBuffer()).byteLength, SIZE);
+  });
 }
 
 test('peer: a client that hangs up mid-file (a media element seeking) leaves both daemons serving', async () => {
