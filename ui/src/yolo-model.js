@@ -74,6 +74,21 @@ export const windowTitle = (s) => `YOLO — ${s.title}${s.node ? ` · ${s.node}`
 const base = (s) => (s.url.endsWith('/') ? s.url : `${s.url}/`);
 export const stopUrl = (s) => `${base(s)}stop`;
 export const errorsUrl = (s) => `${base(s)}errors`;
+/**
+ * A window opened for a run (its yolo-start) folded with the run's meta (GET …/meta): keptAs, and — when the run has
+ * already ended (a window reopened later) — its end, as its yolo-done would have said. Same object when nothing changes.
+ */
+export function withMeta(state, meta) {
+  if (!state || !meta || meta.runId !== state.runId) return state;
+  let s = withKept(state, meta.keptAs);
+  if (s.status === 'live' && ['done', 'failed', 'stopped'].includes(meta.status)) {
+    s = applyEvent(s, { type: 'yolo-done', runId: s.runId, ok: !!meta.ok, summary: meta.summary || (meta.status === 'stopped' ? 'Stopped' : ''), errors: meta.errors, at: meta.endedAt,
+      timeToFirstFrameMs: meta.firstFrameAt && meta.startedAt ? Math.max(0, meta.firstFrameAt - meta.startedAt) : null });
+    s = { ...s, step: Math.max(s.step, Number(meta.updates) || 0) };
+  }
+  return s;
+}
+
 export const keepUrl = (s) => `${base(s)}keep`;
 export const metaUrl = (s) => `${base(s)}meta`;
 

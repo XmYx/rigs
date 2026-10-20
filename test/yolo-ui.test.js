@@ -127,3 +127,16 @@ test('wiring: the Keep button is live, posts through the run\'s node and opens t
   assert.match(src, /import \{[^}]*openApp[^}]*\} from '\.\/apps\.js'/);
   assert.match(read('ui/src/styles.css'), /\.yolo-keep-form/);
 });
+
+test('withMeta: a window opened for a run takes keptAs and, for a run that already ended, its end from the meta', () => {
+  const live = M.startRun(start);
+  assert.equal(M.withMeta(live, { runId: 'r1', status: 'running' }), live, 'a run still working: nothing changes');
+  assert.equal(M.withMeta(live, { runId: 'other', status: 'done' }), live, 'another run');
+  const keptAs = { id: 'orbit-test', node: 'magix-system', name: 'Orbit test' };
+  const re = M.withMeta(live, { runId: 'r1', status: 'done', ok: true, summary: 'Planets.', errors: 2, updates: 4, startedAt: 1000, firstFrameAt: 1900, endedAt: 9000, keptAs });
+  assert.deepEqual([re.status, re.ok, re.errors, re.step, re.endedAt, re.timeToFirstFrameMs, re.keptAs.id], ['done', true, 2, 4, 9000, 900, 'orbit-test']);
+  assert.equal(M.keepButton(re).label, '★ Kept');
+  assert.equal(M.withMeta(live, { runId: 'r1', status: 'stopped', ok: false }).status, 'failed');
+  const ended = M.applyEvent(live, done(true));
+  assert.equal(M.withMeta(ended, { runId: 'r1', status: 'done', ok: true }), ended, 'already ended: unchanged');
+});

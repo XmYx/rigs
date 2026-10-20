@@ -1,7 +1,7 @@
 import { api, h } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
-import { STATUS_LABEL, applyEvent, elapsed, errorCount, errorsUrl, eventKey, isYoloEvent, keepBody, keepButton, keepUrl, keptApp, metaUrl, startRun, stopUrl, windowTitle, withKept } from './yolo-model.js';
+import { STATUS_LABEL, applyEvent, elapsed, errorCount, errorsUrl, eventKey, isYoloEvent, keepBody, keepButton, keepUrl, keptApp, metaUrl, startRun, stopUrl, windowTitle, withKept, withMeta } from './yolo-model.js';
 
 // YOLO windows: "yolo a bouncing ball in p5" opens a floating window the moment the daemon pushes yolo-start (before the
 // agent writes anything), shows the run's sandbox page in an iframe through /api/nodes/<node>/yolo/<runId>/ (so a run
@@ -140,8 +140,16 @@ function openKept(r, fromServer = null) {
   if (a) openApp(a);
 }
 
-async function loadKept(r) {
-  try { const m = await api(metaUrl(r.state)); if (m?.keptAs) { r.state = withKept(r.state, m.keptAs); render(r); } } catch { /* run gone or peer unreachable */ }
+/** The run's meta when its window opens: kept already? ended already (a window reopened for a finished run)? */
+async function loadMeta(r) {
+  try {
+    const next = withMeta(r.state, await api(metaUrl(r.state)));
+    if (next === r.state) return;
+    const ended = r.state.status === 'live' && next.status !== 'live';
+    r.state = next;
+    render(r);
+    if (ended) finish(r);
+  } catch { /* run gone or peer unreachable */ }
 }
 
 function render(r) {
@@ -192,6 +200,6 @@ function openRun(state) {
   r.timer = setInterval(() => { r.time.textContent = elapsed(r.state); }, 1000);
   r.win.interval(() => { if (r.state.status === 'live') pollErrors(r); }, 2500);
   render(r);
-  if (!state.keptAs) loadKept(r);
+  loadMeta(r);
   return r;
 }
