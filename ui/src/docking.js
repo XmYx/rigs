@@ -858,8 +858,12 @@ function endDrag(cancel) {
   el.classList.remove('dragging', 'dock-lifted');
   if (d.docking) el.style.zIndex = /z-index:\s*(\d+)/.exec(d.snapshot.css)?.[1] || '';
   if (d.snap?.shown) {
-    // Let go in a tile zone (its preview was showing): the window glides into the zone's rect.
-    windowSnap.drop(it, d.snap.zone, d.start);
+    // Let go in a tile zone (its preview was showing): the window glides into the zone's rect. One lifted out of the
+    // docked tree leaves it first (else render() docks it again), and untiling returns it to its lifted size there.
+    const wasDocked = panelStatus(dockManager.getLayout(), it.id) === 'docked';
+    const lifted = { x: b.left, y: b.top, w: b.width, h: b.height };
+    if (wasDocked) dockManager.floatPanel(it.id, { ...d.snap.rect, vw: window.innerWidth, vh: window.innerHeight });
+    windowSnap.drop(it, d.snap.zone, wasDocked ? lifted : d.start);
     if (d.docking) it.raise?.();
     announce(`${it.title} tiled: ${d.snap.label || d.snap.zone}.`);
     render();

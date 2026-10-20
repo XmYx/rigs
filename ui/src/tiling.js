@@ -142,7 +142,8 @@ setWindowSnap({
     const area = dockArea();
     for (const el of [...tiled]) {
       if (!el.isConnected) { forget(el); continue; }
-      if (el.classList.contains('docked') || el.classList.contains('dragging')) continue;
+      // Maximised (double-click / ▢) stays maximised; it re-fits on the next change after it is restored.
+      if (el.classList.contains('docked') || el.classList.contains('dragging') || el.classList.contains('max')) continue;
       const s = state.get(el);
       const r = zoneRect(s.zone, area);
       if (same(r, s.rect)) continue;

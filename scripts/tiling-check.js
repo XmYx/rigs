@@ -220,8 +220,14 @@ const errors = [];
   await sleep(500);
   const A2 = await area(page);
   check('after a resize, a tiled quarter re-fits to its zone', near(await rect(page, w1), zone(A2, 'top-left')), JSON.stringify({ got: await rect(page, w1), want: zone(A2, 'top-left') }));
+  // A tiled window that is maximised stays maximised through a resize (the re-fit leaves it alone).
+  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn[aria-label="Maximize"]').click(), w1);
+  await sleep(200);
   await page.setViewportSize({ width: 1440, height: 900 });
   await sleep(400);
+  check('a maximised tiled window stays maximised after a resize', await page.evaluate((s) => document.querySelector(s).classList.contains('max'), w1));
+  await page.evaluate((s) => document.querySelector(s).querySelector('.win-btn[aria-label="Maximize"]').click(), w1);
+  await sleep(200);
   await closeAll(page);
   await sleep(400);
 
@@ -242,9 +248,19 @@ const errors = [];
   const dg2 = await grab(page, d2);
   await drag(page, dg2, { x: 1437, y: 897 }, { shot: 'docking-on-corner.png' });
   await sleep(400); // the lifted look (scale 1.01) eases back after the drop
+  // The pointer at the bottom may reveal an auto-hidden app dock: wait until the tile has re-fitted above it.
+  for (let i = 0; i < 15 && !near(await rect(page, d2), zone(await area(page), 'bottom-right')); i++) await sleep(100);
   const A3 = await area(page); // after the drop: the pointer at the bottom may have revealed an auto-hidden app dock (the tile re-fits above it)
   check('docking on: a corner still tiles into the quarter', near(await rect(page, d2), zone(A3, 'bottom-right')) && !(await page.evaluate((s) => document.querySelector(s).classList.contains('docked'), d2)),
     JSON.stringify({ got: await rect(page, d2), want: zone(A3, 'bottom-right'), A3, vars: await page.evaluate(() => ['--mb-h', '--ad-l', '--ad-r', '--ad-b'].map((n) => getComputedStyle(document.documentElement).getPropertyValue(n))), tile: await page.evaluate((s) => { const e = document.querySelector(s); return [e.className, getComputedStyle(e).scale, getComputedStyle(e).transition, e.style.cssText]; }, d2) }));
+  // A docked window dragged out of the layout into a corner tiles there (it must leave the docked tree, not snap back).
+  const dg3 = await grab(page, d1);
+  await drag(page, dg3, { x: 3, y: 3 }, { shot: 'docking-on-docked-to-corner.png' });
+  await sleep(400);
+  const A4 = await area(page);
+  const d1s = await page.evaluate((s) => { const e = document.querySelector(s); return { docked: e.classList.contains('docked'), tiled: e.classList.contains('tiled') }; }, d1);
+  check('docking on: a docked window dragged to a corner leaves the layout and tiles', !d1s.docked && d1s.tiled && near(await rect(page, d1), zone(A4, 'top-left')),
+    JSON.stringify({ ...d1s, got: await rect(page, d1), want: zone(A4, 'top-left') }));
   await closeAll(page);
   await page.evaluate(() => { localStorage.setItem('rigs.docking', '0'); });
   await ctx.close();
