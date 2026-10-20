@@ -178,7 +178,29 @@ const LABEL = { left: 'Left', bottom: 'Bottom', right: 'Right' };
 const steps = (state, phone) => (state.settings.position === 'bottom' || phone ? ['left', 'right'] : ['up', 'down']);
 
 /** The dock's own settings: position, auto-hide, magnification (+ size), hidden items. */
-export function settingsEntries(state, act, { phone = false, reducedMotion = false } = {}) {
+/**
+ * The mesh sync line of Dock settings: the layout and the dock are saved on the daemon and follow every machine
+ * (synced-storage.js). status = { state: synced | saving | offline | local | starting, last: { by } | null }.
+ */
+export function syncEntries(sync, { phone = false } = {}) {
+  if (!sync) return [];
+  const st = sync.status?.() || {};
+  const by = st.last?.by ? `last change: ${st.last.by}` : '';
+  const line = {
+    synced: { label: 'Synced across the mesh', hint: by },
+    saving: { label: 'Syncing across the mesh…', hint: by },
+    starting: { label: 'Syncing across the mesh…', hint: 'connecting' },
+    offline: { label: 'Mesh sync paused', hint: 'saved here; daemon unreachable' },
+    local: { label: 'Saved in this browser only', hint: 'daemon too old to sync' },
+  }[st.state] || { label: 'Synced across the mesh', hint: by };
+  return [
+    SEP,
+    { label: line.label, icon: '⇄', disabled: true, ...(phone ? { hint: 'panel layout read-only on phones' } : line.hint ? { hint: line.hint } : {}) },
+    { label: 'Reset layout for all machines', icon: '↺', disabled: phone || st.state === 'local', ...(phone ? { hint: 'from a desktop' } : {}), run: () => sync.resetAll?.() },
+  ];
+}
+
+export function settingsEntries(state, act, { phone = false, reducedMotion = false, sync = null } = {}) {
   const st = state.settings;
   const hidden = Object.values(state.items).filter((it) => it.hidden);
   const nearest = STRENGTHS.reduce((a, b) => (Math.abs(b[1] - st.magnifyStrength) < Math.abs(a[1] - st.magnifyStrength) ? b : a))[1];
@@ -200,6 +222,7 @@ export function settingsEntries(state, act, { phone = false, reducedMotion = fal
       ? [...hidden.map((it) => ({ label: `Show ${it.title}`, icon: it.icon || '', run: () => act((s) => setHidden(s, it.id, false)) })), SEP,
         { label: 'Show all', run: () => act((s) => hidden.reduce((x, h) => setHidden(x, h.id, false), s)) }]
       : [{ label: 'Nothing hidden', disabled: true }]) },
+    ...syncEntries(sync, { phone }),
   ];
 }
 

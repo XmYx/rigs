@@ -1,16 +1,18 @@
 import { isPhone } from './mobile.js';
 import { announce } from './a11y.js';
+import { syncedStorage, onRemoteKey } from './synced-storage.js';
 
 // Smart scaling: the optional mode (off by default, persisted in 'rigs.scaling') that keeps every visible panel
 // and window fully on screen as the browser window resizes. The maths is the fit solver in dock-layout.js;
 // docking.js applies it (and animates it with CSS transitions). This module holds the switch, the commands
 // for menus and the timing of the resize handler. Phones never scale: they keep the mobile layout.
+// The switch is saved through synced-storage.js, so it follows every machine on the mesh (live).
 
 const KEY = 'rigs.scaling';
 const listeners = new Set();
 let on = read();
 
-function read() { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } }
+function read() { return syncedStorage.getItem(KEY) === '1'; }
 
 /** Smart scaling as the user set it (persisted). */
 export const isScaling = () => on;
@@ -24,12 +26,13 @@ export function setScaling(next) {
   next = !!next;
   if (next === on) return on;
   on = next;
-  try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* private mode */ }
+  syncedStorage.setItem(KEY, on ? '1' : '0');
   announce(on ? 'Smart scaling on: panels stay on screen as the window resizes.' : 'Smart scaling off.');
   for (const fn of listeners) { try { fn(on); } catch { /* keep going */ } }
   return on;
 }
 export const toggleScaling = () => setScaling(!on);
+onRemoteKey(KEY, (raw) => setScaling(raw === '1')); // switched on another machine
 
 // ---------------------------------------------------------------- timing of the resize handler
 

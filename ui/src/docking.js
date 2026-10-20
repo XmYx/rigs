@@ -3,9 +3,10 @@ import { isPhone } from './mobile.js';
 import { announce } from './a11y.js';
 import {
   dockManager, panelStatus, panelsIn, dropZoneAt, allocate, minSizeOf, setActiveTab, reorder, resizeSplit,
-  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN,
+  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN, deserialize, serialize, STORAGE_KEY,
 } from './dock-layout.js';
 import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion } from './scaling.js';
+import { syncedStorage, readOnlyWhen, prepareKey, onRemoteKey } from './synced-storage.js';
 
 // The DOM side of the dock layout engine (dock-layout.js holds the model; this module draws it).
 //
@@ -28,6 +29,11 @@ import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion
 // rects are never stored: the layout keeps each panel's home, so a growing window brings it back. Motion is
 // CSS transitions (styles.css, SMART SCALING): eased and spring-like for a discrete resize, switched off
 // (.fit-live) while the window edge is being dragged and under prefers-reduced-motion.
+//
+// Mesh sync: the layout ('rigs.dock') and the docking switch ('rigs.docking') go through synced-storage.js, so they
+// are saved on the daemon and follow every machine. What is synced leaves out this page's wm.js windows (win-<n>);
+// a layout from another machine is re-read live (reloadLayout) once no pointer is held, keeping this page's windows
+// where they are on screen. Phones read it but never write a panel layout back (they never dock).
 
 export const STAGE = 'stage';
 const MODE_KEY = 'rigs.docking';
@@ -55,7 +61,7 @@ let drag = null; // the drag in progress
 let splitDrag = null;
 let stageEl = null;
 
-function readMode() { try { return localStorage.getItem(MODE_KEY) === '1'; } catch { return false; } }
+function readMode() { return syncedStorage.getItem(MODE_KEY) === '1'; }
 
 /** Docking mode as the user set it (persisted). */
 export const isDocking = () => mode;
@@ -89,7 +95,7 @@ export function setDocking(on) {
     dockManager.setLayout(L);
   }
   mode = on;
-  try { localStorage.setItem(MODE_KEY, on ? '1' : '0'); } catch { /* private mode */ }
+  syncedStorage.setItem(MODE_KEY, on ? '1' : '0');
   render();
   announce(on ? 'Docking layout on: drag a panel by its title bar onto another to dock it.' : 'Docking layout off.');
   for (const fn of modeListeners) { try { fn(on); } catch { /* keep going */ } }
@@ -885,15 +891,14 @@ let started = false;
 export function initDocking({ defaults }) {
   if (started) return;
   started = true;
-  let storage = null;
-  try { storage = window.localStorage; } catch { /* blocked storage: nothing persists */ }
-  dockManager.attach({ storage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
+  readOnlyWhen(STORAGE_KEY, isPhone); // phones never dock: their layout stays on the phone
+  prepareKey(STORAGE_KEY, withoutWindows); // windows belong to this page, not to the mesh
+  dockManager.attach({ storage: syncedStorage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
   // Windows never outlive the page; the galaxy always has its place in the tree.
-  let L = dockManager.getLayout();
-  for (const p of [...panelsIn(L.root), ...L.floating.map((f) => f.id), ...Object.keys(L.hidden)]) if (p.startsWith('win-')) L = removePanel(L, p);
-  if (panelStatus(L, STAGE) !== 'docked') L = dock(removePanel(L, STAGE), STAGE, 'root', 'right', { share: 0.7 });
-  dockManager.setLayout(L);
+  dockManager.setLayout(withStage(stripWindows(dockManager.getLayout())));
   dockManager.subscribe(() => render());
+  onRemoteKey(STORAGE_KEY, reloadLayout);
+  onRemoteKey(MODE_KEY, (raw) => setDocking(raw === '1'));
   window.addEventListener('resize', onResize);
   // The top menu bar (--mb-h) and the app dock (--ad-*) show / hide / move by setting variables on <html>: lay out again inside them.
   const insetKey = () => { const a = appDockInsets(); return `${topInset()},${a.l},${a.r},${a.b}`; };
@@ -907,6 +912,35 @@ export function initDocking({ defaults }) {
     render();
   });
   watchViewport();
+}
+
+const isWin = (id) => id.startsWith('win-');
+function stripWindows(L) {
+  for (const p of [...panelsIn(L.root), ...L.floating.map((f) => f.id), ...Object.keys(L.hidden)]) if (isWin(p)) L = removePanel(L, p);
+  return L;
+}
+const withStage = (L) => (panelStatus(L, STAGE) === 'docked' ? L : dock(removePanel(L, STAGE), STAGE, 'root', 'right', { share: 0.7 }));
+/** The synced form of a stored layout: the same JSON without this page's windows. */
+function withoutWindows(v) {
+  if (!JSON.stringify(v).includes('"win-')) return v;
+  return JSON.parse(serialize(stripWindows(deserialize(v))));
+}
+
+/**
+ * Another machine changed the layout (synced-storage.js wrote it to the cache, never while a pointer is held):
+ * load it as on boot, then put this page's windows back where they are on screen, floating.
+ */
+function reloadLayout() {
+  if (drag) endDrag(true);
+  const wins = [...items.values()].filter((it) => it.kind === 'window' && panelStatus(dockManager.getLayout(), it.id));
+  const rects = wins.map((it) => { const r = it.el.getBoundingClientRect(); return { id: it.id, x: r.left, y: r.top, w: r.width, h: r.height }; });
+  syncedStorage.quiet(() => {
+    dockManager.attach({});
+    let L = withStage(stripWindows(dockManager.getLayout()));
+    for (const r of rects) if (r.w > 0 && r.h > 0) L = undock(L, r.id, { ...r, vw: window.innerWidth, vh: window.innerHeight });
+    dockManager.setLayout(L);
+  });
+  render();
 }
 
 /**
