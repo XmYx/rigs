@@ -1,6 +1,7 @@
 import { h, toast } from './api.js';
 import { commands, formatShortcut, inTextField, isMac } from './commands.js';
 import { isPhone, PHONE_QUERY } from './mobile.js';
+import { closeTrayPopover, mountTray, openTrayItem, trayPopoverOpen } from './tray.js';
 
 // The top menu bar: File, Edit, Window, Tools, Help — slim, animated, themed by the CSS variables of themes.js.
 // Every item runs a command from commands.js (the model comes from jarvis-commands.js menuModel()).
@@ -9,6 +10,7 @@ import { isPhone, PHONE_QUERY } from './mobile.js';
 // ARIA: menubar / menu / menuitem(checkbox) / separator. On a phone it collapses into one ⋮ button in the header
 // whose menu drills into File, Edit… in place.
 // openMenuAt() renders the same menus at a point, for context menus.
+// The right end holds the status tray (tray.js: session limit, calendar, clock); on a phone a compact copy sits in the header.
 // The right side holds one self-contained slot, #menubar-ask-slot: mountAskSlot() puts the inline Ask JARVIS field
 // there (ask-panel.js decides when), askSlot() is the element (its drop target), peekMenubar() shows a hidden bar.
 
@@ -208,7 +210,9 @@ function fillPhone(menuEl, entries, label) {
 function openPhoneMenu() {
   rememberFocus();
   closeFrom(0);
-  const top = model().map((d) => ({ label: d.label, submenu: d.items }));
+  const top = [...model().map((d) => ({ label: d.label, submenu: d.items })), { sep: true },
+    { label: 'Calendar', icon: '📅', run: () => setTimeout(() => openTrayItem('clock'), 0) },
+    { label: 'Session limit', icon: '◔', run: () => setTimeout(() => openTrayItem('session-limit'), 0) }];
   const el = renderMenu(top, { label: 'JARVIS menu' });
   el.classList.add('mb-phone-menu');
   el._entries = top;
@@ -402,7 +406,7 @@ function schedulePeekEnd() {
   if (!hidden) return;
   clearTimeout(peekTimer);
   peekTimer = setTimeout(() => {
-    if (open.length || bar?.matches(':hover') || bar?.contains(document.activeElement)) return;
+    if (open.length || trayPopoverOpen() || bar?.matches(':hover') || bar?.contains(document.activeElement)) return;
     endPeek();
   }, 650);
 }
@@ -429,15 +433,17 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
   }, d.label));
   const statusEl = h('span', { class: 'mb-status' });
   askSlotEl = h('div', { id: 'menubar-ask-slot', class: 'mb-ask-slot', role: 'group', 'aria-label': 'Ask JARVIS', hidden: true });
+  const trayEl = h('div', { id: 'mb-tray', class: 'tray', role: 'toolbar', 'aria-label': 'Status' });
   const hideBtn = h('button', { class: 'mb-hide', title: `Hide menu bar (${formatShortcut('Mod+Shift+M', mac)})`, 'aria-label': 'Hide menu bar', onclick: () => setMenubarHidden(true) }, '⌃');
   bar = h('nav', { id: 'menubar', 'aria-label': 'JARVIS menu bar' },
     h('span', { class: 'mb-brand', 'aria-hidden': 'true' }, '◆ JARVIS'),
     h('div', { class: 'mb-tops', role: 'menubar', 'aria-label': 'JARVIS' }, ...tops),
-    h('span', { class: 'mb-spacer' }), askSlotEl, statusEl, hideBtn);
+    h('span', { class: 'mb-spacer' }), askSlotEl, statusEl, trayEl, hideBtn);
   bar.addEventListener('keydown', onBarKey);
   bar.addEventListener('pointerleave', schedulePeekEnd);
   bar.addEventListener('pointerenter', () => clearTimeout(peekTimer));
   bar.addEventListener('focusout', () => setTimeout(schedulePeekEnd, 0));
+  mountTray(trayEl);
   zone = h('div', { id: 'mb-zone', 'aria-hidden': 'true' });
   zone.addEventListener('pointerenter', () => { clearTimeout(peekTimer); peekTimer = setTimeout(startPeek, 120); });
   zone.addEventListener('pointerleave', () => { if (!document.body.classList.contains('mb-peek')) clearTimeout(peekTimer); });
@@ -455,8 +461,12 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
     if (isPhone() && topbar) { const d = document.getElementById('drawer-btn'); if (d?.parentElement === topbar) d.after(phoneBtn); else topbar.prepend(phoneBtn); }
     else phoneBtn.remove();
     closeMenus({ restore: false });
+    closeTrayPopover({ restore: false });
     applyHidden();
   };
+  const phoneTray = h('div', { id: 'mb-tray-phone', class: 'tray', role: 'toolbar', 'aria-label': 'Status' });
+  document.body.append(phoneTray);
+  mountTray(phoneTray, { phone: true });
   placePhone();
   window.matchMedia?.(PHONE_QUERY)?.addEventListener?.('change', placePhone);
 
@@ -466,6 +476,7 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
     if (e.target.closest?.('.mb-menu, #menubar .mb-top, #mb-phone')) return;
     closeMenus({ restore: false });
   }, true);
+  document.addEventListener('tray-popover-open', () => closeMenus({ restore: false }));
   document.addEventListener('focusin', (e) => {
     const t = e.target;
     if (inChrome(t)) return;

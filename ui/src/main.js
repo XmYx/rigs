@@ -12,6 +12,7 @@ import { createProviders, galaxyTarget, registerJarvisProviders } from './ctx-pr
 import { tagCtx } from './ctx-tag.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
+import { registerJarvisTray } from './tray-jarvis.js';
 import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
 import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
@@ -769,11 +770,20 @@ function shortModel(b) {
   return m.replace(/^claude-/, '').replace(/:latest$/, '');
 }
 
+let jarvisTray = null; // set below, once setBrain and friends exist
 function renderBrainBadge() {
   const b = currentBrain();
   $('#brain-badge').innerHTML = b ? `◆ ${shortModel(b).toUpperCase()}${b.effort ? ` <small>· ${b.effort}</small>` : ''} <small>· ${b.nodeName}</small> ▾` : '◆ NO BRAIN ▾';
   $('#brain-badge').removeAttribute('aria-label'); // the visible text is its name (the title only described it before it filled in)
+  jarvisTray?.refresh();
 }
+
+// The JARVIS icon at the left of the menu-bar tray: the same brain choices, hot-swapped through setBrain.
+jarvisTray = registerJarvisTray({
+  current: currentBrain, entries: () => snap,
+  setBrain: (b) => { setBrain(b); api('/api/local/brain/core').then((c) => { coreDefault = c; }).catch(() => {}); },
+  openAsk: () => focusAsk(), openBrainPanel: () => toggleBrainMenu(),
+});
 
 function setBrain(b, { quiet = false } = {}) {
   const prevNode = currentBrain()?.nodeId;

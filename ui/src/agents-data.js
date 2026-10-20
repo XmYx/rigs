@@ -46,7 +46,18 @@ function withoutShadowed(sessions) {
   return live.filter((s) => !drop.has(s));
 }
 
-/** Live agents across every online machine, waiting first, then most recently active. */
+/** A finished agent stays listed this long after its end / last activity. */
+export const FINISHED_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+/** An agent session that is no longer live (finished, failed or stopped); chats and plain shells are not agents. */
+function isEndedAgent(s) {
+  if (!s || s.live) return false;
+  if (s.kind === 'claude' || s.kind === 'codex' || s.kind === 'rig') return true;
+  if (s.kind === 'tmux' || s.kind === 'pty') return AGENT.test(s.agent || '');
+  return false;
+}
+
+/** Agents across every online machine: live ones (waiting first, then most recently active), then ones that ended within 12h. */
 export function activeAgents(snap, now = Date.now()) {
   const out = [];
   for (const e of snap || []) {
@@ -55,7 +66,30 @@ export function activeAgents(snap, now = Date.now()) {
     for (const s of withoutShadowed(e.sessions || [])) {
       out.push({ machine: e.node, session: s, state: agentState(s, waiting, now) });
     }
+    for (const s of e.sessions || []) {
+      if (isEndedAgent(s) && s.updatedAt && now - s.updatedAt < FINISHED_WINDOW_MS) out.push({ machine: e.node, session: s, state: 'done' });
+    }
   }
-  const rank = { waiting: 0, working: 1, idle: 2 };
+  const rank = { waiting: 0, working: 1, idle: 2, done: 3 };
   return out.sort((a, b) => rank[a.state] - rank[b.state] || (b.session.updatedAt || 0) - (a.session.updatedAt || 0));
+}
+
+/** Stable id of a row, and a signature that changes when its state does (finished rows: when it ended). */
+export const agentKey = (r) => `${r.machine?.id || r.machine?.name || ''}:${r.session.kind}:${r.session.id}`;
+export const agentSig = (r) => (r.state === 'done' ? `done@${r.session.updatedAt || 0}` : r.state === 'waiting' ? 'waiting' : 'running');
+
+/** Forget dismissals made more than 12h ago. `dismissed` is { key: { sig, at } }. */
+export function pruneDismissed(dismissed, now = Date.now()) {
+  const out = {};
+  for (const [k, v] of Object.entries(dismissed || {})) if (v && now - v.at < FINISHED_WINDOW_MS) out[k] = v;
+  return out;
+}
+
+/** Rows to show: inside the window (running/waiting always; finished within 12h) and not dismissed in their current state. */
+export function filterAgents(list, { now = Date.now(), dismissed = {} } = {}) {
+  return (list || []).filter((r) => {
+    if (r.state === 'done' && !(r.session.updatedAt && now - r.session.updatedAt < FINISHED_WINDOW_MS)) return false;
+    const d = dismissed[agentKey(r)];
+    return !(d && d.sig === agentSig(r) && now - d.at < FINISHED_WINDOW_MS);
+  });
 }

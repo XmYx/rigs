@@ -868,6 +868,10 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .ag-state.waiting { color: #fbbf24; }
 .ag-chat { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: transparent; font-size: 13px; display: grid; place-items: center; }
 .ag-chat:hover { border-color: var(--accent); }
+.ag-row.done { opacity: .72; }
+.ag-state.done { color: var(--muted); }
+.ag-x { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 12px; display: grid; place-items: center; cursor: pointer; }
+.ag-x:hover, .ag-x:focus-visible { border-color: var(--accent); color: var(--text, #fff); }
 .ag-empty { font-size: 12px; color: var(--muted); padding: 6px 2px; line-height: 1.5; }
 #btn-agents { position: relative; }
 .ag-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #4ade80; color: #04120a; font: 700 10px/16px var(--mono); text-align: center; }
@@ -1377,7 +1381,38 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 :root[data-theme="atari"] #menubar { background: var(--panel-solid); border-bottom: 2px solid var(--line-strong); }
 :root[data-theme="atari"] #menubar .mb-brand { font-family: var(--pixel); font-size: 9px; letter-spacing: 0; text-shadow: 2px 2px 0 #000; }
 :root[data-theme="atari"] .mb-menu { border-width: 2px; box-shadow: 4px 4px 0 #000; }
-@media (prefers-reduced-motion: reduce) { #menubar, .mb-menu, .mb-top { transition: none; } .floating.panel-flash { animation: none; } }
+/* Status tray (tray.js): session limit, calendar, clock at the right of the menu bar; a compact copy in the phone header. */
+.tray { display: flex; align-items: center; gap: 2px; height: 100%; }
+#mb-tray-phone { display: none; }
+.tray-item { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); opacity: .86; font: 12px var(--mono); white-space: nowrap; transition: background .12s, opacity .12s; }
+.tray-item:hover, .tray-item[aria-expanded="true"], .tray-item:focus-visible { background: rgba(var(--accent-rgb), .14); opacity: 1; }
+.tray-clock { font-variant-numeric: tabular-nums; }
+.tray-meter { position: relative; display: inline-block; width: 26px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+.tray-meter.wide { display: block; width: auto; height: 7px; margin: 4px 0 3px; }
+.tray-meter i { position: absolute; inset: 0 auto 0 0; background: var(--muted); border-radius: inherit; }
+.tray-limit.ok .tray-meter i, .tray-meter.ok i { background: #34d399; }
+.tray-limit.warn .tray-meter i, .tray-meter.warn i { background: #fbbf24; }
+.tray-limit.bad .tray-meter i, .tray-meter.bad i { background: #f87171; }
+.tray-limit.unknown { opacity: .6; }
+.tray-pct { min-width: 2.4em; text-align: right; font-variant-numeric: tabular-nums; }
+.tray-pop { width: 252px; padding: 10px; outline: none; }
+.tray-pop-title { font: 600 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.tray-lim-row + .tray-lim-row { margin-top: 8px; }
+.tray-lim-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.tray-lim-top b.ok { color: #34d399; } .tray-lim-top b.warn { color: #fbbf24; } .tray-lim-top b.bad { color: #f87171; }
+.tray-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+.tray-btn { width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font-size: 16px; }
+.tray-btn:hover, .tray-btn:focus-visible, .tray-link:hover, .tray-link:focus-visible { background: rgba(var(--accent-rgb), .16); }
+.tray-cal { width: 100%; border-collapse: collapse; table-layout: fixed; font: 12px var(--mono); text-align: center; }
+.tray-cal th { color: var(--muted); font-weight: 500; padding: 3px 0; }
+.tray-cal td { height: 28px; border-radius: 6px; }
+.tray-cal td.out { color: var(--muted); opacity: .45; }
+.tray-cal td.today { background: var(--accent); color: #04060a; font-weight: 700; }
+.tray-cal-foot { display: flex; justify-content: space-between; margin-top: 6px; }
+.tray-link { border: 0; border-radius: 6px; background: transparent; color: var(--accent-2); padding: 4px 6px; font-size: 11px; }
+:root[data-theme="atari"] .tray-item { font-family: var(--pixel); font-size: 9px; }
+
+@media (prefers-reduced-motion: reduce) { #menubar, .mb-menu,   .mb-top, .tray-item { transition: none; } .floating.panel-flash { animation: none; } }
 /* ===================================================================== ASK JARVIS (ask-panel.js)
    Its own panel (#ask-panel: field, 🎙, 👂, ➤; floats, docks, tabs, resizes in width) or, docked into the top bar, an
    inline field in #menubar-ask-slot that grows on focus. Dragging the panel over the menu bar lights the slot up. */
@@ -1393,6 +1428,9 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 #ask-send { font-size: 13px; color: var(--accent); }
 #menubar-ask-slot { display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; height: 26px; margin: 0 6px; padding: 0 2px; border-radius: 999px; user-select: text; }
 #menubar-ask-slot[hidden] { display: none; }
+/* A crowded bar (field + tray at ~1024px): the brand and menus keep their size, the status text gives way first. */
+#menubar .mb-brand, #menubar .mb-tops { flex-shrink: 0; white-space: nowrap; }
+#menubar .mb-status { flex: 0 4 auto; min-width: 0; }
 #menubar-ask-slot .ask-row { gap: 3px; flex: 0 1 auto; }
 #menubar-ask-slot #ask { width: clamp(140px, 22vw, 300px); min-width: 64px; height: 24px; padding: 2px 11px; font-size: 12px; transition: width .2s cubic-bezier(.2, .8, .2, 1), border-color .2s, box-shadow .2s; }
 #menubar-ask-slot #ask:focus { width: clamp(220px, 34vw, 520px); }
@@ -1407,6 +1445,17 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   #menubar, #mb-zone { display: none !important; }
   #ask-panel { display: none !important; } /* phones: the Ask field stays in the bottom toolbar */
   #mb-phone { display: grid; place-items: center; font-size: 20px; }
+  #mb-tray-phone { display: flex; position: fixed; z-index: 30; top: calc(var(--sat) + var(--gap)); right: calc(var(--sar) + var(--gap)); height: 44px; max-width: 45vw; padding: 0 2px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+  #mb-tray-phone .tray-item { min-height: 44px; padding: 0 5px; }
+  /* three items must clear the header's ↻ button at 390px: the meter alone (its % is in the label and the popover) */
+  #mb-tray-phone .tray-pct { display: none; }
+  #mb-tray-phone .tray-meter { width: 32px; }
+  #brain-badge { display: none; } /* its header slot is the tray's now; the brain stays reachable in ⋮ › Tools › Pre-routing & brain… */
+  .tray-pop { position: fixed; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); width: auto; top: var(--hdr) !important; }
+  .tray-pop .tray-cal td { height: 38px; }
+  .tray-pop { max-height: var(--room); overflow-y: auto; }
+  .tray-pop .tray-jv-item, .tray-pop .tray-link { min-height: 44px; }
+  .tray-btn { width: 44px; height: 44px; }
   #brain-badge { max-width: calc(100vw - 300px - var(--sal) - var(--sar)); }
   .mb-menu.mb-phone-menu { left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)); top: var(--hdr) !important; width: auto; max-width: none; max-height: var(--room) !important; }
   .mb-phone-menu .mb-item, .mb-drill .mb-item { min-height: 44px; font-size: 15px; }
@@ -1535,3 +1584,16 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   .ex-vis .vz-card, .ex-vis .vz-card * { color: #000 !important; background: none !important; animation: none !important; border-color: #bbb !important; }
 }
 /* === END EXHIBITS === */
+
+/* JARVIS tray item (tray-jarvis.js): brain, model and effort menu */
+.tray-jarvis { gap: 5px; }
+.tray-jarvis img { display: block; border-radius: 4px; }
+.tray-jv-badge { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--mono); color: var(--muted); }
+.tray-jv-grp + .tray-jv-grp { margin-top: 6px; }
+.tray-jv-scroll { max-height: 160px; overflow-y: auto; }
+.tray-jv-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: transparent; font: inherit; }
+.tray-jv-item:disabled { opacity: .5; cursor: not-allowed; }
+.tray-jv-ck { width: 1em; flex: none; color: var(--accent); }
+.tray-jv-lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tray-jv-links { display: flex; justify-content: space-between; margin-top: 8px; }
+@media (max-width: 760px) { .tray-jv-badge { display: none; } }
