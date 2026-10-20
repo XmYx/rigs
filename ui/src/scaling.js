@@ -19,7 +19,7 @@ export const scalingActive = () => on && !isPhone();
 export const reducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 export function onScalingChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-/** Switch smart scaling on or off (the ☰ menu and the top menu call this). */
+/** Switch smart scaling on or off (the Panels menu calls this). */
 export function setScaling(next) {
   next = !!next;
   if (next === on) return on;

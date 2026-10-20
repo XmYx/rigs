@@ -396,12 +396,6 @@ a.link { color: var(--accent); cursor: pointer; }
 #orb-wrap > .pctl { top: -6px; right: -4px; }
 #footer > .pctl { position: static; margin-right: 6px; }
 #topbar > .pctl { padding: 4px 2px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
-#panels-btn { position: fixed; right: 12px; bottom: 10px; z-index: 30; width: 28px; height: 28px; font-size: 13px; opacity: .55; }
-#panels-btn:hover { opacity: 1; }
-#panels-menu { position: fixed; right: 12px; bottom: 46px; z-index: 31; padding: 10px 12px; min-width: 170px; display: flex; flex-direction: column; gap: 6px; }
-#panels-menu > div { display: flex; flex-direction: column; gap: 4px; }
-#panels-menu .check { display: flex; align-items: center; gap: 6px; }
-#panels-menu.hidden { display: none; }
 
 /* ---- motion: panels and windows open, close and collapse smoothly (panels.js / wm.js) ---- */
 .floating { transition: opacity .19s ease, scale .19s cubic-bezier(.2, .8, .2, 1), translate .19s cubic-bezier(.2, .8, .2, 1), filter .19s ease; }
@@ -418,14 +412,12 @@ a.link { color: var(--accent); cursor: pointer; }
 .win { transition: opacity .18s ease, scale .18s cubic-bezier(.2, .8, .2, 1), translate .18s cubic-bezier(.2, .8, .2, 1); }
 .win.win-enter, .win.win-leave { opacity: 0; scale: .96; translate: 0 8px; }
 .win.win-leave { pointer-events: none; }
-#panels-menu { transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s; transform-origin: bottom right; }
 /* visibility (switched after the fade) keeps the closed menu's switches and buttons out of the Tab order */
-#panels-menu.hidden { display: flex !important; opacity: 0; scale: .95; translate: 0 6px; pointer-events: none; visibility: hidden; transition: opacity .16s ease, scale .16s ease, translate .16s ease, visibility 0s .16s; }
 #brain-menu.open { animation: panel-reveal .18s ease both; }
 .app-tile { transition: border-color .15s, background .15s, translate .15s; }
 .app-tile:hover { translate: 0 -2px; }
 @media (prefers-reduced-motion: reduce) {
-  .floating, .win, #panels-menu, .app-tile { transition: none !important; }
+  .floating, .win, .app-tile { transition: none !important; }
   .floating > :not(.pctl), #brain-menu.open { animation: none !important; }
 }
 
@@ -581,7 +573,6 @@ h1.title { margin: 0; }
 #footer { color: var(--muted); }
 .pctl { opacity: .75; }
 .floating:focus-within .pctl { opacity: 1; }
-#panels-btn { opacity: .85; }
 .flt.off, .round.dim { opacity: .6; }
 .round[aria-pressed=true] { box-shadow: 0 0 0 2px var(--accent) inset; }
 @media (forced-colors: active) { :focus-visible { outline: 2px solid Highlight; } }
@@ -608,7 +599,7 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   :root { --gap: 8px; --hdr: calc(var(--sat) + 60px); --bar-h: 44px; --bar-bottom: calc(max(8px, var(--sab)) + var(--kb)); --room: calc(100dvh - var(--hdr) - var(--bar-h) - var(--bar-bottom) - 16px); }
   input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea { font-size: 16px; }
-  .scroll-contain, .win-body, .win-body *, #left, #work, #questions, #usage, #subtitle, #brain-menu, #panels-menu, .xterm-viewport { overscroll-behavior: contain; }
+  .scroll-contain, .win-body, .win-body *, #left, #work, #questions, #usage, #subtitle, #brain-menu, .xterm-viewport { overscroll-behavior: contain; }
   #legend, #footer, #face, #face.big { display: none !important; }
 
   /* Panel chrome: no grips/resize/collapse; only the ✕ of the work and chat panels, at finger size. Saved
@@ -648,11 +639,10 @@ body.zoomed #graph { pointer-events: none; } /* pinch-zoomed in: one-finger pans
   #btn-more { display: grid; font-size: 20px; }
   #more-sheet.open { display: grid; position: fixed; left: calc(var(--sal) + var(--gap)); right: calc(var(--sar) + var(--gap)); bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px); max-height: var(--room); overflow-y: auto; z-index: 35;
     grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; padding: 10px; background: var(--panel-solid); backdrop-filter: none; box-shadow: 0 -8px 30px rgba(0, 0, 0, .5); animation: panel-reveal .18s ease both; }
-  #more-sheet .round, #more-sheet #panels-btn { position: static; width: 100%; height: 64px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 20px; opacity: 1; }
+  #more-sheet .round { position: static; width: 100%; height: 64px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 20px; opacity: 1; }
   #more-sheet #btn-ask, #more-sheet #btn-agents { position: relative; } /* their count badges sit on the button, not the sheet's corner */
   #more-sheet .round::after { content: attr(data-label); font: 12px var(--sans); color: #b9c8d2; }
   #more-sheet .round.dim { opacity: .6; }
-  #panels-menu { left: calc(var(--sal) + var(--gap)); right: calc(var(--sar) + var(--gap)); bottom: calc(var(--bar-bottom) + var(--bar-h) + 8px); max-height: var(--room); overflow-y: auto; z-index: 36; background: var(--panel-solid); }
 
     /* Active agents: a sheet under the header, like the work dashboard */
   #agents { top: var(--hdr) !important; left: calc(var(--sal) + var(--gap)) !important; right: calc(var(--sar) + var(--gap)) !important; bottom: auto !important; width: auto !important; height: auto !important; transform: none !important; max-height: var(--room); z-index: 20; }
@@ -1295,11 +1285,6 @@ body.dock-dragging .dock-stage { opacity: 1; }
 .dock-pad[data-zone="center"] i::after { left: 0; right: 0; top: 0; height: 28%; } /* a tab strip */
 .dock-pad.on { background: rgba(var(--accent-rgb), .4); border-color: var(--accent); scale: 1.14; }
 
-#panels-menu .pm-dock { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
-#panels-menu .pm-where { margin-left: auto; padding: 0 6px; border-radius: 999px; font: 10px var(--mono); color: var(--accent); border: 1px solid rgba(var(--accent-rgb), .4); }
-#panels-menu .pm-sub { margin: 4px 0 0; font: 600 10px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-#panels-menu .pm-sub[hidden], #panels-menu .pm-dock[hidden] { display: none; }
-#panels-menu .pm-restore { text-align: left; }
 
 @media (prefers-reduced-motion: reduce) {
   .docked, .dock-tabs, .dock-tab, .dock-split::after, .dock-preview, .dock-label, .dock-compass, .dock-pad, .dock-stage { transition: none !important; }
@@ -1788,7 +1773,7 @@ html.adock-rl #left { left: calc(12px + var(--ad-l)); }
 html.adock-rl #traces { left: calc(294px + var(--ad-l)); }
 html.adock-rl #graphify { left: calc(330px + var(--ad-l)); }
 html.adock-rl .win.max { left: calc(8px + var(--ad-l)) !important; }
-html.adock-rr #legend, html.adock-rr #toasts, html.adock-rr #panels-btn, html.adock-rr #panels-menu,
+html.adock-rr #legend, html.adock-rr #toasts,
 html.adock-rr #work, html.adock-rr #questions, html.adock-rr #usage, html.adock-rr #desktops, html.adock-rr #agents { right: calc(12px + var(--ad-r)); }
 html.adock-rr #orb-wrap, html.adock-rr #activity { right: calc(16px + var(--ad-r)); }
 html.adock-rr #footer { right: calc(48px + var(--ad-r)); }

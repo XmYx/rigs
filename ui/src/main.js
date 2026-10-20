@@ -17,7 +17,7 @@ import { tagCtx } from './ctx-tag.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { registerJarvisTray } from './tray-jarvis.js';
-import { listPanels, makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
+import { listPanels, makeFloating, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
 import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
@@ -1372,7 +1372,6 @@ function wire() {
   makeFloating($('#graphify'), { id: 'graphify', title: 'Graphify', into: $('#graphify .wk-head'), keep: [$('#graphify .wk-head')], closedByDefault: true, closedOnPhone: true, onToggle: ({ closed, collapsed }) => graphifyPanel.setActive(!closed && !collapsed) });
   { const st = panelState('graphify'); graphifyPanel.setActive(!st.closed && !st.collapsed); }
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
-  panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
   appDock = createAppDock({ // the app dock only calls the existing open / focus / launch paths
     sources: () => ({ ...sourcesFromSnapshot(snap, { isRemoved: isAppRemoved }), tools: TOOLS }),

@@ -239,7 +239,7 @@ test('dock CSS moves existing panels only while the dock reserves that edge', ()
   const css = fs.readFileSync(new URL('../ui/src/styles.css', import.meta.url), 'utf8');
   const block = css.slice(css.indexOf('/* === APP DOCK ==='), css.indexOf('/* === END APP DOCK === */'));
   assert.ok(block.length > 1000);
-  const existing = /#(bar|chat-dock|left|legend|orb-wrap|work|questions|usage|desktops|agents|toasts|activity|panels-btn|panels-menu|footer|traces|graphify|topbar)\b|\.win\.max/;
+  const existing = /#(bar|chat-dock|left|legend|orb-wrap|work|questions|usage|desktops|agents|toasts|activity|footer|traces|graphify|topbar)\b|\.win\.max/;
   const rules = block.replace(/\/\*[\s\S]*?\*\//g, '').match(/[^{}]+\{[^{}]*\}/g) || [];
   const touching = rules.map((r) => r.slice(0, r.indexOf('{')).trim()).filter((sel) => existing.test(sel));
   assert.ok(touching.length >= 5, 'the edge rules are there');
