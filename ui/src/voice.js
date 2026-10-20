@@ -9,6 +9,7 @@
 // and Chromium on Linux, whose SpeechRecognition exists but has no backend — the microphone is recorded and
 // transcribed by the mesh's own Whisper (hearing.js). localStorage rigs.stt = "server" | "browser" forces one.
 import { createHearing } from './hearing.js';
+import { createPhraseCache } from './phrase-cache.js';
 import { drain } from './sentences.js';
 import { createSpeechQueue } from './speech-queue.js';
 
@@ -44,7 +45,8 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
   let server = { engine: null, voice: '', voices: [] };
   let source = null;
   let levelRaf = 0;
-  const phraseAudio = new Map(); // thinking phrase → Promise<rendered audio>, pre-rendered from the bundled voice
+  // thinking phrase → rendered audio, pre-rendered in JARVIS's voice (Kokoro; phrase-cache.js keeps them all in the voice that is speaking now)
+  const phraseAudio = createPhraseCache((text) => fetchAudio(text));
   let finishCurrent = null; // resolves the sentence that is playing right now (stop() never fires onended)
   const utterances = new Set(); // Safari garbage-collects utterances (and drops onend) unless referenced
 
@@ -134,7 +136,9 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
       const c = ensureCtx();
       // Safari's webkitAudioContext only has the callback form of decodeAudioData.
       const buffer = await new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p?.then) p.then(res, rej); });
-      return { buffer, cues };
+      const engine = r.headers.get('x-tts-engine') || '';
+      phraseAudio.note(engine);
+      return { buffer, cues, engine };
     })().catch(() => null);
   }
 
@@ -200,24 +204,18 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     q.push(text);
   }
 
-  /** Thinking phrases: render each once from the bundled voice so think() plays at once. */
+  /** Thinking phrases: render each once in JARVIS's voice so think() plays at once. */
   function prewarm(list) {
     ready.then(() => {
       if (!useServer()) return;
-      for (const t of list) if (!phraseAudio.has(t)) cachePhrase(t);
+      for (const t of list) if (!phraseAudio.has(t)) phraseAudio.warm(t);
     });
-  }
-  function cachePhrase(text) {
-    // A failed or empty render is not kept (the next request tries again), and only if no newer render replaced it.
-    const p = fetchAudio(text).catch(() => null).then((r) => { if ((!r || r === 'empty') && phraseAudio.get(text) === p) phraseAudio.delete(text); return r; });
-    phraseAudio.set(text, p);
-    return p;
   }
 
   /** Say a thinking phrase now, unless JARVIS is already speaking or muted. → true when queued. */
   function think(text) {
     if (muted || !String(text || '').trim()) return false;
-    return q.think(text, phraseAudio.get(text) || cachePhrase(text));
+    return q.think(text, phraseAudio.get(text));
   }
 
   /** Feed streaming text; complete sentences are spoken as they arrive. */
@@ -421,7 +419,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
     setVoice(id) {
       pref = parsePref(id || '');
       localStorage.setItem('rigs.voice', id || '');
-      const phrases = [...phraseAudio.keys()];
+      const phrases = phraseAudio.keys();
       phraseAudio.clear(); // rendered in the old voice
       prewarm(phrases);
     },
