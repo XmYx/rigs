@@ -68,6 +68,20 @@ test('node info + mesh list include this node', async () => {
   assert.ok(nodes.find((n) => n.self && n.name === 'test-node'));
 });
 
+test('shared folder: created under the throwaway home and its sync loop runs at startup', async () => {
+  let s;
+  for (let i = 0; i < 50; i++) {
+    s = await get('/api/local/shared');
+    if (s.lastSync) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  assert.equal(s.path, path.join(HOME, 'RIGS-Shared'));
+  assert.deepEqual(s.subfolders.map((x) => x.name), ['apps', 'files', 'reports']);
+  assert.ok(s.lastSync, 'the engine was started (first reconcile ran)');
+  const r = await fetch(`${BASE}/api/local/shared/file?path=${encodeURIComponent('../config.json')}`);
+  assert.equal(r.status, 400);
+});
+
 test('files: write, list, read, rename, trash', async () => {
   const dir = path.join(HOME, 'files');
   await post('/api/nodes/self/files/mkdir', { path: dir });

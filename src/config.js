@@ -25,6 +25,10 @@ function defaults() {
     allowedUsers: [],
     allowTaggedDevices: true,
     files: { showHidden: false },
+    // The shared folder (src/shared.js, docs/shared-folder.md): synced with every online RIGS node, the default place
+    // for ad-hoc apps (apps/<id>), files made for Sir (files/) and reports (reports/). path '' = ~/RIGS-Shared
+    // (a throwaway node with its own RIGS_HOME: <RIGS_HOME>/RIGS-Shared). A new path applies after a restart.
+    shared: { enabled: true, path: '', intervalSec: 60, maxFileMb: 256, ignore: [] },
     brain: {
       // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
@@ -250,7 +254,7 @@ export function publicConfig() {
   const c = config();
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
-    persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
+    persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files, shared: c.shared,
     models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, experimental: c.experimental,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },

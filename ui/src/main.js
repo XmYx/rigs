@@ -33,6 +33,7 @@ import { openFiles } from './files.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
+import { createDesktopMode } from './desktop.js';
 import { createGraphify } from './graphify.js';
 import { openMesh } from './mesh.js';
 import { controlEvent, openControl } from './control.js';
@@ -102,9 +103,20 @@ const graph = createCloud($('#graph'), {
   onSelect: (n) => { select(n.id); revealInspector(); }, onBackground: () => {},
   onChange: (on) => { store.set('cloud', on); syncCloud(); },
 });
+// Desktop mode (desktop.js): the shared folder as desktop icons in the cloud's place — mounted only while the cloud is
+// hidden, and removed with all its listeners and timers when it comes back.
+let desktopMode = null;
 function syncCloud() {
   const on = graph.visible;
   document.body.classList.toggle('cloud-off', !on);
+  desktopMode ||= createDesktopMode({
+    store, confirm: (t) => window.confirm(t),
+    self: () => ({ id: selfId || 'self', name: machineById(selfId)?.name || 'this machine' }),
+    apps: () => meshApps(), openApp: (a) => openApp(a), machines: () => machines(),
+    showInFiles: (p, select = '') => showInFiles(p, select),
+  });
+  desktopMode.setActive(!on);
+  window.__rigsDesktop = desktopMode; // checks (scripts/desktop-mode-check.js) read stats() from here
   const box = document.getElementById('d-cloud');
   if (box) box.checked = on;
   const pill = document.getElementById('cloud-toggle');
@@ -673,6 +685,13 @@ function filesOn(m, path = '~', { select = '', showHidden = false } = {}) {
   filesWins.set(m.id, w);
   w.onCleanup(() => { if (filesWins.get(m.id) === w) filesWins.delete(m.id); });
   return w;
+}
+
+/** Open the file browser on this machine at a folder (a file in it selected): the window a ui_open push would use. */
+function showInFiles(path, select = '') {
+  const self = { id: selfId || 'self', name: machineById(selfId)?.name || 'this machine' };
+  const w = filesTarget(filesWins, self.id);
+  if (w) { w.navigate(path, { select }); w.raise(); } else filesOn(self, path, { select });
 }
 
 /** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — today the file browser at a folder. */

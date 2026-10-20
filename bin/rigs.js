@@ -414,6 +414,27 @@ const commands = {
       console.log(`${n.self ? '*' : ' '} ${String(n.name).padEnd(18)} ${String(n.platform || '?').padEnd(8)} ${n.online ? 'online ' : 'offline'} ${n.rigs ? 'rigs ' + (n.version || '') : 'no-rigs'}  ${n.tailscale?.ip || n.url || ''}  ${tools}`);
     }
   },
+  async shared() {
+    // rigs shared status|sync|path — the shared folder synced across the mesh (src/shared.js, docs/shared-folder.md).
+    const sub = argv[0] || 'status';
+    const fail = (m) => { console.error(m); process.exit(1); };
+    if (sub === 'path') {
+      const r = await daemonFetch('/api/local/shared/path').catch(() => null);
+      if (r?.path) { console.log(r.path); return; }
+      const { sharedRoot } = await import('../src/files.js');
+      console.log(sharedRoot()); // daemon not running: the path it would use
+      return;
+    }
+    if (sub !== 'status' && sub !== 'sync') fail('usage: rigs shared [status|sync|path]');
+    const r = await daemonFetch(sub === 'sync' ? '/api/local/shared/sync' : '/api/local/shared', { method: sub === 'sync' ? 'POST' : 'GET', body: sub === 'sync' ? '{}' : undefined, timeout: 30 * 60 * 1000 })
+      .catch((e) => fail(`RIGS daemon is not running (rigs start): ${e.message}`));
+    if (!r || r.error || !r.path) fail(r?.error || 'RIGS daemon is not running (rigs start).');
+    const ago = (t) => (t ? `${Math.max(0, Math.round((Date.now() - t) / 1000))}s ago` : 'never');
+    console.log(`shared folder ${r.path}`);
+    console.log(`  ${r.files} file(s), ${(r.bytes / 1048576).toFixed(1)} MB · subfolders ${r.subfolders.map((x) => x.name + '/').join(' ')} · last sync ${ago(r.lastSync)}${r.syncing ? ' (syncing)' : ''}`);
+    for (const p of r.peers) console.log(`  ${String(p.node).padEnd(18)} ${String(p.state).padEnd(11)} ${ago(p.lastSync)}${p.pulled || p.trashed || p.conflicts ? ` · pulled ${p.pulled || 0}, trashed ${p.trashed || 0}, conflicts ${p.conflicts || 0}` : ''}${p.error ? ` · ${p.error}` : ''}`);
+    if (!r.peers.length) console.log('  no other RIGS node seen yet');
+  },
   async update() {
     const all = argv.includes('--all');
     const r = await daemonFetch(all ? '/api/mesh/update' : '/api/local/update', { method: 'POST', body: '{}', timeout: 20 * 60 * 1000 });
@@ -481,6 +502,7 @@ const commands = {
   rigs status          list machines in the mesh
   rigs open            open the JARVIS UI
   rigs ssh <machine>   ssh to another node
+  rigs shared [status|sync|path]  the shared folder synced across the mesh (apps/, files/, reports/): state per peer, sync now, or its path
   rigs update [--all]  pull the latest code from GitHub (this node or every node) and restart
   rigs notify <text>   speak a message on every open JARVIS UI
   rigs mcp             stdio MCP server for coding agents (registered by setup)

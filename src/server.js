@@ -30,6 +30,7 @@ import * as migrations from './migrations.js';
 import * as rootsteps from './rootsteps.js';
 import { Discovery } from './discovery.js';
 import * as files from './files.js';
+import * as shared from './shared.js';
 import * as models from './models.js';
 import * as hubs from './hubs.js';
 import * as openrig from './openrig.js';
@@ -124,6 +125,19 @@ export async function startServer() {
   const cfg = config();
   await ssh.ensureKey().catch(() => null);
   const discovery = new Discovery(selfInfo);
+  // The shared folder (src/shared.js): synced with every online RIGS peer, authenticated like any other peer call.
+  const rigsPeers = () => discovery.list().filter((n) => !n.self && n.rigs);
+  const sharedCfg = cfg.shared || {};
+  const sharedEngine = sharedCfg.enabled === false ? null : shared.createShared({
+    root: files.sharedRoot(), stateDir: path.join(RIGS_HOME, 'shared'), trashDir: path.join(RIGS_HOME, 'trash'), node: cfg.name,
+    intervalSec: Number(sharedCfg.intervalSec) || 60, maxFileBytes: (Number(sharedCfg.maxFileMb) || 256) * 1024 * 1024,
+    ignore: Array.isArray(sharedCfg.ignore) ? sharedCfg.ignore : [], log,
+    peers: () => rigsPeers().filter((n) => n.online),
+    fetchPeer: (n, p, { method = 'GET' } = {}) => fetch(n.url.replace(/\/$/, '') + '/api/local/' + p, {
+      method, headers: n.viaToken ? { 'x-rigs-token': config().meshToken } : {},
+      signal: AbortSignal.timeout(p.startsWith('shared/file') ? 30 * 60 * 1000 : 20000),
+    }),
+  });
   responder.setPeers((name) => discovery.get(name)); // the local responder streams turns from the machine hosting its model
   // ComfyUI connector (/api/local/comfyui/*): the user's URL wins; the detected ComfyUI is the fallback.
   const comfy = createComfyService({ suggest: async () => { const c = (await caps.capabilities()).comfyui; return c?.url ? { url: c.url, running: c.running !== false } : null; } });
@@ -688,6 +702,11 @@ export async function startServer() {
       return publicConfig();
     }
 
+    // shared folder (src/shared.js): status, manifest, raw files, forced sync, peer nudges
+    if (sub === 'shared' || sub.startsWith('shared/')) {
+      return shared.sharedRoute(sharedEngine, { method, sub, q, req, res, known: () => rigsPeers().map((n) => ({ name: n.name, online: n.online })) });
+    }
+
     // files
     if (sub === 'files' && method === 'GET') return files.list(q.get('path') || '~', { showHidden: q.get('hidden') === '1' || config().files.showHidden });
     if (sub === 'files/read') return files.readText(q.get('path'));
@@ -697,6 +716,8 @@ export async function startServer() {
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
     if (sub === 'files/rename' && method === 'POST') { const b = await body(); return files.rename(b.from, b.to); }
     if (sub === 'files/trash' && method === 'POST') return files.trash((await body()).path);
+    if (sub === 'files/zip' && method === 'POST') { const b = await body(); return files.zip(b.paths, b.dest, { config: config().files?.zip }); }
+    if (sub === 'files/unzip' && method === 'POST') { const b = await body(); return files.unzip(b.path, b.dest, { config: config().files?.zip }); }
 
     // terminals
     if (sub === 'pty' && method === 'GET') return pty.listPtys();
@@ -1528,6 +1549,13 @@ export async function startServer() {
   discovery.on('change', () => { pullGlobal(); });
   setInterval(() => { pullGlobal(); }, 2 * 60 * 1000).unref();
   discovery.start();
+  if (sharedEngine) {
+    // A local change tells the online peers to pull now, so it lands everywhere within seconds; a peer (re)appearing
+    // brings a reconcile too.
+    sharedEngine.start({ notify: () => Promise.all(rigsPeers().filter((n) => n.online).map((n) => peerJson(n, 'shared/nudge', { method: 'POST', body: { from: config().name }, timeout: 8000 }).catch(() => null))) });
+    discovery.on('change', () => sharedEngine.nudge());
+    log(`shared folder: ${sharedEngine.root}`);
+  }
   if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
     if (!r.restart) return;
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
@@ -1636,5 +1664,5 @@ export async function startServer() {
   // Live stats push for the HUD.
   setInterval(async () => { if (uiSockets.size) broadcast({ type: 'stats', id: config().nodeId, stats: await stats() }); }, 5000).unref();
 
-  return { discovery, close: () => { for (const s of servers.values()) s.close(); discovery.stop(); } };
+  return { discovery, close: () => { for (const s of servers.values()) s.close(); discovery.stop(); sharedEngine?.stop(); } };
 }
