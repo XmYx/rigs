@@ -181,16 +181,17 @@ export function setDockTitle(id, title) {
 
 // ---------------------------------------------------------------- geometry
 
+const cssPx = (name) => { const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)); return Number.isFinite(v) && v > 0 ? v : 0; };
 /** Height of the top menu bar (menubar.js sets --mb-h on <html>; 0 when it is hidden or on a phone). */
-function topInset() {
-  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--mb-h'));
-  return Number.isFinite(v) && v > 0 ? v : 0;
-}
+const topInset = () => cssPx('--mb-h');
+/** The edges the app dock keeps while it stays on screen (app-dock.js sets --ad-l/--ad-r/--ad-b; 0 when auto-hidden or absent). */
+const appDockInsets = () => ({ l: cssPx('--ad-l'), r: cssPx('--ad-r'), b: cssPx('--ad-b') });
 
-/** The docked area: the whole window minus a small margin, below the top menu bar. */
+/** The docked area: the whole window minus a small margin, below the top menu bar and clear of the app dock's edge. */
 function dockArea() {
   const t = topInset();
-  return { x: PAD, y: PAD + t, w: Math.max(1, window.innerWidth - 2 * PAD), h: Math.max(1, window.innerHeight - 2 * PAD - t) };
+  const { l, r, b } = appDockInsets();
+  return { x: PAD + l, y: PAD + t, w: Math.max(1, window.innerWidth - 2 * PAD - l - r), h: Math.max(1, window.innerHeight - 2 * PAD - t - b) };
 }
 const inset = (r) => ({ x: r.x + GAP / 2, y: r.y + GAP / 2, w: Math.max(0, r.w - GAP), h: Math.max(0, r.h - GAP) });
 
@@ -664,7 +665,8 @@ const rectOfEl = (el) => { const b = el.getBoundingClientRect(); return { x: b.l
 function hitTest(x, y) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const edge = x < ROOT_EDGE ? 'left' : x > vw - ROOT_EDGE ? 'right' : y < ROOT_EDGE ? 'top' : y > vh - ROOT_EDGE ? 'bottom' : null;
+  const ad = appDockInsets(); // the screen edges start where the app dock ends (it sits over them, z 3000)
+  const edge = x < ad.l + ROOT_EDGE ? 'left' : x > vw - ad.r - ROOT_EDGE ? 'right' : y < ROOT_EDGE ? 'top' : y > vh - ad.b - ROOT_EDGE ? 'bottom' : null;
   if (edge) return { id: 'root', zone: edge, rect: dockArea() };
   for (const e of document.elementsFromPoint(x, y)) {
     if (drag.el.contains(e) || e.closest('.dock-overlay')) continue;
@@ -893,9 +895,10 @@ export function initDocking({ defaults }) {
   dockManager.setLayout(L);
   dockManager.subscribe(() => render());
   window.addEventListener('resize', onResize);
-  // The top menu bar shows / hides by setting --mb-h on <html>: lay out again below it.
-  let lastInset = topInset();
-  new MutationObserver(() => { const t = topInset(); if (t !== lastInset) { lastInset = t; queueRender(); } })
+  // The top menu bar (--mb-h) and the app dock (--ad-*) show / hide / move by setting variables on <html>: lay out again inside them.
+  const insetKey = () => { const a = appDockInsets(); return `${topInset()},${a.l},${a.r},${a.b}`; };
+  let lastInset = insetKey();
+  new MutationObserver(() => { const k = insetKey(); if (k !== lastInset) { lastInset = k; queueRender(); } })
     .observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   window.matchMedia?.('(max-width: 640px), (max-height: 500px) and (pointer: coarse)')?.addEventListener?.('change', queueRender);
   onScalingChange(() => {

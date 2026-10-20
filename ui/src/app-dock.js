@@ -515,8 +515,9 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
   window.addEventListener('resize', () => { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(relayout); });
   window.matchMedia?.(PHONE_QUERY)?.addEventListener?.('change', render);
   window.matchMedia?.('(prefers-reduced-motion: reduce)')?.addEventListener?.('change', () => { reduced = prefersReducedMotion(); render(); });
-  // The menu bar showing/hiding moves a side dock's centre (menubar.js sets --mb-h on <html>).
-  new MutationObserver(() => { measureRest(); if (popGroup) placePop(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  // The menu bar showing/hiding moves a side dock's centre and changes the room it has (menubar.js sets --mb-h on <html>).
+  let lastMb = mbHeight();
+  new MutationObserver(() => { const mb = mbHeight(); if (mb === lastMb) return; lastMb = mb; relayout(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   setInterval(() => { if (!document.hidden) refreshRunning(); }, 2000);
   window.addEventListener('storage', (e) => { if (e.key === STORAGE_KEY) { state = load(); render(); } }); // another tab changed the dock
 
@@ -542,8 +543,8 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
 export function registerAppDockProviders(reg, dock) {
   const opts = () => ({ phone: dock.phone(), reducedMotion: dock.reducedMotion() });
   const settings = () => ({ label: 'Dock settings', icon: '⚙', submenu: () => settingsEntries(dock.state, dock.act, opts()) });
-  reg.register('dockitem', (t) => [...itemEntries(dock.state, t.id, dock.act, { open: dock.open, phone: dock.phone() }), { sep: true }, settings()], { title: 'Dock' });
+  reg.register('dockitem', (t) => [...itemEntries(dock.state, t.id, dock.act, { open: dock.open, phone: dock.phone() }), { sep: true }, settings()], { title: 'App dock' });
   reg.register('dockgroup', (t) => [...groupEntries(dock.state, t.id, dock.act, { openGroup: dock.openGroup, rename: dock.rename, phone: dock.phone() }), { sep: true }, settings()], { title: 'Group' });
-  reg.register('appdock', () => settingsEntries(dock.state, dock.act, opts()), { title: 'Dock' });
+  reg.register('appdock', () => settingsEntries(dock.state, dock.act, opts()), { title: 'App dock' });
   return reg;
 }

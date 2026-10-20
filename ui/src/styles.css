@@ -1806,6 +1806,9 @@ html.adock-rr .win.max { right: calc(8px + var(--ad-r)) !important; }
   html.adock-rr #orb-wrap { right: calc(8px + var(--ad-r)); }
 }
 
+/* A side dock narrows the floating Ask JARVIS panel at its CSS place so the two never overlap (narrow desktops). */
+html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100vw - 32px - 2 * max(var(--ad-l), var(--ad-r)))); }
+
 /* Phones: one scrolling row of finger-sized icons under the toolbar; no magnification, no auto-hide, no side docks. */
 .adock.phone { left: calc(var(--sal) + 8px); right: calc(var(--sar) + 8px); bottom: max(8px, var(--sab)); transform: none; z-index: 30; }
 .adock.phone .adock-list { height: 44px; width: auto; flex-direction: row; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior: contain; border-radius: 16px; }
