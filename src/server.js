@@ -45,6 +45,7 @@ import * as exhibits from './exhibits.js';
 import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyQuickPatch, localSettings, quickSettings } from './quick.js';
+import * as settingsApi from './settings-api.js';
 import * as responder from './responder.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
@@ -701,6 +702,15 @@ export async function startServer() {
       return r;
     }
     if (sub === 'config' && method === 'GET') return publicConfig();
+    // Unified settings (src/settings-api.js, docs/settings.md): every setting of the schema, read and patched in one place.
+    if (sub === 'settings' && method === 'GET') return settingsApi.readSettings({ node: config().name });
+    if (sub === 'settings' && method === 'POST') {
+      return settingsApi.patchSettings(await body(), {
+        node: config().name, discovery, comfy, linear, drive,
+        warm: (local) => responder.warm(local, { soul: chat.soul() }),
+        emit: (what, v) => { if (what === 'starnet') starnet.events.emit('config', v); },
+      });
+    }
     if (sub === 'config' && method === 'POST') {
       const b = await body();
       patchConfig(b);
@@ -1454,7 +1464,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'SettingsError' ? { errors: e.errors, applied: e.applied } : {}), ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }

@@ -72,7 +72,7 @@ Secret items: `meshToken`, `desktop.sunshinePass`, `router.jev.apiKey`, `connect
 
 ## API contract: `/api/local/settings`
 
-Implemented by task t2. Authentication is that of every `/api/local/*` route (`src/auth.js`: loopback, same-owner tailnet
+Implemented in `src/settings-api.js` (routes in `src/server.js`, tests in `test/settings-api.test.js`). Authentication is that of every `/api/local/*` route (`src/auth.js`: loopback, same-owner tailnet
 devices, the mesh token). `/api/nodes/<id>/settings` reaches another machine through the existing peer proxy
 (`src/proxy.js`, `/api/nodes/<id>/*` → peer `/api/local/*`).
 
@@ -141,7 +141,9 @@ Never through this API: screen control (`control.*` — only the Access & contro
 switches it on; `src/control.js`), browser prefs, actions (the window calls their own endpoints), and identity
 (`name`, `nodeId`, `port`, `bind`, `meshToken`).
 
-Optional CLI: `rigs settings [get <id> | set <id> <value>]` over the same two calls.
+CLI: `rigs settings [get [id] | set <id> <value>] [--node <machine>] [--json]` over the same two calls. A secret is never an argument: `rigs settings set <id>` asks for it (or reads stdin), `--clear` removes it.
+
+The error answer also carries `errors` (and `applied` when a setter refused after earlier writes).
 
 ## UI prefs (browser and synced)
 
