@@ -1,0 +1,14 @@
+[Unit]
+Description=RIGS Vertex Cow applet (spinning green point-cloud cow)
+After=network-online.target
+
+[Service]
+# Template: fill in the double-brace placeholders with this machine's paths (as src/store.js installPlan does).
+WorkingDirectory={{INSTALL_DIR}}/applets/vertex-cow
+ExecStart={{NODE}} {{INSTALL_DIR}}/applets/vertex-cow/server.js
+Environment=PORT={{PORT}} HOST=127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
