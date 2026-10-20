@@ -80,8 +80,12 @@ Tailscale network (macOS, Ubuntu, Windows) runs the RIGS daemon, and you can rea
   switch it off per machine or stop it (\`rigs control off\`), and only Sir can switch it back on (from JARVIS).
   Ask Sir before using computer use on a machine unless your task brief explicitly allows it for that machine. Never switch it back on or work around it (no \`screencapture\`, \`grim\`
   or uinput from a shell), and pass \`secret: true\` when typing anything credential-like.
+- **Shared folder** (default location for your output): RIGS keeps one folder in sync on every machine
+  (\`rigs shared path\` prints it, default ~/RIGS-Shared; \`rigs shared status|sync\`). Put ad-hoc apps in
+  \`apps/<id>\`, files made for Sir's requests in \`files/\` and reports in \`reports/\` there, not loose in home.
+  Deletions sync to ~/.rigs/trash; .git, node_modules and temp files stay local.
 - **Apps / applets — ground rule**: anything you build that has a web UI must be published to the
-  App Cloud, not just left running on a port. Serve it with relative URLs and a \`/healthz\`, give it
+  App Cloud, not just left running on a port. Build an ad-hoc app in the shared folder's \`apps/<id>\`. Serve it with relative URLs and a \`/healthz\`, give it
   a launch recipe per OS (Linux: a \`systemctl --user\` unit, enabled; elsewhere a \`command\`; side by side as
   \`launch: { systemd, windows: { command, cwd }, darwin: { command } }\`), then call
   \`mesh_app_register\` (node, id, name, icon, port, healthPath, launch). It then shows up in every

@@ -14,7 +14,7 @@
       "icon": { "type": "string", "description": "one emoji" },
       "port": { "type": "number", "description": "the port the app listens on (127.0.0.1)" },
       "command": { "type": "string", "description": "the command line that starts the server, e.g. node server.js" },
-      "cwd": { "type": "string", "description": "working directory, default home" },
+      "cwd": { "type": "string", "description": "working directory, default home; ad-hoc apps live in the shared folder: ~/RIGS-Shared/apps/<id> (rigs shared path)" },
       "env": { "type": "object", "description": "environment variables for the server: NAME: \"value\"" },
       "healthPath": { "type": "string", "description": "default /healthz" },
       "description": { "type": "string", "description": "what the applet does, so tool_list finds it" },

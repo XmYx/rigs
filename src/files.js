@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { RIGS_HOME } from './config.js';
+import { config, RIGS_HOME } from './config.js';
 import { HOME, expandHome, isWin } from './util.js';
 import { nearestExisting } from './ui-open.js';
 
@@ -13,16 +13,29 @@ const MIME = {
   '.mov': 'video/quicktime', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.zip': 'application/zip',
 };
 
+/**
+ * This machine's shared folder (src/shared.js): config.shared.path, else RIGS_SHARED, else ~/RIGS-Shared — or
+ * <RIGS_HOME>/RIGS-Shared on a throwaway node (tests, a second instance), so it never syncs the real folder.
+ */
+export function sharedRoot() {
+  const p = config().shared?.path || process.env.RIGS_SHARED || (process.env.RIGS_HOME ? path.join(RIGS_HOME, 'RIGS-Shared') : '~/RIGS-Shared');
+  return path.resolve(expandHome(p));
+}
+
+/** '@shared' (and '@shared/reports/x.md') names the shared folder on whichever machine resolves it. */
 export function resolvePath(p) {
+  const m = /^@shared(?:[\\/](.*))?$/i.exec(String(p || ''));
+  if (m) return path.resolve(sharedRoot(), m[1] || '.');
   const raw = expandHome(p || '~');
   return path.resolve(raw || HOME);
 }
 
 export async function roots() {
-  if (!isWin) return [{ name: 'Home', path: HOME }, { name: '/', path: '/' }];
+  const shared = config().shared?.enabled === false ? [] : [{ name: 'Shared', path: sharedRoot() }];
+  if (!isWin) return [{ name: 'Home', path: HOME }, ...shared, { name: '/', path: '/' }];
   const drives = [];
   for (const l of 'CDEFGHIJKLMNOPQRSTUVWXYZ') if (fs.existsSync(l + ':\\')) drives.push({ name: l + ':', path: l + ':\\' });
-  return [{ name: 'Home', path: HOME }, ...drives];
+  return [{ name: 'Home', path: HOME }, ...shared, ...drives];
 }
 
 export async function list(p, { showHidden = false } = {}) {
