@@ -9,6 +9,7 @@ import { test } from 'node:test';
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-tools-'));
 process.env.RIGS_NAME = 'box';
 process.env.RIGS_SEED_TOOLS = ''; // the registry core, without the checkout's seed tools (test/toolbox-seeds.test.js covers those)
+process.env.RIGS_ADHOC_TOOLS = path.join(process.env.RIGS_HOME, 'adhoc'); // new tools go to the ad-hoc root, here not the checkout's tools/local
 const T = await import('../src/toolbox.js');
 
 const base = { id: 'echo-json', name: 'Echo JSON', description: 'Prints its arguments back as JSON, for tests.', language: 'node', entry: 'main.js', safety: 'read-only' };
@@ -90,7 +91,7 @@ test('registerTool: invalid manifests and missing entries are rejected; a valid 
   await assert.rejects(T.registerTool({ ...base, safety: 'whatever', source: ECHO }), (e) => e.status === 400 && /invalid tool manifest: echo-json: safety must be/.test(e.message));
   await assert.rejects(T.registerTool({ ...base }), /entry file "main.js" is missing/);
   await assert.rejects(T.registerTool({ ...base, files: { '../evil.js': 'x' }, source: ECHO }), /must be relative/);
-  assert.equal(fs.existsSync(path.join(process.env.RIGS_HOME, 'tools', 'echo-json')), false, 'nothing written for a rejected tool');
+  assert.equal(fs.existsSync(path.join(process.env.RIGS_ADHOC_TOOLS, 'echo-json')), false, 'nothing written for a rejected tool');
   const r = await T.registerTool({ ...base, tags: ['demo'], source: ECHO, files: { 'lib/util.js': 'export {}' }, origin: { project: 'p1', task: 't2', session: 's' }, uses: 99 }, { now: 5 });
   assert.equal(r.created, true);
   assert.equal(r.node, 'box');
@@ -104,7 +105,7 @@ test('registerTool: invalid manifests and missing entries are rejected; a valid 
   assert.deepEqual(got.manifest.origin, { project: 'p1', task: 't2', session: 's' }); // kept by an update without origin
   assert.deepEqual(Object.keys(got.files).sort(), ['lib/util.js', 'main.js']);
   assert.equal(got.files['main.js'], ECHO);
-  fs.mkdirSync(path.join(process.env.RIGS_HOME, 'tools', 'broken'));
+  fs.mkdirSync(path.join(process.env.RIGS_ADHOC_TOOLS, 'broken'));
   const list = await T.listLocal();
   assert.deepEqual(list.tools.map((t) => t.id), ['echo-json']);
   assert.deepEqual(list.errors, [{ id: 'broken', error: 'no manifest.json' }]);

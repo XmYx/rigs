@@ -26,8 +26,9 @@ const DIR = path.join(RIGS_HOME, 'merge');
 const QUEUE = path.join(DIR, 'queue.json');
 const BRANCH_PREFIX = 'work';
 // Never part of a change: dependencies (a worktree's node_modules is a symlink, which a "dir/"
-// ignore rule does not match) and build output.
-const FORBIDDEN = /^(node_modules|ui\/dist)(\/|$)/;
+// ignore rule does not match), build output and the machine-local ad-hoc tools (tools/local, src/toolbox.js: a
+// tracked file there would let an update overwrite a machine's own tools; they ship by promotion to tools/<id>).
+const FORBIDDEN = /^(node_modules|ui\/dist|tools\/local)(\/|$)/;
 
 async function forbiddenPaths(cwd, range) {
   const r = await git(['diff', '--name-only', range], cwd);
@@ -115,7 +116,7 @@ export async function describe(dir) {
   const managed = await managedBlockPaths(dir, 'origin/main...HEAD');
   if (managed.length) throw new Error(`the branch commits OpenRig's managed blocks into ${managed.join(', ')} (seats inject them into their folder's guide) — run \`rigs propose\` via RIGS, or remove the <!-- BEGIN/END OpenRig MANAGED BLOCK --> sections and commit`);
   const bad = await forbiddenPaths(dir, 'origin/main...HEAD');
-  if (bad.length) throw new Error(`the branch commits ${bad.join(', ')} — remove them (git rm -r --cached ${bad[0].split('/')[0]}) and commit again`);
+  if (bad.length) throw new Error(`the branch commits ${bad.join(', ')} — remove them (git rm -r --cached ${bad[0].match(FORBIDDEN)[1]}) and commit again`);
   return { branch, base: base.stdout.trim(), commits };
 }
 

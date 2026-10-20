@@ -22,8 +22,16 @@ const STATE = path.join(RIGS_HOME, 'update.json');
 let lastCheck = { at: 0, behind: 0, error: null };
 let busy = false;
 
-function git(args, timeout = 60000) {
-  return run(bin('git') || 'git', args, { cwd: APP_DIR, timeout });
+function git(args, timeout = 60000, cwd = APP_DIR) {
+  return run(bin('git') || 'git', args, { cwd, timeout });
+}
+
+/**
+ * The clean-checkout check: uncommitted edits to tracked files mean someone is working here, so no auto-update.
+ * Untracked and ignored files (tools/local, the ad-hoc tools agents file; node_modules; ui/dist) never count.
+ */
+export async function isDirty(dir = APP_DIR) {
+  return !!(await git(['status', '--porcelain', '--untracked-files=no'], 8000, dir)).stdout.trim();
 }
 
 export function isCheckout() {
@@ -52,10 +60,10 @@ export async function version() {
   if (!isCheckout()) return { sha: 'dev', short: 'dev', branch: '', dirty: false };
   cleanInjectedGuides();
   const [sha, branch, dirty, subject] = await Promise.all([
-    git(['rev-parse', 'HEAD'], 5000), git(['rev-parse', '--abbrev-ref', 'HEAD'], 5000), git(['status', '--porcelain', '--untracked-files=no'], 8000), git(['log', '-1', '--format=%s|%ct'], 5000),
+    git(['rev-parse', 'HEAD'], 5000), git(['rev-parse', '--abbrev-ref', 'HEAD'], 5000), isDirty(), git(['log', '-1', '--format=%s|%ct'], 5000),
   ]);
   const [msg, ct] = subject.stdout.trim().split('|');
-  return { sha: sha.stdout.trim(), short: sha.stdout.trim().slice(0, 7), branch: branch.stdout.trim(), dirty: !!dirty.stdout.trim(), subject: msg, committedAt: Number(ct) * 1000 };
+  return { sha: sha.stdout.trim(), short: sha.stdout.trim().slice(0, 7), branch: branch.stdout.trim(), dirty, subject: msg, committedAt: Number(ct) * 1000 };
 }
 
 export async function check() {
