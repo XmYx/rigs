@@ -22,6 +22,7 @@ import { createSlack, slackRoute } from './connectors/slack.js';
 import { createGoogleDrive, googleDriveRoute } from './connectors/google-drive.js';
 import { adoptGlobal, config, currentGlobal, loadConfig, markGlobalChanged, onGlobalChange, patchConfig, publicConfig, RIGS_HOME, saveConfig } from './config.js';
 import { homeNode, relayTarget } from './globalbrain.js';
+import * as uilayout from './uilayout.js';
 import { createLinearService, linearRoute } from './linear.js';
 import * as desktop from './desktop.js';
 import * as desktopInstall from './desktop-install.js';
@@ -135,6 +136,9 @@ export async function startServer() {
   // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
   const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
+  // Dock layout + app dock (src/uilayout.js): saved here, pushed to peers, pulled when they come back.
+  const layoutStore = uilayout.createStore({ file: path.join(RIGS_HOME, 'ui-layout.json'), name: () => config().name });
+  const layoutErr = (e) => { throw e instanceof uilayout.LayoutError ? new HttpError(e.status, e.message) : e; };
   const broadcast = (msg) => { const s = JSON.stringify(msg); for (const w of uiSockets) if (w.readyState === 1) w.send(s); };
 
   discovery.on('change', async (nodes) => {
@@ -801,6 +805,10 @@ export async function startServer() {
     // Global JARVIS settings: { rev, by, settings, home }. POST adopts a peer's newer revision (never re-broadcast).
     if (sub === 'global' && method === 'GET') return { ...currentGlobal(), home: homeNode(config()) };
     if (sub === 'global' && method === 'POST') { const adopted = adoptGlobal(await body()); if (adopted) broadcast({ type: 'global', ...currentGlobal() }); return { adopted, ...currentGlobal() }; }
+    // Dock layout + app dock, per-key revisions. PUT stamps and pushes; POST ui-layout/adopt is the peer-facing, never re-broadcast one.
+    if (sub === 'ui-layout' && method === 'GET') return layoutStore.snapshot();
+    if (sub === 'ui-layout' && method === 'PUT') { const b = await body(); try { return layoutStore.set(b.key, b.value, { baseRev: b.baseRev }); } catch (e) { layoutErr(e); } }
+    if (sub === 'ui-layout/adopt' && method === 'POST') return { adopted: layoutStore.adopt(await body()) };
     // The main brain: the machine (and its conversational brain) every JARVIS on the mesh talks to.
     if (sub === 'brain/home' && method === 'POST') {
       const b = await body();
@@ -1513,6 +1521,21 @@ export async function startServer() {
       peerJson(n, 'global', { method: 'POST', body: g, timeout: 8000 }).catch((e) => log(`global → ${n.name}:`, e.message));
     }
   });
+  // Dock layout: tell our browsers about every change; push only what this machine changed to the online peers.
+  layoutStore.onChange((key, entry, source) => {
+    broadcast({ type: 'ui-layout', key, ...entry });
+    if (source !== 'local') return;
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      peerJson(n, 'ui-layout/adopt', { method: 'POST', body: { keys: { [key]: entry } }, timeout: 8000 }).catch(() => { /* offline or an old peer: it pulls when it is back */ });
+    }
+  });
+  let pullingLayout = null;
+  const pullLayout = () => (pullingLayout ||= (async () => {
+    for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
+      try { const adopted = layoutStore.adopt(await peerJson(n, 'ui-layout', { timeout: 8000 })); if (adopted.length) log(`dock layout: adopted ${adopted.join(', ')} from ${n.name}`); }
+      catch { /* an old peer without /ui-layout, or offline: the next pull tries again */ }
+    }
+  })().finally(() => { pullingLayout = null; }));
   let pulling = null;
   const pullGlobal = () => (pulling ||= (async () => {
     for (const n of discovery.list().filter((x) => !x.self && x.online && x.rigs)) {
@@ -1520,8 +1543,8 @@ export async function startServer() {
       catch { /* an old peer without /global, or offline: the next pull tries again */ }
     }
   })().finally(() => { pulling = null; }));
-  discovery.on('change', () => { pullGlobal(); });
-  setInterval(() => { pullGlobal(); }, 2 * 60 * 1000).unref();
+  discovery.on('change', () => { pullGlobal(); pullLayout(); });
+  setInterval(() => { pullGlobal(); pullLayout(); }, 2 * 60 * 1000).unref();
   discovery.start();
   if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
     if (!r.restart) return;
