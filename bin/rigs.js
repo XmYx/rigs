@@ -40,7 +40,7 @@ async function quickLocal([sub = 'status', value = '']) {
     console.log(`warm in ${w.ms} ms`);
   }
   const st = await daemonFetch('/api/local/responder').catch((e) => ({ error: e.message }));
-  if (st.error || st.enabled === undefined) fail(st.error);
+  if (st.enabled === undefined) fail(st.error); // st.error alone is the host's Ollama being unreachable: shown below
   const model = st.host ? `${st.model} ${st.loaded ? `loaded (${st.sizeVramMb} MB VRAM, ${st.contextLength} ctx)` : st.installed ? 'installed, not loaded' : st.reachable === false ? `— ${st.error}` : 'NOT installed'}` : st.model;
   console.log(`local responder ${st.enabled ? 'on' : 'off'} · host ${st.node}${st.host ? ' (this machine)' : ''} · ${model} · tiers ${st.tiers.join(', ')} · tools ${st.tools.length}${st.lastError ? ` · last error: ${st.lastError}` : ''}`);
 }

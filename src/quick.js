@@ -193,17 +193,29 @@ export function resolveQuick({ text = '', route = '', override, brain = '', rout
 }
 
 /**
+ * Data that changes from day to day and that no read-only mesh tool returns (weather, prices, scores…). The local
+ * responder has no web tools: asked about these, qwen3:8b invents an answer ("sunny, 22 °C") or declines, where the
+ * Haiku turn searches. Such asks stay on the Claude tier. ("latest", "news", "search" already pick the Sonnet tier.)
+ */
+const LIVE_INFO = /\b(weather|forecast|rain(?:ing|y)?|snow(?:ing|y)?|prices?|stocks?|exchange rates?|bitcoin|btc|ethereum|crypto(?:currency)?|scores?|headlines?|traffic|flights?|elections?)\b/i;
+/** The live-data word in a request's ask, or ''. Pure. */
+export function liveInfo(text) { return (askPart(text).match(LIVE_INFO)?.[0] || '').toLowerCase(); }
+
+/**
  * Does this fast-path turn (`q` from resolveQuick) run on the local responder? → { on: true, ...localSettings, node }
  * (node '' resolves to `self`) or { on: false, reason }. On when config.quick.local is enabled and lists the turn's tier,
- * or when the request asked for it (quick: 'local'); never when the request named a Claude tier. Pure.
+ * or when the request asked for it (quick: 'local'); never when the request named a Claude tier, and not for a `text`
+ * that asks about live data (liveInfo) unless the request asked for the local responder. Pure.
  */
-export function localResponder(q, quick = {}, { self = '' } = {}) {
+export function localResponder(q, quick = {}, { self = '', text = '' } = {}) {
   if (!q?.on) return { on: false, reason: 'not on the fast path' };
   if (q.forcedTier) return { on: false, reason: `quick: ${q.forcedTier} on this request` };
   const l = localSettings(quick?.local);
   if (!q.local) {
     if (!l.enabled) return { on: false, reason: 'config.quick.local.enabled is false' };
     if (!l.tiers.includes(q.tier)) return { on: false, reason: `the ${q.tier} tier is not in quick.local.tiers` };
+    const live = liveInfo(text);
+    if (live) return { on: false, reason: `asks about ${live}: live data the local responder has no tool for` };
   }
   if (!l.tools.length) return { on: false, reason: 'quick.local.tools is empty' };
   return { on: true, ...l, node: l.node || self, forced: !!q.local };

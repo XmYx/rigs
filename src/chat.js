@@ -572,7 +572,7 @@ async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, proj
 export async function quickTurn(id, text, q, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
-  const local = localResponder(q, config().quick, { self: config().name });
+  const local = localResponder(q, config().quick, { self: config().name, text });
   let resolved = local.on ? { brain: 'ollama', model: local.model, effort: '' } : quickBrain(q, await availableBrains());
   if (!resolved) return { escalate: `${q.provider} is not available on this machine`, ran: false, tools: [] };
   let tier = local.on ? 'local' : q.tier;

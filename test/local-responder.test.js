@@ -156,6 +156,22 @@ test('localResponder: only answer-routed fast-path turns on its tiers, only when
   assert.equal(answer({ override: 'sonnet' }).forcedTier, 'sonnet');
 });
 
+test('localResponder: asks about live data (weather, prices, scores) stay on the Claude tier, which can search', () => {
+  const on = { local: { enabled: true, node: '' } };
+  const ask = (text, o = {}) => Q.localResponder(Q.resolveQuick({ text, route: 'answer', settings: {}, ...o }), on, { self: 'magix-system', text });
+  for (const text of ["What's the weather in Budapest right now?", 'Will it rain tomorrow?', 'What is the Bitcoin price today?', 'What was the score in the Arsenal game?', 'Euro to forint exchange rate?']) {
+    const r = ask(text);
+    assert.equal(r.on, false, text);
+    assert.match(r.reason, /live data/);
+  }
+  for (const text of ['Good evening, JARVIS.', 'What is the capital of Australia?', 'Which apps are down?', 'How much have I spent on tokens today?', 'How far away is the Moon?']) {
+    assert.equal(ask(text).on, true, text);
+  }
+  assert.equal(ask("What's the weather in Budapest?", { override: 'local' }).on, true, 'quick: local on the request still forces it');
+  assert.equal(Q.liveInfo('Weather in Paris'), 'weather');
+  assert.equal(Q.liveInfo('How is the mesh doing?'), '');
+});
+
 // ---------------------------------------------------------------- the prompt and the narration guard (pure)
 
 test('responderPrompt: character without the Work section or filing examples, the tool map, escalation last, only the clock line changes', () => {

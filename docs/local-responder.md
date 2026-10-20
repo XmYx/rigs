@@ -345,7 +345,7 @@ local), which is why there is no `url` key.
 Speech settings are not part of this block: the voice that speaks a reply is the UI's existing voice output (§2,
 §5.8), so a reply from the responder is spoken exactly like a Haiku reply.
 
-CLI and API (thin additions to existing surfaces): `rigs quick local on|off|status|model <name>|node <name>`
+CLI and API (thin additions to existing surfaces): `rigs quick local on|off|status|warm|model <name>|node <name>`
 (`bin/rigs.js`, next to `rigs quick`), `POST /api/local/quick {local:{…}}` (already the quick endpoint,
 `src/server.js:909-915`), and on the host `GET /api/local/responder` (enabled, model, loaded?, VRAM, last error) and
 `POST /api/local/responder/warm`.
@@ -406,9 +406,10 @@ the asks where it fires and nothing elsewhere.
 | what happens | detected | what Sir gets |
 | --- | --- | --- |
 | responder off, tier not covered, a Claude tier forced | `localResponder` → `on: false` | today's path, unchanged |
+| the ask is about live data (weather, prices, scores, exchange rates, traffic, flights…: `quick.liveInfo`) | `localResponder` → `on: false` | today's Haiku turn, which can search the web (review t5: qwen3:8b answered "What's the weather in Budapest right now?" with an invented "sunny, 22 °C"; a prompt rule made it decline or escalate general-knowledge questions instead). `quick: 'local'` on the request still forces the local model |
 | host offline / not running RIGS, Ollama down, model not installed | before the request (peer list, `/api/ps`, HTTP error) | Haiku quick turn (`unavailable`), trace event `responder-fallback` |
 | model not loaded (evicted by the GPU overseer, first use) | `/api/ps` on the host before the turn | Haiku answers this one; the host warms the model in the background |
-| no first token within `firstTokenMs` | timer in `runResponder` | abort, Haiku answers (nothing was shown, no reset needed) |
+| no first token within `firstTokenMs` | timer in `localTurn` on the host (`remoteTurn` allows 2 s more for a silent host) | abort, Haiku answers (nothing was shown, no reset needed) |
 | Ollama rejects the model's tool call (`HTTP 500 error parsing tool call`, seen once with gpt-oss) | HTTP error | before any text: `unavailable` → Haiku; after text: the error row below |
 | error or disconnect after text was streamed | stream error | `{ error }` → today's quick-lane error path: re-run on the full brain with `reset: true` |
 | model replies `[[ESCALATE]] …`, asks for a tool it doesn't have, or uses up `maxRounds` | `parseEscalation` / runner | `{ escalate }` → full JARVIS thread, as today |
@@ -425,16 +426,18 @@ therefore runs **where the model is** and streams back:
 
 - **Host route** (magix-system): `POST /api/local/responder/turn`, NDJSON stream, behind the same auth as every
   `/api/local/*` route (`src/auth.js`: loopback, same-owner tailnet device, or the mesh token). Body
-  `{ text, context: [{role, text}] (last 6, ≤800 chars each, like recentContext), hint, trace: {traceId, parentId} }`.
-  Events: `start`, `delta`, `tool` (name, input), `status`, `done` `{ text, usage }`, `error`, and `unavailable`
+  `{ text (the router hint in front), context: [{role, content}] (last 6, ≤800 chars each), local: {the caller's
+  settings, validated again on the host}, trace }`. Events: `delta`, `tool` (id, name, input), `tool-result` (id, output,
+  status), a `ping` every 15 s, then one of `done` `{ text, usage, escalate? }`, `error` `{ message }` or `unavailable`
   `{ reason }` (always before any `delta`). The host builds the prompt from its own `SOUL.md`, runs the model on its own
   Ollama (`127.0.0.1:11434`, which stays bound to loopback — nothing new is exposed on the tailnet) and runs the tools
   itself; the mesh tools return the same mesh-wide data on any machine.
 - **Caller** (`runResponder` on the main-brain machine): `node !== self` → `discovery.get(node)`, then a streamed POST
   to the peer's `/api/local/responder/turn` with the mesh token when `viaToken` (the same headers `peerJson` sends,
   `src/proxy.js`); a peer that is offline or not running RIGS → `unavailable`.
-- **Trace**: the caller records the brain-turn span; the host writes the tool-call spans under the passed `trace`
-  context with its own node name (as task runs already do), so the trace explorer shows one request across both machines.
+- **Trace**: the caller records everything: the brain-turn span (meta `node` = the host) and, from the streamed `tool` /
+  `tool-result` events, the tool-call spans with their real results. The host writes no spans (the `trace` it is
+  passed is not used yet).
 - **Latency**: the tailnet path magix-system ↔ macbookpro is direct LAN, 10 ms round trip (`tailscale ping`).
 - Every UI keeps working unchanged: it posts `jarvis/send` to its own daemon, which relays to the main brain.
 - If Sir makes magix-system the main-brain machine, `node` equals `self` and the turn runs in-process with no hop.
@@ -612,7 +615,7 @@ with Piper-generated speech through `POST /api/local/stt`.
   `gpt-oss:20b` (keep — the alternative), and removable with `ollama rm` once Sir has no use for them:
   `llama3.1:8b`, `qwen3:14b`, `qwen3.5:9b`, `mistral-small3.2:24b`, `gemma4:latest`.
 
-## 7. Speech engine (task t3)
+## 8. Speech engine (task t3)
 
 Implemented on the existing path (§2, §5.8); nothing replaces the current voice.
 
@@ -622,7 +625,7 @@ Implemented on the existing path (§2, §5.8); nothing replaces the current voic
 - UI: chunking moved to `ui/src/sentences.js` (fixes a dropped-prefix bug on "3.5 …"); the first chunk of a reply may end at a comma after 80 chars.
 - Follow-up (not built): speech input is Web Speech / mesh Whisper, already local; nothing cloud-dependent to swap.
 
-## 8. JARVIS UI control and end-to-end check (task t4)
+## 9. JARVIS UI control and end-to-end check (task t4)
 
 - **Control**: Brain popover (◆ badge) → "Local responder (<host>)", under Pre-routing. Switch = `config.quick.local.enabled` (mesh-global, off by default); switching on also warms the model on the host. Model dot: green loaded (+ VRAM), amber installed but not loaded, red missing / Ollama or host unreachable. Voice dot: the speech engine `/api/local/tts` reports. The line under it says where it is configured (`config.quick.local`, `rigs quick local on|off|status`). Files: `ui/src/local-responder.js`, `ui/src/local-responder-model.js`.
 - **Reply label**: a reply the local model answered shows "local · qwen3:8b" next to ◆ JARVIS (and a `local` activity chip, and "· local" in the conversation window). It is taken from the turn's `done` event, so a turn that fell back to Haiku is not labelled local.
