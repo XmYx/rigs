@@ -64,7 +64,9 @@ export function createDesktopMode(deps) {
     // ------------------------------------------------------------ data
     const folderAbs = () => (st.folderRel ? joinPath(st.root, st.folderRel.split('/').join(st.sep), st.sep) : st.root);
     const pathOf = (name) => joinPath(folderAbs(), name, st.sep);
-    const savedKey = () => positionsKey(self().id, st.folderRel);
+    // Keyed on 'self', not the node id: the desktop always shows this daemon's folder (localStorage is per daemon
+    // origin already), and the id only arrives with the first mesh snapshot, often after the first render.
+    const savedKey = () => positionsKey('self', st.folderRel);
     const loadSaved = () => deps.store.get(savedKey(), {}) || {};
     const saveSaved = (s) => deps.store.set(savedKey(), s);
 

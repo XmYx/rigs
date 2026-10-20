@@ -187,8 +187,8 @@ export function createShared({
         if (!d.isFile()) continue;
         let st;
         try { st = await fsp.stat(full); } catch { continue; }
+        seen.add(rel); // before the size check: a file grown too big to sync is not a delete
         if (st.size > maxFileBytes) continue;
-        seen.add(rel);
         const prev = man.files[rel];
         const mtime = Math.floor(st.mtimeMs);
         if (prev && !prev.deleted && prev.size === st.size && prev.mtime === mtime) continue;
@@ -204,6 +204,8 @@ export function createShared({
     await walk(root, '');
     const now = Date.now();
     for (const [rel, e] of Object.entries(man.files)) {
+      // Newly ignored (config.shared.ignore changed): forget it rather than tell the peers it was deleted.
+      if (ign(rel)) { delete man.files[rel]; continue; }
       if (e.deleted) { if (now - e.mtime > TOMBSTONE_TTL_MS) delete man.files[rel]; continue; }
       if (!seen.has(rel)) { man.files[rel] = { deleted: true, size: 0, mtime: now, sha256: e.sha256, hist: e.hist || [] }; changed = true; }
     }
@@ -216,10 +218,12 @@ export function createShared({
     return { node, root, at: lastScan, files: man.files };
   }
 
-  /** Move a local file to the trash (never unlink): <trashDir>/<ts>-<name>. */
+  /** Move a local file to the trash (never unlink): <trashDir>/<ts>-<name>, with a counter when that name is taken. */
   async function toTrash(abs) {
     await fsp.mkdir(trashDir, { recursive: true });
-    const dest = path.join(trashDir, `${Date.now()}-${path.basename(abs)}`);
+    const ts = Date.now();
+    let dest = path.join(trashDir, `${ts}-${path.basename(abs)}`);
+    for (let i = 2; await present(dest); i++) dest = path.join(trashDir, `${ts}-${i}-${path.basename(abs)}`);
     try { await fsp.rename(abs, dest); } catch (e) {
       if (e.code !== 'EXDEV') throw e;
       await fsp.copyFile(abs, dest);
@@ -239,6 +243,8 @@ export function createShared({
     const st = await fsp.stat(abs);
     return { abs, size: st.size, mtime: Math.floor(st.mtimeMs), sha256: await hashFile(abs) };
   }
+
+  const present = (p) => fsp.lstat(p).then(() => true, () => false);
 
   /** The local file at rel still is what the last scan saw (nobody wrote it since). */
   async function unchanged(abs, e) {
@@ -263,7 +269,8 @@ export function createShared({
         if (act === 'none') continue;
         try {
           const { abs } = await resolve(rel);
-          if (L && !L.deleted && !(await unchanged(abs, L))) continue; // edited since the scan: the next run decides
+          // Edited, or created, since the scan: the next run decides (never overwrite what the scan has not seen).
+          if (L && !L.deleted ? !(await unchanged(abs, L)) : await present(abs)) continue;
           if (act === 'pull') {
             const got = await download(peer, rel, rel, R.mtime);
             man.files[rel] = { size: got.size, mtime: got.mtime, sha256: got.sha256, hist: got.sha256 === R.sha256 ? (R.hist || []) : [R.sha256, ...(R.hist || [])].slice(0, HIST_MAX) };

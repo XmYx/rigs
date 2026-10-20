@@ -65,7 +65,10 @@ A rename is a delete plus a create: the new name is pulled and the old one goes 
   `desktop.ini`), temp and lock files (`*.tmp`, `*.swp`, `*.part`, `*.crdownload`, `*~`, `~$*`, `.~lock.*`, `.#*`),
   our own transfer temp files, symlinks, files over `maxFileMb`, and anything matching `config.shared.ignore`.
 - Paths from the API or a peer's manifest must be relative: `..`, absolute paths, drive letters and NUL bytes are
-  refused (400), and a symlink anywhere on the way is refused (403). A file being edited while a sync runs is left
-  for the next run.
+  refused (400), and a symlink anywhere on the way is refused (403). A file being edited, or created, while a sync
+  runs is left for the next run, so a pull never overwrites something the scan has not seen.
+- A file that grows past `maxFileMb`, or starts matching `config.shared.ignore`, simply stops syncing: the other
+  nodes keep their copies (it is not treated as a delete).
+- Trash names are `<ms>-<name>`, with a counter (`<ms>-2-<name>`) when several files of the same name go in at once.
 - Empty folders do not sync. Each node creates `apps/`, `files/` and `reports/` itself.
 - Nodes running an older RIGS without the shared folder show as `unsupported` in `rigs shared status`.
