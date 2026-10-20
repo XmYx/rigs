@@ -49,7 +49,8 @@ after(() => {
     try { const p = JSON.parse(fs.readFileSync(path.join(HOME, 'apps', id, 'app.pid'), 'utf8')); for (const pid of [p.child, p.launcher]) try { process.kill(pid); } catch {} } catch {}
   }
   server?.kill();
-  fs.rmSync(HOME, { recursive: true, force: true });
+  // Windows frees a just-stopped app's folder a moment later (EBUSY): retry instead of failing the file.
+  fs.rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test('serves the UI shell', async () => {
@@ -224,7 +225,8 @@ test('App Store API: catalog, install end to end, open through the App Cloud, un
   assert.deepEqual(job.steps.map((s) => s.status), ['done', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'done', 'done', 'done']);
   assert.ok(job.log.some((l) => /Hello is installed/.test(l)));
   const app = (await get('/api/local/apps')).apps.find((a) => a.id === 'hello');
-  assert.match(app.launch.command, /launch\.mjs/);
+  // The recipe this host runs: { command } on Linux/macOS, { windows: { command } } on Windows.
+  assert.match(app.launchHere.command, /launch\.mjs/);
   const page = await fetch(`${BASE}/api/nodes/self/apps/hello/`);
   assert.equal(await page.text(), 'hello from the app store');
   assert.equal((await get('/api/local/appstore')).apps.find((a) => a.id === 'hello').install.state, 'installed');

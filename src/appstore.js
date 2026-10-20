@@ -699,6 +699,12 @@ export function launcherRecipe({ node, file, platform = process.platform }) {
 /** A rendered argv[0] like "{appDir}/run.cmd" → a native absolute path (C:\…\app\run.cmd on Windows). Pure. */
 export const nativeExe = (s, platform = process.platform) => (pathFor(platform).isAbsolute(s) ? pathFor(platform).normalize(s) : s);
 
+/**
+ * A rendered argument such as "{rigsApp}/appstore/x.txt" → native separators when it is an absolute Windows path
+ * (C:\…/x → C:\…\x, or \\server\…); anything else (flags, URLs, POSIX paths) unchanged. Pure.
+ */
+export const nativeArg = (s, platform = process.platform) => (platform === 'win32' && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(s) ? path.win32.normalize(s) : s);
+
 /** The postInstall steps that run on `platform` (linux | mac | windows): those without `platforms`, or listing it. Pure. */
 export const postStepsFor = (m, platform) => m.postInstall.filter((p) => !p.platforms.length || p.platforms.includes(platform));
 
@@ -748,7 +754,7 @@ child.on('exit', (code, sig) => process.exit(code ?? (sig ? 1 : 0)));
 
 async function launchPlan(ctx) {
   const { m, inst, vars, d } = ctx;
-  const argv = m.launch.command.map((a, i) => (i ? render(a, vars) : nativeExe(render(a, vars))));
+  const argv = m.launch.command.map((a, i) => (i ? nativeArg(render(a, vars)) : nativeExe(render(a, vars))));
   const cwd = m.launch.cwd ? path.resolve(inst.appDir, render(m.launch.cwd, vars)) : inst.appDir;
   const env = { ...(m.runtime.type === 'python' ? { PYTHONUNBUFFERED: '1' } : {}), ...Object.fromEntries(Object.entries(m.env).map(([k, v]) => [k, render(v, vars)])) };
   if (await d.systemd()) {
@@ -839,9 +845,16 @@ function overseerRemove(rec) {
 
 // ---------------------------------------------------------------- python helpers
 
+/** The interpreters to try for Python `ver` on `platform` (linux | mac | windows), in order: [name, leading args]. Pure. */
+export function pythonCandidates(ver, platform) {
+  return platform === 'windows'
+    ? [['py', ver ? [`-${ver}`] : ['-3']], ['python', []]]
+    : [...(ver ? [[`python${ver}`, []]] : []), ['python3', []], ['python', []]];
+}
+
 async function findPython(ver, ctx) {
   const { d } = ctx;
-  const candidates = isWin ? [['py', ver ? [`-${ver}`] : ['-3']], ['python', []]] : [...(ver ? [[`python${ver}`, []]] : []), ['python3', []], ['python', []]];
+  const candidates = pythonCandidates(ver, d.platform());
   for (const [name, pre] of candidates) {
     const exe = d.which(name);
     if (!exe) continue;
@@ -1000,7 +1013,7 @@ const STEP_IMPL = {
       const what = [...rt.requirements, ...(rt.torch?.packages || []), ...rt.packages].join(', ') || 'the project';
       if (ctx.dryRun && !exists(inst.appDir)) return { skipped: true, detail: `dry run: would install ${what}${rt.torch ? ` (torch index ${rt.torch.index})` : ''}` };
       for (const [i, r] of reqs.entries()) if (!exists(r)) throw new Error(`${rt.requirements[i]} is not in the app source`);
-      const pipArgs = rt.pipArgs.map((a) => render(a, ctx.vars));
+      const pipArgs = rt.pipArgs.map((a) => nativeArg(render(a, ctx.vars)));
       // A file named in pipArgs (e.g. --constraint {rigsApp}/…/constraints.txt) counts like a requirements file.
       const argFiles = pipArgs.filter((a) => path.isAbsolute(a) && exists(a)).map(readText);
       const key = keyOf({ rt, reqs: reqs.map(readText), argFiles, venv: ctx.state.steps?.venv?.at || 0, rev: ctx.state.sourceRev || '' });
@@ -1072,7 +1085,7 @@ const STEP_IMPL = {
     if (ctx.dryRun) return { skipped: true, key, detail: `dry run: would run ${steps.map((p) => p.name).join(', ')}` };
     for (const [i, p] of steps.entries()) {
       ctx.progress((i / steps.length) * 100, p.name);
-      const argv = p.run.map((a, j) => (j ? render(a, ctx.vars) : nativeExe(render(a, ctx.vars))));
+      const argv = p.run.map((a, j) => (j ? nativeArg(render(a, ctx.vars)) : nativeExe(render(a, ctx.vars))));
       await ctx.sh(argv[0], argv.slice(1), { cwd: p.cwd ? path.resolve(inst.appDir, render(p.cwd, ctx.vars)) : inst.appDir, env: runEnv(ctx), timeout: p.timeoutSec * 1000 });
     }
     return { key, detail: steps.map((p) => p.name).join(', ') };
