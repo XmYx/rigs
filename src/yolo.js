@@ -19,6 +19,8 @@
 //       a debounced (YOLO_DEBOUNCE_MS) batch of sandbox writes: `file` the last one, `files` all of them, `step` 1, 2, …
 //       `activity` the agent's latest tool step ("Write index.html").
 //   { type: 'yolo-done',   runId, ok, summary, step, firstFrameAt, timeToFirstFrameMs, errors, at }
+//   { type: 'yolo-kept',   runId, keptAs: { id, node, path, name, icon, port, dir, unit?, at }, at }   (/ws only)
+//       the run was kept as an App Cloud app (POST …/keep below); `path` = '/api/nodes/<node>/apps/<id>/'.
 // The stream also carries the usual 'route' (route 'yolo'), 'start' (lane 'yolo', runId), 'tool', 'delta', 'done'
 // (lane 'yolo', runId; its text is the one spoken line) and 'timing' (lane 'yolo', runId, timeToFirstFrameMs).
 //
@@ -39,7 +41,16 @@
 //   POST yolo/<runId>/errors {type, message, source, line, col, stack, url} → { ok, seq }   (the page's own reports)
 //   GET  yolo/<runId>/errors[?after=<seq>] → { runId, status, total, dropped, errors: [{seq, type, message, …}] }
 //   POST yolo/<runId>/stop            → { ok, stopped } aborts the agent; yolo-done follows with ok: false
-//   GET  yolo/<runId>/meta            → the run's meta
+//   GET  yolo/<runId>/meta            → the run's meta (with `keptAs` once it was kept)
+//   POST yolo/<runId>/keep {id?, name?, icon?, description?, tags?}  (src/yolo-keep.js) → { ok, already, keptAs, app,
+//                                       health, files, skipped, steps }: the finished run becomes an App Cloud app —
+//                                       the sandbox copied to <shared>/apps/<id>/ (no dot-files, symlinks or __yolo/,
+//                                       the client never in the stored HTML), a static server.mjs (/healthz) beside it
+//                                       that serves the page under the same CSP sandbox as here (KEPT_HEADERS),
+//                                       a systemd --user unit on Linux else a launch command, registered with a per-OS
+//                                       recipe. A second keep returns the same app (already: true). 409 while the run is
+//                                       live, before its first frame, or for a taken id / existing folder (never
+//                                       overwritten); 404 unknown run; 403 from Origin: null (only JARVIS may keep).
 // The parent window may also post { type: 'yolo-reload' } to the iframe; the client reloads on it. The frame is cross-
 // origin to the parent (opaque), so drive it with postMessage or by resetting `src`, never through contentDocument.
 import crypto from 'node:crypto';
@@ -420,6 +431,27 @@ export async function finishRun(runId, { ok = true, summary = '' } = {}) {
   return done;
 }
 
+/** Is the agent still working on this run (status running in this daemon)? A run left 'running' on disk by a daemon
+ * that stopped is not live (listRuns calls it 'interrupted'). */
+export const isLive = (runId) => { const r = runs.get(runId); return !!r && !r.closed && r.meta.status === 'running'; };
+
+/**
+ * Keep as app (src/yolo-keep.js) finished: store `keptAs` in the run's meta (live and on disk) and emit 'yolo-kept'
+ * { runId, keptAs } to the run's listeners and the /ws push. → the event, or null for an unknown run.
+ */
+export async function markKept(runId, keptAs, root = yoloRoot()) {
+  const r = runs.get(runId);
+  if (r) { r.meta.keptAs = keptAs; await writeMeta(r); } else {
+    const m = await getRun(runId, root);
+    if (!m) return null;
+    await fsp.writeFile(metaFile(root, runId), JSON.stringify({ ...m, keptAs }, null, 2));
+  }
+  const ev = { type: 'yolo-kept', runId, keptAs, at: Date.now() };
+  for (const fn of r?.listeners || []) { try { fn(ev); } catch {} }
+  events.emit('event', ev);
+  return ev;
+}
+
 /** A run's meta: live, else from disk (a run from before a restart). */
 export async function getRun(runId, root = yoloRoot()) {
   if (!isRunId(runId)) return null;
@@ -483,7 +515,8 @@ export function readErrors(runId, { after = 0, limit = 20 } = {}) {
 }
 
 // ── Serving ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-const TYPES = {
+/** Content types by extension, for the sandbox and for a kept app's static server (src/yolo-keep.js). */
+export const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.geojson': 'application/json; charset=utf-8', '.map': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.svg': 'image/svg+xml',
@@ -492,6 +525,7 @@ const TYPES = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
 };
+const TYPES = MIME_TYPES;
 /** Headers on every sandbox response: an opaque-origin sandbox that may still load its own files. */
 export const SANDBOX_HEADERS = {
   'content-security-policy': 'sandbox allow-scripts allow-modals allow-popups allow-forms allow-pointer-lock allow-downloads',

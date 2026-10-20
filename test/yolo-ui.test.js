@@ -91,3 +91,52 @@ test('prettyActivity shortens a tool step to the tool and its file', () => {
   const s = M.applyEvent(M.startRun(start), update(1, { activity: 'Edit {"file_path":"/a/b/app.js"}' }));
   assert.equal(s.activity, 'Edit app.js');
 });
+
+test('Keep as app: the button per state, the kept event, the request body and the app it opens', () => {
+  const live = M.startRun(start);
+  assert.deepEqual(M.keepButton(live), { label: '★ Keep as app', title: 'Stop the agent and keep this page as an App Cloud app', disabled: false, kept: false });
+  const fin = M.applyEvent(live, done(true));
+  assert.equal(M.keepButton(fin).title, 'Keep this page as an App Cloud app');
+  assert.equal(M.keepButton(fin, 'asking').disabled, true, 'the form is open');
+  assert.deepEqual([M.keepButton(fin, 'stopping').label, M.keepButton(fin, 'keeping').label], ['★ Stopping…', '★ Keeping…']);
+  const keptAs = { id: 'orbit-test', node: 'magix-system', path: '/api/nodes/magix-system/apps/orbit-test/', name: 'Orbit test', icon: '🪐' };
+  const kev = { type: 'yolo-kept', runId: 'r1', keptAs, at: 9500 };
+  assert.ok(M.isYoloEvent(kev));
+  const kept = M.applyEvent(fin, kev);
+  assert.equal(kept.keptAs.id, 'orbit-test');
+  assert.equal(M.applyEvent(kept, kev), kept, 'the same keep twice changes nothing');
+  assert.deepEqual(M.keepButton(kept), { label: '★ Kept', title: 'Kept as Orbit test — open it', disabled: false, kept: true });
+  assert.equal(M.startRun({ ...start, keptAs }).keptAs.id, 'orbit-test', 'a run that was kept reads Kept on reopen');
+  assert.equal(M.keepUrl(fin), '/api/nodes/magix-system/yolo/r1/keep');
+  assert.equal(M.metaUrl(fin), '/api/nodes/magix-system/yolo/r1/meta');
+  assert.deepEqual(M.keepBody({ name: '  Orbit   test ', icon: '🪐' }, fin), { name: 'Orbit test', icon: '🪐' });
+  assert.deepEqual(M.keepBody({ name: '', icon: '' }, fin), { name: 'bouncing ball' }, 'the run title when the name is empty');
+  const cat = [{ id: 'orbit-test', node: 'magix-system', name: 'Orbit test', health: { status: 'up' } }];
+  assert.equal(M.keptApp(keptAs, cat), cat[0], 'the catalog entry when there is one');
+  assert.equal(M.keptApp(keptAs, [], { id: 'orbit-test', node: 'x', name: 'From server' }).node, 'magix-system');
+  const built = M.keptApp(keptAs, []);
+  assert.deepEqual([built.id, built.node, built.name, !!built.launchHere], ['orbit-test', 'magix-system', 'Orbit test', true], 'built from keptAs, started on open when down');
+  assert.equal(M.keptApp(null, cat), null);
+});
+
+test('wiring: the Keep button is live, posts through the run\'s node and opens the app with the Apps opener', () => {
+  const src = read('ui/src/yolo.js');
+  assert.doesNotMatch(src, /not available yet/);
+  assert.match(src, /keepUrl\(r\.state\)/);
+  assert.match(src, /openApp\(a\)/);
+  assert.match(src, /import \{[^}]*openApp[^}]*\} from '\.\/apps\.js'/);
+  assert.match(read('ui/src/styles.css'), /\.yolo-keep-form/);
+});
+
+test('withMeta: a window opened for a run takes keptAs and, for a run that already ended, its end from the meta', () => {
+  const live = M.startRun(start);
+  assert.equal(M.withMeta(live, { runId: 'r1', status: 'running' }), live, 'a run still working: nothing changes');
+  assert.equal(M.withMeta(live, { runId: 'other', status: 'done' }), live, 'another run');
+  const keptAs = { id: 'orbit-test', node: 'magix-system', name: 'Orbit test' };
+  const re = M.withMeta(live, { runId: 'r1', status: 'done', ok: true, summary: 'Planets.', errors: 2, updates: 4, startedAt: 1000, firstFrameAt: 1900, endedAt: 9000, keptAs });
+  assert.deepEqual([re.status, re.ok, re.errors, re.step, re.endedAt, re.timeToFirstFrameMs, re.keptAs.id], ['done', true, 2, 4, 9000, 900, 'orbit-test']);
+  assert.equal(M.keepButton(re).label, '★ Kept');
+  assert.equal(M.withMeta(live, { runId: 'r1', status: 'stopped', ok: false }).status, 'failed');
+  const ended = M.applyEvent(live, done(true));
+  assert.equal(M.withMeta(ended, { runId: 'r1', status: 'done', ok: true }), ended, 'already ended: unchanged');
+});

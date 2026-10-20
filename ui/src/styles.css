@@ -1946,9 +1946,26 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 .yolo-btn { padding: 3px 9px; font-size: 12px; }
 .yolo-btn:disabled { opacity: .45; cursor: not-allowed; }
 .yolo-stage { background: #fff; }
+.yolo-keep-btn.kept { border-color: rgba(var(--accent-rgb), .6); color: var(--accent); }
+/* Keep as app: the name/icon form and the progress or error line, a full-width row under the status */
+.yolo-keep { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.yolo-keep[hidden] { display: none; }
+.yolo-keep-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.yolo-keep-form label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.yolo-keep-form input { font: 12px var(--mono); padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--text, inherit); }
+.yolo-keep-name { width: min(260px, 50vw); }
+.yolo-keep-icon { width: 3.2em; text-align: center; }
+.yolo-keep-msg { flex: 1 1 200px; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.yolo-keep-msg.ok { color: #4ade80; }
+.yolo-keep-msg.bad { color: #f87171; }
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .yolo-strip { padding: 6px 8px; gap: 6px; }
   .yolo-status { flex-basis: 100%; }
   .yolo-btns { width: 100%; }
   .yolo-btn { flex: 1 1 0; min-height: 44px; padding: 4px 6px; }
+  .yolo-keep-form { width: 100%; }
+  .yolo-keep-form label { flex: 1 1 100%; }
+  .yolo-keep-form label.yolo-keep-icon-l { flex: 0 0 auto; }
+  .yolo-keep-name { flex: 1; width: auto; min-height: 40px; font-size: 16px; }
+  .yolo-keep-icon { min-height: 40px; font-size: 16px; }
 }
