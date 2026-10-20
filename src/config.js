@@ -80,6 +80,10 @@ function defaults() {
       standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
       maxTurns: 8, timeoutMs: 90000,
     },
+    // YOLO mode (src/yolo.js): "yolo a p5 sketch…", "… yolo it", "in yolo mode" (or jarvis/send yolo: true) runs one
+    // bounded turn on this model that builds a page in RIGS_HOME/yolo/<runId>/ while a JARVIS window shows it live — no
+    // project, review, commit or merge. enabled: false ignores the marker (a request's yolo: true still runs). keep = runs kept.
+    yolo: { enabled: true, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50 },
     // Request traces (src/trace.js): one span tree per request in traces/<day>.jsonl. days = retention; maxField = the cap
     // (characters) on each span's input / output / meta before it is cut and marked; enabled: false records nothing.
     traces: { enabled: true, days: 14, maxField: 8000 },
@@ -249,7 +253,7 @@ export function publicConfig() {
   return {
     name: c.name, port: c.port, peers: c.peers, allowedUsers: c.allowedUsers, brain: c.brain,
     persona: c.persona, update: c.update, ssh: c.ssh, openrig: c.openrig, files: c.files,
-    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, experimental: c.experimental,
+    models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, yolo: c.yolo, experimental: c.experimental,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },
   };

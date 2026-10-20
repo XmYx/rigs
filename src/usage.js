@@ -305,7 +305,9 @@ export function requestTiming(t = {}) {
     filedBy: String(t.filedBy || '').slice(0, 20), ...(t.traceId ? { traceId: String(t.traceId).slice(0, 40) } : {}),
     // The quick-task fast path (src/quick.js): lane 'quick', its tier, and why it went to the full brain if it did.
     // tier 'local' = the local responder answered (src/responder.js); fallback = why it couldn't and Claude answered instead.
-    ...(t.lane ? { lane: String(t.lane).slice(0, 20), tier: String(t.tier || '').slice(0, 20), ...(t.escalated ? { escalated: String(t.escalated).slice(0, 200) } : {}), ...(t.fallback ? { fallback: String(t.fallback).slice(0, 200) } : {}) } : {}),
+    // YOLO (src/yolo.js): lane 'yolo', the run id and the time from intake to the agent's first file in the sandbox.
+    ...(t.lane === 'yolo' ? { lane: 'yolo', runId: String(t.runId || '').slice(0, 40), timeToFirstFrameMs: msOrNull(t.timeToFirstFrameMs) }
+      : t.lane ? { lane: String(t.lane).slice(0, 20), tier: String(t.tier || '').slice(0, 20), ...(t.escalated ? { escalated: String(t.escalated).slice(0, 200) } : {}), ...(t.fallback ? { fallback: String(t.fallback).slice(0, 200) } : {}) } : {}),
   };
 }
 
@@ -823,7 +825,8 @@ export async function recordRequest(x = {}) {
       tsStart: x.tsStart, tsEnd: x.tsEnd, kind: 'request', provider: t.via === 'jev' ? 'jev' : t.via === 'model' ? 'claude' : '', model: x.model || '',
       chatId: x.chatId || '', status: x.status, tokensFrom: 'none', request: { ...t, traceId: x.traceId }, ...(t.lane ? { lane: t.lane } : {}),
       outcome: (t.preroute ? `pre-routed: ${t.route || '?'} (${t.via || '?'}, ${t.routerMs} ms)${t.filedBy ? `, filed by ${t.filedBy}` : ''}` : `pre-routing off${t.filedBy ? ', filed by the brain' : ''}`)
-        + (t.lane === 'quick' ? `, fast path ${t.tier}${t.fallback ? ` (local responder unavailable: ${t.fallback})` : ''}${t.escalated ? ` → full brain (${t.escalated})` : ''}` : ''),
+        + (t.lane === 'quick' ? `, fast path ${t.tier}${t.fallback ? ` (local responder unavailable: ${t.fallback})` : ''}${t.escalated ? ` → full brain (${t.escalated})` : ''}` : '')
+        + (t.lane === 'yolo' ? `, YOLO run ${t.runId || '?'}${t.timeToFirstFrameMs != null ? `, first frame after ${t.timeToFirstFrameMs} ms` : ', no frame'}` : ''),
     });
   } catch (e) { log('usage ledger: request: ' + e.message); return null; }
 }
