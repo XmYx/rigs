@@ -150,6 +150,9 @@ test('the activity and the motion gate are wired: trace spans reach the window, 
   const main = read('ui/src/main.js');
   assert.match(main, /m\.type === 'trace-span'\) \{ onTraceSpan\(m\.span\); onExhibitSpan\(m\.span\);/, 'trace spans reach the Exhibit activity');
   assert.match(main, /setExhibitAnim\(exAnim\.value\)/, 'the display setting changes the mode');
+  assert.match(main, /function wire\(\) \{(?:(?!\n\}\n)[^])*const exAnim = \$\('#d-exanim'\);/, 'wired inside wire(), not stranded in another function');
+  assert.match(read('ui/index.html'), /<h2 class="sec-h">Display<\/h2>(?:(?!<\/section>)[^])*id="d-exanim"/, 'the select is inside the Display section');
+  assert.doesNotMatch(read('ui/src/styles.css'), /@media print \{(?:(?!\n\}\n)[^])*\.ex-act-cols \{ grid/, 'activity layout rules are not inside the print block');
   assert.match(read('ui/index.html'), /id="d-exanim"[^>]*>(?=.*value="off")(?=.*value="auto")(?=.*value="always")/, 'off / auto / always in the display settings');
   const ex = read('ui/src/exhibits.js');
   assert.match(ex, /'rigs\.exhibitAnim'/, 'kept under rigs.<key>, like the other display settings');

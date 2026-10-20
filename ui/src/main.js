@@ -1344,6 +1344,10 @@ function wire() {
   const auto = $('#d-autosess');
   auto.checked = store.get('autoOpenSessions', true);
   auto.onchange = () => store.set('autoOpenSessions', auto.checked);
+  const exAnim = $('#d-exanim'); // Exhibit animations: off | auto | always (exhibits.js keeps it under rigs.exhibitAnim, like `store`)
+  exAnim.value = exhibitAnim();
+  exAnim.onchange = () => setExhibitAnim(exAnim.value);
+  window.addEventListener('rigs:exhibit-anim', (e) => { exAnim.value = e.detail; });
   const themeSel = $('#d-theme');
   themeSel.replaceChildren(...Object.entries(THEMES).map(([id, t]) => h('option', { value: id }, t.name)));
   themeSel.value = themeId();
@@ -1411,10 +1415,6 @@ setTimeout(() => { const s = `${greeting()}, ${persona.address}. ${meshStatusLin
 function focusedMachine() {
   const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null;
   return n || machineById(selfId) || null;
-  const exAnim = $('#d-exanim'); // Exhibit animations: off | auto | always (exhibits.js keeps it under rigs.exhibitAnim, like `store`)
-  exAnim.value = exhibitAnim();
-  exAnim.onchange = () => setExhibitAnim(exAnim.value);
-  window.addEventListener('rigs:exhibit-anim', (e) => { exAnim.value = e.detail; });
 }
 
 function wireMenus() {

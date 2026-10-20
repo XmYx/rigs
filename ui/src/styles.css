@@ -1457,10 +1457,6 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .ex-ghost i.ex-g-fig { height: 76px; border-radius: 9px; }
 .ex-ghost i.short { width: 55%; }
 
-/* document view: the same entries as a plain, still document */
-.ex-list.ex-doc { padding: 18px 16px 28px; }
-.ex-doc .ex-card { max-width: var(--measure, 68ch); margin: 0 auto 22px; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
-.ex-doc .ex-card::before, .ex-doc .ex-card::after, .ex-doc .ex-sheen, .ex-doc .ex-ghost { display: none; }
 /* motion is decoration (exhibits.js motion): nothing loops while no work runs, the window is hidden, on low power or with
    Exhibit animations off (.ex-still); 'auto' drifts only the card of the stage running now (.ex-current) */
 .win-exhibits.ex-still .ex-img.in, .win-exhibits.ex-still .ex-pulse, .win-exhibits.ex-still .ex-badge.live::before, .win-exhibits.ex-still .ex-ghost i, .win-exhibits.ex-still .ex-type { animation: none; }
@@ -1507,6 +1503,10 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .ex-tool.error .ex-tsum { color: var(--danger); }
 .ex-none { color: var(--muted); font: 11px var(--mono); opacity: .7; }
 
+/* document view: the same entries as a plain, still document */
+.ex-list.ex-doc { padding: 18px 16px 28px; }
+.ex-doc .ex-card { max-width: var(--measure, 68ch); margin: 0 auto 22px; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
+.ex-doc .ex-card::before, .ex-doc .ex-card::after, .ex-doc .ex-sheen, .ex-doc .ex-ghost { display: none; }
 .ex-doc .ex-card, .ex-doc .ex-card.ex-new, .ex-doc .ex-img, .ex-doc .ex-img.in { animation: none; }
 .ex-doc .ex-img { opacity: 1; clip-path: none; transform: none; filter: none; transition: none; }
 .ex-doc .ex-h { font-size: 17px; }
@@ -1540,13 +1540,13 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
   .ex-ticker { padding: 8px var(--sp-3); }
   .ex-list { padding: var(--sp-3) var(--sp-3) calc(var(--sp-4) + var(--sab)); }
   .ex-card { padding: 10px 11px 12px; margin-bottom: var(--sp-3); }
+  .ex-act { padding: 8px var(--sp-3); max-height: 52%; }
+  .ex-act-cols { grid-template-columns: minmax(0, 1fr); }
+  .ex-anim { min-height: 44px; font-size: 13px; flex: 1 1 auto; }
 }
 
 /* print: only the document, black on white, one card never split across pages */
 @media print {
-  .ex-act { padding: 8px var(--sp-3); max-height: 52%; }
-  .ex-act-cols { grid-template-columns: minmax(0, 1fr); }
-  .ex-anim { min-height: 44px; font-size: 13px; flex: 1 1 auto; }
   body > *:not(.win-exhibits) { display: none !important; }
   .win-exhibits { position: static !important; width: auto !important; height: auto !important; inset: auto !important; box-shadow: none !important; border: 0 !important; background: #fff !important; color: #000 !important; resize: none; animation: none !important; transition: none !important; overflow: visible !important; }
   .win-exhibits::after, .win-bar, .ex-ticker, .ex-act, .ex-bar, .ex-ghost, .ex-sheen, .ex-card::before, .ex-card::after, .presize { display: none !important; }
