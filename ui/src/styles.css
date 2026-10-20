@@ -98,6 +98,8 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .dock-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font: 11px var(--mono); color: var(--muted); }
 #dock-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 #dock-target:hover { color: var(--accent); }
+#dock-tier { flex: none; opacity: .75; white-space: nowrap; } /* "local · qwen3:8b" while a locally answered reply is shown */
+#dock-tier.hidden { display: none; }
 #chat-dock.attached #dock-target { color: #f0abfc; }
 #subtitle { padding: 0 14px; font-size: 13px; white-space: pre-wrap; max-height: 0; overflow-y: auto; cursor: pointer; transition: max-height .3s, padding .3s; }
 #subtitle.show { max-height: var(--dock-h, 30vh); max-height: var(--dock-h, 30dvh); padding: 2px 14px 9px; }
@@ -991,6 +993,14 @@ button, [role=button], .hub, .conn, .flt, .file-row, .sess-row, .wk-row, .app-ti
 .bm-pre { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 4px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; cursor: pointer; }
 .bm-pre b { font-size: 12px; }
 .bm-pre-note { margin-top: 2px; line-height: 1.35; }
+.lr { align-items: flex-start; }
+.lr-body { min-width: 0; }
+.lr-line { display: flex; align-items: flex-start; gap: 6px; margin-top: 3px; line-height: 1.35; }
+.lr-dot { flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--line); }
+.lr-dot.ok { background: #4ade80; }
+.lr-dot.warn { background: #fbbf24; }
+.lr-dot.bad { background: #f87171; }
+.lr-where { margin-top: 4px; opacity: .8; }
 .bm-pre:has(input:disabled) { cursor: default; opacity: .7; }
 
 /* Graphify window: the mesh graph in a panel (graphify.js) */

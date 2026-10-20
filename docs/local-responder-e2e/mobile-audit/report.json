@@ -1,0 +1,82 @@
+{
+ "generated": "2026-10-20T14:28:55.896Z",
+ "url": "http://localhost:4795",
+ "views": [
+  {
+   "view": "orb-home",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "orb-home@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 25,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  },
+  {
+   "view": "brain-menu",
+   "viewport": "390x844",
+   "desktop": false,
+   "screenshot": "brain-menu@390x844.png",
+   "note": null,
+   "errors": [],
+   "failures": {
+    "overflow": 0,
+    "smallTargets": 0
+   },
+   "axeViolationRules": 0,
+   "axeViolationNodes": 0,
+   "axe": [],
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "hScroll": false,
+    "docScroll": {
+     "w": 390,
+     "h": 844
+    },
+    "smallTargets": 0,
+    "smallTargetSamples": [],
+    "overflow": [],
+    "clipped": [],
+    "overlaps": [],
+    "textUnder12px": 25,
+    "meta": "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    "safeAreaCss": true,
+    "orientationLandscape": false
+   }
+  }
+ ],
+ "check": {
+  "overflow": 0,
+  "smallTargets": 0,
+  "pageErrors": 0,
+  "captureFailed": 0
+ }
+}

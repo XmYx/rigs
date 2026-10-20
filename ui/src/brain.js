@@ -1,4 +1,5 @@
 import { api, h, node, toast } from './api.js';
+import { localResponderControl } from './local-responder.js';
 
 /**
  * Brain settings popover: which machine thinks, which provider, the exact model and the reasoning
@@ -104,6 +105,7 @@ export function openBrainPanel({ host, entries, current, gatewayName, onSave }) 
     hint,
     effortRow,
     h('label', { class: 'bm-pre' }, h('div', {}, h('b', {}, 'Pre-routing'), preNote), h('span', { class: 'ctl-switch' }, preBox, h('span', { class: 'ctl-knob' }))),
+    localResponderControl({ entries }),
     h('label', { class: 'check bm-core' }, core, ` Also the core brain — project planning for the whole mesh`),
     h('div', { class: 'actions' }, Object.assign(useBtn, { onclick: async () => {
       const e = entry();
