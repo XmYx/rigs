@@ -366,6 +366,12 @@ export async function startServer() {
     const out = [];
     for (const it of items) {
       const ws = it.workspace;
+      if (it.tool) {
+        // A helper tool for a task: an ordinary task under the main rigs project — no dev worktree, no merge-steward proposal.
+        const r = await planner.intake({ title: it.title, instruction: it.goal, kind: 'code', trace: tctx || undefined }, plannerCtx);
+        out.push({ id: r.project.id, name: r.project.name, owner: r.project.owner, node: config().name, path: '', workspace: 'RIGS · JARVIS', self: false, tool: true, flow: '', note: it.note || 'ad-hoc tool, filed in the ad-hoc store' });
+        continue;
+      }
       // One handoff span per project filed, under the router's span; the project keeps its context so its planning
       // call and task briefs attach to the same trace. It ends once planning and dispatch have run.
       const hs = tctx ? trace.startSpan({ ...tctx, kind: 'handoff', name: 'file-work', input: { goal: it.goal, workspace: ws?.name || '', node: it.node || '', self: !!it.self, flow: it.flow?.name || '' } }) : null;

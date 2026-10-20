@@ -360,7 +360,8 @@ export function hintLines(matches, { width = 90 } = {}) {
 // What agents are told. Each stays a few hundred characters: it is paid for in every brief and every setup.
 
 /** The paragraph of a task brief's tool section. */
-export const BRIEF_NOTE = 'Before writing a helper script, call the rigs MCP tool `tool_list` with what you need (filed tools and published applets are ranked together); run a hit with `tool_run`, open an applet instead of building another. When you write a script another task could reuse (a check, converter, publisher, parser), file it with `tool_register`: arguments as JSON on stdin, result on stdout, no secrets.';
+export const ADHOC_RULE = 'When a task needs a helper script or tool, build it in the ad-hoc store with `tool_register`, use it with `tool_run` and finish the task. Never call `rigs_dev_start` or `rigs_propose` just to add a tool, and never edit seeds in `tools/` to get a task done: promotion into RIGS is a separate, explicit step (`rigs tools promote`).';
+export const BRIEF_NOTE = `Before writing a helper script, call the rigs MCP tool \`tool_list\` with what you need (filed tools and published applets are ranked together); run a hit with \`tool_run\`, open an applet instead of building another. When you write a script another task could reuse (a check, converter, publisher, parser), file it with \`tool_register\`: arguments as JSON on stdin, result on stdout, no secrets. ${ADHOC_RULE}`;
 
 /** The task brief's "Reusable tools" section: the paragraph plus this task's likely matches. */
 export function briefSection(matches) {
@@ -371,11 +372,11 @@ export function briefSection(matches) {
 /** The planning prompt's tool rule with the filed tools that fit the goal. */
 export function planNote(matches) {
   const lines = hintLines(matches, { width: 70 });
-  return `- Agents reuse filed tools: before writing a helper they call \`tool_list\`, and they file reusable scripts with \`tool_register\`. Where a filed tool fits, name it in the task description so the agent runs it with \`tool_run\` instead of writing it again.${lines.length ? `\n  Filed tools that fit this goal:\n${lines.map((l) => `  ${l}`).join('\n')}` : ''}`;
+  return `- Agents reuse filed tools: before writing a helper they call \`tool_list\`, and they file reusable scripts with \`tool_register\`. A helper tool a task needs is built in the ad-hoc store (tool_register, then tool_run) inside that task: never plan a task to start a RIGS dev worktree, propose, or edit tools/ seeds just to add a tool; promotion (\`rigs tools promote\`) is a separate step Sir asks for. Where a filed tool fits, name it in the task description so the agent runs it with \`tool_run\` instead of writing it again.${lines.length ? `\n  Filed tools that fit this goal:\n${lines.map((l) => `  ${l}`).join('\n')}` : ''}`;
 }
 
 /** The agent instructions bullet written by `rigs setup`. */
-export const AGENT_NOTE = '**Reusable tools**: before writing a helper script, search the registry with `tool_list` (tools other agents filed plus App Cloud applets) and run a hit with `tool_run`. When you write a script another task could reuse, file it with `tool_register` (JSON arguments on stdin, result on stdout, no secrets).';
+export const AGENT_NOTE = '**Reusable tools**: before writing a helper script, search the registry with `tool_list` (tools other agents filed plus App Cloud applets) and run a hit with `tool_run`. When you write a script another task could reuse, file it with `tool_register` (JSON arguments on stdin, result on stdout, no secrets). Build a helper a task needs in the ad-hoc store with `tool_register`, use it with `tool_run` and finish the task: never call `rigs_dev_start` or `rigs_propose` just to add a tool, and never edit seeds in `tools/` to get a task done (promotion is the separate `rigs tools promote` step).';
 
 /**
  * Merge per-node results like aggregateApps: [{ node: {id,name}, tools?: [...], error? }] → { tools, errors }.
@@ -771,6 +772,29 @@ export async function listAdhoc({ dirs = roots(), all = false, now = Date.now() 
   const state = adhocState(input, seeds, { now }).map((s) => ({ ...s, dir: where.get(s.id).dir }));
   const counts = Object.fromEntries(ADHOC_STATUS.map((k) => [k, state.filter((s) => s.status === k).length]));
   return { node: config().name, tools: all ? state : state.filter((s) => s.status !== 'merged'), counts, errors: own.errors };
+}
+
+/** The completion-note line for a project's unmerged ad-hoc tools ('' when it filed none). Pure. */
+export function adhocNote(tools, projectId) {
+  const n = (tools || []).filter((t) => t.status === 'unmerged' && String(t.origin?.project || '') === String(projectId)).length;
+  return n ? `${n} ad-hoc tool${n === 1 ? '' : 's'} unmerged; \`rigs tools adhoc\` lists ${n === 1 ? 'it' : 'them'}, \`rigs tools promote\` ships ${n === 1 ? 'it' : 'them'}.` : '';
+}
+
+/**
+ * adhocNote for the tools on this machine, read synchronously from their manifests (the completion note is told at once;
+ * "unmerged" is the status the manifest carries, so a tool merged to main since is only noticed by `rigs tools adhoc`).
+ * Never throws: a completion note must not fail over a listing.
+ */
+export function projectAdhocNote(projectId, { dirs = roots() } = {}) {
+  const tools = [];
+  for (const root of dirs.filter((r) => !isSeedRoot(r))) {
+    let names = [];
+    try { names = fs.readdirSync(root); } catch { continue; }
+    for (const n of names) {
+      try { const m = JSON.parse(fs.readFileSync(path.join(root, n, 'manifest.json'), 'utf8')); if (m?.adhoc) tools.push({ id: m.id, status: m.adhoc.status, origin: m.adhoc.origin || m.origin }); } catch { /* not a tool folder */ }
+    }
+  }
+  return adhocNote(tools, projectId);
 }
 
 /**

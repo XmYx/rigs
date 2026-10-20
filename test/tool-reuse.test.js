@@ -87,7 +87,7 @@ test('token budget: each addition for agents stays under 300 tokens (with three 
   const plan = T.planNote(T.matchTools(CATALOG, 'screenshots app publish word cloud', { limit: 5 }));
   const setup = T.AGENT_NOTE;
   for (const [name, text] of [['brief', brief], ['plan', plan], ['setup', setup]]) assert.ok(approxTokens(text) < 300, `${name} is ${approxTokens(text)} tokens`);
-  assert.ok(approxTokens(T.BRIEF_NOTE) < 150);
+  assert.ok(approxTokens(T.BRIEF_NOTE) < 220);
 });
 
 test('agent instructions from setup carry the tool note exactly once, with plain backticks', () => {
@@ -155,4 +155,42 @@ test('usage log: the mesh view adds every node\'s tool reuse', () => {
   const agg = U.aggregateUsage([{ node: { name: 'a' }, report: { totals: U.totals([]), groups: {}, records: [], toolReuse: a } }, { node: { name: 'b' }, report: { totals: U.totals([]), groups: {}, records: [], toolReuse: b } }]);
   assert.equal(agg.toolReuse.runs, 5);
   assert.equal(U.aggregateUsage([{ node: { name: 'a' }, error: 'down' }]).toolReuse.runs, 0);
+});
+
+test('ad-hoc rule: briefs, the planning prompt and the setup note say to build tools in the store, never via a dev worktree', () => {
+  for (const [name, text] of [['BRIEF_NOTE', T.BRIEF_NOTE], ['AGENT_NOTE', T.AGENT_NOTE], ['ADHOC_RULE', T.ADHOC_RULE]]) {
+    assert.match(text, /tool_register/, name);
+    assert.match(text, /rigs_dev_start/, name);
+    assert.match(text, /rigs_propose/, name);
+    assert.match(text, /rigs tools promote/, name);
+    assert.match(text, /seeds in `tools\/`/, name);
+  }
+  assert.match(T.ADHOC_RULE, /tool_run/);
+  const brief = P.taskPrompt(project, task('Check disk', 'Write a script that reports free disk on every machine.'), CATALOG);
+  assert.match(brief, /Helper tools: When a task needs a helper script or tool, build it in the ad-hoc store/);
+  const selfBrief = P.taskPrompt({ ...project, selfDev: { branch: 'work/box/x' }, repo: { node: 'box', path: '/dev/x' } }, task('Change router', 'Change the router.'), CATALOG);
+  assert.match(selfBrief, /Never call `rigs_dev_start` or `rigs_propose` just to add a tool/);
+  const plan = P.planningPrompt({ ...project, request: '' }, [], "", CATALOG);
+  assert.match(plan, /never plan a task to start a RIGS dev worktree, propose, or edit tools\/ seeds just to add a tool/);
+  assert.match(S.agentInstructions(), /never call `rigs_dev_start` or `rigs_propose` just to add a tool/i);
+});
+
+test('adhocNote: the completion note counts a project\'s unmerged ad-hoc tools only', () => {
+  const tools = [
+    { id: 'a', status: 'unmerged', origin: { project: 'p1' } }, { id: 'b', status: 'unmerged', origin: { project: 'p1' } },
+    { id: 'c', status: 'promoted', origin: { project: 'p1' } }, { id: 'd', status: 'unmerged', origin: { project: 'p2' } },
+  ];
+  assert.match(T.adhocNote(tools, 'p1'), /^2 ad-hoc tools unmerged; `rigs tools adhoc`/);
+  assert.match(T.adhocNote(tools, 'p2'), /^1 ad-hoc tool unmerged;/);
+  assert.equal(T.adhocNote(tools, 'p3'), '');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-adhoc-note-'));
+  for (const [id, status, project] of [['a', 'unmerged', 'p1'], ['b', 'unmerged', 'p1'], ['c', 'promoted', 'p1'], ['d', 'unmerged', 'p2']]) {
+    fs.mkdirSync(path.join(dir, id));
+    fs.writeFileSync(path.join(dir, id, 'manifest.json'), JSON.stringify({ id, origin: { project }, adhoc: { status, origin: { project } } }));
+  }
+  fs.mkdirSync(path.join(dir, 'junk'));
+  const text = P.withAdhocNote({ id: 'p1' }, 'Demo is done.', { dirs: [dir] });
+  assert.match(text, /^Demo is done\.\n\n2 ad-hoc tools unmerged; `rigs tools adhoc`/);
+  assert.equal(P.withAdhocNote({ id: 'p3' }, 'Demo is done.', { dirs: [dir] }), 'Demo is done.');
+  assert.equal(T.projectAdhocNote('p1', { dirs: [path.join(dir, 'missing')] }), '');
 });

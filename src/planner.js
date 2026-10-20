@@ -6,7 +6,7 @@ import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { PROVIDERS, coreBrain } from './models.js';
-import { briefSection, matchTools, planNote } from './toolbox.js';
+import { briefSection, matchTools, planNote, projectAdhocNote, ADHOC_RULE } from './toolbox.js';
 import * as trace from './trace.js';
 import * as usage from './usage.js';
 import { parseContext } from './trace.js';
@@ -128,7 +128,7 @@ export function workspaceBrief(p) {
   ].filter(Boolean).join('\n');
 }
 
-function planningPrompt(p, snapshot, guide = '', tools = []) {
+export function planningPrompt(p, snapshot, guide = '', tools = []) {
   const rules = config().routing.rules.map((r) => `${r.kind}${r.size ? '/' + r.size : ''}${r.tool ? ' [needs ' + r.tool + ']' : ''} → ${r.provider} ${r.model || '(default)'} effort=${r.effort || 'default'}`).join('; ');
   return `You are the planning brain of RIGS, a mesh of the user's workstations with coding agents on each.
 Break this project into concrete, independently executable tasks for coding agents.
@@ -479,6 +479,7 @@ export function autonomyBrief(p) {
   as a follow-up for Sir.
 - A declined permission prompt or a safety-classifier denial means: take another route (a different tool, a smaller
   step) — not "blocked". If you still have a question, RIGS answers it with the safe default; nobody else will.
+- Helper tools: ${ADHOC_RULE}
 ${p.selfDev ? '- Commits: this is RIGS itself — commit in your dev worktree; RIGS proposes the branch to the merge steward, which tests and pushes it.'
     : '- Commits: Sir approves commits on this project. Do not commit, push, merge, rebase or switch branches in its repositories — leave your changes in the working tree and list every file you changed plus a suggested commit message in your summary.'}
 `;
@@ -747,8 +748,20 @@ export function completionNotify(p, ctx, { why = 'done', merged = '' } = {}) {
   if (p.loop?.notified === sig) return false;
   p.loop = { ...(p.loop || {}), notified: sig, endedAt: Date.now(), why };
   event(p, `loop ended (${why}) — asked Sir how it worked out`);
-  tell(ctx, p, autonomy.completionReport(p, { why, merged }), why === 'done' ? 'info' : 'error', { keep: true });
+  const text = autonomy.completionReport(p, { why, merged });
+  tell(ctx, p, withAdhocNote(p, text), why === 'done' ? 'info' : 'error', { keep: true });
   return true;
+}
+
+/** `text` plus a line on the project's unmerged ad-hoc tools, when it filed any (the tools are filed per origin project). */
+export function withAdhocNote(p, text, deps) {
+  const note = projectAdhocNote(p.id, deps);
+  return note ? `${text}\n\n${note}` : text;
+}
+
+/** finalReport + the ad-hoc note, told to Sir (autonomy off). */
+function tellFinal(ctx, p, opts) {
+  tell(ctx, p, withAdhocNote(p, finalReport(p, opts)), 'info', { keep: true });
 }
 
 /** Sir's answer to "How did it work out?", kept on the project. */
@@ -833,7 +846,7 @@ async function settle(p, ctx, now = Date.now()) {
           // Nothing was committed (an action, not a code change): there is nothing to merge — the project is done.
           p.status = 'done';
           event(p, `all tasks done — ${p.selfDev.branch} has no commits ahead of main, nothing to merge`);
-          if (A.enabled) completionNotify(p, ctx); else tell(ctx, p, finalReport(p), 'info', { keep: true });
+          if (A.enabled) completionNotify(p, ctx); else tellFinal(ctx, p);
           ctx?.release?.(p);
         } else {
           p.selfDev = { ...p.selfDev, request: r.id, steward: r.steward, proposedAt: now, proposeFails: 0, proposeRetryAt: 0 };
@@ -857,7 +870,7 @@ async function settle(p, ctx, now = Date.now()) {
     } else {
       p.status = 'done';
       event(p, 'all tasks done');
-      if (A.enabled) completionNotify(p, ctx); else tell(ctx, p, finalReport(p), 'info', { keep: true });
+      if (A.enabled) completionNotify(p, ctx); else tellFinal(ctx, p);
       ctx?.release?.(p);
     }
     await saveProject(p);
@@ -1134,7 +1147,7 @@ async function followMerge(p, ctx, now) {
     event(p, `merged to main as ${req.sha} and rolled out`);
     if (A.enabled) completionNotify(p, ctx, { merged: req.sha || 'main' });
     await saveProject(p);
-    if (!A.enabled) tell(ctx, p, finalReport(p, { merged: req.sha || 'main' }), 'info', { keep: true });
+    if (!A.enabled) tellFinal(ctx, p, { merged: req.sha || 'main' });
     ctx.release?.(p);
   } else if (req.status === 'conflict' && A.enabled) {
     // A conflict belongs to a resolver agent (routing kind "merge"). One that failed, stalled or never started is
