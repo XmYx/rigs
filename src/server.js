@@ -1544,8 +1544,6 @@ export async function startServer() {
   discovery.on('change', () => { pullGlobal(); });
   setInterval(() => { pullGlobal(); }, 2 * 60 * 1000).unref();
   discovery.start();
-  if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
-    if (!r.restart) return;
   if (sharedEngine) {
     // A local change tells the online peers to pull now, so it lands everywhere within seconds; a peer (re)appearing
     // brings a reconcile too.
@@ -1553,6 +1551,8 @@ export async function startServer() {
     discovery.on('change', () => sharedEngine.nudge());
     log(`shared folder: ${sharedEngine.root}`);
   }
+  if (!process.env.RIGS_NO_AUTOUPDATE) updater.startAutoUpdate((r) => {
+    if (!r.restart) return;
     broadcast({ type: 'notify', text: `Updated to ${r.to}. Restarting.`, speak: false, from: config().name });
     setTimeout(() => process.exit(updater.RESTART_CODE), 1000);
   });
