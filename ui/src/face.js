@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 // JARVIS's face: a procedural holographic head (no external model) with realtime lipsync.
-//  - Lip shapes come from a viseme timeline (the neural voice sends phoneme timings with the audio),
+//  - Lip shapes come from a viseme timeline (a voice that sends phoneme timings with the audio; the bundled voices do not, then the face follows the audio),
 //    played against the AudioContext clock so mouth and sound stay locked together.
 //  - Without a timeline (espeak, macOS say, browser speech) the live audio loudness and brightness
 //    drive the mouth instead, so any voice still lip-syncs.

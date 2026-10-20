@@ -126,7 +126,7 @@ export function createVoice({ onTranscript, onInterim, onState, onLevel, onSpeec
       const r = await fetch('/api/local/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: pref.name || undefined }), signal: abort.signal });
       if (r.status === 204) return 'empty';
       if (!r.ok) throw new Error('tts ' + r.status);
-      let cues = null; // lipsync timeline from the neural voice: [[start, end, viseme], …]
+      let cues = null; // lipsync timeline when the engine sends one (x-visemes): [[start, end, viseme], …]
       try { const v = r.headers.get('x-visemes'); if (v) cues = JSON.parse(atob(v)).cues || null; } catch { cues = null; }
       const data = await r.arrayBuffer();
       if (g !== gen) return null;

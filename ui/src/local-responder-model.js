@@ -17,7 +17,7 @@ export function responderView({ settings = {}, status = null, tts = null, hostKn
     else { modelDot = 'warn'; modelText = `${model} installed, not loaded yet — it loads on the first reply`; }
   }
   const voiceOk = !!tts?.engine;
-  const voiceName = tts?.engine === 'neural' ? 'JARVIS voice (Kokoro)' : tts?.engine || '';
+  const voiceName = tts?.engine === 'piper' ? 'JARVIS voice (Piper)' : tts?.engine || '';
   return {
     on, host, model, modelDot, modelText,
     voiceDot: voiceOk ? 'ok' : 'bad',

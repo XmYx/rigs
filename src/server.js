@@ -573,11 +573,14 @@ export async function startServer() {
   };
 
   async function broadcastNotify(b) {
+    // One notification, one voice: when the speakers on this machine are asked for (aloud), the open UIs must not speak it
+    // as well, or Sir hears it twice. Otherwise the UIs speak it, and the speakers only when no UI saw it.
+    if (b.aloud === true && b.speak !== false) b = { ...b, speak: false, aloud: true, spokenAloud: true };
     const all = discovery.list().filter((n) => n.online && n.rigs);
     const results = await Promise.all(all.map((n) => (n.self ? localCall('notify', 'POST', b) : peerJson(n, 'notify', { method: 'POST', body: b })).then((r) => ({ node: n.name, ...r })).catch((e) => ({ node: n.name, error: e.message }))));
     // Nobody is looking at a JARVIS UI (or the caller asked for it): say it through this machine's speakers.
     const seen = results.some((r) => r.delivered > 0);
-    if (!process.env.RIGS_NO_NOTIFY && b.speak !== false && (b.aloud === true || (!seen && config().persona.speakAloud !== 'never'))) {
+    if (!process.env.RIGS_NO_NOTIFY && (b.spokenAloud || (b.speak !== false && !seen && config().persona.speakAloud !== 'never'))) {
       tts.speakAloud(String(b.text || '').slice(0, 2000)).catch((e) => log('tts', e.message));
       results.push({ node: config().name, aloud: true });
     }
@@ -1247,7 +1250,7 @@ export async function startServer() {
       const r = await tts.synthesize(b.text, b.voice);
       if (!res) return { bytes: r ? r.audio.length : 0, engine: r?.engine };
       if (!r) { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); return undefined; }
-      // x-visemes: base64 JSON lipsync timeline from the neural voice (empty for local engines)
+      // x-visemes: base64 JSON lipsync timeline when the engine provides one (empty for the bundled voices: the face follows the audio)
       res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': r.audio.length, 'cache-control': 'no-store', 'x-tts-engine': r.engine, ...(r.visemes ? { 'x-visemes': r.visemes } : {}) });
       res.end(r.audio);
       return undefined;

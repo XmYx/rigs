@@ -30,7 +30,7 @@ test('voice dot: red with a plain explanation when no speech engine answers', ()
   const v = responderView({ settings: { enabled: true }, status: { loaded: true }, tts: { engine: null } });
   assert.equal(v.voiceDot, 'bad');
   assert.match(v.voiceText, /browser voice/);
-  assert.match(responderView({ settings: {}, tts: { engine: 'neural' } }).voiceText, /Kokoro/);
+  assert.match(responderView({ settings: {}, tts: { engine: 'piper' } }).voiceText, /Piper/);
 });
 
 test('title names the host and the config location is shown', () => {

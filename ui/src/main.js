@@ -114,7 +114,7 @@ const orb = createOrb($('#orb'), 'J.A.R.V.I.S.');
 /** The launch recipe an app's host runs on its own OS (launchHere); older peers send only launch. */
 const launchOf = (a) => (a.launchHere !== undefined ? a.launchHere : a.launch);
 
-// The face lip-syncs to every spoken sentence (viseme timeline from the neural voice, else the audio itself)
+// The face lip-syncs to every spoken sentence (viseme timeline when the voice sends one, else the audio itself)
 let face = null;
 // The face is the heaviest WebGL scene after the galaxy, so it is created lazily: on low-power devices only once
 // the user asks for it ("show your face"), elsewhere unless they hid it.

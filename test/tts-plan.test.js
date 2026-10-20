@@ -4,32 +4,33 @@ import { test } from 'node:test';
 import { engineOrder, runChain, trimSilence } from '../src/tts-plan.js';
 import { drain, nextChunk } from '../ui/src/sentences.js';
 
-test('engineOrder: auto prefers neural, then piper, then the machine engine; unreachable engines are left out', () => {
-  assert.deepEqual(engineOrder({ up: { piper: true } }), ['neural', 'piper', 'local']);
-  assert.deepEqual(engineOrder({ up: { piper: false } }), ['neural', 'local']);
-  assert.deepEqual(engineOrder({ neural: false, up: { piper: true, local: false } }), ['piper']);
-  assert.deepEqual(engineOrder({ up: { piper: true, neural: false } }), ['piper', 'local']);
+test('engineOrder: auto prefers resident piper, then the machine engine; unreachable engines are left out; never neural', () => {
+  assert.deepEqual(engineOrder({ up: { piper: true } }), ['piper', 'local']);
+  assert.deepEqual(engineOrder({ up: { piper: false } }), ['local']);
+  assert.deepEqual(engineOrder({ up: { piper: true, local: false } }), ['piper']);
+  assert.deepEqual(engineOrder({ choice: 'neural', up: { piper: true } }), ['piper', 'local']); // retired choice = auto
 });
 
 test('engineOrder: the chosen engine goes first, the rest remain as fallback; named local voices stay local', () => {
-  assert.deepEqual(engineOrder({ choice: 'piper', up: { piper: true } }), ['piper', 'neural', 'local']);
-  assert.deepEqual(engineOrder({ choice: 'local', up: { piper: true } }), ['local', 'neural', 'piper']);
-  assert.deepEqual(engineOrder({ choice: 'bogus', up: { piper: true } }), ['neural', 'piper', 'local']);
+  assert.deepEqual(engineOrder({ choice: 'piper', up: { piper: true } }), ['piper', 'local']);
+  assert.deepEqual(engineOrder({ choice: 'local', up: { piper: true } }), ['local', 'piper']);
+  assert.deepEqual(engineOrder({ choice: 'bogus', up: { piper: true } }), ['piper', 'local']);
   assert.deepEqual(engineOrder({ voice: 'Daniel', up: { piper: true } }), ['local']);
-  assert.deepEqual(engineOrder({ voice: 'neural:bm_lewis', up: {} }), ['neural', 'local']);
+  // a saved UI preference may still carry the retired neural voice ids: they mean "the default voice"
+  assert.deepEqual(engineOrder({ voice: 'neural:bm_lewis', up: { piper: true } }), ['piper', 'local']);
+  for (const choice of ['auto', 'neural', 'piper', 'local']) assert.ok(!engineOrder({ choice, up: { piper: true, neural: true } }).includes('neural'));
 });
 
 test('runChain falls through failing engines, reports them, and keeps a null ("nothing to say") result', async () => {
   const failed = [];
-  const r = await runChain(['neural', 'piper', 'local'], {
-    neural: async () => { throw new Error('down'); },
+  const r = await runChain(['piper', 'local'], {
     piper: async () => { throw new Error('refused'); },
     local: async () => ({ engine: 'espeak' }),
   }, (n, e) => failed.push([n, e.message]));
   assert.deepEqual(r, { engine: 'espeak' });
-  assert.deepEqual(failed, [['neural', 'down'], ['piper', 'refused']]);
-  assert.equal(await runChain(['neural', 'local'], { neural: async () => null, local: async () => assert.fail('not reached') }), null);
-  await assert.rejects(runChain(['neural'], { neural: async () => { throw new Error('boom'); } }), /boom/);
+  assert.deepEqual(failed, [['piper', 'refused']]);
+  assert.equal(await runChain(['piper', 'local'], { piper: async () => null, local: async () => assert.fail('not reached') }), null);
+  await assert.rejects(runChain(['piper'], { piper: async () => { throw new Error('boom'); } }), /boom/);
   await assert.rejects(runChain([], {}), /no text-to-speech engine/);
 });
 
