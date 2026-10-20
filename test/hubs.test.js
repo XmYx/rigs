@@ -224,8 +224,13 @@ test('rig resolves outside the service PATH: RIGS\'s pinned wrapper first, then 
     const { clearWhichCache } = await import(${JSON.stringify(path.join(ROOT, 'src/util.js'))}); clearWhichCache();
     console.log(JSON.stringify([a, bin('rig')]));`;
   // augmentedPath() appends dirname(process.execPath); a node that lives beside a real `rig` (nvm) would win, so run a lone copy.
-  const nodeDir = path.join(home, 'node-only'); fs.mkdirSync(nodeDir);
+  // A shared-library node (Homebrew's loads @rpath/libnode.*.dylib from ../lib) needs that library beside the copy.
+  const nodeDir = path.join(home, 'node-only', 'bin'); fs.mkdirSync(nodeDir, { recursive: true });
   const nodeBin = path.join(nodeDir, 'node'); fs.copyFileSync(process.execPath, nodeBin);
+  const libDir = path.join(path.dirname(fs.realpathSync(process.execPath)), '..', 'lib');
+  const libs = fs.existsSync(libDir) ? fs.readdirSync(libDir).filter((f) => /^libnode\./.test(f)) : [];
+  if (libs.length) fs.mkdirSync(path.join(home, 'node-only', 'lib'));
+  for (const f of libs) fs.copyFileSync(path.join(libDir, f), path.join(home, 'node-only', 'lib', f));
   const out = await new Promise((res) => {
     const p = spawn(nodeBin, ['--input-type=module', '-e', script], { env: { HOME: home, PATH: '/usr/bin:/bin', RIGS_HOME: path.join(home, '.rigs') } });
     let o = ''; p.stdout.on('data', (d) => (o += d)); p.stderr.on('data', (d) => (o += d)); p.on('close', () => res(o));

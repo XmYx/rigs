@@ -105,6 +105,11 @@ test('isToolWork / withWork: building a helper tool is not a RIGS change, a RIGS
   const rigs = ['add a dark mode to the dashboard', 'JARVIS feature: a tools page with a search box', 'fix the router so it stops misreading requests', 'add a button to the window header'];
   for (const t of tool) assert.equal(isToolWork(t), true, t);
   for (const t of rigs) assert.equal(isToolWork(t), false, t);
+  // Changes to RIGS's own MCP tools, CLI and connectors use tool words but are RIGS changes: dev worktree + steward.
+  for (const t of ['make the mesh_exec tool support timeouts', 'write a new rigs CLI subcommand that lists sessions', 'build a scraper so the Linear connector pulls comments', 'create a helper so mesh_ask retries on timeout']) {
+    assert.equal(isToolWork(t), false, t);
+    assert.equal(withWork(heuristicRoute(`JARVIS: ${t}`, []), `JARVIS: ${t}`, { catalog: [], selfNode: 'box' }).work[0].self, true, t);
+  }
   const route = (t) => withWork(heuristicRoute(t, []), t, { catalog: [], selfNode: 'box' });
   for (const t of tool) {
     const d = route(t);

@@ -73,9 +73,10 @@ const QUESTION = /^\s*(what|why|how|when|where|who|which|is|are|was|were|did|doe
 const SELF = /\b(jarvis|rigs(?: os)?)\b/i;
 // Building or using a helper tool to get something done (a script, checker, converter…) is ordinary work, not a change to
 // RIGS: the tool is filed in the ad-hoc store (tool_register), never through a dev worktree and the merge steward.
-// Anything that names RIGS's own UI, router, planner, daemon or code stays a RIGS change. Conservative on purpose.
+// Anything that names RIGS's own UI, router, planner, daemon, MCP tools (mesh_exec…), CLI, connectors or code stays a
+// RIGS change. Conservative on purpose: a miss here only means the old routing.
 const TOOL_WORK = /\b(?:build|write|make|create|code|develop|script up|put together|whip up|need|use|run)\b[^.;\n]{0,50}\b(?:scripts?|helpers?|tools?|one-?offs?|checkers?|probes?|converters?|parsers?|scrapers?|utility|utilities|cli)\b/i;
-const RIGS_CHANGE = /\b(?:dashboards?|ui|interface|buttons?|pages?|views?|panels?|windows?|widgets?|dark mode|themes?|css|router|planner|daemon|steward|mcp|endpoints?|settings|setup|codebase|source code|src\/|features?|behaviou?r|tools? (?:page|tab|panel|list|registry|store|box|ui)|rigs tools|tool_register|toolbox)\b/i;
+const RIGS_CHANGE = /\b(?:dashboards?|ui|interface|buttons?|pages?|views?|panels?|windows?|widgets?|dark mode|themes?|css|router|planner|daemon|steward|mcp|endpoints?|settings|setup|codebase|source code|src\/|features?|behaviou?r|tools? (?:page|tab|panel|list|registry|store|box|ui)|rigs tools|tool_register|toolbox|(?:mesh|tool|rigs|project|linear|slack|drive|trace|appstore|exhibit|usage|preroute)_[a-z_]+|subcommands?|(?:rigs|jarvis) (?:cli|commands?)|connectors?|integrations?)\b/i;
 /** A request whose work is building or using a helper tool, as opposed to changing RIGS/JARVIS itself. Pure. */
 export const isToolWork = (text) => TOOL_WORK.test(String(text || '')) && !RIGS_CHANGE.test(String(text || ''));
 const WORDS = (s) => new Set(String(s || '').toLowerCase().match(/[a-zà-ž0-9]{4,}/g) || []);
