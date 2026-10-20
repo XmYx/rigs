@@ -21,6 +21,30 @@ async function daemonFetch(p, opts = {}) {
   try { return JSON.parse(t); } catch { return t; }
 }
 
+/**
+ * rigs quick local [on|off|status|warm|model <name>|node <machine>] — the local responder (config.quick.local,
+ * src/responder.js). `on` without a host makes this machine the host; the setting is mesh-global.
+ */
+async function quickLocal([sub = 'status', value = '']) {
+  const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+  const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : sub === 'model' ? { model: value } : sub === 'node' ? { node: value } : null;
+  if (!patch && !['status', 'warm'].includes(sub)) fail('usage: rigs quick local [on|off|status|warm|model <name>|node <machine>]');
+  if (sub === 'model' && !value) fail('usage: rigs quick local model <ollama model, e.g. qwen3:8b>');
+  if (patch) {
+    const r = await daemonFetch('/api/local/quick', { method: 'POST', body: JSON.stringify({ local: patch }) }).catch((e) => ({ error: e.message }));
+    if (r.error || !r.local) fail(r.error);
+  }
+  if (sub === 'warm') {
+    const w = await daemonFetch('/api/local/responder/warm', { method: 'POST', timeout: 130000 }).catch((e) => ({ error: e.message }));
+    if (!w.ok) fail(`warm-up failed: ${w.error || JSON.stringify(w)}`);
+    console.log(`warm in ${w.ms} ms`);
+  }
+  const st = await daemonFetch('/api/local/responder').catch((e) => ({ error: e.message }));
+  if (st.enabled === undefined) fail(st.error); // st.error alone is the host's Ollama being unreachable: shown below
+  const model = st.host ? `${st.model} ${st.loaded ? `loaded (${st.sizeVramMb} MB VRAM, ${st.contextLength} ctx)` : st.installed ? 'installed, not loaded' : st.reachable === false ? `— ${st.error}` : 'NOT installed'}` : st.model;
+  console.log(`local responder ${st.enabled ? 'on' : 'off'} · host ${st.node}${st.host ? ' (this machine)' : ''} · ${model} · tiers ${st.tiers.join(', ')} · tools ${st.tools.length}${st.lastError ? ` · last error: ${st.lastError}` : ''}`);
+}
+
 /** A secret from stdin: piped in, or typed at a prompt without echo. Never from argv (shell history, ps). */
 async function readSecret(prompt) {
   const { stdin, stderr } = process;
@@ -190,9 +214,13 @@ const commands = {
     if (typeof r === 'string' || r?.error) { console.error(typeof r === 'string' ? r : `${r.error}${r.code ? ` (${r.code})` : ''}`); process.exit(1); }
     console.log(JSON.stringify(r, null, 2));
   },
-  /** rigs quick [on|off|status] — the quick-task fast path (answers on Haiku / Sonnet instead of the full brain) */
+  /**
+   * rigs quick [on|off|status] — the quick-task fast path (answers on Haiku / Sonnet instead of the full brain)
+   * rigs quick local [on|off|status|warm|model <name>|node <machine>] — the local responder (src/responder.js)
+   */
   async quick() {
     const [sub = 'status'] = argv;
+    if (sub === 'local') return quickLocal(argv.slice(1));
     const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : null;
     if (!patch && sub !== 'status') { console.error('usage: rigs quick [on|off|status]'); process.exit(1); }
     const r = await daemonFetch('/api/local/quick', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
@@ -426,6 +454,7 @@ const commands = {
   rigs linear [status]  is the Linear connector configured and reachable (never prints the key)
   rigs linear key [--clear]  set the Linear API key (asked for, or piped in on stdin) or remove it
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
+  rigs quick local [on|off|status|warm|model <m>|node <machine>]  the local responder: a local Ollama model answers the fast path (read-only tools)
   rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats
   rigs exhibits attach <projectId>  build a project's exhibit document from its current state (idempotent)

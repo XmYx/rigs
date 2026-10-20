@@ -22,6 +22,7 @@ import { createWork, createQuestions } from './work.js';
 import { createUsage } from './usage-panel.js';
 import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
+import { replyLabel } from './local-responder-model.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
@@ -1029,6 +1030,9 @@ async function ask(text, { spoken = false } = {}) {
   let felt = false;
   const tools = [];
   const chips = []; // activity chips for this reply's tool calls
+  let startNode = ''; // the machine that hosts the local responder, from the turn's start event
+  const tierTag = $('#dock-tier'); // "local · qwen3:8b" next to ◆ JARVIS while a locally answered reply is shown
+  tierTag.classList.add('hidden');
   try {
     // Every request is routed on the server: a new conversation, or the ongoing thread it belongs to
     await stream(`${node(b.nodeId)}/jarvis/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
@@ -1037,6 +1041,17 @@ async function ask(text, { spoken = false } = {}) {
         store.set('chat', chatRef);
         const rc = routeChip(e); // "route answer · pre-routed …" or "route direct · pre-routing off …"
         activity(rc.name, rc.detail).done(true);
+      } else if (e.type === 'start') {
+        startNode = e.node || '';
+      } else if (e.type === 'done') {
+        // a locally answered reply says so, discreetly; `done` carries the tier that answered (not a fallback)
+        const lb = replyLabel({ ...e, node: e.node || startNode });
+        if (lb) {
+          activity(lb.name, lb.detail).done(true);
+          tierTag.textContent = `${lb.name} · ${e.model || 'local model'}`;
+          tierTag.title = `Answered by the local responder: ${lb.detail}`;
+          tierTag.classList.remove('hidden');
+        }
       } else if (e.type === 'delta') {
         if (!reply) setOrb('speaking');
         reply += e.text;
@@ -1221,7 +1236,7 @@ async function conversationWindow() {
   try {
     const c = await api(`${node(chatRef.nodeId)}/chats/${chatRef.chatId}`);
     const older = Math.max(0, c.messages.length - CAPS.chatMessages); // a long conversation shows its latest messages, not thousands of nodes
-    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...c.messages.slice(older).map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}`), h('div', { class: 'mt' }, x.text))));
+    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...c.messages.slice(older).map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
 }

@@ -42,7 +42,8 @@ import * as trace from './trace.js';
 import * as exhibits from './exhibits.js';
 import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
-import { applyQuickPatch, quickSettings } from './quick.js';
+import { applyQuickPatch, localSettings, quickSettings } from './quick.js';
+import * as responder from './responder.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
 import * as ssh from './ssh.js';
@@ -121,6 +122,7 @@ export async function startServer() {
   const cfg = config();
   await ssh.ensureKey().catch(() => null);
   const discovery = new Discovery(selfInfo);
+  responder.setPeers((name) => discovery.get(name)); // the local responder streams turns from the machine hosting its model
   // ComfyUI connector (/api/local/comfyui/*): the user's URL wins; the detected ComfyUI is the fallback.
   const comfy = createComfyService({ suggest: async () => { const c = (await caps.capabilities()).comfyui; return c?.url ? { url: c.url, running: c.running !== false } : null; } });
   // Linear connector (/api/local/linear/*): API key from config.linear or LINEAR_API_KEY, never returned or logged.
@@ -906,15 +908,39 @@ export async function startServer() {
       return routerView();
     }
     if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
-    // Quick-task fast path (src/quick.js): on/off and the model per tier.
-    if (sub === 'quick' && method === 'GET') return quickSettings(config().quick);
+    // Quick-task fast path (src/quick.js): on/off and the model per tier; `local` = the local responder (src/responder.js).
+    if (sub === 'quick' && method === 'GET') return { ...quickSettings(config().quick), local: localSettings(config().quick?.local) };
     if (sub === 'quick' && method === 'POST') {
+      const b = await body();
       let next;
-      try { next = applyQuickPatch(config().quick, await body()); } catch (e) { throw new HttpError(400, e.message); }
+      try { next = applyQuickPatch(config().quick, b); } catch (e) { throw new HttpError(400, e.message); }
+      // Switched on without a host: the machine it was switched on at hosts the model (its own Ollama).
+      if (b.local?.enabled !== undefined && next.local?.enabled && !next.local.node) next.local.node = config().name;
       const cfg = config();
       cfg.quick = next;
       saveConfig(cfg);
-      return next;
+      if (b.local !== undefined) {
+        markGlobalChanged(); // config.quick is a mesh-global setting: the main-brain machine must see the switch
+        if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
+      }
+      return { ...next, local: localSettings(next.local) };
+    }
+    // The local responder on this machine (src/responder.js): status, warm-up, busy (for the GPU overseer), and the
+    // host side of a turn another machine's fast path streams from here (NDJSON).
+    if (sub === 'responder' && method === 'GET') return responder.status();
+    if (sub === 'responder/warm' && method === 'POST') return responder.warm(config().quick?.local, { soul: chat.soul() });
+    if (sub === 'responder/busy' && method === 'GET') return { busy: responder.isBusy() };
+    if (sub === 'responder/turn' && method === 'POST') {
+      const b = await body();
+      if (!res) return responder.hostTurn(b, () => {}, { soul: config().persona?.soul === false ? '' : chat.soul() });
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+      res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
+      const hb = setInterval(() => res.write('{"type":"ping"}\n'), 15000);
+      try {
+        await responder.hostTurn(b, (e) => res.write(JSON.stringify(e) + '\n'), { soul: config().persona?.soul === false ? '' : chat.soul(), signal: ac.signal });
+      } catch (e) { res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n'); } finally { clearInterval(hb); res.end(); }
+      return undefined;
     }
     if (sub === 'routing' && method === 'GET') return config().routing;
     if (sub === 'routing' && method === 'POST') {

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { escalationGate, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
+import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
+import { runResponder } from './responder.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as trace from './trace.js';
 import { claudeResultUsage, codexTurnUsage, ollamaUsage, recordChatTurn, recordRequest } from './usage.js';
@@ -424,14 +425,17 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
     if (q.on) {
       Object.assign(m, { lane: 'quick', tier: q.tier });
       const r = await (opts.sendQuick || quickTurn)(chatId, text, q, emit, { ...opts, hint, onTool });
+      // the local responder (src/responder.js) reports the tier that actually answered: 'local', or the Claude tier it fell back to
+      if (r?.tier) m.tier = r.tier;
+      if (r?.fallback) m.fallback = r.fallback;
       if (r?.escalate == null || opts.signal?.aborted) return (out = r);
       m.escalated = r.escalate;
       if (opts.trace) trace.recordSpan({ traceId: opts.trace.traceId, parentId: opts.trace.parentId || '', kind: 'event', name: 'escalate', start: Date.now(),
-        input: { reason: r.escalate, ran: r.tools || [] }, output: 'handed to the full JARVIS brain', meta: { lane: 'quick', tier: q.tier, model: q.model, effort: q.effort, to: 'full' } });
+        input: { reason: r.escalate, ran: r.tools || [] }, output: 'handed to the full JARVIS brain', meta: { lane: 'quick', tier: m.tier, model: r.model || q.model, effort: r.model ? '' : q.effort, to: 'full' } });
       // reset: what the fast turn already streamed (text before a tool call, a cut-off reply) is not part of the answer.
       emit({ type: 'status', text: 'handing this to the full brain…', reset: true });
       const ran = r.tools?.length ? ` It already ran: ${r.tools.slice(0, 8).join('; ')} — don't repeat what is done.` : '';
-      out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint: `${hint}\n[The fast path (${q.model}) handed this request to you: ${r.escalate}.${ran}]`.trim(), onTool });
+      out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint: `${hint}\n[The fast path (${r.model || q.model}) handed this request to you: ${r.escalate}.${ran}]`.trim(), onTool });
       return out;
     }
     out = await send(chatId, { text, brain, model, effort }, emit, { ...opts, hint, onTool });
@@ -442,7 +446,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
       preroute: m.preroute, route: m.route, via: m.via, routerMs: m.routerMs,
       timeToFiledMs: m.filedAt ? Math.max(0, m.filedAt - t0) : null, filedBy: m.filedBy,
       timeToReplyMs: !failed && !opts.signal?.aborted && out && !out.error ? end - t0 : null,
-      ...(m.lane ? { lane: m.lane, tier: m.tier, ...(m.escalated ? { escalated: m.escalated } : {}) } : {}),
+      ...(m.lane ? { lane: m.lane, tier: m.tier, ...(m.escalated ? { escalated: m.escalated } : {}), ...(m.fallback ? { fallback: m.fallback } : {}) } : {}),
     };
     emit({ type: 'timing', ...timing });
     await recordRequest({ tsStart: t0, tsEnd: end, chatId: m.chatId, model: m.model, traceId: opts.trace?.traceId || '', status: opts.signal?.aborted ? 'stopped' : failed || out?.error ? 'failed' : 'done', ...timing });
@@ -514,7 +518,7 @@ async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
  * hears every finished tool call, traced or not; the turn is filed in the usage ledger. `meta` adds facts to the span
  * (the fast path's lane, tier…), `lane` tags the ledger record, `runOpts` go to the runner.
  */
-async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, onToolStart, usage, sessionKey, meta = {}, lane = '', runOpts = {} }) {
+async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, onToolStart, usage, sessionKey, meta = {}, lane = '', tier = '', runOpts = {} }) {
   const startedAt = Date.now();
   const ctx = trace.parseContext(tctx);
   const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
@@ -547,7 +551,7 @@ async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, proj
       },
     });
   }
-  await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted, lane });
+  await recordChatTurn({ chat, tag: usage, brain: resolved.brain, model: resolved.model, effort: resolved.effort, startedAt, out, aborted: !!signal?.aborted, lane, tier });
   return out;
 }
 
@@ -558,51 +562,87 @@ async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, proj
  * brain should answer instead: the fast brain said so (ESCALATE_MARKER), it hit its turn limit or another error, timed
  * out (q.timeoutMs), or the tier's provider isn't available here. Then nothing of the turn stays in the thread. A turn
  * that already filed work (jarvis_task / project_create) is never re-run: that work was handed off as usual.
+ *
+ * With the local responder on (config.quick.local or quick: 'local', see quick.localResponder) the turn runs on the
+ * local model instead (src/responder.js: read-only tools, its own timeout quick.local.timeoutMs) and the result carries
+ * tier 'local' and the model. When the responder can't start (host or Ollama down, model not loaded, no first token in
+ * time) nothing has been shown: the Claude turn above answers instead, and the result says why (fallback). One after
+ * the other, never both at once. With it off this is exactly the Claude turn.
  */
 export async function quickTurn(id, text, q, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
-  const resolved = quickBrain(q, await availableBrains());
+  const local = localResponder(q, config().quick, { self: config().name, text });
+  let resolved = local.on ? { brain: 'ollama', model: local.model, effort: '' } : quickBrain(q, await availableBrains());
   if (!resolved) return { escalate: `${q.provider} is not available on this machine`, ran: false, tools: [] };
+  let tier = local.on ? 'local' : q.tier;
   chat.messages.push({ role: 'user', text, ts: Date.now() });
-  emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', tier: q.tier });
+  emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', tier, ...(local.on ? { node: local.node } : {}) });
   // Shown on the work dashboard as JARVIS answering, like a full turn (sendMessage); cleared before an escalation re-runs.
   activeTurns.set(id, { id, title: chat.title, brain: resolved.brain, model: resolved.model, startedAt: Date.now(), text: truncate(text, 120), lane: 'quick' });
-  // Bounded: its own abort (the timeout) on top of Sir's stop.
-  const ac = new AbortController();
-  let timedOut = false;
-  const stop = () => ac.abort();
-  signal?.addEventListener('abort', stop, { once: true });
-  const timer = setTimeout(() => { timedOut = true; ac.abort(); }, q.timeoutMs);
   const gate = escalationGate(emit);
   const ran = [];
   let filed = false;
   const sent = hint ? `${hint}\n${text}` : text;
-  let out;
+  // One bounded turn: its own abort (the timeout) on top of Sir's stop.
+  const bounded = async (runner, meta, runOpts, timeoutMs, ledgerTier = '') => {
+    const ac = new AbortController();
+    let timedOut = false;
+    const stop = () => ac.abort();
+    signal?.addEventListener('abort', stop, { once: true });
+    const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
+    try {
+      const out = await tracedRun({ chat, runner, resolved, sent, emit: gate.emit, meshSummary, projects, signal: ac.signal, tctx, usage: null, sessionKey: 'quickSessionId', lane: 'quick', tier: ledgerTier, meta,
+        onToolStart: (c) => ran.push(`${c.name}${c.input ? ' ' + truncate(typeof c.input === 'string' ? c.input : JSON.stringify(c.input), 120) : ''}`),
+        onTool: (name, r) => { if (r.status === 'ok' && HANDOFF_TOOL.test(name || '')) filed = true; onTool?.(name, r); },
+        runOpts });
+      return { out, timedOut, timeoutMs };
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); }
+  };
+  const claudeTurn = () => bounded(runClaude, { lane: 'quick', tier: q.tier, why: q.why, maxTurns: q.maxTurns, timeoutMs: q.timeoutMs }, { quick: { maxTurns: q.maxTurns } }, q.timeoutMs);
+  let fallback = '';
+  let res;
   try {
-    out = await tracedRun({ chat, runner: runClaude, resolved, sent, emit: gate.emit, meshSummary, projects, signal: ac.signal, tctx, usage: null, sessionKey: 'quickSessionId', lane: 'quick',
-      meta: { lane: 'quick', tier: q.tier, why: q.why, maxTurns: q.maxTurns, timeoutMs: q.timeoutMs },
-      onToolStart: (c) => ran.push(`${c.name}${c.input ? ' ' + truncate(typeof c.input === 'string' ? c.input : JSON.stringify(c.input), 120) : ''}`),
-      onTool: (name, r) => { if (r.status === 'ok' && HANDOFF_TOOL.test(name || '')) filed = true; onTool?.(name, r); },
-      runOpts: { quick: { maxTurns: q.maxTurns } } });
-  } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); activeTurns.delete(id); }
+    if (!local.on) res = await claudeTurn();
+    else {
+      const soulText = config().persona?.soul === false ? '' : soul();
+      res = await bounded(runResponder, { lane: 'quick', tier: 'local', why: q.why, claudeTier: q.tier, node: local.node, timeoutMs: local.timeoutMs, maxRounds: local.maxRounds },
+        { local, soul: soulText, self: config().name }, local.timeoutMs, 'local');
+      if (res.out.unavailable && !signal?.aborted) {
+        // Nothing was shown: today's Claude turn answers instead (docs/local-responder.md §5.5).
+        fallback = res.out.unavailable;
+        if (tctx) trace.recordSpan({ traceId: tctx.traceId, parentId: tctx.parentId || '', kind: 'event', name: 'responder-fallback', start: Date.now(),
+          input: { reason: fallback, node: local.node, model: local.model }, output: `the ${q.tier} fast path answers instead`, meta: { lane: 'quick', tier: q.tier, local: true } });
+        const claude = quickBrain(q, await availableBrains());
+        if (claude) {
+          resolved = claude;
+          tier = q.tier;
+          emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', tier, fallback });
+          Object.assign(activeTurns.get(id) || {}, { brain: resolved.brain, model: resolved.model });
+          res = await claudeTurn();
+        }
+      }
+    }
+  } finally { activeTurns.delete(id); }
+  const { out, timedOut } = res;
+  const lanes = local.on ? { tier, model: resolved.model, ...(fallback ? { fallback } : {}) } : {};
   const userStopped = !!signal?.aborted;
-  const asked = parseEscalation(out.text);
+  const asked = out.escalate ? { reason: out.escalate } : parseEscalation(out.text);
   const escalate = userStopped || filed ? null
-    : timedOut ? `the fast path timed out after ${Math.round(q.timeoutMs / 1000)} s`
+    : timedOut ? `the fast path timed out after ${Math.round(res.timeoutMs / 1000)} s`
       : asked ? asked.reason
         : out.error ? `the fast path failed: ${truncate(out.error, 160)}` : null;
   if (escalate) {
     chat.messages.pop(); // the full brain's turn records the request itself
     await saveChat(chat);
-    return { escalate, ran: true, tools: ran, usage: out.usage };
+    return { escalate, ran: true, tools: ran, usage: out.usage, ...lanes };
   }
   gate.flush();
-  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', ts: Date.now() });
+  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', ...(tier === 'local' ? { tier } : {}), ts: Date.now() });
   await saveChat(chat);
   if (out.error) emit({ type: 'error', message: out.error });
-  emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'quick', tier: q.tier });
-  return out;
+  emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'quick', tier });
+  return local.on ? Object.assign(out, lanes) : out;
 }
 
 /**
