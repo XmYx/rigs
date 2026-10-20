@@ -4,6 +4,7 @@ import { dialogify } from './a11y.js';
 import { registerDockable, unregisterDockable, setDockTitle } from './docking.js';
 import { tagCtx } from './ctx-tag.js';
 import { createDisposer } from './cleanup.js';
+import { dockableWindow, emitClosed, emitOpened, emitTitle } from './open-events.js';
 
 // Minimal floating window manager: drag by the whole title bar (docking.js; buttons in it still click),
 // double-click the bar to maximise/restore, resize from the corner, click to raise, close. With the
@@ -65,6 +66,8 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
 
   const ro = new ResizeObserver(() => win.dispatchEvent(new CustomEvent('winresize')));
   ro.observe(body);
+  const dockable = dockableWindow(className); // open / close / title are announced for the app dock's auto-docking (open-events.js)
+  if (dockable) emitOpened('window', { id: win.dataset.winId, title, icon });
 
   let closing = false;
   function close({ fromBack = false } = {}) {
@@ -74,6 +77,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     if (i >= 0) { backStack.splice(i, 1); if (!fromBack) { skipPop++; history.back(); } }
     ro.disconnect();
     windows.delete(win);
+    if (dockable) emitClosed('window', { id: win.dataset.winId });
     unregisterDockable(id);
     try { onClose?.(); } catch (e) { console.error(e); }
     bin.dispose();
@@ -87,7 +91,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     el: win, body, close,
     /** Run fn when the window closes (✕, Esc, phone back, close others, hide). interval/listen: the same, pre-wired. */
     onCleanup: (fn) => bin.add(fn), interval: (fn, ms) => bin.interval(fn, ms), listen: (t, ev, fn, o) => bin.listen(t, ev, fn, o),
-    setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
+    setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); if (dockable) emitTitle('window', { id: win.dataset.winId, title: t, icon }); }, onResize: (fn) => win.addEventListener('winresize', fn), raise };
 }
 
 /** Open windows, topmost first: { id, title, icon, raise(), close(), el }. */

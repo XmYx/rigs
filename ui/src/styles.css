@@ -155,6 +155,19 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .term-status { font: 11px var(--mono); color: var(--muted); }
 .term-status.live { color: #4ade80; }
 .term-status.live::before { content: '● '; }
+/* The shared Terminals window (autoTabTerminals in the app dock): a tab strip over one pane per session. */
+.term-tabbar { display: flex; gap: 2px; padding: 4px 6px 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--line); flex: none; }
+.term-tab { display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 6px 5px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; user-select: none; }
+.term-tab:hover { background: rgba(255, 255, 255, .05); color: #fff; }
+.term-tab.on { background: #05090e; border-color: var(--line); color: #fff; }
+.term-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.term-tab-label { overflow: hidden; text-overflow: ellipsis; }
+.term-tab-x { all: unset; flex: none; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 4px; font-size: 10px; cursor: pointer; }
+.term-tab-x:hover { background: rgba(248, 113, 113, .25); }
+.term-tab-x:focus-visible { outline: 2px solid var(--accent); }
+.term-panes { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term-pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.term-pane.on { display: flex; }
 
 .toolbar { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .tb { padding: 4px 9px; border-radius: 6px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03); font-size: 12px; white-space: nowrap; }
@@ -1662,3 +1675,153 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 .tray-jv-lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tray-jv-links { display: flex; justify-content: space-between; margin-top: 8px; }
 @media (max-width: 760px) { .tray-jv-badge { display: none; } }
+
+/* === APP DOCK === macOS-style dock of applets and online rigs (app-dock.js, drawn from app-dock-state.js).
+   Bottom, left or right; icons magnify under the pointer (--s per tile, set by the magnification loop), groups are
+   stacks that open a popover. While the dock stays on screen, app-dock.js sets --ad-l / --ad-r / --ad-b and the
+   html.adock-r* classes, and the panels anchored to that edge keep clear of it (only at their CSS place: a panel the
+   user moved keeps its own inline position). On a phone it is a plain bottom bar and lifts the toolbar (--bar-bottom). */
+:root { --ad-l: 0px; --ad-r: 0px; --ad-b: 0px; --ad-phone: 0px; }
+.adock { position: fixed; z-index: 3000; --ad-icon: 46px; pointer-events: none; transition: transform .26s cubic-bezier(.2, .8, .2, 1); }
+.adock-list { pointer-events: auto; display: flex; gap: 6px; padding: 6px; border-radius: 18px; box-sizing: content-box;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, .02)), var(--panel);
+  border: 1px solid var(--line-strong); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .07); }
+.adock.pos-bottom { left: 50%; bottom: 6px; transform: translateX(-50%); }
+.adock.pos-bottom .adock-list { flex-direction: row; align-items: flex-end; height: var(--ad-icon); }
+.adock.pos-left { left: 6px; top: calc(var(--mb-h) + (100% - var(--mb-h)) / 2); transform: translateY(-50%); }
+.adock.pos-right { right: 6px; top: calc(var(--mb-h) + (100% - var(--mb-h)) / 2); transform: translateY(-50%); }
+.adock.pos-left .adock-list, .adock.pos-right .adock-list { flex-direction: column; width: var(--ad-icon); }
+.adock.pos-left .adock-list { align-items: flex-start; }
+.adock.pos-right .adock-list { align-items: flex-end; }
+.adock-empty { color: var(--muted); font-size: 12px; padding: 0 10px; align-self: center; white-space: nowrap; }
+.adock.pos-left .adock-empty, .adock.pos-right .adock-empty { writing-mode: vertical-rl; padding: 10px 0; }
+
+.adock-tile { position: relative; flex: none; width: calc(var(--ad-icon) * var(--s, 1)); height: calc(var(--ad-icon) * var(--s, 1)); padding: 0; margin: 0;
+  border: 0; background: none; border-radius: 23%; cursor: pointer; color: inherit; -webkit-tap-highlight-color: transparent; }
+.adock-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.adock-hit { position: absolute; inset: 0; display: grid; }
+.adock-icon { width: 100%; height: 100%; box-sizing: border-box; border-radius: 23%; display: grid; place-items: center; line-height: 1; overflow: hidden;
+  font-size: calc(var(--ad-icon) * var(--s, 1) * .54); --h: 180;
+  background: linear-gradient(150deg, hsl(var(--h) 52% 34%), hsl(calc(var(--h) + 40) 58% 15%));
+  border: 1px solid rgba(255, 255, 255, .1); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 3px 8px rgba(0, 0, 0, .45); }
+.adock-icon.mono { font: 700 calc(var(--ad-icon) * var(--s, 1) * .34)/1 var(--mono); letter-spacing: .02em; color: #eafffb; position: relative; text-shadow: 0 0 8px rgba(var(--accent-rgb), .7);
+  background: radial-gradient(120% 90% at 30% 15%, hsl(var(--h) 45% 26%), #070c12 75%); border-color: rgba(var(--accent-rgb), .45); }
+.adock-icon.mono::before, .adock-mini.k-rig::before { content: attr(data-mono); }
+.adock-icon.mono::after { content: ""; position: absolute; top: 12%; right: 12%; width: 16%; height: 16%; border-radius: 50%; background: #34d399; box-shadow: 0 0 6px #34d399; }
+.off > .adock-hit .adock-icon.mono::after, .adock-pop-tile.off .adock-icon.mono::after { background: #64748b; box-shadow: none; }
+.adock-icon.stack { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 7%; padding: 13%; place-items: stretch;
+  background: linear-gradient(150deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .05)); border-color: var(--line-strong); }
+.adock-mini { border-radius: 26%; display: grid; place-items: center; font-size: calc(var(--ad-icon) * var(--s, 1) * .2); line-height: 1; overflow: hidden;
+  background: linear-gradient(150deg, hsl(var(--h) 52% 36%), hsl(calc(var(--h) + 40) 58% 17%)); box-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
+.adock-mini.k-rig { font: 700 calc(var(--ad-icon) * var(--s, 1) * .12)/1 var(--mono); color: #eafffb; background: #0b141c; border: 1px solid rgba(var(--accent-rgb), .45); }
+.adock-count { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center;
+  font: 700 10px/1 var(--sans); color: #022; background: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .5); pointer-events: none; }
+.adock-run { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); opacity: 0; transition: opacity .2s; pointer-events: none; }
+.adock-tile.open .adock-run { opacity: 1; }
+.adock.pos-bottom .adock-run { left: 50%; bottom: -5px; margin-left: -2.5px; }
+.adock.pos-left .adock-run { top: 50%; left: -5px; margin-top: -2.5px; }
+.adock.pos-right .adock-run { top: 50%; right: -5px; margin-top: -2.5px; }
+.adock-tile.off { opacity: .42; filter: grayscale(.85); cursor: default; }
+.adock-tile.dragging { opacity: .22; }
+.adock-tile.drop-onto .adock-icon { box-shadow: 0 0 0 3px var(--accent), 0 0 20px rgba(var(--accent-rgb), .65); }
+html.adock-dragging, html.adock-dragging * { cursor: grabbing !important; user-select: none; }
+.adock-ghost { position: fixed !important; left: 0; top: 0; z-index: 3005; pointer-events: none; opacity: .9; filter: drop-shadow(0 10px 18px rgba(0, 0, 0, .55)); --s: 1.08; }
+.adock-ghost.adock-pop-tile { --s: 1; }
+.adock-caret { position: fixed; left: 0; top: 0; z-index: 3004; pointer-events: none; width: 3px; height: var(--len, 40px); border-radius: 2px; background: var(--accent);
+  box-shadow: 0 0 10px var(--accent); opacity: 0; transition: opacity .1s; }
+.adock-caret[data-axis="y"] { width: var(--len, 40px); height: 3px; }
+.adock-caret.show { opacity: 1; }
+.adock-label { position: fixed; left: 0; top: 0; z-index: 3003; pointer-events: none; padding: 4px 10px; border-radius: 7px; white-space: nowrap;
+  background: var(--panel-solid); border: 1px solid var(--line-strong); color: var(--text); font: 12px/1.3 var(--sans); box-shadow: 0 4px 12px rgba(0, 0, 0, .45);
+  opacity: 0; transition: opacity .12s; }
+.adock-label.show { opacity: 1; }
+
+/* Launch bounce (none under reduced motion: app-dock.js skips it). */
+@keyframes adock-bounce-y { 0%, 100% { translate: 0 0; } 25% { translate: 0 -16px; } 50% { translate: 0 0; } 70% { translate: 0 -7px; } }
+@keyframes adock-bounce-l { 0%, 100% { translate: 0 0; } 25% { translate: 16px 0; } 50% { translate: 0 0; } 70% { translate: 7px 0; } }
+@keyframes adock-bounce-r { 0%, 100% { translate: 0 0; } 25% { translate: -16px 0; } 50% { translate: 0 0; } 70% { translate: -7px 0; } }
+.adock.pos-bottom .adock-tile.launch .adock-hit { animation: adock-bounce-y .7s ease-out; }
+.adock.pos-left .adock-tile.launch .adock-hit { animation: adock-bounce-l .7s ease-out; }
+.adock.pos-right .adock-tile.launch .adock-hit { animation: adock-bounce-r .7s ease-out; }
+
+/* Auto-hide: off screen until the pointer touches the edge strip (or a tile gets keyboard focus). */
+.adock.ah.pos-bottom { transform: translate(-50%, calc(100% + 12px)); }
+.adock.ah.pos-left { transform: translate(calc(-100% - 12px), -50%); }
+.adock.ah.pos-right { transform: translate(calc(100% + 12px), -50%); }
+.adock.ah.shown.pos-bottom { transform: translateX(-50%); }
+.adock.ah.shown.pos-left, .adock.ah.shown.pos-right { transform: translateY(-50%); }
+.adock-edge { position: fixed; z-index: 2999; display: none; }
+.adock-edge.on { display: block; }
+.adock-edge.pos-bottom { left: 0; right: 0; bottom: 0; height: 4px; }
+.adock-edge.pos-left { left: 0; top: 0; bottom: 0; width: 4px; }
+.adock-edge.pos-right { right: 0; top: 0; bottom: 0; width: 4px; }
+
+/* A group's popover. */
+.adock-pop { position: fixed; left: 0; top: 0; z-index: 3001; box-sizing: border-box; max-width: calc(100vw - 16px); max-height: calc(100dvh - 120px); overflow: auto; padding: 8px 10px 10px;
+  border-radius: 14px; background: var(--panel-solid); border: 1px solid var(--line-strong); box-shadow: 0 18px 50px rgba(0, 0, 0, .6); opacity: 0; transition: opacity .16s; }
+.adock-pop.show { opacity: 1; overflow: visible; }
+.adock-pop[hidden] { display: none; }
+.adock-pop::after { content: ""; position: absolute; width: 12px; height: 12px; background: var(--panel-solid); border: 1px solid var(--line-strong); }
+.adock-pop[data-pos="bottom"]::after { left: var(--arrow, 50%); bottom: -7px; transform: translateX(-50%) rotate(45deg); border-top: 0; border-left: 0; }
+.adock-pop[data-pos="left"]::after { top: var(--arrow, 50%); left: -7px; transform: translateY(-50%) rotate(45deg); border-top: 0; border-right: 0; }
+.adock-pop[data-pos="right"]::after { top: var(--arrow, 50%); right: -7px; transform: translateY(-50%) rotate(45deg); border-bottom: 0; border-left: 0; }
+.adock-pop.phone::after { display: none; }
+.adock-pop-head { display: flex; justify-content: center; margin-bottom: 6px; }
+.adock-pop-name { width: 100%; min-width: 0; box-sizing: border-box; text-align: center; padding: 4px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent;
+  color: #fff; font: 600 14px var(--sans); outline: none; }
+.adock-pop-name:hover { border-color: var(--line); }
+.adock-pop-name:focus { border-color: var(--line-strong); background: rgba(var(--accent-rgb), .06); }
+.adock-pop-grid { display: grid; grid-template-columns: repeat(var(--cols, 4), 84px); gap: 4px; }
+.adock-pop-tile { position: relative; display: flex; justify-content: center; min-height: 44px; padding: 8px 4px 6px; border: 0; border-radius: 10px; background: none; color: var(--text); cursor: pointer; }
+.adock-pop-tile:hover, .adock-pop-tile:focus-visible { background: rgba(var(--accent-rgb), .1); outline: none; }
+.adock-pop-tile:focus-visible { box-shadow: 0 0 0 2px var(--accent) inset; }
+.adock-pop-tile .adock-hit { position: static; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.adock-pop-tile .adock-icon { width: 48px; height: 48px; font-size: 26px; }
+.adock-pop-tile .adock-icon.mono { font-size: 16px; }
+.adock-pop-tile.off { opacity: .45; filter: grayscale(.85); cursor: default; }
+.adock-pop-tile.dragging { opacity: .25; }
+.adock-pop-tile.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.adock-pop-label { font-size: 11.5px; max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adock-pop .adock-empty { grid-column: 1 / -1; white-space: normal; text-align: center; padding: 10px; max-width: 300px; }
+
+/* Panels anchored to the dock's edge keep clear of it (only while it stays on screen; phones use --bar-bottom below). */
+html.adock-rb #bar { bottom: calc(22px + var(--ad-b)); } /* a bottom dock is centred: it only meets the toolbar and the chat strip */
+html.adock-rb #chat-dock { bottom: calc(74px + var(--ad-b)); }
+html.adock-rb .win.max { bottom: calc(8px + var(--ad-b)) !important; }
+html.adock-rl #left { left: calc(12px + var(--ad-l)); }
+html.adock-rl #traces { left: calc(294px + var(--ad-l)); }
+html.adock-rl #graphify { left: calc(330px + var(--ad-l)); }
+html.adock-rl .win.max { left: calc(8px + var(--ad-l)) !important; }
+html.adock-rr #legend, html.adock-rr #toasts, html.adock-rr #panels-btn, html.adock-rr #panels-menu,
+html.adock-rr #work, html.adock-rr #questions, html.adock-rr #usage, html.adock-rr #desktops, html.adock-rr #agents { right: calc(12px + var(--ad-r)); }
+html.adock-rr #orb-wrap, html.adock-rr #activity { right: calc(16px + var(--ad-r)); }
+html.adock-rr #footer { right: calc(48px + var(--ad-r)); }
+html.adock-rr .win.max { right: calc(8px + var(--ad-r)) !important; }
+@media (max-width: 900px) {
+  html.adock-rb #bar { bottom: calc(10px + var(--ad-b)); }
+  html.adock-rb #chat-dock { bottom: calc(110px + var(--ad-b)); }
+  html.adock-rb #orb-wrap { bottom: calc(120px + var(--ad-b)); }
+  html.adock-rb #topbar { bottom: calc(170px + var(--ad-b)); }
+  html.adock-rr #orb-wrap { right: calc(8px + var(--ad-r)); }
+}
+
+/* Phones: one scrolling row of finger-sized icons under the toolbar; no magnification, no auto-hide, no side docks. */
+.adock.phone { left: calc(var(--sal) + 8px); right: calc(var(--sar) + 8px); bottom: max(8px, var(--sab)); transform: none; z-index: 30; }
+.adock.phone .adock-list { height: 44px; width: auto; flex-direction: row; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior: contain; border-radius: 16px; }
+.adock.phone .adock-list::-webkit-scrollbar { display: none; }
+.adock.phone .adock-tile { width: 44px; height: 44px; --s: 1; }
+.adock.phone .adock-tile:first-child { margin-left: auto; }
+.adock.phone .adock-tile:last-child { margin-right: auto; }
+.adock.phone .adock-run { left: 50%; bottom: -4px; top: auto; margin: 0 0 0 -2.5px; }
+.adock-pop.phone { left: calc(var(--sal) + 8px); right: calc(var(--sar) + 8px); top: auto; bottom: calc(max(8px, var(--sab)) + var(--ad-phone)); transform: none !important; max-height: 60dvh; overflow-y: auto; }
+.adock-pop.phone .adock-pop-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.adock-pop.phone .adock-pop-name { min-height: 44px; font-size: 16px; }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  :root.adock-phone { --bar-bottom: calc(max(8px, var(--sab)) + max(var(--kb), var(--ad-phone))); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .adock, .adock-label, .adock-pop, .adock-caret, .adock-run { transition: none; }
+  .adock-tile.launch .adock-hit { animation: none !important; }
+}
+/* === END APP DOCK === */

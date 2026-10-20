@@ -4,7 +4,9 @@ import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
 import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
-import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, resetPanel, toggleCollapse } from './layout-actions.js';
+import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isCollapsed, isDocked, listRemoved, openPanel, resetPanel, toggleCollapse } from './layout-actions.js';
+import { createAppDock, registerAppDockProviders } from './app-dock.js';
+import { sourcesFromSnapshot } from './app-dock-model.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
 import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
@@ -14,7 +16,7 @@ import { tagCtx } from './ctx-tag.js';
 import { initAppStore, onAppStoreEvent, openAppStore } from './appstore.js';
 import { openBrainPanel } from './brain.js';
 import { registerJarvisTray } from './tray-jarvis.js';
-import { makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
+import { listPanels, makeFloating, panelMenu, panelState, showPanel, togglePanel, setClosed, inheritPanel } from './panels.js';
 import { initMobile, openDrawer, revealInspector, isPhone } from './mobile.js';
 import { renderReply } from './visual.js';
 import { activity, freshIds } from './os.js';
@@ -40,7 +42,9 @@ import { lowPower } from './perf.js';
 import { announce, initA11y, initPopovers, prefersReducedMotion } from './a11y.js';
 import { openSessions } from './sessions.js';
 import { createPopups } from './popups.js';
-import { openTerminal } from './terminal-lazy.js';
+import { focusTerminal, openTerminal } from './terminal-lazy.js';
+import { bindDock, openBus, reconcileOnLoad, trackPanels } from './open-events.js';
+import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
 import { closeAll as closeAllWindows, closeOthers, isMaximized, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
@@ -63,7 +67,8 @@ const popups = createPopups({
   open: async (s) => {
     try {
       const r = await api(`${node(s.nodeId)}/sessions/attach`, { method: 'POST', body: { kind: s.kind, id: s.id } });
-      const t = await openTerminal({ nodeId: s.nodeId, nodeName: s.nodeName, ptyId: r.ptyId, title: s.title?.slice(0, 50) });
+      // auto/tab: an automatically surfaced session; with the dock's autoTabTerminals on it joins the shared Terminals window (off by default: its own window as before)
+      const t = await openTerminal({ nodeId: s.nodeId, nodeName: s.nodeName, ptyId: r.ptyId, title: s.title?.slice(0, 50), auto: true, tab: !!appDock?.state.settings.autoTabTerminals });
       if (!t?.window) return;
       popupWins.push(t.window);
       t.window.onCleanup(() => { const i = popupWins.indexOf(t.window); if (i >= 0) popupWins.splice(i, 1); });
@@ -162,6 +167,7 @@ const machineById = (id) => snap.find((e) => e.node.id === id)?.node;
 // Every machine reports agents waiting on the user (permission prompts, questions, blocked tasks).
 // They blink in the galaxy, sit in a banner until answered, and announce themselves once.
 let work = null; // the Active projects panel (wire())
+let appDock = null; // the app dock (app-dock.js, wire())
 let attention = []; // [{ node, nodeId, items: [...] }]
 const baseTitle = document.title;
 
@@ -291,6 +297,7 @@ async function refresh() {
     agentsPanel?.update();
     renderHubs();
     renderAppList();
+    appDock?.sync();
     renderFilters();
     renderBrainBadge();
     if (graph.focused) renderInspector(graph.focused);
@@ -1318,6 +1325,32 @@ function wire() {
   makeFloating($('#footer'), { id: 'footer', title: 'Footer' });
   panelMenu();
   initMobile(); // phone layout: drawer, ⋯ sheet, keyboard offset (mobile.js)
+  appDock = createAppDock({ // the app dock only calls the existing open / focus / launch paths
+    sources: () => sourcesFromSnapshot(snap, { isRemoved: isAppRemoved }),
+    appFor: (ref) => meshApps().find((a) => a.nodeId === ref.node && a.id === ref.id) || null,
+    nodeFor: (id) => machineById(id) || null,
+    isOpen: (it) => {
+      if (it.kind === 'panel') return !panelState(it.ref.id).closed;
+      if (it.kind === 'window') return it.live;
+      if (it.kind === 'terminal') return it.live;
+      if (it.kind !== 'applet') return false;
+      const a = meshApps().find((x) => x.nodeId === it.ref.node && x.id === it.ref.id);
+      return !!a && isAppOpen(a);
+    },
+    open: (it) => {
+      if (it.kind === 'applet') {
+        const a = meshApps().find((x) => x.nodeId === it.ref.node && x.id === it.ref.id);
+        if (a) openApp(a); else toast(`${it.title} is not on the mesh right now.`, 'info');
+      } else if (it.kind === 'rig') { select(`m:${it.ref.nodeId}`); revealInspector(); }
+      else if (it.kind === 'panel' || it.kind === 'window') openPanel({ kind: it.kind, id: it.ref.id });
+      else if (it.kind === 'terminal') focusTerminal(it.ref.ptyId);
+    },
+  });
+  // Auto-docking: panels and floating windows (wm.js) and terminals (terminal.js) announce open / close on the bus; the
+  // dock turns them into items only when its autoDock / autoTabTerminals settings are on (both off by default).
+  appDock.act((s) => reconcileOnLoad(s, listPanels())); // a reload leaves no window or terminal open: drop their stale items
+  bindDock(openBus, appDock);
+  trackPanels({ list: listPanels, subscribe: (fn) => dockManager.subscribe(fn) });
   wireMenus();
   $('#btn-work').onclick = () => { if (isPhone() && panelState('work').closed) setClosed('questions', true); togglePanel('work'); };
   $('#btn-ask').onclick = () => { if (panelState('questions').closed) showQuestions(); else togglePanel('questions'); };
@@ -1570,6 +1603,7 @@ function wireContextMenus() {
     },
     station: { select: (id) => { select(id); revealInspector(); }, fit: () => starnetFit() },
   });
+  if (appDock) registerAppDockProviders(providers, appDock);
   // The galaxy is a canvas: ask the graph which node is under the pointer.
   const galaxyEl = $('#graph');
   tagCtx(galaxyEl, 'galaxy', null, null);
