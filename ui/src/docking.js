@@ -3,7 +3,7 @@ import { isPhone } from './mobile.js';
 import { announce } from './a11y.js';
 import {
   dockManager, panelStatus, panelsIn, dropZoneAt, allocate, minSizeOf, setActiveTab, reorder, resizeSplit,
-  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN, deserialize, serialize, STORAGE_KEY,
+  dock, undock, removePanel, solveFit, fitHome, DEFAULT_MIN, deserialize, serialize, STORAGE_KEY, VERSION as LAYOUT_VERSION,
 } from './dock-layout.js';
 import { scalingActive, onScalingChange, recordFit, scaleCommands, reducedMotion } from './scaling.js';
 import { syncedStorage, readOnlyWhen, prepareKey, onRemoteKey } from './synced-storage.js';
@@ -891,13 +891,14 @@ let started = false;
 export function initDocking({ defaults }) {
   if (started) return;
   started = true;
-  readOnlyWhen(STORAGE_KEY, isPhone); // phones never dock: their layout stays on the phone
+  checkFormat(syncedStorage.getItem(STORAGE_KEY));
+  readOnlyWhen(STORAGE_KEY, () => isPhone() || newerFormat); // phones never dock; a page too old for the synced format never overwrites it
   prepareKey(STORAGE_KEY, withoutWindows); // windows belong to this page, not to the mesh
   dockManager.attach({ storage: syncedStorage, defaults, viewport: () => ({ w: window.innerWidth, h: window.innerHeight }) });
   // Windows never outlive the page; the galaxy always has its place in the tree.
   dockManager.setLayout(withStage(stripWindows(dockManager.getLayout())));
   dockManager.subscribe(() => render());
-  onRemoteKey(STORAGE_KEY, reloadLayout);
+  onRemoteKey(STORAGE_KEY, (raw) => { if (!checkFormat(raw)) reloadLayout(); });
   onRemoteKey(MODE_KEY, (raw) => setDocking(raw === '1'));
   window.addEventListener('resize', onResize);
   // The top menu bar (--mb-h) and the app dock (--ad-*) show / hide / move by setting variables on <html>: lay out again inside them.
@@ -912,6 +913,15 @@ export function initDocking({ defaults }) {
     render();
   });
   watchViewport();
+}
+
+// A layout saved by a newer JARVIS (a higher `version`, e.g. one that adds fields) cannot be read here: this page keeps
+// its own layout and stops writing the synced one until it is reloaded with the new code, so a stale tab never
+// replaces the mesh's layout with a default one in the old format.
+let newerFormat = false;
+function checkFormat(raw) {
+  try { newerFormat = Number(JSON.parse(raw)?.version) > LAYOUT_VERSION; } catch { newerFormat = false; }
+  return newerFormat;
 }
 
 const isWin = (id) => id.startsWith('win-');

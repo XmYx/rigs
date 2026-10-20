@@ -10,6 +10,7 @@
 //   5. B reloaded with cleared storage restores the synced layout
 //   6. a 390x844 phone on B shows the synced app dock and never writes a panel layout back
 //   7. Dock settings says the layout is synced; "Reset layout for all machines" resets A and, live, B
+//   8. a layout saved by a newer JARVIS (higher version) is neither applied nor overwritten by these pages
 //   node scripts/dock-sync-check.js [--out ~/.rigs/screens/dock/sync]
 // Exit code 1 when a check fails.
 import { spawn } from 'node:child_process';
@@ -259,6 +260,25 @@ await shot(phone, 'phone@390x844.png');
   const resetThere = await waitFor(async () => pageB.evaluate(() => !document.querySelector('#left').classList.contains('docked')), 5000, 100);
   check('Reset layout for all machines resets here and, live, on B', resetHere && resetThere);
   await shot(pageB, 'B-after-reset-all@1920x1080.png');
+}
+
+// ------------------------------------------------------------------ 8. a layout from a newer JARVIS (higher version) is never overwritten
+{
+  pageA.puts.length = 0;
+  pageB.puts.length = 0;
+  const future = { version: 99, root: { type: 'panel', id: 'stage' }, floating: [], hidden: {}, collapsed: [], windows: { 'files:x': { state: 'normal', rect: null } } };
+  await fetch(new URL('/api/local/ui-layout', A.url), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'rigs.dock', value: future }) });
+  await waitFor(async () => (await layoutOf(B)).keys['rigs.dock']?.value?.version === 99, 5000, 100);
+  await sleep(800);
+  const workBefore = await rect(pageB, '#work');
+  await pageB.click('#work .pcollapse'); // a local layout change on the old page
+  await sleep(250);
+  await pageB.click('#work .pcollapse');
+  await sleep(1500);
+  const [la, lb] = [(await layoutOf(A)).keys['rigs.dock'], (await layoutOf(B)).keys['rigs.dock']];
+  check('a newer-format layout stays on the mesh: old pages neither apply nor overwrite it', la.value.version === 99 && lb.value.version === 99 && la.value.windows?.['files:x'] && !pageA.puts.includes('rigs.dock') && !pageB.puts.includes('rigs.dock'), JSON.stringify({ a: la.value.version, b: lb.value.version, putsA: pageA.puts, putsB: pageB.puts }));
+  const workAfter = await rect(pageB, '#work');
+  check('the old page keeps its own layout meanwhile', Math.abs(workAfter.x - workBefore.x) < 3 && Math.abs(workAfter.y - workBefore.y) < 3, JSON.stringify({ workBefore, workAfter }));
 }
 
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
