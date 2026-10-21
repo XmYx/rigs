@@ -567,7 +567,8 @@ export function createAppStream(deps) {
     } else if (m.ev === 'clipboard') {
       if (!prefs().clipboard || typeof m.text !== 'string') return;
       audit('clipboard', { session: s.id, direction: 'from-app', bytes: Buffer.byteLength(m.text) });
-      for (const v of s.viewers.values()) v.message({ type: 'clipboard', text: m.text.slice(0, 1024 * 1024) });
+      // People only: on the Mac this is the person's real pasteboard, which an agent watching the stream must not read.
+      for (const v of s.viewers.values()) if (v.caller.human !== false && !v.caller.agent) v.message({ type: 'clipboard', text: m.text.slice(0, 1024 * 1024) });
     } else if (m.ev === 'stats') {
       s.runnerStats = m;
     } else if (m.ev === 'app-exit') {
@@ -1030,6 +1031,8 @@ export function createAppStream(deps) {
         const ready = new Promise((resolve) => { s.waiters.push(resolve); setTimeout(resolve, 3000).unref?.(); });
         await connect(s, 2000);
         await ready;
+        // Re-parking on ready restarts the clock: keep the deadline it had, or every daemon restart would extend it.
+        if (rec.state === 'parked' && rec.parkUntil && s.state === 'parked') { s.parkUntil = rec.parkUntil; persist(s); }
         log(`appstream: reattached ${s.id} (${s.app?.name})`);
       } catch {
         log(`appstream: ${s.id} is gone; cleaning up`);

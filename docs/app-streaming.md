@@ -1098,3 +1098,59 @@ check: grant "RIGS Control (dev)" (`~/rigs-scratch-t5/rigs/bin/RIGS Control.app`
 `POST http://macbookpro:4795/api/local/appstream/sessions {app:'com.apple.TextEdit'}` and open the stream from another
 machine — or, after the rollout, switch control on for macbookpro, re-grant RIGS Control, and open TextEdit from
 Applications in JARVIS on magix-system.
+
+## 17. t7 — independent review against the goal (2026-10-21)
+
+Branch head reviewed: `057c430` plus the fixes below. `npm run build` OK; `npm test`: 1453 tests, 1452 pass, 0 fail,
+1 skip.
+
+**Live, magix-system → macbookpro** (scratch host daemon of this branch on magix-system, own `RIGS_HOME` and
+`XDG_DATA_DIRS`, reached through an SSH tunnel; scratch viewer daemon on macbookpro; Google Chrome through Playwright):
+
+- `node scripts/appstream-viewer-check.js --state <file>`: 19/19. Applications → RIGS Stream Test Client → viewer;
+  WebCodecs; `nvh264enc (hw) dmabuf-gl`; 52 fps, RTT 6.9 ms, 0 dropped; click, wheel and keys reach the app; window
+  resize resizes the remote display (1112×622 → 698×446); ⏹ ends the session on the host; phone 390×844: 1280×720
+  letterboxed, a tap clicks at the touched point; no console errors.
+- FilmCraft from Applications (`docs/screenshots/app-stream/review.png`): 986×552, NVENC dmabuf-gl, encode 4.5 ms,
+  RTT 5.9 ms, glass-to-glass p50/p95 22/34 ms (idle UI, 2–4 fps of damage).
+- Cleanup: viewer closed → `parked` (runner kept); host daemon restarted → session reattached, same runner pid;
+  `DELETE` → no unit, app, headless shell, null sink, socket, state file or private bus dir left.
+
+**Gate and auth, per path.** Every new HTTP route and both WebSocket routes sit behind the same `authorize()` as the
+rest of `/api/local` (request handler and `onUpgrade`). Start: `gateDecision` (switch, kill, allowFrom), plus
+`control.accessFor` on macOS, refusals audited. Stream: the same gate on join, re-checked every 500 ms; a control kill
+or switch-off ends viewers. Input, paste and macOS resize: the input gate (input switch, no agents, controller only;
+on macOS `control.inputStream` with the person's lease, lock and rate). Peer proxy: `forwardHttp` and `forwardWs` keep
+`x-rigs-caller` and set `x-rigs-via`, so an agent stays an agent on the host. Enable: a human caller with the
+machine-name confirm; `appStream` is in `PATCH_BLOCKED`. Icons are looked up by catalog id only (no path from the
+request); SVG is served with a CSP and `nosniff`. Existing remote desktop: `screen-stream.js`, `desktop.js`,
+`moonlight-hosts.js`, `access.js` and `proxy.js` are unchanged; the `control.js` additions leave
+`accessFor(caller)` as it was for its existing callers.
+
+**Fixed in this review**
+- `src/app-stream.js`: the app's clipboard went to every viewer. On macOS that is the person's real pasteboard, so an
+  agent viewer could read it. It now goes only to human viewers (test in `test/app-stream.test.js`).
+- `src/app-stream.js` `reconcile()`: re-parking a reattached session reset `parkUntil`, so every daemon restart
+  (auto-update) gave a parked app another `parkMinutes` and it might never be stopped. The deadline it had is kept
+  (test).
+- `src/ui-open.js`: the `isPathLike` doc comment had slid above `APPS_PLACE`.
+
+**Open items**
+1. macOS host: never run live (capture, input, remote viewer). Screen control on macbookpro is off and killed by Sir,
+   and RIGS Control needs Screen Recording + Accessibility. Finish as in §16.
+2. t6 was closed without results: §15 is still empty. The figures above are the only end-to-end numbers; no
+   iPhone run and no input-to-photon measurement.
+3. magix-system has no `mutter`, so sessions use the gnome-shell fallback: it registers with GDM and watches the
+   person's logind session, and the empty 32-px strip at the top is visible in `review.png`. The root step
+   `appstream-mutter` from §3.2 is not built; only `rigs appstream status` prints the `apt-get` line.
+4. An app whose minimum size is larger than the virtual monitor is cropped, not fitted: FilmCraft at 986×552 shows its
+   left edge cut off (`review.png`). The size policy does not know the app's minimum size.
+5. Single-instance apps with a profile lock (Chrome/Chromium, Firefox, …) carry only a catalog note. Not tested: a
+   second Chrome may hand its window to the instance on the person's real desktop rather than open in the session.
+6. Not built: Windows host (catalog only, `streamable:false`), audio (sound goes to a per-session null sink), the MSE
+   fallback of §5.7 (viewers without WebCodecs or a secure context get JPEG; §10 still says "else MSE"), whole-desktop
+   mode (Phase 3), and FilmCraft timeline playback in the headless session (§14).
+7. Same trust model as screen control: "human" means a request without `x-rigs-caller`. Any authenticated caller may
+   start a session (also with a `command` argv, no more than `mesh_exec` already allows) and stop any session.
+8. Earlier tasks left scratch copies and captures in `magix-system:~/rigs-scratch` (`appstream-t2`, `appstream-t6`,
+   `home-t2*`, `home-t6`, `*.h264`, …): no units or processes, only files, for Sir to delete.

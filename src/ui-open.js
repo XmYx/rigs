@@ -26,10 +26,10 @@ export function placePath(text) {
   return Object.hasOwn(NAMED_PLACES, t) ? NAMED_PLACES[t] : null;
 }
 
-/** Looks like a filesystem path (~, /, \, ., C:\ or a separator inside), not a name like "MadMikeUnity". */
 /** The virtual place that lists a machine's applications; it has no folder to look up. */
 export const APPS_PLACE = '@apps';
 
+/** Looks like a filesystem path (~, /, \, ., C:\ or a separator inside), not a name like "MadMikeUnity". */
 export const isPathLike = (p) => /^(?:~|\/|\\|\.{1,2}(?:[\\/]|$)|[a-z]:[\\/])/i.test(String(p || '')) || /[\\/]/.test(String(p || ''));
 
 function bad(msg) { const e = new Error(msg); e.status = 400; e.code = 'bad-request'; return e; }

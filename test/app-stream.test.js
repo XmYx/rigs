@@ -403,6 +403,12 @@ test('host: start a session, stream to a viewer through the peer relay, input re
   agent.send({ type: 'in', seq: 9, e: [{ k: 'pm', x: 1, y: 1 }] });
   await until(() => agent.text.some((m) => m.type === 'status' && m.code === 'agent'));
   assert.equal(run.ops.filter((o) => o.op === 'input').length, before);
+  // The app's clipboard (on the Mac: the person's real pasteboard) reaches the person, never the agent.
+  run.event({ ev: 'clipboard', text: 'copied in the app' });
+  await until(() => v.text.some((m) => m.type === 'clipboard'));
+  assert.equal(v.text.find((m) => m.type === 'clipboard').text, 'copied in the app');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(!agent.text.some((m) => m.type === 'clipboard'));
   agent.ws.close();
 
   // Leaving parks the session; DELETE stops it and removes its files.
@@ -522,6 +528,25 @@ test('host: a viewer whose acks arrive later than the budget keeps getting frame
   assert.ok(v.frames.every((f, i) => i === 0 || f.key || f.seq === v.frames[i - 1].seq + 1));
   v.ws.close();
   await h.as.api('sessions/' + body.session.id, 'DELETE', new URLSearchParams('force=1'), null, caller);
+});
+
+test('host: a daemon restart reattaches a parked session and keeps its park deadline', async () => {
+  const h = host();
+  const caller = { from: 'local', human: true };
+  const { body } = await h.as.api('sessions', 'POST', null, async () => ({ command: ['glxgears'] }), caller);
+  const sid = body.session.id;
+  assert.equal(body.session.state, 'parked');
+  const deadline = h.as.sessions.get(sid).parkUntil;
+  // The daemon stops; the runner keeps going and a new daemon on the same RIGS_HOME reattaches it.
+  h.as.close();
+  await sleep(50);
+  const as2 = S.createAppStream({ getConfig: h.cfg, persistConfig: () => {}, home: h.home, appDir: path.resolve('.'), nodeName: () => 'magix', control: h.control, run: async () => ({ code: 0, stdout: '', stderr: '' }), which: () => null, systemd: false, platform: 'linux' });
+  cleanups.push(async () => as2.close());
+  await as2.reconcile();
+  const s = as2.sessions.get(sid);
+  assert.equal(s.state, 'parked');
+  assert.equal(s.parkUntil, deadline); // not now + parkMinutes again: restarts must not keep a parked app alive for ever
+  await as2.api('sessions/' + sid, 'DELETE', new URLSearchParams('force=1'), null, caller);
 });
 
 test('macOS: compositor/encoder facts, the Mac key table, and control refusals in the app-stream shape', () => {
