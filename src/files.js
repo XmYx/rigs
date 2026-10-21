@@ -89,7 +89,7 @@ export function parseRange(header, size) {
   let end;
   if (m[1] === '') { // suffix: the last N bytes
     const n = Number(m[2]);
-    if (n === 0) return 'unsatisfiable';
+    if (n === 0 || size === 0) return 'unsatisfiable';
     start = Math.max(0, size - n);
     end = size - 1;
   } else {
@@ -161,9 +161,16 @@ export async function mkdir(p) {
   return { path: dir };
 }
 
+/** Never overwrites: fs.rename would silently replace what is at `to` (a hidden file, or one made since the listing). */
 export async function rename(from, to) {
   const a = resolvePath(from);
   const b = resolvePath(to);
+  const there = a === b ? null : await fsp.lstat(b).catch(() => null);
+  if (there) {
+    const src = await fsp.lstat(a).catch(() => null);
+    const same = src && src.ino === there.ino && src.dev === there.dev; // a case-only rename on a case-insensitive disk
+    if (!same) throw Object.assign(new Error(`“${path.basename(b)}” already exists`), { status: 409 });
+  }
   await fsp.rename(a, b);
   return { from: a, to: b };
 }

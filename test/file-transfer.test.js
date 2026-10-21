@@ -185,3 +185,16 @@ test('pull: refuses an escaping destination, a bad path list and a source name t
   await assert.rejects(pull(evilList, [src], dst), (e) => e.status === 400);
   assert.ok(!fs.existsSync(path.join(d, 'evil.txt')) && !fs.existsSync(path.join(d, 'evil')));
 });
+
+test('files.rename never overwrites (a hidden or newer file at the target answers 409); a case-only rename works', async () => {
+  const { rename } = await import('../src/files.js');
+  const { src } = fresh();
+  put(path.join(src, 'a.txt'), 'A'); put(path.join(src, '.hidden'), 'KEEP');
+  await assert.rejects(rename(path.join(src, 'a.txt'), path.join(src, '.hidden')), (e) => e.status === 409);
+  assert.equal(read(path.join(src, '.hidden')), 'KEEP');
+  assert.equal(read(path.join(src, 'a.txt')), 'A');
+  await rename(path.join(src, 'a.txt'), path.join(src, 'A.txt'));
+  assert.deepEqual(fs.readdirSync(src).filter((f) => /^a\.txt$/i.test(f)), ['A.txt']);
+  await rename(path.join(src, 'A.txt'), path.join(src, 'b.txt'));
+  assert.equal(read(path.join(src, 'b.txt')), 'A');
+});
