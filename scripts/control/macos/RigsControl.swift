@@ -778,8 +778,12 @@ final class AppSession: NSObject, SCStreamOutput, SCStreamDelegate {
   /** A daemon connected (first start, or a reattach after its restart): it replaces any earlier connection. */
   private func adopt(_ c: Int32) {
     if ended { close(c); return }
-    if client >= 0 { stopStream(); shutdown(client, SHUT_RDWR); close(client) }
+    if client >= 0 { stopStream() }
+    // Swapped under the write lock: the encoder's thread may be writing a frame to the old connection right now.
+    writeLock.lock()
+    if client >= 0 { shutdown(client, SHUT_RDWR); close(client) }
     client = c
+    writeLock.unlock()
     lostClientAt = nil
     sendJSON(["ev": "ready", "compositor": "screencapturekit", "display": String(displayId), "width": outW, "height": outH,
               "app": ["pid": Int(pid), "name": name, "bundleId": bundleId, "launched": launched]])
@@ -806,8 +810,10 @@ final class AppSession: NSObject, SCStreamOutput, SCStreamDelegate {
     }
     q.async {
       guard self.client == c else { return }
+      self.writeLock.lock()
       close(c)
       self.client = -1
+      self.writeLock.unlock()
       self.lostClientAt = Date()
       // The daemon went away (restart or crash): nothing may stay pressed, and nobody is watching.
       self.releaseInput()
