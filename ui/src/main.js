@@ -8,7 +8,7 @@ import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isDoc
 import { onRemoteKey, prepareKey, receiveLayout, syncedStorage } from './synced-storage.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
 import { sourcesFromSnapshot, STORAGE_KEY as APPDOCK_KEY } from './app-dock-model.js';
-import { TOOLS, deserialize as deserializeDock, serialize as serializeDock } from './app-dock-state.js';
+import { TOOLS, deserialize as deserializeDock, serialize as serializeDock, setSettings as setDockSettings } from './app-dock-state.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
 import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
@@ -55,6 +55,10 @@ import { SEPARATOR, spokenText } from './sentences.js';
 import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
 import { closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, minimizeWindow, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
+// System Preferences (last, so the modules above keep their evaluation order)
+import { openPreferences } from './prefs-window.js';
+import { createPrefBridge } from './prefs-bridge.js';
+import { clock12, setClock12 } from './tray.js';
 
 applyTheme();
 
@@ -848,8 +852,16 @@ function projectsWindow(openId) {
   return pw;
 }
 
-function meshWindow() {
-  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo, onSsh: sshTo, onRun: runOn, onInstallDesktop: installDesktop });
+function meshWindow(tab) {
+  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo, onSsh: sshTo, onRun: runOn, onInstallDesktop: installDesktop, tab });
+}
+
+/** Mute or unmute JARVIS's voice (🔊 button, JARVIS › Stand down, System Preferences) and keep the button in step. */
+function setMuted(on) {
+  voice.setMuted(!!on);
+  const b = $('#btn-mute');
+  if (b) { b.textContent = voice.muted ? '🔇' : '🔊'; b.setAttribute('aria-pressed', String(voice.muted)); }
+  syncToolBadges();
 }
 
 // ------------------------------------------------------------------ brain
@@ -1473,10 +1485,10 @@ function wire() {
   $('#btn-files').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; filesOn(n || machineById(selfId)); };
   $('#btn-desk').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; if (n && !n.self) desktopTo(n); else toast('Focus another machine first (click it in the galaxy), then press 🖥.'); };
   $('#btn-sess').onclick = () => sessionsWindow();
-  $('#btn-mesh').onclick = meshWindow;
+  $('#btn-mesh').onclick = () => meshWindow();
   $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-apps').onclick = () => openApps();
-  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); syncToolBadges(); };
+  $('#btn-mute').onclick = () => setMuted(!voice.muted);
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
   $('#btn-mute').setAttribute('aria-label', 'Mute voice output');
@@ -1597,7 +1609,62 @@ function wireMenus() {
     if (isPhone()) openDrawer({ focus: false }); else showPanel('left');
     setTimeout(() => { const el = $(sel); el?.scrollIntoView?.({ block: 'center' }); el?.focus({ preventScroll: true }); }, 60);
   };
-  registerJarvisCommands({
+  // System Preferences (prefs-window.js): UI prefs go through the same code as the left panel, menus and app dock.
+  const setBox = (sel, prop, v) => { const el = $(sel); if (el) el[prop] = v; };
+  const prefBridge = createPrefBridge({
+    theme: { get: () => themeId(), set: (id) => { applyTheme(id); setBox('#d-theme', 'value', themeId()); } },
+    face: { get: () => !$('#face').classList.contains('off'), set: (on) => showFace(on) },
+    menubar: { get: () => bar?.isHidden(), set: (on) => bar?.setHidden(on) },
+    clock12: { get: clock12, set: setClock12 },
+    ask: {
+      get: askMode,
+      set: (mode) => {
+        if (mode === 'topbar') dockAskToTopbar();
+        else if (mode === 'floating') floatAsk();
+        else if (mode === 'hidden') hideAsk();
+        else throw new Error('To dock the Ask field, turn on the docking layout and drag the Ask panel onto another panel.');
+      },
+    },
+    cloud: { get: () => graph.visible, set: (on) => setCloud(on) },
+    display: { get: (k) => store.get('d-' + k, true), set: (k, on) => { store.set('d-' + k, on); graph.setDisplay({ [k]: on }); setBox('#d-' + k, 'checked', on); } },
+    forces: {
+      get: (k) => store.get(k === 'repel' ? 'repel' : 'linklen', k === 'repel' ? 120 : 24),
+      set: (k, n) => { const key = k === 'repel' ? 'repel' : 'linklen'; store.set(key, Number(n)); graph.setForces({ [k]: Number(n) }); setBox('#' + key, 'value', n); },
+    },
+    exhibitAnim: { get: exhibitAnim, set: setExhibitAnim },
+    // the Panels menu's switches (importing docking.js / scaling.js here would reorder the bundle's module cycle)
+    docking: { get: () => jarvisCmds.isChecked('panels.docking', {}), set: (on) => { if (jarvisCmds.isChecked('panels.docking', {}) !== !!on) jarvisCmds.run('panels.docking', {}); } },
+    scaling: { get: () => jarvisCmds.isChecked('panels.scaling', {}), set: (on) => { if (jarvisCmds.isChecked('panels.scaling', {}) !== !!on) jarvisCmds.run('panels.scaling', {}); } },
+    dock: {
+      get: (f) => appDock?.state.settings?.[f],
+      set: (f, v) => { if (!appDock) throw new Error('The app dock is not on this page.'); appDock.act((s) => setDockSettings(s, { [f]: v })); },
+    },
+    notify: {
+      get: (k) => prefs()[k],
+      set: (k, on) => { prefs()[k] = on; if (!on && k === 'notifications') $('#toasts')?.querySelectorAll('.toast').forEach((t) => t.remove()); syncNotifyChecks(); renderAttention(); },
+    },
+    autoOpen: { get: () => store.get('autoOpenSessions', true), set: (on) => { store.set('autoOpenSessions', on); setBox('#d-autosess', 'checked', on); } },
+    voice: { get muted() { return voice.muted; }, setMuted, get voiceId() { return voice.voiceId; }, setVoice: (id) => voice.setVoice(id) },
+  });
+  // The existing UI behind a setting's Open… action (settings-model.js UI_SURFACES).
+  const MESH_TABS = { 'mesh.routing': 'Routing', 'mesh.tools': 'Tools', 'mesh.connectors': 'Connectors', 'mesh.updates': 'Updates', 'mesh.changes': 'Changes' };
+  const openSurface = (name, m) => {
+    if (MESH_TABS[name]) return meshWindow(MESH_TABS[name]);
+    if (name === 'control') return openControl({ machine: machineById(m?.id) || machineById(selfId) });
+    if (name === 'apps') return openApps();
+    if (name === 'appstore') return openAppStore();
+    if (name === 'hubs') return reveal('#hubs');
+    throw new Error(`Nothing opens ${name} here`);
+  };
+  const preferences = (category) => openPreferences({
+    prefs: prefBridge, machines, selfId: () => selfId, voices: () => voice.voices(), themes: THEMES, openSurface,
+  }, { category });
+  window.__rigsPrefs = { bridge: prefBridge, open: preferences }; // read by scripts/prefs-check.js
+  const jarvisCmds = registerJarvisCommands({
+    preferences: () => preferences(),
+    rescan: async () => { await api('/api/mesh/refresh', { method: 'POST' }); refresh(); toast('Rescanning the mesh…', 'info'); },
+    voice: { muted: () => voice.muted, setMuted },
+    brain: () => { const b = currentBrain(); return b ? `${shortModel(b)}${b.effort ? ` · ${b.effort}` : ''} on ${b.nodeName}` : 'none'; },
     projects: () => projectsWindow(),
     openApps: () => openApps(),
     openAppStore: () => openAppStore(),

@@ -3,7 +3,7 @@ import { commands, formatShortcut, inTextField, isMac } from './commands.js';
 import { isPhone, PHONE_QUERY } from './mobile.js';
 import { closeTrayPopover, mountTray, openTrayItem, trayPopoverOpen } from './tray.js';
 
-// The top menu bar: File, Edit, Window, Tools, Help — slim, animated, themed by the CSS variables of themes.js.
+// The top menu bar: the JARVIS menu (the ◆ mark at the far left, like the Apple menu: About, System Preferences…), File, Edit, Window, Tools, Help — slim, animated, themed by the CSS variables of themes.js.
 // Every item runs a command from commands.js (the model comes from jarvis-commands.js menuModel()).
 // Hide/show: Window › Hide menu bar, Ctrl/⌘+Shift+M, or hover the top edge to peek; the setting persists
 // (rigs.menubar). Keyboard: F10 focuses it; ←/→ between menus, ↑/↓ inside, → opens a submenu, Esc closes.
@@ -426,8 +426,10 @@ export function focusMenubar() {
 export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {}) {
   model = menus;
   extraCtx = ctx;
+  // A `brand` entry (the JARVIS menu) is the mark at the far left, like the Apple menu: the first top-level menu.
   tops = model().map((d, i) => h('button', {
-    id: `mb-top-${d.id}`, class: 'mb-top', role: 'menuitem', 'aria-haspopup': 'menu', 'aria-expanded': 'false', tabindex: i ? '-1' : '0',
+    id: `mb-top-${d.id}`, class: `mb-top${d.brand ? ' mb-brand' : ''}`, role: 'menuitem', 'aria-haspopup': 'menu', 'aria-expanded': 'false', tabindex: i ? '-1' : '0',
+    ...(d.brand ? { 'aria-label': 'JARVIS menu', title: 'JARVIS — About, System Preferences…' } : {}),
     onclick: (e) => { e.stopPropagation(); if (openTop === i) closeMenus({ restore: false, focusTop: true }); else { setRoving(i); openTopMenu(i, { focus: e.detail === 0 ? 'first' : 'none' }); } },
     onpointerenter: () => { if (open.length && openTop >= 0 && openTop !== i) { setRoving(i); tops[i].focus({ preventScroll: true }); openTopMenu(i); } },
   }, d.label));
@@ -436,7 +438,7 @@ export function initMenubar({ menus, ctx = () => ({}), status = () => '' } = {})
   const trayEl = h('div', { id: 'mb-tray', class: 'tray', role: 'toolbar', 'aria-label': 'Status' });
   const hideBtn = h('button', { class: 'mb-hide', title: `Hide menu bar (${formatShortcut('Mod+Shift+M', mac)})`, 'aria-label': 'Hide menu bar', onclick: () => setMenubarHidden(true) }, '⌃');
   bar = h('nav', { id: 'menubar', 'aria-label': 'JARVIS menu bar' },
-    h('span', { class: 'mb-brand', 'aria-hidden': 'true' }, '◆ JARVIS'),
+    model().some((d) => d.brand) ? null : h('span', { class: 'mb-brand', 'aria-hidden': 'true' }, '◆ JARVIS'),
     h('div', { class: 'mb-tops', role: 'menubar', 'aria-label': 'JARVIS' }, ...tops),
     h('span', { class: 'mb-spacer' }), askSlotEl, statusEl, trayEl, hideBtn);
   bar.addEventListener('keydown', onBarKey);
