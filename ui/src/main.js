@@ -55,7 +55,10 @@ import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
 import { SEPARATOR, spokenText } from './sentences.js';
 import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
-import { closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, minimizeWindow, openWindow, toggleMaximize, windowCount } from './wm.js';
+import {
+  addDesktop, closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, listDesktops, minimizeWindow, moveWindowToDesktop, openWindow, toggleMaximize, windowCount, windowDesktop,
+} from './wm.js';
+import './spaces-indicator.js'; // the desktop indicator in the menu bar tray (Spaces)
 import { THEMES, applyTheme, themeId } from './themes.js';
 // System Preferences (last, so the modules above keep their evaluation order)
 import { openPreferences } from './prefs-window.js';
@@ -1744,7 +1747,10 @@ function wireContextMenus() {
   registerJarvisProviders(providers, {
     copy: copyText,
     layout: { state: panelWindowState, act: panelWindowAction, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
-    window: { minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
+    window: {
+      minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount,
+      desktops: listDesktops, desktopOf: windowDesktop, moveTo: moveWindowToDesktop, addDesktop: () => addDesktop(),
+    },
     app: {
       key: appKey, isOpen: isAppOpen, status: (a) => a.health?.status, url: (a) => `${location.origin}${appPath(a)}`,
       open: openApp, openTab: (a) => window.open(appPath(a), '_blank', 'noopener'), reload: reloadApp,

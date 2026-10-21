@@ -30,7 +30,7 @@ const same = (a, b) => !!a && !!b && ['x', 'y', 'w', 'h'].every((k) => Math.abs(
 /** Can this window tile right now? Not on phones, not while docked into the docking layout, not once closing. */
 export function canTile(win) {
   const el = winEl(win);
-  return !!el && el.isConnected && !isPhone() && !el.classList.contains('docked') && !el.classList.contains('win-leave') && !el.classList.contains('min'); // a minimized window is off the stage
+  return !!el && el.isConnected && !isPhone() && !el.classList.contains('docked') && !el.classList.contains('win-leave') && !el.classList.contains('min') && !el.classList.contains('off-space'); // a minimized window, or one on another desktop (wm.js Spaces), is off the stage
 }
 
 /** The window keyboard tiling acts on: the one holding focus, else the frontmost floating window. */
@@ -137,21 +137,27 @@ setWindowSnap({
   /** Moved (or docked) anywhere but a tile zone: a normal window again, where it was let go. */
   moved(it) { if (state.has(it.el)) forget(it.el); },
   /** The usable area changed (resize, menu bar, app dock): tiled windows follow their zone. */
-  refit() {
-    if (!tiled.size) return;
-    const area = dockArea();
-    for (const el of [...tiled]) {
-      if (!el.isConnected) { forget(el); continue; }
-      // Maximised (double-click / ▢) stays maximised; it re-fits on the next change after it is restored.
-      if (el.classList.contains('docked') || el.classList.contains('dragging') || el.classList.contains('max')) continue;
-      const s = state.get(el);
-      const r = zoneRect(s.zone, area);
-      if (same(r, s.rect)) continue;
-      s.rect = r;
-      place(el, r, false);
-    }
-  },
+  refit: refitTiles,
 });
+
+/**
+ * Tiled windows follow their zone in the usable area now. docking.js runs it on every render; wm.js after a desktop
+ * switch, since a window on another desktop (`.off-space`, no size) is left for when it is back.
+ */
+export function refitTiles() {
+  if (!tiled.size) return;
+  const area = dockArea();
+  for (const el of [...tiled]) {
+    if (!el.isConnected) { forget(el); continue; }
+    // Maximised (double-click / ▢) stays maximised; it re-fits on the next change after it is restored.
+    if (el.classList.contains('docked') || el.classList.contains('dragging') || el.classList.contains('max') || el.classList.contains('off-space')) continue;
+    const s = state.get(el);
+    const r = zoneRect(s.zone, area);
+    if (same(r, s.rect)) continue;
+    s.rect = r;
+    place(el, r, false);
+  }
+}
 
 // The window's own corner grip resizes it: after that it is no longer tiled (else it would jump back on a refit).
 document.addEventListener('pointerdown', (e) => {

@@ -11,7 +11,7 @@ import { isNewer } from './globalbrain.js';
 export { isNewer };
 
 /** The localStorage keys that are synced; each holds one opaque JSON value. */
-export const KEYS = ['rigs.dock', 'rigs.appdock', 'rigs.docking', 'rigs.scaling'];
+export const KEYS = ['rigs.dock', 'rigs.appdock', 'rigs.docking', 'rigs.scaling', 'rigs.spaces'];
 export const MAX_VALUE_BYTES = 256 * 1024;
 
 export class LayoutError extends Error { constructor(status, msg, extra = {}) { super(msg); this.status = status; Object.assign(this, extra); } }

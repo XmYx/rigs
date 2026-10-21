@@ -33,7 +33,7 @@ export const GLOBAL_PATHS = [
   ['brain.core', []], ['brain.chat', []], ['brain.home', []], ['brain.compact', []], ['router', ['jev.url', 'jev.apiKey']], ['routing', []], ['quick', []], ['yolo', []],
 ];
 // Mirrors src/uilayout.js KEYS: localStorage keys the daemon syncs across the mesh.
-export const SYNCED_KEYS = ['rigs.dock', 'rigs.appdock', 'rigs.docking', 'rigs.scaling'];
+export const SYNCED_KEYS = ['rigs.dock', 'rigs.appdock', 'rigs.docking', 'rigs.scaling', 'rigs.spaces'];
 
 /**
  * Who saves a config subtree, longest prefix first. POST /api/local/settings must go through these so validation and
@@ -442,6 +442,8 @@ export const HIDDEN = [
   { config: 'persona.overseer', reason: 'Internal pointer to JARVIS\'s overseer session (default tmux jarvis-overseer), set by RIGS.' },
   { pref: 'rigs.dock', reason: 'The dock layout itself (arranged by dragging; reset in the Panels menu), not a preference.' },
   { pref: 'rigs.panels', reason: 'Legacy dock layout, migrated into rigs.dock.' },
+  { pref: 'rigs.spaces', reason: 'The virtual desktops (Spaces) and which desktop each window is on, arranged from the menu bar desktop indicator, not a preference.' },
+  { pref: 'rigs.spaces.active', reason: 'The desktop this browser was last on (Spaces, switched with Ctrl+arrows or the menu bar indicator), not a preference.' },
   { pref: 'rigs.sync', reason: 'Bookkeeping of the synced storage (revisions of rigs.dock and friends).' },
   { pref: 'rigs.removed', reason: 'Removed panels and apps with their undo history; restored from the Window menu.' },
   { pref: 'rigs.agents.dismissed', reason: 'Agent cards you dismissed: state, not a preference.' },

@@ -154,6 +154,14 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 .win-bar > .win-btn { flex: none; display: inline-grid; place-items: center; padding: 0; font: 13px/1 var(--mono); }
 .win-bar > .win-btn.win-min { margin-left: 2px; }
 .win.min { display: none !important; }
+/* Spaces (wm.js + spaces.js): a window on another desktop is off the stage with its rect, state and tile kept; coming back it slides in from the side the desktops moved to.
+   .space-back: it has been away once, so leaving display:none must not replay the opening materialise / scan animations. */
+.win.off-space { display: none !important; }
+.win.space-back, .win.space-back::after { animation: none; }
+.win.space-back.space-in-next { animation: space-in-next .22s cubic-bezier(.2, .8, .2, 1); }
+.win.space-back.space-in-prev { animation: space-in-prev .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes space-in-next { from { translate: 56px 0; opacity: 0; } }
+@keyframes space-in-prev { from { translate: -56px 0; opacity: 0; } }
 .win.win-minimizing { opacity: 0; scale: .9; translate: 0 48px; pointer-events: none; }
 .win-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .term-holder { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; background: #05090e; }
@@ -1409,6 +1417,12 @@ kbd { font: 11px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px 
 #mb-tray-phone { display: none; }
 .tray-item { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); opacity: .86; font: 12px var(--mono); white-space: nowrap; transition: background .12s, opacity .12s; }
 .tray-item:hover, .tray-item[aria-expanded="true"], .tray-item:focus-visible { background: rgba(var(--accent-rgb), .14); opacity: 1; }
+/* Spaces indicator (spaces-indicator.js): the active desktop's name; a dot per desktop when there are a few. */
+.tray-space { gap: 5px; max-width: 16em; }
+.tray-space-name { overflow: hidden; text-overflow: ellipsis; }
+.tray-space-dots { display: inline-flex; gap: 3px; }
+.tray-space-dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .3; }
+.tray-space-dots i.on { opacity: .95; }
 .tray-clock { font-variant-numeric: tabular-nums; }
 .tray-meter { position: relative; display: inline-block; width: 26px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .14); overflow: hidden; }
 .tray-meter.wide { display: block; width: auto; height: 7px; margin: 4px 0 3px; }

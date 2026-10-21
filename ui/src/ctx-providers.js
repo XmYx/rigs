@@ -204,6 +204,16 @@ export function registerJarvisProviders(reg, deps = {}) {
       c.phone ? null : it(max ? 'Restore size' : 'Maximize', bind(W, 'toggleMax', id), { icon: max ? '❐' : '□' }), // phones: windows are always full-screen
       { cmd: 'window.hide', args: ref, label: 'Close', icon: '✕' },
       SEP,
+      // Spaces: the other desktops, and a new one (phones have one desktop)
+      c.phone || !W.desktops || !W.moveTo ? null : {
+        label: 'Move to desktop', icon: '▭', submenu: () => {
+          const here = W.desktopOf?.(id);
+          return [
+            ...W.desktops().map((d) => ({ label: d.name, checked: d.id === here, disabled: d.id === here, run: () => W.moveTo(id, d.id) })),
+            ...(W.addDesktop ? [SEP, { label: 'New desktop', icon: '+', run: () => { const d = W.addDesktop(); if (d) W.moveTo(id, d); } }] : []),
+          ];
+        },
+      },
       it('Close other windows', bind(W, 'closeOthers', id), { disabled: (W.count?.() ?? 2) < 2 }),
       it('Close all windows', bind(W, 'closeAll'), { disabled: (W.count?.() ?? 1) < 1 }),
     ];

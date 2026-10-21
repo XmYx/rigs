@@ -1,9 +1,12 @@
 import { api, h, toast } from './api.js';
 import { commands, formatShortcut, isMac } from './commands.js';
-import { openWindow, listWindows } from './wm.js';
+import {
+  activeDesktop, addDesktop, canAddDesktop, canRemoveDesktop, listDesktops, listWindows, openWindow, removeDesktop, renameDesktop, switchDesktop,
+} from './wm.js';
 import { isPhone } from './mobile.js';
 import { canTileActive, tileActive } from './tiling.js';
 import { tileShortcuts, zoneLabel } from './tiling-model.js';
+import { desktopShortcuts, targetOf } from './spaces-model.js';
 import {
   focusPanel, hideOthers, hidePanel, lastFocusedPanel, listPanels, listRemoved, openPanel, removePanel, removed, resetLayout, restorePanel, showAll,
 } from './layout-actions.js';
@@ -35,6 +38,54 @@ const tile = (zone) => ({
   when: (ctx) => !ctx.phone, enabled: () => canTileActive(zone), run: () => tileActive(zone),
 });
 
+// Spaces (wm.js / spaces.js): Ctrl+←/→ and Ctrl+1…9 (spaces-model.js DESKTOP_KEYS), not while typing or in a terminal;
+// the menu bar's desktop indicator and Window › Desktops list them. Phones have one desktop.
+const quotedName = (d) => quoted(d?.name || '');
+/** The windows on the active desktop, topmost first (File › Close never closes one you can't see). */
+const shown = () => listWindows({ desktop: activeDesktop().id });
+const spaceGo = (n) => ({
+  label: () => listDesktops()[n - 1]?.name || `Desktop ${n}`, shortcut: desktopShortcuts(n, isMac()),
+  when: (ctx) => !ctx.phone && listDesktops().length >= n, checked: () => activeDesktop().index === n - 1, run: () => switchDesktop(targetOf(n)),
+});
+const spaceStep = (dir) => {
+  const at = () => activeDesktop().index;
+  return {
+    label: dir === 'next' ? 'Next desktop' : 'Previous desktop', icon: dir === 'next' ? '→' : '←', shortcut: desktopShortcuts(dir, isMac()),
+    when: (ctx) => !ctx.phone, enabled: () => (dir === 'next' ? at() < listDesktops().length - 1 : at() > 0), run: () => switchDesktop(dir),
+  };
+};
+const SPACE_COMMANDS = [
+  { id: 'space.prev', ...spaceStep('prev') },
+  { id: 'space.next', ...spaceStep('next') },
+  ...Array.from({ length: 9 }, (_, i) => ({ id: `space.go${i + 1}`, ...spaceGo(i + 1) })),
+  { id: 'space.add', label: 'Add desktop', icon: '+', when: (ctx) => !ctx.phone, enabled: () => canAddDesktop(), run: () => addDesktop({ switchTo: true }) },
+  {
+    id: 'space.remove', icon: '−', when: (ctx) => !ctx.phone, enabled: () => canRemoveDesktop(),
+    label: () => `Remove ${quotedName(activeDesktop())}`, run: () => removeDesktop(activeDesktop().id),
+  },
+  {
+    id: 'space.rename', label: 'Rename desktop…', when: (ctx) => !ctx.phone,
+    run: () => {
+      const d = activeDesktop();
+      const name = globalThis.prompt?.(`Name for ${d.name} (empty: back to its number)`, listDesktops()[d.index]?.named ? d.name : '');
+      if (name != null) renameDesktop(d.id, name);
+    },
+  },
+];
+
+/**
+ * The desktops menu (the menu bar indicator and Window › Desktops): one row per desktop (the active one checked; the
+ * first nine with their Ctrl+n), previous / next, then add, rename and remove.
+ */
+export function desktopMenu() {
+  const ds = listDesktops();
+  return [
+    ...ds.map((d, i) => (i < 9 ? { cmd: `space.go${i + 1}` } : { label: d.name, checked: d.active, run: () => switchDesktop(d.id) })),
+    { sep: true }, { cmd: 'space.prev' }, { cmd: 'space.next' },
+    { sep: true }, { cmd: 'space.add' }, { cmd: 'space.rename' }, { cmd: 'space.remove' },
+  ];
+}
+
 export function registerJarvisCommands(deps) {
   const machine = () => deps.machine?.() || null;
   const list = [
@@ -53,9 +104,9 @@ export function registerJarvisCommands(deps) {
     { id: 'file.openSession', label: 'Open session…', icon: '💬', run: () => deps.sessions() },
     {
       id: 'file.close', icon: '✕', shortcut: 'Alt+W',
-      label: () => (listWindows().length ? `Close window ${quoted(listWindows()[0].title)}` : lastFocusedPanel() ? 'Close panel' : 'Close window or panel'),
-      enabled: () => listWindows().length > 0 || !!lastFocusedPanel(),
-      run: () => { const w = listWindows()[0]; if (w) w.close(); else hidePanel(lastFocusedPanel()); },
+      label: () => (shown().length ? `Close window ${quoted(shown()[0].title)}` : lastFocusedPanel() ? 'Close panel' : 'Close window or panel'),
+      enabled: () => shown().length > 0 || !!lastFocusedPanel(),
+      run: () => { const w = shown()[0]; if (w) w.close(); else hidePanel(lastFocusedPanel()); },
     },
     { id: 'file.reload', label: 'Reload JARVIS', icon: '↻', run: () => location.reload() },
 
@@ -129,6 +180,7 @@ export function registerJarvisCommands(deps) {
     { id: 'window.tileBottomRight', ...tile('bottom-right') },
     { id: 'window.tileFill', ...tile('fill') },
     { id: 'window.tileRestore', ...tile('restore') },
+    ...SPACE_COMMANDS,
     { id: 'view.menubarFocus', label: 'Go to the menu bar', shortcut: 'F10', global: true, when: (ctx) => !ctx.phone, run: () => deps.menubar.focus() },
 
     // ------------------------------------------------------------ Tools
@@ -206,7 +258,7 @@ export function menuModel() {
         { cmd: 'window.tileLeft' }, { cmd: 'window.tileRight' }, { cmd: 'window.tileTop' }, { cmd: 'window.tileBottom' }, { sep: true },
         { cmd: 'window.tileTopLeft' }, { cmd: 'window.tileTopRight' }, { cmd: 'window.tileBottomLeft' }, { cmd: 'window.tileBottomRight' }, { sep: true },
         { cmd: 'window.tileFill' }, { cmd: 'window.tileRestore' },
-      ] }, { sep: true }]),
+      ] }, { id: 'desktops', label: 'Desktops', icon: '▭', submenu: () => desktopMenu() }, { sep: true }]),
       ...(apps.length ? [{ header: 'Apps' }, ...apps.map(perItem), { sep: true }] : []),
       ...(wins.length ? [{ header: 'Open windows' }, ...wins.map(perItem), { sep: true }] : []),
       { header: 'Ask JARVIS' }, { cmd: 'window.ask' }, { cmd: 'window.askTopbar' }, { cmd: 'window.askFloat' }, { cmd: 'window.askHide' },
