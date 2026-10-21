@@ -1001,7 +1001,8 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       if (policy === 'skip') names.set(n, null);
       else if (policy === 'keep') { const u = uniqueName(n, [...taken, ...tops]); names.set(n, u); taken.push(u); }
       else {
-        try { await api(`${node(dest.nodeId)}/files/trash`, { method: 'POST', body: { path: joinPath(base, n, sep) } }); } // the old one goes to ~/.rigs/trash
+        const old = existing.find((x) => x === n) || existing.find((x) => x.toLowerCase() === n.toLowerCase()) || n; // its real name ("notes.txt" for "Notes.txt")
+        try { await api(`${node(dest.nodeId)}/files/trash`, { method: 'POST', body: { path: joinPath(base, old, sep) } }); } // the old one goes to ~/.rigs/trash
         catch (e) { toast(`Could not replace “${n}”: ${e.message}`, 'error'); names.set(n, null); }
       }
     }

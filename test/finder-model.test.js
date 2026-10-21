@@ -293,6 +293,7 @@ test('dragPayload / parseDrag: multi-item drags round-trip; the older single-ite
 test('findClashes / clashText: names that exist, worded like Finder', () => {
   assert.deepEqual(findClashes(['a', 'b', 'c'], ['c', 'a', 'z']), ['a', 'c']);
   assert.deepEqual(findClashes(['a'], []), []);
+  assert.deepEqual(findClashes(['Notes.txt'], ['notes.txt']), ['Notes.txt'], 'case-blind: on macOS/Windows it is the same file');
   const one = clashText(['Report.pdf'], { verb: 'moving', where: '“Docs”' });
   assert.match(one.title, /An item named “Report.pdf” already exists in “Docs”/);
   assert.match(one.detail, /keep both, replace.*moving.*skip.*~\/\.rigs\/trash/);

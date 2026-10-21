@@ -375,10 +375,13 @@ export function dropAction(src, dest, { alt = false } = {}) {
 /** The dropEffect to show: the copy badge for copies and cross-machine drops, the plain arrow for moves. */
 export const dropEffect = (action) => (action === 'move' ? 'move' : action === 'none' ? 'none' : 'copy');
 
-/** Names that already exist in a folder (case-insensitively on macOS/Windows listings: exact match is enough here). */
+/**
+ * Names that already exist in a folder, compared case-blind: on macOS and Windows disks "Notes.txt" IS "notes.txt", and
+ * writing it would silently replace the old file (asking once too often on Linux is the cheaper mistake).
+ */
 export function findClashes(names, existing) {
-  const have = new Set(existing);
-  return names.filter((n) => have.has(n));
+  const have = new Set(existing.map((n) => String(n).toLowerCase()));
+  return names.filter((n) => have.has(String(n).toLowerCase()));
 }
 
 /** Finder-like wording of the clash dialog → { title, detail, many }. `verb` = 'moving' | 'copying' | 'uploading'. */
