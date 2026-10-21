@@ -462,11 +462,29 @@ Screen access, input control and remote desktop.
 | Screen access and control › **Actions per minute** `control.maxActionsPerMin` | number 1–10000 | machine | `control.maxActionsPerMin` | default `120` · read-only |
 | Screen access and control › **Screenshots per minute** `control.maxShotsPerMin` | number 1–10000 | machine | `control.maxShotsPerMin` | default `30` · read-only |
 | Screen access and control › **Stream frames per minute** `control.maxStreamFramesPerMin` | number 1–100000 | machine | `control.maxStreamFramesPerMin` | default `600` · read-only |
+| Screen access and control › **Streamed-app input per minute** `control.maxStreamInputPerMin` | number 1–100000 | machine | `control.maxStreamInputPerMin` | default `12000` · read-only |
 | Screen access and control › **Announce** `control.announce` | text | machine | `control.announce` | default `"lease"` · read-only |
 | Screen access and control › **Kill hotkey** `control.killHotkey` | text | machine | `control.killHotkey` | default `"default"` · read-only |
 | Screen access and control › **Audit preview** `control.auditPreview` | number 0–1000 | machine | `control.auditPreview` | default `64` · read-only |
 | Screen access and control › **Access & control…** `action.openControl` | action | browser | opens `control` |  |
 | Screen access and control › **Stop control on this machine** `action.controlKill` | action | machine | `POST control/kill` | `rigs control off` · confirms first |
+| App streaming › **App streaming** `appStream.enabled` | switch | machine | `appStream.enabled` | default `true` · read-only |
+| App streaming › **Input to streamed apps** `appStream.input` | switch | machine | `appStream.input` | default `true` · read-only |
+| App streaming › **Allowed from** `appStream.allowFrom` | list | machine | `appStream.allowFrom` | default `[]` · read-only |
+| App streaming › **Sessions** `appStream.maxSessions` | number 1–32 | machine | `appStream.maxSessions` | default `4` · read-only |
+| App streaming › **Keep open without viewers** `appStream.parkMinutes` | number 1–10080 min | machine | `appStream.parkMinutes` | default `120` · read-only |
+| App streaming › **Encoder** `appStream.encoder` | text | machine | `appStream.encoder` | default `"auto"` · read-only |
+| App streaming › **Compositor** `appStream.compositor` | text | machine | `appStream.compositor` | default `"auto"` · read-only |
+| App streaming › **Frame rate limit** `appStream.fps` | number 5–120 fps | machine | `appStream.fps` | default `60` · read-only |
+| App streaming › **Largest width** `appStream.maxWidth` | number 640–7680 px | machine | `appStream.maxWidth` | default `3840` · read-only |
+| App streaming › **Largest height** `appStream.maxHeight` | number 360–4320 px | machine | `appStream.maxHeight` | default `2160` · read-only |
+| App streaming › **Bitrate · Low** `appStream.bitrate.low` | number 500–100000 kbit/s | machine | `appStream.bitrate.low` | default `3000` · read-only |
+| App streaming › **Bitrate · Balanced** `appStream.bitrate.balanced` | number 500–100000 kbit/s | machine | `appStream.bitrate.balanced` | default `8000` · read-only |
+| App streaming › **Bitrate · High** `appStream.bitrate.high` | number 500–100000 kbit/s | machine | `appStream.bitrate.high` | default `16000` · read-only |
+| App streaming › **Bitrate · Max** `appStream.bitrate.max` | number 500–100000 kbit/s | machine | `appStream.bitrate.max` | default `40000` · read-only |
+| App streaming › **Clipboard** `appStream.clipboard` | switch | machine | `appStream.clipboard` | default `true` · read-only |
+| App streaming › **Audio** `appStream.audio` | switch | machine | `appStream.audio` | default `false` · read-only |
+| App streaming › **Stop app streaming on this machine** `action.appStreamKill` | action | machine | `POST appstream/kill` | `rigs appstream off` |
 | Remote desktop › **Sunshine user** `desktop.sunshineUser` | text | machine | `desktop.sunshineUser` | default `"rigs"` · read-only |
 | Remote desktop › **Sunshine password** `desktop.sunshinePass` | secret-status | machine | `desktop.sunshinePass` | read-only · secret |
 
@@ -572,6 +590,8 @@ Features that are still being tried out.
 | localStorage `rigs.brainv` | One-time migration marker of rigs.brain. |
 | localStorage `rigs.hidden` | Node types hidden in the Filters legend: a view filter toggled in the legend. |
 | localStorage `rigs.graphify.view` | Which view the Graphify window shows: remembered window state. |
+| localStorage `rigs.appstream` | The app stream viewer's own choices (quality, frame rate, size, touch mode, key swap), set in its toolbar (app-stream.js): remembered window state. |
+| localStorage `rigs.appstream.debug` | Developer switch: set to 1 to log the viewer's protocol messages to the browser console. |
 | localStorage `rigs.finder` | The file browser's view (icons, list, columns), sort and sidebar/preview widths, set in the window itself (finder-model.js): remembered window state. |
 | localStorage `rigs.media` | The media player's volume, mute and speed, set with its own controls: remembered player state. |
 | localStorage `rigs.usage.range` | Time range of the Tokens & time panel: remembered panel state. |

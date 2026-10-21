@@ -344,6 +344,7 @@ Every `down` is paired with an `up`: helpers track what they hold and release it
   "maxActionsPerMin": 120,
   "maxShotsPerMin": 30,
   "maxStreamFramesPerMin": 600, // live stream frames (src/screen-stream.js), all streams together; frames take no lease
+  "maxStreamInputPerMin": 12000, // input batches to an app streamed from this Mac (docs/app-streaming.md §16); they take the person's lease
   "announce": "lease",     // speak at lease start/end ("every" = speak each action); the feed always shows every action
   "killHotkey": "default", // per OS, see below; "" disables
   "auditPreview": 64       // chars of typed text kept in the audit line (0 = none)

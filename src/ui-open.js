@@ -14,6 +14,8 @@ export const NAMED_PLACES = {
   trash: '~/.rigs/trash', 'rigs trash': '~/.rigs/trash',
   // The shared folder synced across the mesh (src/shared.js): '@shared' resolves on the machine that opens it.
   shared: '@shared', '@shared': '@shared', 'rigs shared': '@shared', 'rigs-shared': '@shared', 'mesh shared': '@shared',
+  // The machine's installed apps (src/app-catalog.js): a virtual place, not a folder.
+  applications: '@apps', application: '@apps', apps: '@apps', programs: '@apps', '@apps': '@apps', 'installed apps': '@apps', 'installed applications': '@apps',
   'shared apps': '@shared/apps', 'shared files': '@shared/files', 'shared reports': '@shared/reports',
 };
 
@@ -23,6 +25,9 @@ export function placePath(text) {
     .replace(/^(?:(?:my|the|sir'?s|his|our)\s+)+/, '').replace(/\s+(?:folder|directory|dir)$/, '').trim();
   return Object.hasOwn(NAMED_PLACES, t) ? NAMED_PLACES[t] : null;
 }
+
+/** The virtual place that lists a machine's applications; it has no folder to look up. */
+export const APPS_PLACE = '@apps';
 
 /** Looks like a filesystem path (~, /, \, ., C:\ or a separator inside), not a name like "MadMikeUnity". */
 export const isPathLike = (p) => /^(?:~|\/|\\|\.{1,2}(?:[\\/]|$)|[a-z]:[\\/])/i.test(String(p || '')) || /[\\/]/.test(String(p || ''));

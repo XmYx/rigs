@@ -165,7 +165,13 @@ export function defaults() {
     // settings patch. backend: 'auto' or a forced one (mutter, portal, …).
     control: {
       enabled: true, input: true, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
-      maxActionsPerMin: 120, maxShotsPerMin: 30, maxStreamFramesPerMin: 600, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+      maxActionsPerMin: 120, maxShotsPerMin: 30, maxStreamFramesPerMin: 600, maxStreamInputPerMin: 12000, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+    },
+    // App streaming (docs/app-streaming.md, src/app-stream.js): isolated app sessions streamed to JARVIS viewers. Its own
+    // switch, like control: switched on only by appstream/enable from a confirmed human surface, never the settings patch.
+    appStream: {
+      enabled: true, input: true, allowFrom: [], maxSessions: 4, parkMinutes: 120, encoder: 'auto', compositor: 'auto',
+      fps: 60, maxWidth: 3840, maxHeight: 2160, bitrate: { low: 3000, balanced: 8000, high: 16000, max: 40000 }, clipboard: true, audio: false,
     },
   };
 }
@@ -215,8 +221,9 @@ export function saveConfig(cfg = current) {
 
 // Top-level keys patchConfig drops: identity, secrets and screen control. comfyui, linear and connectors (Slack, Google
 // Drive) hold secrets and have their own validated endpoints (/api/local/comfyui/config, linear/config,
-// /api/local/connectors/google-drive/config); control is switched on only by a confirmed human surface (src/control.js).
-export const PATCH_BLOCKED = Object.freeze(['nodeId', 'meshToken', 'desktop', 'comfyui', 'linear', 'connectors', 'control']);
+// /api/local/connectors/google-drive/config); control and appStream are switched on only by a confirmed human surface
+// (src/control.js, src/app-stream.js).
+export const PATCH_BLOCKED = Object.freeze(['nodeId', 'meshToken', 'desktop', 'comfyui', 'linear', 'connectors', 'control', 'appStream']);
 
 /** Shallow-safe patch used by the settings API; never lets the UI change identity or secrets. */
 export function patchConfig(patch) {
@@ -270,5 +277,6 @@ export function publicConfig() {
     models: c.models, routing: c.routing, capabilities: c.capabilities, apps: c.apps, pinnedProjects: c.pinnedProjects, traces: c.traces, quick: c.quick, yolo: c.yolo, experimental: c.experimental,
     router: { ...c.router, jev: { ...c.router?.jev, apiKey: c.router?.jev?.apiKey ? '••••' : '' } },
     control: { ...c.control },
+    appStream: { ...c.appStream },
   };
 }

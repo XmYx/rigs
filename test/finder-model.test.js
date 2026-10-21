@@ -24,8 +24,8 @@ test('sidebar: every machine the mesh reports, this one first, offline and non-R
 
 test('sidebar: favourites of the rig being browsed, with their real paths when its home is known', () => {
   const s = F.sidebarModel(NODES, { current: 'n-lin' });
-  assert.deepEqual(s.favourites.map((f) => f.label), ['Home', 'Desktop', 'Documents', 'Downloads', 'RIGS Shared']);
-  assert.deepEqual(s.favourites.map((f) => f.path), ['~', '~/Desktop', '~/Documents', '~/Downloads', '@shared']);
+  assert.deepEqual(s.favourites.map((f) => f.label), ['Home', 'Desktop', 'Documents', 'Downloads', 'RIGS Shared', 'Applications']);
+  assert.deepEqual(s.favourites.map((f) => f.path), ['~', '~/Desktop', '~/Documents', '~/Downloads', '@shared', '@apps']);
   assert.ok(s.favourites.every((f) => f.nodeId === 'n-lin'));
   assert.equal(s.favourites[3].full, '/home/magix/Downloads');
   assert.equal(s.favourites[4].full, ''); // the shared folder's place is only known on that machine
@@ -325,4 +325,42 @@ test('shortcutFor: ⌘Z is undo, but not while typing', () => {
   assert.equal(shortcutFor({ metaKey: true, key: 'z', code: 'KeyZ' }), 'undo');
   assert.equal(shortcutFor({ ctrlKey: true, key: 'z', code: 'KeyZ' }), 'undo');
   assert.equal(shortcutFor({ metaKey: true, key: 'z', code: 'KeyZ' }, { typing: true }), '');
+});
+
+// ---------------------------------------------------------------- Applications place (@apps)
+
+test('apps: every machine gets an Applications child row, enabled only where the machine is browsable', () => {
+  const s = F.sidebarModel(NODES, { current: 'n-mac' });
+  assert.deepEqual(s.locations.map((l) => [l.name, l.apps.enabled, l.apps.path]), [['macbookpro', true, '@apps'], ['magix-system', true, '@apps'], ['attic', false, '@apps'], ['iphone172', false, '@apps']]);
+  assert.equal(F.activeFavourite(s.favourites, '@apps'), 'apps');
+  assert.ok(F.isAppsPlace(F.APPS_PLACE) && !F.isAppsPlace('~/@apps'));
+});
+
+test('apps: entries, search over name, generic name, comment and categories, and Open state', () => {
+  const items = [
+    { id: 'ai.storyteller.filmcraft', name: 'FilmCraft', generic: 'Video editor', comment: 'Storyboard to film', categories: ['Video'], streamable: true, source: 'desktop' },
+    { id: 'htop', name: 'htop', categories: ['System', 'Monitor'], streamable: false, why: 'a terminal program, not a window app', source: 'desktop' },
+    { id: 'x', name: 'Calculator', streamable: true, source: 'bundle' },
+  ];
+  const es = F.appEntries([...items, null, {}]);
+  assert.deepEqual(es.map((e) => [e.path, e.type]), [['app:ai.storyteller.filmcraft', 'app'], ['app:htop', 'app'], ['app:x', 'app']]);
+  assert.deepEqual(F.filterApps(es, 'video').map((e) => e.name), ['FilmCraft']);
+  assert.deepEqual(F.filterApps(es, 'storyboard film').map((e) => e.name), ['FilmCraft']);
+  assert.deepEqual(F.filterApps(es, 'monitor').map((e) => e.name), ['htop']);
+  assert.deepEqual(F.filterApps(es, 'zzz'), []);
+  assert.equal(F.filterApps(es, '  ').length, 3);
+  assert.deepEqual(F.appOpenState(items[0]), { ok: true, why: '' });
+  assert.equal(F.appOpenState(items[1]).why, 'a terminal program, not a window app');
+  assert.equal(F.appOpenState(items[0], { host: { supported: false, why: 'macOS hosting is not available yet' } }).why, 'macOS hosting is not available yet');
+  assert.equal(F.appOpenState(items[0], { online: false }).ok, false);
+  assert.equal(F.appKind(items[2]), 'macOS app');
+});
+
+test('apps: session request carries the app id, reuse unless a new session is asked for, and a sane size', () => {
+  const a = { id: 'ai.storyteller.filmcraft' };
+  assert.deepEqual(F.appSessionRequest(a), { app: a.id, reuse: true });
+  assert.deepEqual(F.appSessionRequest(a, { fresh: true, size: { width: 390.4, height: 844 } }), { app: a.id, reuse: false, size: { width: 390, height: 844 } });
+  assert.deepEqual(F.appSessionRequest(a, { size: { width: 0, height: 5 } }), { app: a.id, reuse: true });
+  assert.match(F.appOpenError(new Error('unknown endpoint POST /api/local/appstream/sessions'), 'magix-system'), /magix-system does not run an app streaming host/);
+  assert.equal(F.appOpenError(new Error('app streaming is off')), 'app streaming is off');
 });

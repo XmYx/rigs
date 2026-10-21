@@ -35,6 +35,15 @@ const NODES = [
 
 // ---------------------------------------------------------------- arguments and path resolution (pure)
 
+test('applications is a named place, resolved without a folder lookup', async () => {
+  for (const n of ['applications', 'apps', 'programs', 'the applications', 'my installed apps']) assert.equal(U.placePath(n), '@apps', n);
+  assert.equal(U.isPathLike('@apps'), false);
+  const t = await U.resolveTarget({ node: 'magix-system', path: 'applications' }, { nodes: NODES });
+  assert.deepEqual([t.node.name, t.path, t.via], ['magix-system', '@apps', 'place']);
+  const a = M.uiOpenAction({ type: 'ui-open', view: 'files', nodeId: 'n-lin', nodeName: 'magix-system', path: '@apps' }, { machines: NODES });
+  assert.deepEqual([a.nodeId, a.path, a.play, a.toast], ['n-lin', '@apps', '', '']);
+});
+
 test('validateOpen: files is the default view; unknown views and malformed values are a 400', () => {
   assert.deepEqual(U.validateOpen({}), { view: 'files', node: '', path: '' });
   assert.deepEqual(U.validateOpen({ view: 'files', node: ' magix-system ', path: ' ~/rigs-dev ' }), { view: 'files', node: 'magix-system', path: '~/rigs-dev' });

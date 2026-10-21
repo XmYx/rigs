@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=htop
+Exec=htop
+Terminal=true
+Categories=System;Monitor;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FilmCraft
+Name[de]=FilmWerkstatt
+GenericName=Video editor
+Comment=Storyboard to film
+Exec="/home/magix/.local/bin/filmcraft" %F
+Icon=ai.storyteller.filmcraft
+Categories=AudioVideo;Video;
+StartupNotify=true

@@ -10,6 +10,7 @@ import * as access from './access.js';
 import * as control from './control.js';
 import { createControlApi, wireControlEvents, controlCaller } from './control-api.js';
 import { createStreamHub, streamReadiness } from './screen-stream.js';
+import { createAppStream } from './app-stream.js';
 import { ensureControlSetup } from './control-setup.js';
 import * as attention from './attention.js';
 import { osNotify } from './osnotify.js';
@@ -59,11 +60,12 @@ import * as tts from './tts.js';
 import { notifyVoice } from './tts-plan.js';
 import { detectTools, ollamaModels } from './tools.js';
 import * as updater from './updater.js';
-import { APP_DIR, isWin, log, run, truncate } from './util.js';
+import { APP_DIR, isWin, log, run, spawnCmd, truncate, which } from './util.js';
 import * as work from './work.js';
 import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 import * as uiOpen from './ui-open.js';
+import * as appCatalog from './app-catalog.js';
 import * as yolo from './yolo.js';
 import * as yoloKeep from './yolo-keep.js';
 
@@ -628,7 +630,7 @@ export async function startServer() {
     const t = await uiOpen.resolveTarget(args, { nodes, findWorkspace });
     if (!t.node) throw new HttpError(404, 'no machine to open it on');
     if (!t.node.self && !(t.node.online && t.node.rigs)) throw new HttpError(503, `${t.node.name} is offline`);
-    const located = await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
+    const located = t.path === uiOpen.APPS_PLACE ? { folder: uiOpen.APPS_PLACE, select: '', missing: false } : await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
     const traceId = tctx?.traceId || '';
     const event = uiOpen.uiOpenEvent({ view: args.view, node: t.node, located, requested: args.path || t.path, trace: traceId, workspace: t.workspace });
     const live = nodes.filter((n) => n.self || (n.online && n.rigs));
@@ -1352,6 +1354,28 @@ export async function startServer() {
       return { ok: true, delivered: uiSockets.size };
     }
 
+    // Installed GUI apps on this machine (src/app-catalog.js, docs/app-streaming.md §7, §9). The prefix is appstream/, not apps/:
+    // /api/nodes/<n>/apps/<id>/* belongs to the App Cloud.
+    if (sub === 'appstream/catalog' && method === 'GET') return appCatalog.catalog({ refresh: q.get('refresh') === '1', node: config().name });
+    const appIcon = /^appstream\/catalog\/([^/]+)\/icon$/.exec(sub);
+    if (appIcon && method === 'GET') {
+      const r = await appCatalog.icon(decodeURIComponent(appIcon[1]), { size: q.get('size') });
+      if (!r) throw new HttpError(404, 'no icon');
+      if (!res) return { bytes: r.body.length, type: r.type };
+      if (req.headers['if-none-match'] === r.etag) { res.writeHead(304, { etag: r.etag }); res.end(); return undefined; }
+      res.writeHead(200, { 'content-type': r.type, 'content-length': r.body.length, 'cache-control': 'max-age=86400', etag: r.etag, 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'", 'x-content-type-options': 'nosniff' });
+      res.end(r.body);
+      return undefined;
+    }
+
+    // App streaming host (src/app-stream.js, docs/app-streaming.md §7): status, enable/kill, sessions. The viewer WebSocket
+    // (appstream/sessions/<sid>/stream) is in onUpgrade.
+    if (sub === 'appstream' || sub.startsWith('appstream/')) {
+      const r = await appStream.api(sub.slice('appstream'.length).replace(/^\//, ''), method, q, body, controlCaller(req, config().name));
+      if (r?.status && r.body) { if (!res) return r.body; json(res, r.status, r.body); return undefined; }
+      return r;
+    }
+
     // ui_open (src/ui-open.js): what to open for a path here, and the push to this machine's JARVIS UIs.
     if (sub === 'ui/locate' && method === 'GET') return files.locate(q.get('path') || '~');
     if (sub === 'ui/push' && method === 'POST') {
@@ -1501,7 +1525,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'SettingsError' ? { errors: e.errors, applied: e.applied } : {}), ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'SettingsError' ? { errors: e.errors, applied: e.applied } : {}), ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' || e.name === 'AppStreamError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }
@@ -1556,6 +1580,16 @@ export async function startServer() {
       if (!node) { socket.destroy(); return; }
       if (node.self) streamViewer();
       else forwardWs(node, req, socket, head, 'screen/stream' + url.search);
+      return;
+    }
+    // App stream viewers (src/app-stream.js): local, or relayed to the host's daemon like screen/stream.
+    const appViewer = (sid) => wss.handleUpgrade(req, socket, head, (ws) => appStream.attachWs(ws, sid, url.searchParams, controlCaller(req, config().name)));
+    if ((mm = url.pathname.match(/^\/api\/local\/appstream\/sessions\/([\w-]+)\/stream$/))) { appViewer(mm[1]); return; }
+    if ((mm = url.pathname.match(/^\/api\/nodes\/([^/]+)\/appstream\/sessions\/([\w-]+)\/stream$/))) {
+      const node = discovery.get(decodeURIComponent(mm[1]));
+      if (!node) { socket.destroy(); return; }
+      if (node.self) appViewer(mm[2]);
+      else forwardWs(node, req, socket, head, `appstream/sessions/${mm[2]}/stream` + url.search);
       return;
     }
     if ((mm = url.pathname.match(/^\/api\/local\/pty\/(\w+)\/ws$/))) {
@@ -1677,6 +1711,13 @@ export async function startServer() {
   // Screen access/control: routes for this machine, plus the announcements that make every action visible.
   const controlApi = createControlApi({ control, access, nodeName: () => config().name });
   const streamHub = createStreamHub({ control, nodeName: () => config().name, log });
+  // App streaming host: sessions survive daemon restarts (systemd --user units on Linux, RIGS Control on macOS); reattach them now.
+  const appStream = createAppStream({
+    getConfig: config, persistConfig: saveConfig, home: RIGS_HOME, appDir: APP_DIR, nodeName: () => config().name, control,
+    findApp: (id) => appCatalog.findItem(id), run, which, spawn: spawnCmd, log,
+  });
+  attention.addSource(appStream.attentionItems);
+  if (['linux', 'darwin'].includes(process.platform)) appStream.reconcile().catch((e) => log('appstream reconcile:', e.message));
   attention.addSource(wireControlEvents({
     events: control.events, nodeName: () => config().name, settings: () => config().control || {}, broadcast, log,
     notifyAll: (b) => broadcastNotify(b), osNotify,

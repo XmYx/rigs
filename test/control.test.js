@@ -426,3 +426,56 @@ print('scaled frame, portal coordinates and pre-input Unicode refusal verified')
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /verified/);
 });
+
+test('app streaming on a Mac: inputStream gates each batch (switches, person\'s lease, cached lock, own rate) and audits runs, not batches', async () => {
+  const person = { from: 'magix-system', human: true, who: 'sir' };
+  let locked = false;
+  const f = fixture({ maxStreamInputPerMin: 3 }, { locked: async () => ({ locked }) });
+  assert.equal(await f.c.inputStream(person), null);
+  assert.equal((await f.c.status()).lease.holder.human, true);
+  // The person holds the lease: an agent cannot act meanwhile.
+  await assert.rejects(f.c.pointer({ x: 1, y: 1 }, alice), { code: 'busy' });
+  assert.equal((await f.c.inputStream(alice)).code, 'busy');
+  // The lock is re-probed at most every 250 ms.
+  locked = true;
+  assert.equal(await f.c.inputStream(person), null);
+  f.advance(300);
+  assert.equal((await f.c.inputStream(person)).code, 'locked');
+  locked = false;
+  f.advance(300);
+  assert.equal(await f.c.inputStream(person), null);
+  assert.equal((await f.c.inputStream(person)).code, 'rate');
+  f.advance(61000);
+  assert.equal(await f.c.inputStream(person), null);
+  f.c.inputStreamEnd(person);
+  const lines = f.c.auditTail({ limit: 50 }).filter((l) => l.op === 'stream-input');
+  assert.deepEqual(lines.map((l) => [l.args.phase, l.ok, l.error?.code ?? null]), [
+    ['start', true, null], ['refused', false, 'busy'], ['refused', false, 'locked'], ['start', true, null], ['refused', false, 'rate'], ['start', true, null], ['end', true, null],
+  ]);
+  // Off and input-off refuse without touching the helper.
+  const off = fixture({ enabled: false });
+  assert.equal((await off.c.inputStream(person)).code, 'off');
+  assert.equal(off.c.accessFor(person, true).code, 'off');
+  const noInput = fixture({ input: false });
+  assert.equal(noInput.c.accessFor(person), null);
+  assert.equal(noInput.c.accessFor(person, true).code, 'input-off');
+  assert.equal((await noInput.c.inputStream(person)).code, 'input-off');
+  assert.equal(off.calls.length + noInput.calls.length, 0);
+});
+
+test('app streaming on a Mac: appStream runs the capture gate (off, lock, missing Screen Recording with its fix) before the helper op', async () => {
+  const person = { from: 'magix-system', human: true };
+  const f = fixture({}, { appStream: async (a) => ({ sid: a.sid, pid: 42, launched: true }) });
+  assert.deepEqual(await f.c.appStream('appStream', { sid: 'as-00000001', socket: '/x.sock', path: '/Applications/TextEdit.app' }, person), { sid: 'as-00000001', pid: 42, launched: true });
+  assert.ok(f.calls.some(([op, a]) => op === 'appStream' && a.sid === 'as-00000001'));
+  assert.equal((await f.c.status()).lease, null);  // looking only: no lease
+  assert.equal(f.c.auditTail().at(-1).op, 'appstream');
+  const off = fixture({ enabled: false });
+  await assert.rejects(off.c.appStream('appStream', { sid: 'as-00000001' }, person), { code: 'off' });
+  assert.equal(off.calls.length, 0);
+  const fix = { kind: 'grant', permission: 'screenCapture', app: '/x/RIGS Control.app' };
+  const denied = fixture();
+  denied.adapter.inspect = async () => ({ ...structuredClone(facts), permissions: { screenCapture: { ok: false, fix } } });
+  await assert.rejects(denied.c.appStream('appStream', { sid: 'as-00000001' }, person), (e) => e.code === 'needs-permission' && e.fix?.permission === 'screenCapture');
+  assert.ok(!denied.calls.some(([op]) => op === 'appStream'));
+});
