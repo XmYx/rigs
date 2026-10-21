@@ -345,6 +345,7 @@ const RAW = [
       num('control.maxActionsPerMin', 'Actions per minute', 'Rate limit on input actions.', 1, 10000, { readOnly: true, default: 120 }),
       num('control.maxShotsPerMin', 'Screenshots per minute', 'Rate limit on screenshots.', 1, 10000, { readOnly: true, default: 30 }),
       num('control.maxStreamFramesPerMin', 'Stream frames per minute', 'Rate limit on the live desktop stream.', 1, 100000, { readOnly: true, default: 600 }),
+      num('control.maxStreamInputPerMin', 'Streamed-app input per minute', 'Rate limit on input batches to an app streamed from this Mac (app streaming).', 1, 100000, { readOnly: true, default: 12000 }),
       text('control.announce', 'Announce', 'When control is announced on this machine.', { readOnly: true, default: 'lease' }),
       text('control.killHotkey', 'Kill hotkey', 'The stop hotkey (⌃⌥⌘⎋ on macOS by default).', { readOnly: true, default: 'default' }),
       num('control.auditPreview', 'Audit preview', 'Characters of typed text kept in the audit log.', 0, 1000, { readOnly: true, default: 64 }),

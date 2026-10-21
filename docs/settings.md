@@ -462,6 +462,7 @@ Screen access, input control and remote desktop.
 | Screen access and control › **Actions per minute** `control.maxActionsPerMin` | number 1–10000 | machine | `control.maxActionsPerMin` | default `120` · read-only |
 | Screen access and control › **Screenshots per minute** `control.maxShotsPerMin` | number 1–10000 | machine | `control.maxShotsPerMin` | default `30` · read-only |
 | Screen access and control › **Stream frames per minute** `control.maxStreamFramesPerMin` | number 1–100000 | machine | `control.maxStreamFramesPerMin` | default `600` · read-only |
+| Screen access and control › **Streamed-app input per minute** `control.maxStreamInputPerMin` | number 1–100000 | machine | `control.maxStreamInputPerMin` | default `12000` · read-only |
 | Screen access and control › **Announce** `control.announce` | text | machine | `control.announce` | default `"lease"` · read-only |
 | Screen access and control › **Kill hotkey** `control.killHotkey` | text | machine | `control.killHotkey` | default `"default"` · read-only |
 | Screen access and control › **Audit preview** `control.auditPreview` | number 0–1000 | machine | `control.auditPreview` | default `64` · read-only |

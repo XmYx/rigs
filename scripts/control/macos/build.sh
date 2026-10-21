@@ -18,7 +18,8 @@ trap 'rm -rf "$tmp"' EXIT
 rm -rf "$tmp"
 mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources"
 swiftc -O -swift-version 5 "$here/RigsControl.swift" -o "$tmp/Contents/MacOS/rigs-control" \
-  -framework AppKit -framework ApplicationServices -framework Carbon -framework CoreGraphics -framework ImageIO
+  -framework AppKit -framework ApplicationServices -framework Carbon -framework CoreGraphics -framework ImageIO \
+  -framework CoreMedia -framework CoreVideo -framework ScreenCaptureKit -framework VideoToolbox
 cp "$here/Info.plist" "$tmp/Contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$id" "$tmp/Contents/Info.plist"
 plutil -replace CFBundleName -string "$name" "$tmp/Contents/Info.plist"

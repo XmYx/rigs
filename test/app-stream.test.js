@@ -248,8 +248,11 @@ test('lifecycle transitions', () => {
 
 // ---------------------------------------------------------------- host manager with a fake runner
 
-/** A fake runner: listens on the session socket like scripts/appstream/rigs-appstream-linux.py and records the ops. */
-function fakeRunner(socketPath) {
+/**
+ * A fake runner: listens on the session socket like scripts/appstream/rigs-appstream-linux.py (or a RIGS Control app
+ * session on macOS: `opts` gives its encoder, its own size and its ready event) and records the ops.
+ */
+function fakeRunner(socketPath, opts = {}) {
   const r = { ops: [], conns: [], width: 0, height: 0, seq: 0, timer: null, stopped: false };
   const sendTo = (c, type, body) => c.write(S.packMessage(type, body));
   r.event = (obj) => { for (const c of r.conns) sendTo(c, 1, obj); };
@@ -266,8 +269,8 @@ function fakeRunner(socketPath) {
         const op = JSON.parse(m.body);
         r.ops.push(op);
         if (op.op === 'start-stream') {
-          r.width = op.width; r.height = op.height;
-          r.event({ ev: 'stream', encoder: op.candidates[0].encoder, width: op.width, height: op.height, fps: op.fps, fallback: false });
+          r.width = opts.size?.width ?? op.width; r.height = opts.size?.height ?? op.height;
+          r.event({ ev: 'stream', encoder: opts.encoder || op.candidates[0].encoder, width: r.width, height: r.height, fps: op.fps, fallback: false });
           r.frame(true);
           clearInterval(r.timer);
           r.timer = setInterval(() => r.frame(false), 10);
@@ -277,7 +280,7 @@ function fakeRunner(socketPath) {
       }
     });
     c.on('error', () => {});
-    sendTo(c, 1, { ev: 'ready', compositor: 'gnome-shell', display: 'wayland-50' });
+    sendTo(c, 1, opts.ready || { ev: 'ready', compositor: 'gnome-shell', display: 'wayland-50' });
   });
   r.stop = () => { r.stopped = true; clearInterval(r.timer); for (const c of r.conns) c.destroy(); r.server.close(); };
   r.server.listen(socketPath);
@@ -292,7 +295,7 @@ function host(over = {}) {
   const as = S.createAppStream({
     getConfig: () => cfg, persistConfig: (c) => { cfg = c; }, home, appDir: path.resolve('.'), nodeName: () => 'magix', control,
     findApp: async (id) => (id === 'ai.storyteller.filmcraft' ? { id, name: 'FilmCraft', streamable: true, launch: { kind: 'desktop', file: '/x/filmcraft.desktop', argv: ['/x/filmcraft'], dbus: false } } : null),
-    run: async () => ({ code: 0, stdout: '', stderr: '' }), which: () => null, systemd: false,
+    run: async () => ({ code: 0, stdout: '', stderr: '' }), which: () => null, systemd: false, platform: 'linux',
     probe: async () => ({ platform: 'linux', gnomeShell: 50, mutter: false, nvidia: true, gst: { nvh264enc: true, glupload: true, cudaupload: true, x264enc: true }, missing: [] }),
     spawn: (cmd, args) => {
       runners.push(fakeRunner(args[args.indexOf('--socket') + 1]));
@@ -488,4 +491,165 @@ test('host: slow viewer gets only keyframes until it catches up; unknown session
   await until(() => none.close);
   assert.deepEqual(none.close, { code: 4404, reason: 'no-session' });
   await h.as.api('sessions/' + body.session.id, 'DELETE', new URLSearchParams('force=1'), null, caller);
+});
+
+// ---------------------------------------------------------------- macOS host (§3.6): shared desktop through RIGS Control
+
+test('macOS: compositor/encoder facts, the Mac key table, and control refusals in the app-stream shape', () => {
+  assert.deepEqual(S.compositorFor({ platform: 'darwin', darwin: '25.3.0' }), { name: 'screencapturekit', fallback: false, shared: true });
+  assert.equal(S.compositorFor({ platform: 'darwin', darwin: '21.4.0' }).name, 'screencapturekit'); // macOS 12.3
+  assert.match(S.compositorFor({ platform: 'darwin', darwin: '21.3.0' }).why, /12\.3/);
+  assert.deepEqual(S.pickEncoder({ platform: 'darwin' }), [{ name: 'h264_videotoolbox', hw: true, path: 'sck' }]);
+  const host = S.hostSummary({ platform: 'darwin', darwin: '25.3.0', missing: [] });
+  assert.equal(host.supported, true);
+  assert.equal(host.shared, true);
+  assert.match(host.note, /screen control/);
+  // ANSI positions (kVK_*): the Mac's layout picks the characters, as at its own keyboard.
+  for (const [code, vk] of Object.entries({ KeyA: 0, KeyS: 1, KeyZ: 6, KeyQ: 12, Digit1: 18, Digit0: 29, Enter: 36, Tab: 48, Space: 49, Backspace: 51, Escape: 53, MetaLeft: 55, ShiftLeft: 56, AltLeft: 58, ControlLeft: 59, ArrowLeft: 123, ArrowUp: 126, F1: 122, F12: 111, Delete: 117, IntlBackslash: 10 })) assert.equal(S.CODE_TO_MAC[code], vk, code);
+  assert.equal(new Set(Object.values(S.CODE_TO_MAC)).size, Object.keys(S.CODE_TO_MAC).length);
+  const missing = Object.keys(S.CODE_TO_EVDEV).filter((c) => !(c in S.CODE_TO_MAC));
+  assert.deepEqual(missing.sort(), ['Insert', 'NumLock', 'Pause', 'PrintScreen', 'ScrollLock']);
+  const b = S.validateInput({ seq: 1, e: [{ k: 'kc', c: 'KeyA', d: 1 }, { k: 'kc', c: 'Insert', d: 1 }, { k: 'kc', c: 'toString', d: 1 }] }, { keymap: S.CODE_TO_MAC });
+  assert.deepEqual(b.e, [{ k: 'kc', c: 'KeyA', code: 0, d: 1 }]);
+  assert.equal(b.dropped, 2);
+  assert.equal(S.validateInput({ e: [{ k: 'kc', c: 'KeyA', d: 1 }] }).e[0].code, 30); // Linux keeps evdev
+  assert.equal(S.controlRefusal(null), null);
+  assert.deepEqual(S.controlRefusal({ code: 'off', message: 'x' }), { status: 'control-off', code: 'control-off', message: 'Screen control is off on this Mac, so its apps cannot be streamed. A person can switch it on in JARVIS → Access & control.' });
+  const fix = { kind: 'grant', permission: 'screenCapture' };
+  assert.deepEqual(S.controlRefusal({ code: 'needs-permission', message: 'm', fix }), { status: 'needs-permission', code: 'needs-permission', message: 'm', fix });
+  assert.equal(S.controlRefusal({ code: 'busy', message: 'lease' }).status, 'busy-lease');
+  assert.equal(S.controlRefusal({ code: 'locked', message: 'locked' }).status, 'locked');
+  assert.equal(S.ending(S.controlRefusal({ code: 'needs-permission', message: 'm', fix })).close, 4412);
+  assert.equal(S.ending(S.controlRefusal({ code: 'off', message: 'm' })).close, 4403);
+});
+
+/** A Mac host: control is a fake RIGS Control (gate state, appStream op that opens a fake session, inputStream). */
+function macHost({ helperVersion = '2' } = {}) {
+  const home = fs.mkdtempSync(path.join(root, 'm'));
+  let cfg = { name: 'macbookpro', appStream: {} };
+  const runners = [], starts = [], inputs = [], ended = [];
+  const control = {
+    events: new EventEmitter(), access: null, input: null, startError: null,
+    accessFor(caller, act) { return control.access || (act && control.input === 'input-off' ? { code: 'input-off', message: 'Input control is off on this machine.' } : null); },
+    async appStream(op, args, caller) {
+      starts.push({ op, args, caller });
+      if (control.startError) throw control.startError;
+      runners.push(fakeRunner(args.socket, { encoder: { name: 'h264_videotoolbox', hw: true, path: 'sck-lowlatency' }, size: { width: 1600, height: 1000 }, ready: { ev: 'ready', compositor: 'screencapturekit', display: '1' } }));
+      return { sid: args.sid, pid: 4242, launched: true, name: 'TextEdit' };
+    },
+    async inputStream(caller) { inputs.push(caller); return control.input ? { code: control.input, message: `refused: ${control.input}` } : null; },
+    inputStreamEnd(caller) { ended.push(caller); },
+    async status() { return { backend: { helper: { running: true, version: helperVersion } } }; },
+  };
+  const as = S.createAppStream({
+    getConfig: () => cfg, persistConfig: (c) => { cfg = c; }, home, appDir: path.resolve('.'), nodeName: () => 'macbookpro', control, platform: 'darwin',
+    findApp: async (id) => (id === 'com.apple.TextEdit' ? { id, name: 'TextEdit', streamable: true, launch: { kind: 'bundle', path: '/System/Applications/TextEdit.app' } } : null),
+    run: async () => ({ code: 0, stdout: '', stderr: '' }), which: () => null, systemd: false, spawn: () => { throw new Error('no runner process on macOS'); },
+    probe: async ({ platform }) => ({ platform, darwin: '25.3.0', missing: [] }),
+  });
+  cleanups.push(async () => { as.close(); for (const r of runners) if (!r.stopped) r.stop(); });
+  return { as, control, runners, starts, inputs, ended, home };
+}
+
+test('macOS host: control off or a missing grant refuse the start precisely; an out-of-date RIGS Control says how to update', async () => {
+  const caller = { from: 'magix-system', human: true, via: 'tailnet' };
+  const m = macHost();
+  m.control.access = { code: 'off', message: 'Screen access is off on this machine (switched off or stopped).' };
+  await assert.rejects(m.as.api('sessions', 'POST', null, async () => ({ app: 'com.apple.TextEdit' }), caller),
+    (e) => e.name === 'AppStreamError' && e.status === 403 && e.code === 'control-off' && /Screen control is off on this Mac/.test(e.message));
+  assert.equal(m.starts.length, 0);
+  const status = await m.as.api('', 'GET', null, null, caller);
+  assert.equal(status.host.supported, true);
+  assert.equal(status.host.compositor, 'screencapturekit');
+  // Control on, but RIGS Control lacks Screen Recording: 412 with the grant fix, nothing left behind.
+  m.control.access = null;
+  const fix = { kind: 'grant', permission: 'screenCapture', text: 'switch on RIGS Control in Screen Recording' };
+  m.control.startError = Object.assign(new Error('screenshot needs Screen Recording for RIGS Control.app, which is not granted on macbookpro'), { code: 'needs-permission', fix });
+  await assert.rejects(m.as.api('sessions', 'POST', null, async () => ({ app: 'com.apple.TextEdit' }), caller), (e) => e.status === 412 && e.code === 'needs-permission' && e.fix === fix);
+  assert.equal(m.as.sessions.size, 1);
+  assert.equal([...m.as.sessions.values()][0].state, 'failed');
+  assert.deepEqual(fs.readdirSync(path.join(m.home, 'appstream', 'sessions')), []);
+  const old = macHost({ helperVersion: '1' });
+  await assert.rejects(old.as.api('sessions', 'POST', null, async () => ({ app: 'com.apple.TextEdit' }), caller), (e) => e.status === 501 && /version 1/.test(e.message) && /helper install/.test(e.fix.text));
+  // A command on macOS is an .app bundle (plus files), never an arbitrary argv.
+  await assert.rejects(m.as.api('sessions', 'POST', null, async () => ({ command: ['/usr/bin/xterm'] }), caller), { status: 501 });
+});
+
+test('macOS host: RIGS Control session streams VideoToolbox frames; input needs control\'s lease per batch and uses Mac key codes; control off ends viewers', async () => {
+  const caller = { from: 'magix-system', human: true, via: 'tailnet' };
+  const m = macHost();
+  const r = await m.as.api('sessions', 'POST', null, async () => ({ app: 'com.apple.TextEdit', files: ['/tmp/note.txt'] }), caller);
+  assert.equal(r.status, 201);
+  const sess = r.body.session;
+  assert.deepEqual(m.starts[0].args, { sid: sess.id, socket: path.join(m.home, 'run', 'appstream', sess.id + '.sock'), path: '/System/Applications/TextEdit.app', files: ['/tmp/note.txt'] });
+  assert.equal(m.starts[0].caller, caller);
+  assert.equal(sess.host, 'shared-desktop');
+  assert.equal(sess.appPid, 4242);
+  assert.equal(sess.compositor, 'screencapturekit');
+  assert.equal(sess.state, 'parked');
+
+  const srv = await wsHost(m.as);
+  const url = `ws://127.0.0.1:${srv.address().port}/api/local/appstream/sessions/${sess.id}/stream`;
+  const v = viewer(url);
+  await until(() => v.frames.length >= 3);
+  const hello = v.text.find((x) => x.type === 'hello');
+  assert.deepEqual(hello.encoder, { name: 'h264_videotoolbox', hw: true, path: 'sck-lowlatency' });
+  assert.equal(hello.width, 1600); // the window's size, not the viewer's
+  assert.equal(hello.input, true);
+  const run = m.runners[0];
+  const start = run.ops.find((o) => o.op === 'start-stream');
+  assert.equal(start.candidates[0].desc, null);
+  assert.equal(start.maxWidth, 3840);
+
+  v.send({ type: 'in', seq: 4, e: [{ k: 'pm', x: 10, y: 20 }, { k: 'kc', c: 'KeyA', d: 1 }, { k: 'kc', c: 'KeyA', d: 0 }, { k: 'kc', c: 'PrintScreen', d: 1 }] });
+  await until(() => run.ops.some((o) => o.op === 'input'));
+  assert.deepEqual(run.ops.find((o) => o.op === 'input'), { op: 'input', seq: 4, e: [{ k: 'pm', x: 10, y: 20 }, { k: 'kc', c: 'KeyA', code: 0, d: 1 }, { k: 'kc', c: 'KeyA', code: 0, d: 0 }] });
+  assert.equal(m.inputs.length, 1);
+  // Resize moves a real window: only through the input gate.
+  v.send({ type: 'resize', width: 1200, height: 800 });
+  await until(() => run.ops.some((o) => o.op === 'resize'));
+  assert.equal(m.inputs.length, 2);
+  // An agent holds control's lease (or the screen is locked): the batch is refused with a status, never forwarded.
+  m.control.input = 'busy';
+  v.send({ type: 'in', seq: 5, e: [{ k: 'pm', x: 1, y: 1 }] });
+  v.send({ type: 'clipboard', text: 'secret' });
+  await until(() => v.text.some((x) => x.type === 'status' && x.status === 'busy-lease'));
+  await sleep(30);
+  assert.equal(run.ops.filter((o) => o.op === 'input').length, 1);
+  assert.ok(!run.ops.some((o) => o.op === 'clipboard-set'));
+  assert.equal(v.text.filter((x) => x.type === 'status' && x.status === 'busy-lease').length, 1);
+  m.control.input = null;
+  v.send({ type: 'in', seq: 6, e: [{ k: 'tx', s: 'őű' }] });
+  await until(() => run.ops.filter((o) => o.op === 'input').length === 2);
+
+  // RIGS Control lost Screen Recording mid-stream: the viewer ends with the grant fix.
+  run.event({ ev: 'error', code: 'needs-permission', message: 'RIGS Control needs Screen Recording to stream TextEdit' });
+  await until(() => v.close);
+  assert.deepEqual(v.close, { code: 4412, reason: 'needs-permission' });
+  assert.equal(v.text.at(-1).fix.permission, 'screenCapture');
+  await until(() => m.ended.length === 1); // the controller left: control audits the end of its input run
+
+  // Screen control switched off (no event, e.g. config): the 500 ms re-check ends the viewer as control-off.
+  const v2 = viewer(url);
+  await until(() => v2.frames.length >= 1);
+  const t = Date.now();
+  m.control.access = { code: 'off', message: 'off' };
+  await until(() => v2.close, 2000);
+  assert.ok(Date.now() - t < 1200);
+  assert.deepEqual(v2.close, { code: 4403, reason: 'control-off' });
+  // ... and new viewers are refused at once.
+  const v3 = viewer(url);
+  await until(() => v3.close);
+  assert.deepEqual(v3.close, { code: 4403, reason: 'control-off' });
+
+  // DELETE asks RIGS Control to stop the session; the daemon never signals the app's pid itself.
+  const kill = process.kill;
+  const killed = [];
+  process.kill = (pid, sig) => { killed.push([pid, sig]); return true; };
+  try {
+    const del = await m.as.api('sessions/' + sess.id, 'DELETE', null, null, caller);
+    assert.equal(del.state, 'ended');
+  } finally { process.kill = kill; }
+  assert.ok(run.ops.some((o) => o.op === 'stop' && o.force === false));
+  assert.deepEqual(killed, []);
 });

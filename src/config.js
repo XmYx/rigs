@@ -165,7 +165,7 @@ export function defaults() {
     // settings patch. backend: 'auto' or a forced one (mutter, portal, …).
     control: {
       enabled: true, input: true, backend: 'auto', allowFrom: [], leaseIdleSec: 60,
-      maxActionsPerMin: 120, maxShotsPerMin: 30, maxStreamFramesPerMin: 600, announce: 'lease', killHotkey: 'default', auditPreview: 64,
+      maxActionsPerMin: 120, maxShotsPerMin: 30, maxStreamFramesPerMin: 600, maxStreamInputPerMin: 12000, announce: 'lease', killHotkey: 'default', auditPreview: 64,
     },
     // App streaming (docs/app-streaming.md, src/app-stream.js): isolated app sessions streamed to JARVIS viewers. Its own
     // switch, like control: switched on only by appstream/enable from a confirmed human surface, never the settings patch.

@@ -130,7 +130,7 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     generation++; cached = null;
     for (const reject of active) reject(new ControlError('off', message));
   }
-  const shots = new Map(), rates = { shots: [], actions: [], frames: [] };
+  const shots = new Map(), rates = { shots: [], actions: [], frames: [], input: [] };
   const settings = () => getConfig().control || {};
   const saveState = () => {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -308,8 +308,59 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
    * audited when it starts and ends (noteStream).
    */
   const frame = (options = {}, caller) => capture('frame', { format: 'jpeg', ...options }, caller, false, { lease: false, auditOk: false, bucket: 'frames', max: settings().maxStreamFramesPerMin ?? 600 });
-  /** Cheap synchronous access check for a running stream: null while allowed, else { code, message }. */
-  const accessFor = (caller = {}) => accessCheck(settings(), state.killed, callerInfo(caller));
+  /** Cheap synchronous access check for a running stream (act: also the input switch): null while allowed, else { code, message }. */
+  const accessFor = (caller = {}, act = false) => accessCheck(settings(), state.killed, callerInfo(caller), act);
+  /**
+   * The macOS app-stream host (src/app-stream.js, docs/app-streaming.md §3.6, §6): a helper op (`appStream` starts a
+   * session in RIGS Control) behind the whole gate a capture has — switch, kill, allowFrom, lock, helper running, Screen
+   * Recording — without the lease (looking only, like stream frames). Refusals are ControlErrors with a fix.
+   */
+  const appStream = (op, args = {}, caller) => perform('appstream', { op, ...(args.sid ? { session: args.sid } : {}), ...(args.path ? { app: path.basename(args.path) } : {}) }, caller, false, 'capture',
+    (_, request) => request(op, args), { lease: false });
+  /**
+   * May this person's input batch go to a streamed app on the real desktop now? The same rules as pointer/key —
+   * switches, allowFrom, the lease (taken or renewed for the person, so an agent cannot act meanwhile), unlocked
+   * screen, helper and Accessibility — but cheap enough for 60 batches/s: the lock is re-probed at most every 250 ms,
+   * the budget is its own (`maxStreamInputPerMin`, 12000) and only the first batch of a run and refusals are audited.
+   * The batch itself goes over the session socket. → null when allowed, else { code, message, fix? }.
+   */
+  // Per holder: the run's state ('on', or the code it was last refused with), so each change is audited once.
+  const inputRuns = new Map();
+  let lockSeen = { at: 0, locked: null };
+  async function inputStream(caller = {}) {
+    caller = callerInfo(caller);
+    const key = holderKey(caller);
+    const refuse = (e) => {
+      const r = { code: e.code || 'error', message: e.message, ...(e.fix ? { fix: e.fix } : {}) };
+      if (inputRuns.get(key) !== r.code) { audit('stream-input', { phase: 'refused' }, caller, false, now(), r); inputRuns.set(key, r.code); }
+      return r;
+    };
+    try {
+      await gate(caller, true, true);
+      const info = await inspect();
+      if (!info.backend?.input) {
+        const fix = info.permissions?.input?.fix;
+        throw new ControlError(platform === 'mac' && fix ? 'needs-permission' : 'unsupported', platform === 'mac' && fix ? `RIGS Control is not running on ${getConfig().name}, so input is not possible` : 'No input backend is available for this desktop', fix);
+      }
+      if (info.permissions?.input?.ok === false) throw new ControlError('needs-permission', permissionMessage('input', 'input', info.permissions.input, { platform, node: getConfig().name }), info.permissions.input.fix);
+      if (now() - lockSeen.at >= 250) lockSeen = { at: now(), locked: (await adapter.request('locked')).locked };
+      if (lockSeen.locked !== false) throw new ControlError('locked', lockSeen.locked ? 'The screen is locked' : 'Cannot verify that the screen is unlocked');
+      const bucket = rates.input;
+      while (bucket.length && now() - bucket[0] >= 60000) bucket.shift();
+      if (bucket.length >= (settings().maxStreamInputPerMin ?? 12000)) throw new ControlError('rate', 'Stream input rate limit reached');
+      bucket.push(now());
+    } catch (e) { return refuse(e); }
+    touchLease(caller);
+    lease.actions++;
+    if (inputRuns.get(key) !== 'on') { audit('stream-input', { phase: 'start' }, caller, true, now()); inputRuns.set(key, 'on'); }
+    return null;
+  }
+  /** The person stopped sending input (viewer left, control moved): audit the end of the run. */
+  function inputStreamEnd(caller = {}) {
+    caller = callerInfo(caller);
+    if (inputRuns.get(holderKey(caller)) === 'on') audit('stream-input', { phase: 'end' }, caller, true, now());
+    inputRuns.delete(holderKey(caller));
+  }
   /** Audit and announce a live stream starting or ending (phase 'start' | 'end'); with `refused` ({ code, message }) only audit the refusal. */
   function noteStream(phase, args = {}, caller = {}, refused = null) {
     audit('stream', { phase, ...args }, callerInfo(caller), !refused, now(), refused);
@@ -436,8 +487,8 @@ export function createControl({ home = RIGS_HOME, getConfig = config, persistCon
     if (msg.event === 'exit') { revoke('Control helper stopped'); endLease('helper exit'); return; }
     if (['closed', 'hotkey', 'locked'].includes(msg.event) && settings().enabled) kill({ reason: msg.reason || `helper ${msg.event}` }, { who: 'desktop' }).catch((e) => events.emit('fault', e));
   });
-  return { status, screenshot, frame, accessFor, noteStream, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
+  return { status, screenshot, frame, accessFor, appStream, inputStream, inputStreamEnd, noteStream, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events };
 }
 
 const instance = createControl();
-export const { status, screenshot, frame, accessFor, noteStream, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;
+export const { status, screenshot, frame, accessFor, appStream, inputStream, inputStreamEnd, noteStream, listWindows, check, focusWindow, pointer, typeText, key, enable, kill, auditTail, events } = instance;

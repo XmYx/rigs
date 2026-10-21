@@ -115,7 +115,8 @@ test('windowsItems: shortcuts and AppX, never streamable, noise dropped, ids uni
 
 test('hostSupport and shapeItems: sorted by name, host limit applied, icon URL only with an icon', () => {
   assert.deepEqual(C.hostSupport('linux'), { supported: true });
-  assert.equal(C.hostSupport('darwin').supported, false);
+  // macOS hosts stream an app's windows on the shared desktop (t5); the start is gated by screen control.
+  assert.deepEqual(C.hostSupport('darwin'), { supported: true, shared: true });
   assert.match(C.hostSupport('win32').why, /Windows/);
   const raw = [
     { id: 'b', name: 'beta', streamable: true, iconPath: '/i.png' },

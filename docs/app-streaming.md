@@ -286,6 +286,8 @@ Moonlight remains the tool. Not part of t2–t7.
 
 ### 3.6 macOS host (stretch, t5) — shared-desktop app capture
 
+Built in t5; §16 records what was built, how it differs from this plan and its limits.
+
 macOS has no isolated per-app display without private APIs (`CGVirtualDisplay`). The macOS host
 therefore streams **one app's windows on the real desktop**:
 
@@ -525,6 +527,8 @@ As in `screen-stream.js` (`ENDINGS`), plus the codes for sessions:
 | 4409 | `busy` | `maxSessions` reached (on POST: HTTP 409) |
 | 4410 | `ended` | app exited, stopped, park expired |
 | 4412 | `needs-permission` | macOS TCC grant missing (`fix` included) |
+| 4409 / HTTP 409 | `busy-lease` | macOS host: an agent holds the screen-control lease (input refused with a status; a start is refused) |
+| 4423 / HTTP 423 | `locked` | macOS host: the Mac's screen is locked (start refused; input refused with a status) |
 | 4501 | `unsupported` | host cannot host sessions (§3.2 rule 3, Windows), with the reason |
 | 4503 | `host-restart` | the host daemon is restarting; the viewer reconnects with backoff |
 
@@ -830,7 +834,7 @@ temp icon tree.
 | Host | Ubuntu/GNOME ≥ 45 (Wayland or X11 login), mutter installed | **Required now** (t2) | Isolated sessions, NVENC/VA-API/x264, input, clipboard, resize |
 | Host | GNOME without the `mutter` package | **Works** (fallback) | `gnome-shell --headless --mode=rigs-app`; residuals in §3.2 |
 | Host | KDE / wlroots / X11-only Linux | `unsupported` | §3.2 rule 3 |
-| Host | macOS (Apple silicon/Intel, 12.3+) | **Stretch** (t5) | Shared-desktop app capture, control gate + lease, VideoToolbox |
+| Host | macOS (Apple silicon/Intel, 12.3+) | **Built** (t5, §16) | Shared-desktop app capture in RIGS Control, control gate + the person's lease, VideoToolbox (low-latency HW) |
 | Host | Windows 10/11 | **Designed, deferred** | §3.7; catalog only |
 | Host | Linux whole desktop | Phase 3, optional | View-only, control gate |
 | Viewer | Chrome/Edge (desktop, Android) | ✓ | WebCodecs in a secure context, else MSE |
@@ -992,3 +996,100 @@ yet offered as a button (t3/t4 UI).
 | magix-system → macbookpro | FilmCraft | Chrome | | | | | | | |
 | magix-system → iphone172 | FilmCraft | iOS Safari | | | | | | | |
 | magix-system → macbookpro | latency-pattern | Chrome | | | | | | | |
+
+## 16. t5 — macOS host as built (2026-10-21)
+
+**What runs where.** The daemon (`src/app-stream.js`, `platform === 'darwin'`) keeps the same session registry, hub,
+flow control, audit and REST/WS API as on Linux. There is no per-session runner process: **RIGS Control.app**
+(`scripts/control/macos/RigsControl.swift`, helper version 2), which already holds Screen Recording and Accessibility,
+serves each session. Its control-socket op `appStream {sid, socket, path, files}` launches the `.app` (or attaches to
+it when it is already running), opens `RIGS_HOME/run/appstream/<sid>.sock` (0600, only that path is accepted) and
+returns `{pid, launched, name, bundleId}`. From then on the daemon talks to the session over that socket with **the
+Linux runner's protocol unchanged** (§7: `start-stream`, `stop-stream`, `keyframe`, `bitrate`, `skip`, `input`,
+`resize`, `clipboard-set`, `release-all`, `stop` / `ready`, `stream`, `meta`, `stats`, `clipboard`, `app-exit`,
+`error`). Sessions live in the LaunchAgent, so a daemon restart reattaches them (`reconcile()` now also runs on
+macOS); with no daemon connected for 10 minutes a session ends itself (the app keeps running). `appStreams` lists the
+helper's sessions.
+
+**Capture → encode.** The target window is the app's front ordinary window (CGWindowList, layer 0), followed every
+250 ms (move: new `sourceRect`; resize: new output size, a new encoder, `meta` and an IDR; another display: the
+stream restarts there; all windows closed or minimized: `error no-window`, and the stream resumes when one appears).
+`SCContentFilter(display:including:[the app]:exceptingWindows:[])` + `sourceRect` = the window ∩ its display, so the
+app's own menus and sheets over the window are in the picture and other apps' windows are not. NV12 (`420v`, BT.709),
+`minimumFrameInterval` = 1/fps, queue depth 5, cursor shown. Output size = the window in pixels (points × backing
+scale), fitted into `maxWidth × maxHeight` (config, and the first viewer's decoder limits). **The viewer's size does
+not resize the window at start**; only an explicit `resize` from the controller does (below).
+VideoToolbox: `EnableLowLatencyRateControl` + `RequireHardwareAcceleratedVideoEncoder` first (the encoder is
+`com.apple.videotoolbox.videoencoder.h264.rtvc`), then low-latency without the requirement, then the default encoder.
+The low-latency encoder does not answer `UsingHardwareAcceleratedVideoEncoder` (-12900), so `hw` comes from the
+specification it was created with. `RealTime`, no frame reordering, ConstrainedHigh (High as fallback), no automatic
+keyframes, `ForceKeyFrame` on request, `AverageBitRate` + `DataRateLimits` (1.5× per second), changed live by
+`bitrate`. Output is converted to Annex-B with SPS/PPS before every IDR and framed with the §5.3 header (`captureUs`
+from the sample's host-clock PTS = the daemon's `hrtime` clock; `encodeUs` up to the encoder output; `inputSeq`).
+Frames are numbered as they leave the encoder, so a frame the rate control dropped leaves no `seq` gap. SCK sends
+nothing while the window is idle, so a keyframe request re-encodes the last image as an IDR (flag `repeat`) after
+120 ms. `skip` drops raw frames before the encoder. JPEG viewers get `VTCreateCGImageFromCVPixelBuffer` → JPEG q70 at
+≤ 15 fps (kind 3). hello/stats report `encoder: {name:'h264_videotoolbox', hw, path:'sck-lowlatency'}`.
+
+**Gate (§6, macOS column).** Every check of the Linux host (the `appStream` switch, its kill, `allowFrom`, input only
+for the human controller) **plus screen control**, because this is the real desktop:
+- *Start*: `control.appStream()` runs control's whole capture gate (enabled, not killed, `allowFrom`, unlocked, helper
+  running, Screen Recording) before the helper op, without taking the lease. Refusals: `control-off` (403, "Screen
+  control is off on this Mac…"), `needs-permission` (412 with control's `fix`), `locked` (423), `unsupported` (501;
+  also when the running RIGS Control is version 1, with the `rigs control helper install` fix). The helper itself
+  refuses again without Screen Recording, before it launches or attaches to anything.
+- *View*: `control.accessFor(caller)` on join and every 500 ms; `kill`/`change` events end viewers at once (4403
+  `killed`). A control kill also unloads RIGS Control (as before), which ends its sessions; the apps keep running.
+- *Input, clipboard paste, resize*: per batch `control.inputStream(caller)` (new): the switches and `allowFrom`, the
+  screen lease taken/renewed **for the person** (an agent holding it → `busy-lease`; an agent's pointer/key calls get
+  `busy` while the person drives), helper + Accessibility, lock re-probed at most every 250 ms, own budget
+  `control.maxStreamInputPerMin` (12000), audited in `control.jsonl` as `stream-input` start/end/refused (not per
+  batch). Batches run in order per viewer. A refusal is a `status` message to the viewer, shown once per streak.
+
+**Input semantics on the Mac.** Keys (`kc`, mapped with the pure `CODE_TO_MAC` table, Carbon `kVK_*` ANSI positions;
+the Mac's own layout decides the characters) and text (`tx`, as Unicode key events, so ő/ű need no clipboard) are
+posted **to the app's process only** (`CGEvent.postToPid`). The pointer cannot be: `pm`/`pb`/`pw` are posted at the
+global position mapped from the captured rect (HID tap), drags and double clicks included. Before a button press the
+app and its window are brought to the front (AX raise + activate, 60 ms). `ra`, a viewer leaving, `stop-stream`, a
+daemon disconnect, the ⌃⌥⌘⎋ hotkey and SIGTERM release every held key and button. Touch passthrough (`tc`) has no
+macOS equivalent and is ignored (the viewer's pointer emulation works). `resize` sets the window's AX size so the
+stream reaches the requested pixels (clamped to the display).
+
+**Limits (macOS genuinely does not isolate these; stated, not worked around).**
+1. *Pointer isolation*: remote pointer input moves Sir's real cursor and clicks whatever is at that spot on the real
+   desktop. Raising the window first makes that the app in nearly every case; a window that floats above it (an
+   always-on-top panel, a notification) can still take the click. Sir's own mouse and the remote one share one cursor.
+   Keyboard input is isolated to the app (postToPid); apps that read only HID-level keys (some games) may ignore it.
+2. *Shared screen*: the app is on Sir's desktop, visible locally; resizing from the viewer resizes the real window;
+   streaming does not work while the screen is locked (start 423, input refused).
+3. *Clipboard*: the viewer's paste sets the Mac's real pasteboard (through the input gate). The Mac → viewer direction
+   is sent only for copies made while the streamed app is frontmost, so the viewer never gets what Sir copies elsewhere.
+4. *Stop*: an app the session launched is asked to quit like ⌘Q (it may save or ask) and given 10 s (`force=1`: force
+   quit, 3 s); it is **never killed** after the wait, because on the real desktop that would lose Sir's work. An app
+   that was already running when the session attached keeps running. `app-exit` is noticed within 250 ms.
+5. *Size and rate*: a full Retina window (3200×2000) encodes in ~15 ms per frame, so it does not reach 60 fps; 1080p
+   is ~7 ms. Below ~8 Mbit/s the low-latency rate control drops frames of fully changing content at that size.
+6. *TCC*: Screen Recording and Accessibility belong to RIGS Control. **This change rebuilds RIGS Control (new source
+   hash) on every Mac when it rolls out; an ad-hoc build's grants are pinned to its cdhash, so Sir has to grant RIGS
+   Control again** (JARVIS → Access & control → Grant, as after any helper change).
+7. Needs macOS 12.3+ (ScreenCaptureKit); older Macs report `host.why`.
+
+**Verified on macbookpro (2026-10-21; scratch daemon `macbookpro-t5`, port 4795, `RIGS_HOME=~/rigs-scratch-t5/rigs`,
+the dev worktree's code; the dev helper "RIGS Control (dev)", bundle id `dev.rigs.control.9720511b`, has no grants).**
+
+| Check | Result |
+| --- | --- |
+| Helper builds with the Mac's toolchain (Swift 5.6, macOS 12.3 SDK) | `rigs control helper install` → built, version 2, no warnings |
+| VideoToolbox path (`node scripts/appstream/mac-encode-check.js`: test pattern → the session's encoder, Annex-B and §5.3 header, no capture) | `h264_videotoolbox`, hw true, low-latency; 1280×720: 90/90 decodable (ffprobe `h264 High level 31`), encode p50 4.8 / p95 7.9 ms; 1920×1080: 90/90, `High level 40`, p50 7.1 / p95 8.9 ms; 3200×2000 at 8 Mbit/s: 90/90, `High level 51`, p50 15.4 ms; IDRs exactly where requested |
+| Start from magix-system (`curl` over the tailnet) with screen control **off** | HTTP 403 `{code:'control-off', error:'Screen control is off on this Mac, so its apps cannot be streamed. A person can switch it on in JARVIS → Access & control.'}` |
+| Start from magix-system with control on, RIGS Control without Screen Recording | HTTP 412 `needs-permission` + control's `fix` (System Settings URL, "switch on RIGS Control (dev)…") |
+| `appStream` op sent straight to the helper without the grant | `needs-permission` before any launch or attach (TextEdit, already open, untouched) |
+| Tests | `test/app-stream.test.js` (pure Mac parts; a Mac host with a fake RIGS Control: control-off / needs-permission / old helper starts, VideoToolbox hello at the window's size, Mac key codes, input/resize/paste through `inputStream`, `busy-lease` refusal, a mid-stream TCC loss → 4412 with fix, control off → 4403 within 500 ms, DELETE never signals the app), `test/control.test.js` (`inputStream`, `appStream`) |
+
+**Not verified live: capture of a real app window, input into it, and a viewer on another machine.** The real
+macbookpro has screen control **off and killed** (by Sir from the JARVIS panel, 2026-10-20), and the design forbids
+working around it; a scratch helper needs a person to grant it Screen Recording + Accessibility. To finish the live
+check: grant "RIGS Control (dev)" (`~/rigs-scratch-t5/rigs/bin/RIGS Control.app`) both rights, then
+`POST http://macbookpro:4795/api/local/appstream/sessions {app:'com.apple.TextEdit'}` and open the stream from another
+machine — or, after the rollout, switch control on for macbookpro, re-grant RIGS Control, and open TextEdit from
+Applications in JARVIS on magix-system.

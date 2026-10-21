@@ -198,7 +198,9 @@ export function windowsItems(rows = []) {
 /** The host's limit for this OS (until the stream host reports its own): why apps here cannot be opened, or null. */
 export function hostSupport(platform = process.platform) {
   if (platform === 'linux') return { supported: true };
-  if (platform === 'darwin') return { supported: false, why: 'macOS hosting is not available yet' };
+  // macOS streams the app's windows on the shared desktop (docs/app-streaming.md §3.6): starting one needs screen
+  // control, and the start says so precisely when it is off.
+  if (platform === 'darwin') return { supported: true, shared: true };
   return { supported: false, why: 'Windows app hosting is not available yet' };
 }
 

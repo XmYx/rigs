@@ -11,6 +11,12 @@
  * (status 'killed', close 4403) and parks the sessions. Refusals use screen-stream's error shape: a text
  * {type:'error', status, code, message, fix?} and a 44xx/45xx close; over HTTP {error, code, status}.
  *
+ * macOS (§3.6, §16): no isolated display exists there, so a session streams one app's windows on the real desktop. RIGS
+ * Control.app (scripts/control/macos/RigsControl.swift) holds Screen Recording + Accessibility; its `appStream` op
+ * (behind control's whole gate: control.appStream) launches or attaches to the app and serves the session on the same
+ * socket protocol as the Linux runner (ScreenCaptureKit → VideoToolbox H.264). Being the real desktop, every viewer and
+ * every input batch also needs screen control (control.accessFor, control.inputStream with the person's lease).
+ *
  * The pure parts (settings, size policy, compositor/encoder choice, pipelines, wire header, gate, flow control, input
  * validation, lifecycle) are exported for test/app-stream.test.js.
  */
@@ -85,7 +91,13 @@ export function sizeFor({ want = {}, caps = {}, prefs = streamSettings(), phone 
  * → { name: 'mutter' | 'gnome-shell', fallback: bool } or { name: null, why }.
  */
 export function compositorFor(facts = {}, pref = 'auto') {
-  if (facts.platform && facts.platform !== 'linux') return { name: null, why: facts.platform === 'darwin' ? 'macOS hosting is not available yet' : 'Windows hosting is designed but not built yet' };
+  if (facts.platform === 'darwin') {
+    // ScreenCaptureKit's SCStream is macOS 12.3 (Darwin 21.4); the app's windows are captured on the shared desktop.
+    const [maj, min] = String(facts.darwin || '').split('.').map(Number);
+    if (!(maj > 21 || (maj === 21 && min >= 4))) return { name: null, why: 'streaming a Mac app needs macOS 12.3 or newer (ScreenCaptureKit)' };
+    return { name: 'screencapturekit', fallback: false, shared: true };
+  }
+  if (facts.platform && facts.platform !== 'linux') return { name: null, why: 'Windows hosting is designed but not built yet' };
   const shell = Number(facts.gnomeShell) >= 45;
   if (facts.mutter && pref !== 'gnome-shell') return { name: 'mutter', fallback: false };
   if (shell && pref !== 'mutter') return { name: 'gnome-shell', fallback: true, hint: 'Install mutter for lighter, fully isolated sessions' };
@@ -98,6 +110,8 @@ export function compositorFor(facts = {}, pref = 'auto') {
  * Each entry is { name, hw, path }. A forced choice that is missing falls through to the automatic order.
  */
 export function pickEncoder(facts = {}, pref = 'auto') {
+  // macOS: VideoToolbox in RIGS Control (the helper reports hw and the low-latency path in its stream event).
+  if (facts.platform === 'darwin') return [{ name: 'h264_videotoolbox', hw: true, path: 'sck' }];
   const g = facts.gst || {};
   const nv = g.nvh264enc && facts.nvidia ? [
     ...(g.glupload ? [{ name: 'nvh264enc', hw: true, path: 'dmabuf-gl' }] : []),
@@ -197,6 +211,8 @@ export const ENDINGS = Object.freeze({
   busy: { close: 4409, http: 409 },
   ended: { close: 4410, http: 410 },
   'needs-permission': { close: 4412, http: 412 },
+  locked: { close: 4423, http: 423 },
+  'busy-lease': { close: 4409, http: 409 },
   unsupported: { close: 4501, http: 501 },
   'host-restart': { close: 4503, http: 503 },
 });
@@ -229,6 +245,18 @@ export function mayEnable({ enabled, input } = {}, caller = {}, confirm, nodeNam
 
 /** Does a screen-control event end live app-stream viewers? A kill always; a change only when it switches control off. */
 export const controlEventEnds = (type, ev = {}) => type === 'kill' || (type === 'change' && ev.enabled === false);
+
+/**
+ * A screen-control refusal (control.accessFor / inputStream result, or a ControlError from control.appStream) as an
+ * app-stream refusal { status, code, message, fix? } (§5.5): the macOS host runs on the real desktop, so these apply.
+ */
+export function controlRefusal(r) {
+  if (!r) return null;
+  const status = { off: 'control-off', 'input-off': 'input-off', 'not-allowed': 'not-allowed', 'needs-permission': 'needs-permission', unsupported: 'unsupported',
+    'no-session': 'unsupported', locked: 'locked', busy: 'busy-lease', rate: 'throttled', timeout: 'host-restart' }[r.code] || 'unsupported';
+  const message = r.code === 'off' ? 'Screen control is off on this Mac, so its apps cannot be streamed. A person can switch it on in JARVIS → Access & control.' : String(r.message || '').replace(/^appstream needs/, 'Streaming an app needs');
+  return { status, code: r.code === 'off' ? 'control-off' : r.code, message, ...(r.fix ? { fix: r.fix } : {}) };
+}
 
 // ---------------------------------------------------------------- pure: flow control (§5.6)
 
@@ -278,7 +306,7 @@ const CODE_RE = /^[A-Za-z0-9]{1,24}$/;
  * Validate one input batch {seq, e:[…]} against the stream size. → { seq, e, dropped }: invalid events are dropped
  * (and counted), more than 64 events are cut, and consecutive pointer moves are coalesced to the latest.
  */
-export function validateInput(batch = {}, { width = 1e5, height = 1e5, maxEvents = 64 } = {}) {
+export function validateInput(batch = {}, { width = 1e5, height = 1e5, maxEvents = 64, keymap = CODE_TO_EVDEV } = {}) {
   const seq = Number.isInteger(batch.seq) && batch.seq >= 0 ? batch.seq >>> 0 : 0;
   const list = Array.isArray(batch.e) ? batch.e : [];
   const out = [];
@@ -289,7 +317,7 @@ export function validateInput(batch = {}, { width = 1e5, height = 1e5, maxEvents
     if (k === 'pm' && num(ev.x) && num(ev.y)) ok = { k, x: Math.min(width - 1, Math.max(0, ev.x)), y: Math.min(height - 1, Math.max(0, ev.y)) };
     else if (k === 'pb' && BUTTONS.includes(ev.b) && (ev.d === 0 || ev.d === 1)) ok = { k, b: ev.b, d: ev.d };
     else if (k === 'pw' && num(ev.dx) && num(ev.dy) && ['px', 'line'].includes(ev.mode || 'px')) ok = { k, dx: Math.max(-10000, Math.min(10000, ev.dx)), dy: Math.max(-10000, Math.min(10000, ev.dy)), mode: ev.mode || 'px' };
-    else if (k === 'kc' && typeof ev.c === 'string' && CODE_RE.test(ev.c) && CODE_TO_EVDEV[ev.c] && (ev.d === 0 || ev.d === 1)) ok = { k, c: ev.c, code: CODE_TO_EVDEV[ev.c], d: ev.d };
+    else if (k === 'kc' && typeof ev.c === 'string' && CODE_RE.test(ev.c) && Object.hasOwn(keymap, ev.c) && (ev.d === 0 || ev.d === 1)) ok = { k, c: ev.c, code: keymap[ev.c], d: ev.d };
     else if (k === 'tx' && typeof ev.s === 'string' && ev.s.length && [...ev.s].length <= 4000 && !ev.s.includes('\0')) ok = { k, s: ev.s };
     else if (k === 'tc' && Number.isInteger(ev.id) && ev.id >= 0 && ev.id < 10 && ['down', 'move', 'up'].includes(ev.ph) && num(ev.x) && num(ev.y)) ok = { k, id: ev.id, ph: ev.ph, x: Math.min(width - 1, Math.max(0, ev.x)), y: Math.min(height - 1, Math.max(0, ev.y)) };
     else if (k === 'ra') ok = { k };
@@ -313,6 +341,25 @@ export const CODE_TO_EVDEV = Object.freeze({
   AltRight: 100, Home: 102, ArrowUp: 103, PageUp: 104, ArrowLeft: 105, ArrowRight: 106, End: 107, ArrowDown: 108,
   PageDown: 109, Insert: 110, Delete: 111, NumpadEqual: 117, Pause: 119, IntlYen: 124, MetaLeft: 125, MetaRight: 126,
   ContextMenu: 127,
+});
+
+/**
+ * KeyboardEvent.code → macOS virtual key code (Carbon kVK_*, the ANSI positions), for the macOS host: the helper posts
+ * these to the app's process, and the Mac's own layout decides the characters, as at its keyboard. Keys a Mac keyboard
+ * does not have (Insert, PrintScreen, ScrollLock, Pause, NumLock) are left out, so they are dropped and counted.
+ */
+export const CODE_TO_MAC = Object.freeze({
+  KeyA: 0, KeyS: 1, KeyD: 2, KeyF: 3, KeyH: 4, KeyG: 5, KeyZ: 6, KeyX: 7, KeyC: 8, KeyV: 9, IntlBackslash: 10, KeyB: 11, KeyQ: 12,
+  KeyW: 13, KeyE: 14, KeyR: 15, KeyY: 16, KeyT: 17, Digit1: 18, Digit2: 19, Digit3: 20, Digit4: 21, Digit6: 22, Digit5: 23,
+  Equal: 24, Digit9: 25, Digit7: 26, Minus: 27, Digit8: 28, Digit0: 29, BracketRight: 30, KeyO: 31, KeyU: 32, BracketLeft: 33,
+  KeyI: 34, KeyP: 35, Enter: 36, KeyL: 37, KeyJ: 38, Quote: 39, KeyK: 40, Semicolon: 41, Backslash: 42, Comma: 43, Slash: 44,
+  KeyN: 45, KeyM: 46, Period: 47, Tab: 48, Space: 49, Backquote: 50, Backspace: 51, Escape: 53, MetaRight: 54, MetaLeft: 55,
+  ShiftLeft: 56, CapsLock: 57, AltLeft: 58, ControlLeft: 59, ShiftRight: 60, AltRight: 61, ControlRight: 62, Fn: 63, F17: 64,
+  NumpadDecimal: 65, NumpadMultiply: 67, NumpadAdd: 69, NumpadDivide: 75, NumpadEnter: 76, NumpadSubtract: 78, F18: 79, F19: 80,
+  NumpadEqual: 81, Numpad0: 82, Numpad1: 83, Numpad2: 84, Numpad3: 85, Numpad4: 86, Numpad5: 87, Numpad6: 88, Numpad7: 89,
+  F20: 90, Numpad8: 91, Numpad9: 92, IntlYen: 93, IntlRo: 94, F5: 96, F6: 97, F7: 98, F3: 99, F8: 100, F9: 101, F11: 103,
+  F13: 105, F16: 106, F14: 107, F10: 109, ContextMenu: 110, F12: 111, F15: 113, Help: 114, Home: 115, PageUp: 116, Delete: 117,
+  F4: 118, End: 119, F2: 120, PageDown: 121, F1: 122, ArrowLeft: 123, ArrowRight: 124, ArrowDown: 125, ArrowUp: 126,
 });
 
 // ---------------------------------------------------------------- pure: lifecycle (§3.4)
@@ -348,6 +395,7 @@ const callerInfo = (c = {}) => Object.fromEntries(['via', 'who', 'from', 'agent'
 
 /** What this machine can host: compositor, encoders, python/gi, systemd-run. Probed with the injected `run`/`which`. */
 export async function probeHost({ run, which, platform = process.platform }) {
+  if (platform === 'darwin') return { platform, darwin: os.release(), missing: [] };
   if (platform !== 'linux') return { platform, compositor: compositorFor({ platform }), encoders: [], missing: [] };
   const has = async (el) => (await run('gst-inspect-1.0', ['--exists', el], { timeout: 8000 }).catch(() => ({ code: 1 }))).code === 0;
   const els = ['nvh264enc', 'vah264lpenc', 'vah264enc', 'x264enc', 'openh264enc', 'cudaupload', 'glupload', 'pipewiresrc', 'h264parse', 'appsink'];
@@ -372,7 +420,7 @@ export function hostSummary(facts, prefs = streamSettings()) {
   const comp = compositorFor(facts, prefs.compositor);
   const encoders = pickEncoder(facts, prefs.encoder);
   const why = comp.why || (facts.missing?.length ? `missing packages: ${facts.missing.join(', ')}` : !encoders.length ? 'no H.264 encoder (install gstreamer1.0-plugins-ugly for x264)' : null);
-  return { supported: !why, ...(why ? { why } : {}), compositor: comp.name, ...(comp.hint ? { hint: comp.hint } : {}), encoders, ...(facts.missing?.length ? { missing: facts.missing } : {}) };
+  return { supported: !why, ...(why ? { why } : {}), compositor: comp.name, ...(comp.hint ? { hint: comp.hint } : {}), ...(comp.shared ? { shared: true, note: 'streams the app\'s windows on the shared desktop: needs screen control and RIGS Control\'s Screen Recording + Accessibility' } : {}), encoders, ...(facts.missing?.length ? { missing: facts.missing } : {}) };
 }
 
 // ---------------------------------------------------------------- the host manager
@@ -384,7 +432,9 @@ export function hostSummary(facts, prefs = streamSettings()) {
  * an attention source.
  */
 export function createAppStream(deps) {
-  const { getConfig, persistConfig, home, appDir, nodeName = () => os.hostname(), control, findApp = async () => null, run, which, spawn, log = () => {}, now = Date.now, systemd = !process.env.RIGS_NO_SYSTEMD, probe = probeHost } = deps;
+  const { getConfig, persistConfig, home, appDir, nodeName = () => os.hostname(), control, findApp = async () => null, run, which, spawn, log = () => {}, now = Date.now, systemd = !process.env.RIGS_NO_SYSTEMD, probe = probeHost, platform = process.platform } = deps;
+  // macOS: sessions are the app's windows on the real desktop, served by RIGS Control (§3.6).
+  const mac = platform === 'darwin';
   const events = new EventEmitter();
   const dirs = { sessions: path.join(home, 'appstream', 'sessions'), run: path.join(home, 'run', 'appstream'), logs: path.join(home, 'logs', 'appstream') };
   const stateFile = path.join(home, 'appstream-state.json'), auditFile = path.join(home, 'logs', 'appstream.jsonl');
@@ -409,11 +459,18 @@ export function createAppStream(deps) {
     } catch (e) { log('appstream audit:', e.message); }
     events.emit('audit', line);
   }
-  const gate = (caller, act = false, role) => gateDecision({ settings: prefs(), killed: state.killed || null, caller, act, role });
+  // On the Mac the screen-control switch applies too (synchronous part; input adds the lease and lock: inputGate).
+  const gate = (caller, act = false, role) => gateDecision({ settings: prefs(), killed: state.killed || null, caller, act, role })
+    || (mac ? controlRefusal(control?.accessFor ? control.accessFor(caller, act) : { code: 'off', message: 'screen control is not available' }) : null);
+  async function inputGate(caller, role) {
+    const r = gate(caller, true, role);
+    if (r || !mac) return r;
+    return controlRefusal(await control.inputStream(caller));
+  }
 
   async function hostFacts(force = false) {
     if (!force && facts && now() - factsAt < 10 * 60 * 1000) return facts;
-    facts = await probe({ run, which });
+    facts = await probe({ run, which, platform });
     factsAt = now();
     return facts;
   }
@@ -432,6 +489,7 @@ export function createAppStream(deps) {
       id: s.id, node: nodeName(), app: s.app, mode: 'app', state: s.state, createdAt: s.createdAt, lastViewerAt: s.lastViewerAt || null,
       ...(s.state === 'parked' ? { parkUntil: new Date(s.parkUntil).toISOString() } : {}),
       width: s.width, height: s.height, fps: s.fps, bitrateKbps: s.bitrate, encoder: s.encoder || null, compositor: s.compositor || null, display: s.display || null,
+      ...(s.host === 'mac' ? { host: 'shared-desktop', appPid: s.appPid ?? null, attached: s.attached === true } : {}),
       viewers: [...s.viewers.values()].map((v) => ({ id: v.id, from: v.caller.from || '', who: v.caller.who || '', role: v.role, since: new Date(v.since).toISOString() })),
       ...(s.exit ? { exit: s.exit } : {}), ...(s.error ? { error: s.error } : {}), unit: s.unit,
     };
@@ -520,6 +578,7 @@ export function createAppStream(deps) {
     } else if (m.ev === 'error') {
       log(`appstream ${s.id}: ${m.code}: ${m.message}`);
       if (s.state === 'starting') { s.error = { code: m.code, message: m.message }; transition(s, 'error'); for (const w of s.waiters.splice(0)) w(); }
+      else if (m.code === 'needs-permission') { s.streaming = false; return endViewers(s, { status: 'needs-permission', message: m.message, fix: macFix(m.message) }); }
       else for (const v of s.viewers.values()) v.message({ type: 'status', status: m.code || 'error', message: m.message });
       if (m.code === 'stream-failed') { s.streaming = false; endViewers(s, { status: 'unsupported', message: `No encoder could start: ${m.message}` }); }
     } else if (m.ev === 'log') log(`appstream ${s.id}: ${String(m.line).slice(0, 500)}`);
@@ -569,13 +628,19 @@ export function createAppStream(deps) {
     });
   }
 
+  /** The fix that goes with a TCC refusal from RIGS Control (the same grant flow as control, docs/full-access.md §4). */
+  const macFix = (message = '') => ({ kind: 'grant', permission: /Accessibility/.test(message) ? 'accessibility' : 'screenCapture',
+    text: `In System Settings → Privacy & Security → ${/Accessibility/.test(message) ? 'Accessibility' : 'Screen Recording'}, switch on RIGS Control (JARVIS → Access & control → Grant opens it).` });
+
   function startStream(s) {
     const p = prefs();
-    const encoders = s.transport === 'jpeg' ? [{ name: 'jpegenc', hw: false, path: 'sw' }] : pickEncoder(facts || {}, p.encoder);
+    const encoders = s.transport === 'jpeg' ? [{ name: mac ? 'jpeg' : 'jpegenc', hw: false, path: mac ? 'sck' : 'sw' }] : pickEncoder(facts || { platform }, p.encoder);
     if (!encoders.length) return endViewers(s, { status: 'unsupported', message: 'No H.264 encoder on this host (install gstreamer1.0-plugins-ugly)' });
     s.streaming ||= 'pending';
-    const candidates = encoders.map((enc) => ({ encoder: enc, desc: pipelineFor(enc, { width: s.width, height: s.height, fps: s.fps, kbps: s.bitrate, transport: s.transport }) }));
-    send(s, { op: 'start-stream', width: s.width, height: s.height, fps: s.fps, bitrateKbps: s.bitrate, transport: s.transport || 'h264', kind: s.transport === 'jpeg' ? KIND.jpeg : KIND.h264, candidates });
+    const candidates = encoders.map((enc) => ({ encoder: enc, desc: mac ? null : pipelineFor(enc, { width: s.width, height: s.height, fps: s.fps, kbps: s.bitrate, transport: s.transport }) }));
+    const caps = [...s.viewers.values()][0]?.caps || {};
+    send(s, { op: 'start-stream', width: s.width, height: s.height, fps: s.fps, bitrateKbps: s.bitrate, transport: s.transport || 'h264', kind: s.transport === 'jpeg' ? KIND.jpeg : KIND.h264, candidates,
+      maxWidth: Math.min(p.maxWidth, clampNum(caps.maxWidth, 640, 16384, p.maxWidth)), maxHeight: Math.min(p.maxHeight, clampNum(caps.maxHeight, 360, 16384, p.maxHeight)) });
   }
 
   function endViewers(s, refusal, reason) {
@@ -620,6 +685,7 @@ export function createAppStream(deps) {
     audit('leave', { session: s.id, viewer: v.id, frames: v.sent, skipped: v.skipped, dropped: v.dropped }, v.caller);
     if (v.role === 'controller') {
       send(s, { op: 'release-all' });
+      if (mac) control?.inputStreamEnd?.(v.caller);
       // Control passes to the longest-attached human viewer.
       const next = [...s.viewers.values()].find((x) => x.caller.human !== false && !x.caller.agent);
       if (next) { next.role = 'controller'; next.message({ type: 'role', role: 'controller' }); }
@@ -668,33 +734,49 @@ export function createAppStream(deps) {
     ws.on('error', (e) => { log('appstream viewer:', e.message); bye(); });
   }
 
+  /** Run `fn` once this viewer may act (input gate), keeping the viewer's actions in order; a refusal is shown once. */
+  function withInput(s, v, fn) {
+    v.inputChain = (v.inputChain || Promise.resolve()).then(async () => {
+      const refused = await inputGate(v.caller, v.role);
+      if (refused) {
+        if (!v.inputRefused) { v.inputRefused = true; audit('refused', { session: s.id, phase: 'input' }, v.caller, false, refused); v.message({ type: 'status', status: refused.status, code: refused.code, message: refused.message, ...(refused.fix ? { fix: refused.fix } : {}) }); }
+        return;
+      }
+      v.inputRefused = false;
+      if (s.viewers.has(v.id)) fn();
+    }).catch((e) => log('appstream input:', e.message));
+    return v.inputChain;
+  }
+
   function onViewer(s, v, m) {
     switch (m.type) {
       case 'ack': if (Number.isInteger(m.seq)) v.st = { ...v.st, lastAck: Math.max(v.st.lastAck ?? -1, m.seq) }; return;
       case 'keyframe': return keyframe(s);
       case 'ping': return v.message({ type: 'pong', t0: m.t0, serverUs: Number(monoUs()) });
       case 'in': {
-        const refused = gate(v.caller, true, v.role);
-        if (refused) { if (!v.inputRefused) { v.inputRefused = true; audit('refused', { session: s.id, phase: 'input' }, v.caller, false, refused); v.message({ type: 'status', status: refused.status, code: refused.code, message: refused.message }); } return; }
-        v.inputRefused = false;
         const t = now();
         v.batches = v.batches.filter((x) => t - x < 1000);
         if (v.batches.length >= 240) { v.dropped++; return; }
         v.batches.push(t);
-        const b = validateInput(m, { width: s.width, height: s.height });
+        const b = validateInput(m, { width: s.width, height: s.height, keymap: mac ? CODE_TO_MAC : CODE_TO_EVDEV });
         v.dropped += b.dropped;
-        if (b.e.length) send(s, { op: 'input', seq: b.seq, e: b.e });
-        return;
+        // In order, each batch after its gate (on the Mac that awaits control's lease and lock check).
+        return withInput(s, v, () => { if (b.e.length) send(s, { op: 'input', seq: b.seq, e: b.e }); });
       }
       case 'clipboard': {
         if (!prefs().clipboard || v.role !== 'controller' || gate(v.caller, true, v.role) || typeof m.text !== 'string' || m.text.length > 1024 * 1024) return;
-        audit('clipboard', { session: s.id, direction: 'to-app', bytes: Buffer.byteLength(m.text) }, v.caller);
-        return send(s, { op: 'clipboard-set', text: m.text });
+        // On the Mac this is the real pasteboard: it takes the same input gate (lease, lock) as a keystroke.
+        return withInput(s, v, () => {
+          audit('clipboard', { session: s.id, direction: 'to-app', bytes: Buffer.byteLength(m.text) }, v.caller);
+          send(s, { op: 'clipboard-set', text: m.text });
+        });
       }
       case 'resize': {
         if (v.role !== 'controller' || !(m.width > 0 && m.height > 0)) return;
         const size = sizeFor({ want: { fit: 'fixed', width: m.width, height: m.height }, caps: v.caps, prefs: prefs() });
         if (size.width === s.width && size.height === s.height) return;
+        // On the Mac a resize moves a real window (AX): only with input allowed; the stream follows the window's new size.
+        if (mac) return withInput(s, v, () => send(s, { op: 'resize', ...size }));
         Object.assign(s, size);
         return send(s, { op: 'resize', ...size });
       }
@@ -726,7 +808,8 @@ export function createAppStream(deps) {
     return env;
   }
 
-  async function launchRunner(s) {
+  async function launchRunner(s, caller) {
+    if (mac) return launchMac(s, caller);
     fs.mkdirSync(dirs.run, { recursive: true, mode: 0o700 });
     fs.mkdirSync(dirs.logs, { recursive: true, mode: 0o700 });
     fs.rmSync(sockOf(s.id), { force: true });
@@ -748,6 +831,29 @@ export function createAppStream(deps) {
     }
   }
 
+  /**
+   * macOS: RIGS Control launches (or attaches to) the app and listens on the session socket. control.appStream runs
+   * the whole control gate first, so control off, a kill, a locked screen or a missing grant refuse the start here.
+   */
+  async function launchMac(s, caller) {
+    fs.mkdirSync(dirs.run, { recursive: true, mode: 0o700 });
+    if (!control?.appStream) throw new AppStreamError('unsupported', 'screen control is not available on this Mac');
+    const st = await control.status?.().catch(() => null);
+    const v = Number(st?.backend?.helper?.version);
+    if (st?.backend?.helper?.running && v < 2) throw new AppStreamError('unsupported', `RIGS Control on ${nodeName()} is version ${v}, which cannot stream apps yet`, { kind: 'command', text: 'Run `rigs control helper install` on this Mac to rebuild RIGS Control (then grant Screen Recording and Accessibility again).' });
+    s.unit = null;
+    persist(s);
+    let r;
+    try { r = await control.appStream('appStream', { sid: s.id, socket: sockOf(s.id), ...s.launch.helper }, caller); }
+    catch (e) {
+      const refusal = controlRefusal(e);
+      throw new AppStreamError(ENDINGS[refusal.status] ? refusal.status : 'unsupported', refusal.message, refusal.fix);
+    }
+    Object.assign(s, { appPid: r?.pid ?? null, attached: r?.launched === false, compositor: 'screencapturekit' });
+    if (r?.name) s.app = { ...s.app, name: r.name };
+    persist(s);
+  }
+
   async function startSession(body = {}, caller = {}) {
     const refused = gate(caller);
     if (refused) { audit('refused', { phase: 'start', app: body.app || null }, caller, false, refused); throw new AppStreamError(refused.status, refused.message); }
@@ -762,9 +868,20 @@ export function createAppStream(deps) {
       const item = await findApp(body.app);
       if (!item) throw new AppStreamError('no-session', `No app ${body.app} on ${nodeName()}`);
       if (item.streamable === false) throw new AppStreamError('unsupported', item.why || `${item.name} cannot be streamed`);
-      if (item.launch?.kind !== 'desktop') throw new AppStreamError('unsupported', 'only .desktop apps can be streamed on Linux');
       app = { id: item.id, name: item.name, icon: `appstream/catalog/${encodeURIComponent(item.id)}/icon` };
-      launch = { kind: 'desktop', file: item.launch.file, argv: item.launch.argv, dbus: !!item.launch.dbus, files };
+      if (mac) {
+        if (item.launch?.kind !== 'bundle') throw new AppStreamError('unsupported', 'only .app bundles can be streamed on macOS');
+        launch = { kind: 'bundle', helper: { path: item.launch.path, files } };
+      } else {
+        if (item.launch?.kind !== 'desktop') throw new AppStreamError('unsupported', 'only .desktop apps can be streamed on Linux');
+        launch = { kind: 'desktop', file: item.launch.file, argv: item.launch.argv, dbus: !!item.launch.dbus, files };
+      }
+    } else if (mac && Array.isArray(body.command)) {
+      // macOS: a command is an .app bundle path plus files to open with it (the app runs on the real desktop).
+      const [bundle, ...rest] = body.command;
+      if (typeof bundle !== 'string' || !/\.app\/?$/.test(bundle) || !path.isAbsolute(bundle)) throw new AppStreamError('unsupported', 'on macOS, command must be ["/path/To.app", ...files]; or give app (a catalog id)');
+      app = { id: 'command', name: path.basename(bundle.replace(/\/$/, ''), '.app'), icon: null };
+      launch = { kind: 'bundle', helper: { path: bundle.replace(/\/$/, ''), files: rest.filter((x) => typeof x === 'string' && path.isAbsolute(x)).slice(0, 50) } };
     } else if (Array.isArray(body.command) && body.command.length && body.command.every((x) => typeof x === 'string' && x.length < 4096) && body.command.length <= 100) {
       app = { id: 'command', name: path.basename(body.command[0]), icon: null };
       launch = { kind: 'argv', argv: body.command };
@@ -778,7 +895,7 @@ export function createAppStream(deps) {
     const size = sizeFor({ want: { fit: 'fixed', ...(body.size || {}) }, prefs: p });
     const comp = compositorFor(f, p.compositor);
     const s = {
-      id: newSessionId(), app, state: 'starting', createdAt: new Date(now()).toISOString(), launch, compositor: comp.name, ...size,
+      id: newSessionId(), app, state: 'starting', createdAt: new Date(now()).toISOString(), launch, compositor: comp.name, ...size, ...(mac ? { host: 'mac' } : {}),
       fps: p.fps, bitrate: p.bitrate.balanced, target: p.bitrate.balanced, viewers: new Map(), waiters: [], home,
       shareDir: path.join(appDir, 'scripts', 'appstream'), parkUntil: null,
     };
@@ -786,7 +903,7 @@ export function createAppStream(deps) {
     audit('start', { session: s.id, app: app.id, launch: launch.kind, compositor: comp.name }, caller);
     try {
       const ready = new Promise((resolve) => { s.waiters.push(resolve); setTimeout(resolve, 30000).unref?.(); });
-      await launchRunner(s);
+      await launchRunner(s, caller);
       await connect(s);
       await ready;
     } catch (e) {
@@ -819,7 +936,8 @@ export function createAppStream(deps) {
 
   async function cleanup(s) {
     if (s.unit) await run('systemctl', ['--user', 'stop', s.unit], { timeout: 20000 }).catch(() => {});
-    else if (s.pid) { try { process.kill(s.pid, 'SIGTERM'); } catch {} }
+    // A Mac session's pid is the app's on the real desktop: RIGS Control ends the session, nothing here kills the app.
+    else if (s.pid && s.host !== 'mac') { try { process.kill(s.pid, 'SIGTERM'); } catch {} }
     s.conn?.destroy();
     for (const f of [stateOf(s.id), sockOf(s.id)]) fs.rmSync(f, { force: true });
     if (s.state !== 'ended' && s.state !== 'failed') s.state = 'ended';
@@ -858,7 +976,8 @@ export function createAppStream(deps) {
   }
   const onControl = (type) => (ev) => {
     if (!controlEventEnds(type, ev)) return;
-    const n = endAllViewers({ status: 'killed', code: 'killed', message: type === 'kill' ? 'Screen control was stopped on this machine; the app keeps running, parked' : 'Screen control was switched off; the app keeps running, parked' }, `control-${type}`);
+    const keeps = mac ? 'the app keeps running on the Mac' : 'the app keeps running, parked';
+    const n = endAllViewers({ status: 'killed', code: 'killed', message: type === 'kill' ? `Screen control was stopped on this machine; ${keeps}` : `Screen control was switched off; ${keeps}` }, `control-${type}`);
     if (n) log(`appstream: control ${type} ended ${n} viewer(s)`);
   };
   control?.events?.on('kill', onControl('kill'));

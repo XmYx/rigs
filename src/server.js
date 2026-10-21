@@ -1711,13 +1711,13 @@ export async function startServer() {
   // Screen access/control: routes for this machine, plus the announcements that make every action visible.
   const controlApi = createControlApi({ control, access, nodeName: () => config().name });
   const streamHub = createStreamHub({ control, nodeName: () => config().name, log });
-  // App streaming host: sessions survive daemon restarts (systemd --user units); reattach them now.
+  // App streaming host: sessions survive daemon restarts (systemd --user units on Linux, RIGS Control on macOS); reattach them now.
   const appStream = createAppStream({
     getConfig: config, persistConfig: saveConfig, home: RIGS_HOME, appDir: APP_DIR, nodeName: () => config().name, control,
     findApp: (id) => appCatalog.findItem(id), run, which, spawn: spawnCmd, log,
   });
   attention.addSource(appStream.attentionItems);
-  if (process.platform === 'linux') appStream.reconcile().catch((e) => log('appstream reconcile:', e.message));
+  if (['linux', 'darwin'].includes(process.platform)) appStream.reconcile().catch((e) => log('appstream reconcile:', e.message));
   attention.addSource(wireControlEvents({
     events: control.events, nodeName: () => config().name, settings: () => config().control || {}, broadcast, log,
     notifyAll: (b) => broadcastNotify(b), osNotify,
