@@ -46,6 +46,7 @@ import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyQuickPatch, localSettings, quickSettings } from './quick.js';
 import { applyCompactPatch } from './compact.js';
+import * as settingsApi from './settings-api.js';
 import * as responder from './responder.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
@@ -702,6 +703,15 @@ export async function startServer() {
       return r;
     }
     if (sub === 'config' && method === 'GET') return publicConfig();
+    // Unified settings (src/settings-api.js, docs/settings.md): every setting of the schema, read and patched in one place.
+    if (sub === 'settings' && method === 'GET') return settingsApi.readSettings({ node: config().name });
+    if (sub === 'settings' && method === 'POST') {
+      return settingsApi.patchSettings(await body(), {
+        node: config().name, discovery, comfy, linear, drive,
+        warm: (local) => responder.warm(local, { soul: chat.soul() }),
+        emit: (what, v) => { if (what === 'starnet') starnet.events.emit('config', v); },
+      });
+    }
     if (sub === 'config' && method === 'POST') {
       const b = await body();
       patchConfig(b);
@@ -1029,10 +1039,8 @@ export async function startServer() {
       const cfg = config();
       cfg.quick = next;
       saveConfig(cfg);
-      if (b.local !== undefined) {
-        markGlobalChanged(); // config.quick is a mesh-global setting: the main-brain machine must see the switch
-        if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
-      }
+      markGlobalChanged(); // config.quick is a mesh-global setting (rigs quick on|off, the tray toggle too): the main-brain machine must see it
+      if (b.local !== undefined && next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
       return { ...next, local: localSettings(next.local) };
     }
     // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files
@@ -1478,7 +1486,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'SettingsError' ? { errors: e.errors, applied: e.applied } : {}), ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }

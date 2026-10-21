@@ -560,6 +560,56 @@ const commands = {
     try { await createControl().kill({ reason }, caller); } catch (e) { console.error(`kill: ${e.message}`); process.exit(1); }
     console.log('OS control is off on this machine (daemon not running; kill recorded, it stays off at next start).');
   },
+  async settings() {
+    // rigs settings [get [id] | set <id> <value>] [--node <machine>] [--json] — the unified settings API (docs/settings.md).
+    const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    const args = [...argv];
+    const take = (flag) => { const i = args.indexOf(flag); if (i < 0) return ''; const v = args[i + 1] || ''; args.splice(i, 2); return v; };
+    const node = take('--node');
+    const asJson = args.includes('--json'); if (asJson) args.splice(args.indexOf('--json'), 1);
+    const [sub = 'get', id, ...rest] = args;
+    const base = node ? `/api/nodes/${encodeURIComponent(node)}/settings` : '/api/local/settings';
+    const { SECRET_MASK, formatSecret, itemById, validateValue } = await import('../ui/src/settings-model.js');
+    const call = (opts) => daemonFetch(base, opts).catch((e) => ({ error: e.message }));
+    const show = (e) => (e.secret ? formatSecret(e.secret) : typeof e.value === 'string' ? e.value : JSON.stringify(e.value)) + (e.overridden ? `  (overridden by ${e.env})` : '');
+    if (sub === 'get') {
+      const r = await call();
+      if (r.error || !r.categories) fail(r.error);
+      const all = r.categories.flatMap((c) => c.items.map((e) => ({ ...e, category: c.id })));
+      if (id) {
+        const e = all.find((x) => x.id === id);
+        if (!e) fail(`unknown setting ${id} (rigs settings get lists them all)`);
+        console.log(asJson ? JSON.stringify(e) : show(e));
+      } else if (asJson) console.log(JSON.stringify(r, null, 2));
+      else {
+        let cat = '';
+        for (const e of all) { if (e.category !== cat) { cat = e.category; console.log(`\n${cat}`); } console.log(`  ${e.id.padEnd(40)} ${show(e)}${e.readOnly ? '  [read-only]' : ''}${e.scope === 'global' ? '  [mesh]' : ''}`); }
+      }
+      return;
+    }
+    if (sub !== 'set' || !id) fail('usage: rigs settings [get [id]] | rigs settings set <id> <value> [--node <machine>] [--json]');
+    const it = itemById(id);
+    if (!it) fail(`unknown setting ${id}`);
+    let value;
+    if (it.control === 'secret-status') {
+      if (rest.length) fail('a secret is never passed as an argument: rigs settings set <id>  (paste it when asked, or pipe it in) — or  rigs settings set <id> --clear');
+      value = process.argv.includes('--clear') ? null : await readSecret(`${it.label || id}: `);
+      if (value === '' ) fail('no value given — nothing changed');
+      if (value === SECRET_MASK) fail('that is the mask, not a value');
+    } else {
+      const raw = rest.join(' ');
+      if (it.control === 'switch') value = /^(on|true|1|yes)$/i.test(raw) ? true : /^(off|false|0|no)$/i.test(raw) ? false : raw;
+      else if (it.control === 'number' || it.control === 'slider') value = raw === '' ? raw : Number(raw);
+      else if (it.control === 'list') value = raw.split(',').map((x) => x.trim()).filter(Boolean);
+      else value = raw;
+      const v = validateValue(it, value);
+      if (!v.ok) fail(`${id}: ${v.error}`);
+    }
+    const r = await call({ method: 'POST', body: JSON.stringify({ values: { [id]: value } }), timeout: 60000 });
+    if (r.error || !r.applied) fail(r.error);
+    const e = r.categories.flatMap((c) => c.items).find((x) => x.id === id);
+    console.log(asJson ? JSON.stringify(r) : `${id} = ${e ? show(e) : 'ok'}${r.restart?.length ? '  (applies after a restart)' : ''}`);
+  },
   async help() {
     console.log(`rigs — RIGS OS mesh node  (changes: rigs dev <topic> → commit → rigs propose; never main)
 
@@ -570,6 +620,7 @@ const commands = {
   rigs status          list machines in the mesh
   rigs open            open the JARVIS UI
   rigs ssh <machine>   ssh to another node
+  rigs settings [get [id]|set <id> <value>] [--node m] [--json]  read or change any RIGS OS / JARVIS setting (the System Preferences schema; secrets show as set/len only)
   rigs shared [status|sync|path]  the shared folder synced across the mesh (apps/, files/, reports/): state per peer, sync now, or its path
   rigs update [--all]  pull the latest code from GitHub (this node or every node) and restart
   rigs notify <text>   speak a message on every open JARVIS UI

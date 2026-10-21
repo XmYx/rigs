@@ -366,3 +366,16 @@ test('Google Drive connector routes answer on the real daemon without exposing t
   s = await post(`${D}/disconnect`, {});
   assert.deepEqual([s.ok, s.removed, s.connected], [true, false, false]);
 });
+
+test('quick fast path on/off (rigs quick, the tray) is stamped mesh-global; the settings API never returns a secret', async () => {
+  const rev0 = (await get('/api/local/global')).rev;
+  await post('/api/local/quick', { enabled: false });
+  const g = await get('/api/local/global');
+  assert.ok(g.rev > rev0, 'POST /api/local/quick without `local` still stamps globalRev');
+  assert.equal(g.settings.quick.enabled, false);
+  await post('/api/local/quick', { enabled: true });
+  const s = await get('/api/local/settings');
+  const mesh = s.categories.flatMap((c) => c.items).find((e) => e.id === 'meshToken');
+  assert.deepEqual([mesh.secret.set, mesh.secret.len], [true, 'test-token'.length]);
+  assert.ok(!JSON.stringify(s).includes('test-token'));
+});

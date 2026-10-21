@@ -183,7 +183,7 @@ test('Window menu: the Ask JARVIS group is there and every menu entry is a regis
 test('Panels is its own top-level menu with the docking / scaling switches, the panel toggles and Reset layout; the ☰ corner button is gone', () => {
   const src = fs.readFileSync(new URL('../ui/src/jarvis-commands.js', import.meta.url), 'utf8');
   const tops = [...src.matchAll(/\{ id: '(\w+)', label: '([^']+)', items: \(\) => \[/g)].map((m) => m[1]);
-  assert.deepEqual(tops, ['file', 'edit', 'panels', 'window', 'tools', 'experimental', 'help']);
+  assert.deepEqual(tops, ['jarvis', 'file', 'edit', 'panels', 'window', 'tools', 'experimental', 'help']);
   const panels = src.slice(src.indexOf("{ id: 'panels', label: 'Panels'"), src.indexOf("{ id: 'window', label: 'Window'"));
   for (const c of ['panels.docking', 'panels.scaling', 'window.hideOthers', 'window.showAll', 'window.reset']) assert.ok(panels.includes(`cmd: '${c}'`), c);
   assert.match(panels, /panels\.map\(perItem\)/, 'every panel has a show / hide entry');

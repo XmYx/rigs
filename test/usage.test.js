@@ -343,7 +343,8 @@ test('API: a chat turn is recorded; /api/local/usage and /api/usage aggregate it
   await new Promise((r) => ollama.listen(0, '127.0.0.1', r));
   const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const HOME = path.join(TMP, 'node');
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  // a port the OS just handed out: a random one can collide with another test's or the box's own listeners
+  const PORT = await new Promise((res, rej) => { const s = http.createServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
   const BASE = `http://127.0.0.1:${PORT}`;
   writeJsonl(path.join(HOME, 'usage', '2026-10.jsonl'), [U.makeRecord({ id: 'seed-1', tsStart: Date.now() - 3600000, tsEnd: Date.now() - 3000000, node: 'test-node', kind: 'task', provider: 'claude', model: 'claude-opus-5-5', projectId: 'p1', projectName: 'Alpha', taskId: 't1', taskTitle: 'Build', inputTokens: 100, outputTokens: 1000, status: 'done', outcome: 'built' })]);
   const env = { ...process.env, RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token', RIGS_OLLAMA_URL: `http://127.0.0.1:${ollama.address().port}` };
