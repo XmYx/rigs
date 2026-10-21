@@ -200,7 +200,7 @@ try {
 
   // preview pane
   await row(page, 'notes.md').click();
-  await page.waitForSelector(`${W} .fd-preview .pv-text`);
+  await page.waitForSelector(`${W} .fd-preview .pv-md`); // Markdown is rendered now (finder-preview.js)
   check('the preview pane shows the selected file', (await page.$eval(`${W} .fd-preview .pv-title`, (e) => e.textContent)).includes('notes.md'));
   await page.keyboard.press(`${mod}+Shift+KeyP`);
   check('⌘⇧P hides the preview', await page.$eval(`${W} .finder`, (e) => e.classList.contains('no-preview')));

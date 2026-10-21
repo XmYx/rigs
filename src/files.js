@@ -11,6 +11,8 @@ const MIME = {
   '.ts': 'text/plain', '.html': 'text/html', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
   '.mov': 'video/quicktime', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.zip': 'application/zip',
+  '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg',
+  '.m4v': 'video/mp4', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
 };
 
 /**
@@ -75,13 +77,47 @@ export function mimeOf(p) {
   return MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
 }
 
-export async function sendFile(p, res, { download = false } = {}) {
+/**
+ * Parse an HTTP Range header against a file of `size` bytes → { start, end } (inclusive), null when there is no usable
+ * header (serve it whole), or 'unsatisfiable' (416). Only a single range is served; a multi-range header falls back to
+ * the whole file, which RFC 9110 allows.
+ */
+export function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header || '').trim());
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  let start;
+  let end;
+  if (m[1] === '') { // suffix: the last N bytes
+    const n = Number(m[2]);
+    if (n === 0) return 'unsatisfiable';
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1);
+    if (start >= size || start > end) return 'unsatisfiable';
+  }
+  return { start, end };
+}
+
+export async function sendFile(p, res, { download = false, range } = {}) {
   const file = resolvePath(p);
   const st = await fsp.stat(file);
   if (st.isDirectory()) throw Object.assign(new Error('is a directory'), { status: 400 });
-  const headers = { 'content-type': mimeOf(file), 'content-length': st.size };
+  const headers = { 'content-type': mimeOf(file), 'accept-ranges': 'bytes', 'last-modified': st.mtime.toUTCString() };
   if (download) headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`;
-  res.writeHead(200, headers);
+  const r = parseRange(range, st.size);
+  if (r === 'unsatisfiable') {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${st.size}`, 'content-length': 0 });
+    res.end();
+    return;
+  }
+  if (r) {
+    res.writeHead(206, { ...headers, 'content-range': `bytes ${r.start}-${r.end}/${st.size}`, 'content-length': r.end - r.start + 1 });
+    await pipeline(fs.createReadStream(file, { start: r.start, end: r.end }), res);
+    return;
+  }
+  res.writeHead(200, { ...headers, 'content-length': st.size });
   await pipeline(fs.createReadStream(file), res);
 }
 

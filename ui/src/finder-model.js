@@ -287,6 +287,7 @@ export function shortcutFor(e, { typing = false } = {}) {
     return '';
   }
   if (typing) return '';
+  if ((key === ' ' || code === 'Space') && !shift) return 'quicklook';
   if (key === 'Enter' && !shift) return 'rename';
   if (key === 'F2') return 'rename';
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return 'arrow';

@@ -3,6 +3,7 @@ import { openWindow } from './wm.js';
 import { isPhone } from './mobile.js';
 import { nativeCtx, tagCtx } from './ctx-tag.js';
 import { openFileTool } from './file-tools.js';
+import { quickLook, renderPreview } from './finder-preview.js';
 import { TOOLS, isZip, toolFor, toolsFor } from './file-tools-model.js';
 import {
   SORT_LABELS, actionTargets, activeFavourite, arrowSelect, badName, baseName, canBack, canForward, clickSelect,
@@ -23,7 +24,7 @@ const storage = () => { try { return localStorage; } catch { return null; } };
 // entry = the one selected item (null with none or several), entries = every selected item. `actions` is the window's
 // own: open, openWith, download, zip, unzip, rename, trash, terminalHere, copyTo, machines(). The default renderer
 // below keeps the browser's earlier preview; setPreviewRenderer swaps in another for every file browser.
-let previewRenderer = null;
+let previewRenderer = renderPreview; // finder-preview.js: image, code, Markdown, PDF, audio and video viewers
 export function setPreviewRenderer(fn) { previewRenderer = typeof fn === 'function' ? fn : null; }
 
 /**
@@ -368,14 +369,28 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     runPreviewCleanup();
     preview.replaceChildren();
     const entry = items.length === 1 ? items[0] : null;
-    const ctx = {
-      entry, entries: items, nodeId: rig.id, nodeName: rig.name, sep: cur.sep, folder: cur.path,
-      rawUrl: (p) => `${node(rig.id)}/files/raw?path=${encodeURIComponent(p)}`,
-      actions: { ...fileActions, open: (e) => openEntry(e), machines: () => machines().filter((m) => m.id !== rig.id) },
-    };
+    const ctx = previewCtx(entry, items);
     const r = (previewRenderer || defaultPreview)(preview, ctx);
     previewCleanup = typeof r === 'function' ? r : null;
     if (!items.length) setSheet(false);
+  }
+
+  /** What a preview renderer (and Quick Look) is handed: see the notes at setPreviewRenderer. */
+  function previewCtx(entry, items) {
+    return {
+      entry, entries: items, siblings: shown, nodeId: rig.id, nodeName: rig.name, sep: cur.sep, folder: cur.path,
+      rawUrl: (p) => `${node(rig.id)}/files/raw?path=${encodeURIComponent(p)}`,
+      defaultPreview: (el) => defaultPreview(el, { entry, entries: items }),
+      header: (el, e) => fileHeader(el, e),
+      actions: {
+        ...fileActions, open: (e) => openEntry(e), machines: () => machines().filter((m) => m.id !== rig.id),
+        select: (p) => { if (cur.entries.some((x) => x.path === p) && !(sel.picked.length > 1 && sel.picked.includes(p))) { setSel({ picked: [p], anchor: p, focus: p }); scrollToSel(); } },
+      },
+    };
+  }
+  function quickLookSelected() {
+    const items = selectedEntries();
+    if (items.length) quickLook(previewCtx(items[0], items));
   }
 
   /** The window's preview API (t3's renderer, or anything else, draws through setPreviewRenderer). */
@@ -422,8 +437,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
         onTerminalHere ? h('button', { class: 'btn', onclick: () => onTerminalHere(e.path) }, '⌨ Terminal here') : null)));
   }
 
-  function showFilePreview(el, e) {
+  function fileHeader(el, e) {
     el.append(h('div', { class: 'pad' }, h('div', { class: 'pv-title' }, iconOf(e), ' ', e.name), info(e), actionsFor(e)));
+  }
+  function showFilePreview(el, e) {
+    fileHeader(el, e);
     const raw = `${node(rig.id)}/files/raw?path=${encodeURIComponent(e.path)}`;
     let alive = true;
     if (IMG.test(e.name)) el.append(h('img', { class: 'pv-img', src: raw, alt: e.name }));
@@ -467,6 +485,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     prefs = savePrefs(storage(), { ...prefs, previewOpen: !prefs.previewOpen });
     applyLayout();
     renderChrome();
+    if (!prefs.previewOpen) pausePreviewMedia();
     if (isPhone()) setSheet(prefs.previewOpen && sel.picked.length > 0);
   }
   function toggleHidden() {
@@ -475,7 +494,13 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     reload();
   }
   function setDrawer(open) { root.classList.toggle('drawer-open', !!open && isPhone()); drawerBtn.setAttribute('aria-expanded', String(!!open)); }
-  function setSheet(open) { sheet = !!open && sel.picked.length > 0; root.classList.toggle('sheet-open', sheet); }
+  /** Media in a hidden pane would play on unseen: pausing is the least surprising (the pane redraws it on the next selection). */
+  const pausePreviewMedia = () => { for (const m of preview.querySelectorAll('video,audio')) m.pause(); };
+  function setSheet(open) {
+    sheet = !!open && sel.picked.length > 0;
+    root.classList.toggle('sheet-open', sheet);
+    if (!sheet) pausePreviewMedia();
+  }
 
   /** Drag a separator to resize the sidebar or the preview; the width is remembered (and ←/→ on a focused one). */
   function resizer(el, which) {
@@ -526,7 +551,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     if (t === search && e.key === 'ArrowDown') { e.preventDefault(); content.focus(); if (!sel.picked.length && shown[0]) setSel({ picked: [shown[0].path], anchor: shown[0].path }); return; }
     const inFiles = content.contains(t); // Enter, arrows and letters belong to the files; on a button they press it
     const action = shortcutFor(e, { typing });
-    if (!action || ((action === 'rename' || action === 'arrow') && !inFiles)) {
+    if (!action || ((action === 'rename' || action === 'arrow' || action === 'quicklook') && !inFiles)) {
       // Type-to-select: letters jump to the first name that starts with them.
       if (inFiles && !typing && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key !== ' ') {
         typed = Date.now() - typedAt > 900 ? e.key : typed + e.key;
@@ -552,6 +577,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       case 'trash': return sel.picked.length && trashItems([...sel.picked]);
       case 'newFolder': return newFolder();
       case 'selectAll': return setSel(selectAll(shown.map((x) => x.path)));
+      case 'quicklook': return quickLookSelected();
       case 'togglePreview': return togglePreview();
       case 'toggleHidden': return toggleHidden();
       case 'find': search.focus(); search.select(); return undefined;

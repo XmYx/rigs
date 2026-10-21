@@ -716,7 +716,7 @@ export async function startServer() {
     // files
     if (sub === 'files' && method === 'GET') return files.list(q.get('path') || '~', { showHidden: q.get('hidden') === '1' || config().files.showHidden });
     if (sub === 'files/read') return files.readText(q.get('path'));
-    if (sub === 'files/raw') { if (!res) throw new HttpError(400, 'stream only'); await files.sendFile(q.get('path'), res, { download: q.get('download') === '1' }); return undefined; }
+    if (sub === 'files/raw') { if (!res) throw new HttpError(400, 'stream only'); await files.sendFile(q.get('path'), res, { download: q.get('download') === '1', range: req?.headers?.range }); return undefined; }
     if (sub === 'files/write' && method === 'PUT') return files.writeStream(q.get('path'), req);
     if (sub === 'files/text' && method === 'POST') { const b = await body(); return files.writeText(b.path, b.text ?? ''); }
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
