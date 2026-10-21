@@ -590,6 +590,8 @@ Features that are still being tried out.
 | localStorage `rigs.brainv` | One-time migration marker of rigs.brain. |
 | localStorage `rigs.hidden` | Node types hidden in the Filters legend: a view filter toggled in the legend. |
 | localStorage `rigs.graphify.view` | Which view the Graphify window shows: remembered window state. |
+| localStorage `rigs.appstream` | The app stream viewer's own choices (quality, frame rate, size, touch mode, key swap), set in its toolbar (app-stream.js): remembered window state. |
+| localStorage `rigs.appstream.debug` | Developer switch: set to 1 to log the viewer's protocol messages to the browser console. |
 | localStorage `rigs.finder` | The file browser's view (icons, list, columns), sort and sidebar/preview widths, set in the window itself (finder-model.js): remembered window state. |
 | localStorage `rigs.media` | The media player's volume, mute and speed, set with its own controls: remembered player state. |
 | localStorage `rigs.usage.range` | Time range of the Tokens & time panel: remembered panel state. |

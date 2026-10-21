@@ -502,6 +502,28 @@ test('host: slow viewer gets only keyframes until it catches up; unknown session
 
 // ---------------------------------------------------------------- macOS host (§3.6): shared desktop through RIGS Control
 
+test('host: a viewer whose acks arrive later than the budget keeps getting frames (the skip gate lifts on acks)', async () => {
+  // Regression (found in t4 with a real browser): WebCodecs acks ~130 ms late at 60 fps. The viewer goes over budget, the
+  // skip gate stops the encoder, so no frame reaches the host again; only an ack can lift the gate and ask for an IDR.
+  const h = host({ runner: { honorSkip: true } });
+  const caller = { from: 'local', human: true };
+  const { body } = await h.as.api('sessions', 'POST', null, async () => ({ command: ['glxgears'] }), caller);
+  const srv = await wsHost(h.as);
+  const v = viewer(`ws://127.0.0.1:${srv.address().port}/api/local/appstream/sessions/${body.session.id}/stream`, { ack: false });
+  v.ws.on('message', (d, bin) => { if (bin) { const seq = S.decodeHeader(d).seq; setTimeout(() => v.ws.readyState === 1 && v.send({ type: 'ack', seq }), 150); } });
+  await until(() => h.runners[0].ops.some((o) => o.op === 'skip' && o.on === true));
+  const mark = v.frames.length;
+  await sleep(1500);
+  // Without the ack path it stalls for ever (no frame after the gate closes); with it the stream keeps going.
+  assert.ok(v.frames.length - mark >= 10, `only ${v.frames.length - mark} frames after the gate closed`);
+  assert.ok(h.runners[0].ops.some((o) => o.op === 'skip' && o.on === false));
+  // The gate holds the encoder at the viewer's pace: raw frames are dropped, encoded ones never, so every frame the viewer
+  // gets either follows the previous one or is an IDR (never a P-frame whose reference it did not get).
+  assert.ok(v.frames.every((f, i) => i === 0 || f.key || f.seq === v.frames[i - 1].seq + 1));
+  v.ws.close();
+  await h.as.api('sessions/' + body.session.id, 'DELETE', new URLSearchParams('force=1'), null, caller);
+});
+
 test('macOS: compositor/encoder facts, the Mac key table, and control refusals in the app-stream shape', () => {
   assert.deepEqual(S.compositorFor({ platform: 'darwin', darwin: '25.3.0' }), { name: 'screencapturekit', fallback: false, shared: true });
   assert.equal(S.compositorFor({ platform: 'darwin', darwin: '21.4.0' }).name, 'screencapturekit'); // macOS 12.3

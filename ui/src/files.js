@@ -304,6 +304,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     el.dataset.app = a.id;
     el.addEventListener('click', (ev) => {
       if (isPhone() && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
+        if (sel.picked.length === 1 && sel.picked[0] === e.path && sheet) { openApp(a); return; } // a second tap on the previewed app opens it
         setSel({ picked: [e.path], anchor: e.path, focus: e.path });
         setSheet(true);
         return;
@@ -332,7 +333,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     if (items.length !== 1) { el.append(h('div', { class: 'muted pad fd-pv-empty' }, h('div', { class: 'fd-pv-big', 'aria-hidden': 'true' }, '🚀'), h('div', {}, `Applications on ${rig.name}`), h('div', { class: 'muted' }, appsStatus()))); return; }
     const a = items[0].app;
     const st = appOpenState(a, { host: cur.host, online: true });
-    el.append(h('div', { class: 'fd-pv-head fd-app-pv' }, appIcon(a, 'fd-pv-big'), h('div', { class: 'fd-pv-name' }, a.name), a.generic ? h('div', { class: 'muted' }, a.generic) : null),
+    el.append(...kids(h('div', { class: 'fd-pv-head fd-app-pv' }, appIcon(a, 'fd-pv-big'), h('div', { class: 'fd-pv-name' }, a.name), a.generic ? h('div', { class: 'muted' }, a.generic) : null),
       a.comment ? h('p', { class: 'muted pad' }, a.comment) : null,
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', type: 'button', disabled: !st.ok, title: st.ok ? `Open ${a.name} on ${rig.name}` : st.why, onclick: () => openApp(a) }, 'Open'),
@@ -341,7 +342,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       h('dl', { class: 'fd-info' }, h('dt', {}, 'Kind'), h('dd', {}, appKind(a)),
         a.categories?.length ? [h('dt', {}, 'Categories'), h('dd', {}, a.categories.join(', '))] : null,
         h('dt', {}, 'Path'), h('dd', {}, a.path || ''),
-        a.note ? [h('dt', {}, 'Note'), h('dd', {}, a.note)] : null));
+        a.note ? [h('dt', {}, 'Note'), h('dd', {}, a.note)] : null)));
   }
 
   function listHead() {

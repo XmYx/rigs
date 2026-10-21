@@ -476,6 +476,8 @@ export const HIDDEN = [
   { pref: 'rigs.brainv', reason: 'One-time migration marker of rigs.brain.' },
   { pref: 'rigs.hidden', reason: 'Node types hidden in the Filters legend: a view filter toggled in the legend.' },
   { pref: 'rigs.graphify.view', reason: 'Which view the Graphify window shows: remembered window state.' },
+  { pref: 'rigs.appstream', reason: 'The app stream viewer\'s own choices (quality, frame rate, size, touch mode, key swap), set in its toolbar (app-stream.js): remembered window state.' },
+  { pref: 'rigs.appstream.debug', reason: 'Developer switch: set to 1 to log the viewer\'s protocol messages to the browser console.' },
   { pref: 'rigs.finder', reason: 'The file browser\'s view (icons, list, columns), sort and sidebar/preview widths, set in the window itself (finder-model.js): remembered window state.' },
   { pref: 'rigs.media', reason: 'The media player\'s volume, mute and speed, set with its own controls: remembered player state.' },
   { pref: 'rigs.usage.range', reason: 'Time range of the Tokens & time panel: remembered panel state.' },

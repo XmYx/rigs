@@ -600,8 +600,21 @@ export function createAppStream(deps) {
       if (r.congested) congested = true;
     }
     if (congested) congestion(s);
+    updateSkip(s);
+  }
+  function updateSkip(s) {
     const allBehind = shouldSkip([...s.viewers.values()].filter((v) => v.helloSent).map((v) => ({ st: v.st, buffered: v.buffered() })), { fps: s.fps });
     if (allBehind !== !!s.skipping) { s.skipping = allBehind; send(s, { op: 'skip', on: allBehind }); }
+  }
+  /**
+   * An ack can end the congestion: lift the skip gate and, for a viewer waiting for an IDR with nothing in flight, ask for one.
+   * Frames cannot be the only trigger: while the gate drops raw frames none arrive, and a viewer whose acks took longer than
+   * the budget (~100 ms) would wait for ever.
+   */
+  function afterAck(s, v) {
+    updateSkip(s);
+    const idle = v.st.lastSent == null || (v.st.lastAck ?? -1) >= v.st.lastSent;
+    if (v.st.needsIdr && idle && v.buffered() <= MAX_BUFFERED) keyframe(s);
   }
   function keyframe(s) {
     if (now() - (s.lastIdrAt || 0) < 500) return;
@@ -750,7 +763,7 @@ export function createAppStream(deps) {
 
   function onViewer(s, v, m) {
     switch (m.type) {
-      case 'ack': if (Number.isInteger(m.seq)) v.st = { ...v.st, lastAck: Math.max(v.st.lastAck ?? -1, m.seq) }; return;
+      case 'ack': if (Number.isInteger(m.seq)) { v.st = { ...v.st, lastAck: Math.max(v.st.lastAck ?? -1, m.seq) }; afterAck(s, v); } return;
       case 'keyframe': return keyframe(s);
       case 'ping': return v.message({ type: 'pong', t0: m.t0, serverUs: Number(monoUs()) });
       case 'in': {
