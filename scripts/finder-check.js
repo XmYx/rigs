@@ -134,7 +134,7 @@ try {
   const offline = side.filter((s) => s.off);
   check('an offline rig is greyed out', offline.length >= 1, JSON.stringify(offline.map((s) => s.name)));
   const favs = await page.$$eval(`${W} .fd-side-item[data-fav]`, (els) => els.map((e) => e.textContent.trim()));
-  check('favourites: Home, Desktop, Documents, Downloads, RIGS Shared', favs.join('|').includes('Home') && favs.length === 5, favs.join(', '));
+  check('favourites: Home, Desktop, Documents, Downloads, RIGS Shared, Applications', favs.join('|').includes('Home') && favs.length === 6, favs.join(', '));
   check('Home is highlighted', await page.$eval(`${W} .fd-side-item[data-fav="home"]`, (e) => e.classList.contains('on')));
 
   // list view + sorting

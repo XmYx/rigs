@@ -17,7 +17,12 @@ export const FAVOURITES = Object.freeze([
   { id: 'documents', label: 'Documents', icon: '📄', path: '~/Documents' },
   { id: 'downloads', label: 'Downloads', icon: '⬇', path: '~/Downloads' },
   { id: 'shared', label: 'RIGS Shared', icon: '🔗', path: '@shared' },
+  { id: 'apps', label: 'Applications', icon: '🚀', path: '@apps' },
 ]);
+
+/** The virtual place that lists a machine's installed apps (GET appstream/catalog); not a folder, never sent to files?path=. */
+export const APPS_PLACE = '@apps';
+export const isAppsPlace = (p) => p === APPS_PLACE;
 
 const PLATFORM_ICON = { mac: '💻', linux: '🐧', windows: '🪟', win: '🪟', ios: '📱', android: '📱' };
 
@@ -33,6 +38,8 @@ export function sidebarModel(nodes = [], { current = '', home = '' } = {}) {
       id: n.id, name: n.name || n.id, icon: PLATFORM_ICON[n.platform] || '🖥', self: !!n.self, home: n.home || '',
       online: n.online !== false, rigs: n.rigs !== false, browsable, current: n.id === current,
       badge: n.online === false ? 'offline' : n.rigs === false ? 'no RIGS' : 'online',
+      // The Applications row under the machine: greyed out like the machine itself when it can't be asked.
+      apps: { path: APPS_PLACE, label: 'Applications', icon: '🚀', enabled: browsable },
     };
   });
   // This machine first, then browsable machines, then the rest; by name within each group.
@@ -53,6 +60,7 @@ export function favouritePath(p, home) {
 
 /** The favourite the current folder is (Finder highlights it in the sidebar), else ''. */
 export function activeFavourite(favourites, path) {
+  if (isAppsPlace(path)) return 'apps';
   return (favourites || []).find((f) => f.full && samePath(f.full, path))?.id || '';
 }
 
@@ -411,4 +419,49 @@ export function undoCalls(entry) {
     by.get(dest).push({ from: it.to, name: baseName(it.from) });
   }
   return [...by].map(([dest, paths]) => ({ dest, paths }));
+}
+
+// ------------------------------------------------------------------ Applications (the @apps place)
+
+/** The catalog's items as the browser's entries: path `app:<id>`, type 'app', the item itself under `app`. */
+export function appEntries(items = []) {
+  return (items || []).filter((a) => a && a.id).map((a) => ({ name: a.name, path: `app:${a.id}`, type: 'app', hidden: false, app: a }));
+}
+
+/** Search over name, generic name, comment and categories: every word has to match somewhere. */
+export function filterApps(entries = [], query = '') {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return entries;
+  return entries.filter((e) => {
+    const a = e.app || {};
+    const hay = [e.name, a.generic, a.comment, ...(a.categories || [])].filter(Boolean).join(' ').toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}
+
+/** Where an app comes from, for the Kind column and the preview. */
+export const APP_SOURCES = Object.freeze({ desktop: 'Application', flatpak: 'Flatpak app', snap: 'Snap app', bundle: 'macOS app', startmenu: 'Start menu shortcut', appx: 'Microsoft Store app' });
+export const appKind = (a) => APP_SOURCES[a?.source] || 'Application';
+
+/**
+ * Whether Open works for an app → { ok, why }. A machine that cannot host (the catalog's host block), an app that cannot be
+ * streamed (terminal program, Windows shortcut) or an offline machine disables it with the reason shown beside the button.
+ */
+export function appOpenState(app, { host = { supported: true }, online = true } = {}) {
+  if (!online) return { ok: false, why: 'This machine is offline' };
+  if (host && host.supported === false) return { ok: false, why: host.why || 'This machine cannot host app streaming yet' };
+  if (!app?.streamable) return { ok: false, why: app?.why || 'This app cannot be streamed' };
+  return { ok: true, why: '' };
+}
+
+/** The body of POST appstream/sessions for opening `app` (a new session with `fresh`, else reuse a running one). */
+export function appSessionRequest(app, { fresh = false, size } = {}) {
+  return { app: app.id, reuse: !fresh, ...(size && size.width > 0 && size.height > 0 ? { size: { width: Math.round(size.width), height: Math.round(size.height) } } : {}) };
+}
+
+/** Why a start failed, in words: the host's own message, with the 404 of a build without the stream host explained. */
+export function appOpenError(e, nodeName = 'this machine') {
+  const m = String(e?.message || e || '');
+  if (/unknown endpoint/i.test(m)) return `${nodeName} does not run an app streaming host yet (update RIGS there).`;
+  return m || 'Could not open the app';
 }

@@ -64,6 +64,7 @@ import * as work from './work.js';
 import * as processes from './processes.js';
 import * as workspaces from './workspaces.js';
 import * as uiOpen from './ui-open.js';
+import * as appCatalog from './app-catalog.js';
 import * as yolo from './yolo.js';
 import * as yoloKeep from './yolo-keep.js';
 
@@ -628,7 +629,7 @@ export async function startServer() {
     const t = await uiOpen.resolveTarget(args, { nodes, findWorkspace });
     if (!t.node) throw new HttpError(404, 'no machine to open it on');
     if (!t.node.self && !(t.node.online && t.node.rigs)) throw new HttpError(503, `${t.node.name} is offline`);
-    const located = await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
+    const located = t.path === uiOpen.APPS_PLACE ? { folder: uiOpen.APPS_PLACE, select: '', missing: false } : await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
     const traceId = tctx?.traceId || '';
     const event = uiOpen.uiOpenEvent({ view: args.view, node: t.node, located, requested: args.path || t.path, trace: traceId, workspace: t.workspace });
     const live = nodes.filter((n) => n.self || (n.online && n.rigs));
@@ -1350,6 +1351,20 @@ export async function startServer() {
       const b = await body();
       broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null, session: b.session?.id ? { nodeId: b.session.nodeId, nodeName: b.session.nodeName, kind: b.session.kind, id: b.session.id, title: b.session.title } : null });
       return { ok: true, delivered: uiSockets.size };
+    }
+
+    // Installed GUI apps on this machine (src/app-catalog.js, docs/app-streaming.md §7, §9). The prefix is appstream/, not apps/:
+    // /api/nodes/<n>/apps/<id>/* belongs to the App Cloud.
+    if (sub === 'appstream/catalog' && method === 'GET') return appCatalog.catalog({ refresh: q.get('refresh') === '1', node: config().name });
+    const appIcon = /^appstream\/catalog\/([^/]+)\/icon$/.exec(sub);
+    if (appIcon && method === 'GET') {
+      const r = await appCatalog.icon(decodeURIComponent(appIcon[1]), { size: q.get('size') });
+      if (!r) throw new HttpError(404, 'no icon');
+      if (!res) return { bytes: r.body.length, type: r.type };
+      if (req.headers['if-none-match'] === r.etag) { res.writeHead(304, { etag: r.etag }); res.end(); return undefined; }
+      res.writeHead(200, { 'content-type': r.type, 'content-length': r.body.length, 'cache-control': 'max-age=86400', etag: r.etag, 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'", 'x-content-type-options': 'nosniff' });
+      res.end(r.body);
+      return undefined;
     }
 
     // ui_open (src/ui-open.js): what to open for a path here, and the push to this machine's JARVIS UIs.

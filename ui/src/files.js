@@ -5,11 +5,13 @@ import { nativeCtx, tagCtx } from './ctx-tag.js';
 import { openFileTool } from './file-tools.js';
 import { mediaKind, mediaPreview } from './media-player.js';
 import { quickLook, renderPreview } from './finder-preview.js';
+import { openAppStream } from './app-stream.js';
 import { TOOLS, isZip, toolFor, toolsFor } from './file-tools-model.js';
 import {
   SORT_LABELS, actionTargets, activeFavourite, arrowSelect, badName, baseName, canBack, canForward, clickSelect,
   columnPaths, crumbs, emptyHistory, filterEntries, histGo, histPush, histReplace, iconOf, joinPath, kindOf, loadPrefs,
   nextSort, normalizePrefs, parentOf, samePath, savePrefs, selectAll, shortcutFor, sidebarModel, sortEntries, statusText, typeSelect,
+  APPS_PLACE, appEntries, appKind, appOpenError, appOpenState, appSessionRequest, filterApps, isAppsPlace,
   uniqueName, SPRING_MS, clashText, dragPayload, dropAction, dropEffect, findClashes, parseDrag, peekUndo, popUndo, pushUndo, undoCalls,
 } from './finder-model.js';
 
@@ -59,6 +61,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   const colCache = new Map(); // `${nodeId}|${path}` → entries of a column view folder above the current one
   let previewCleanup = null;
   let previewKey = '';
+  let appsHost = { supported: true }; // the host block of the last Applications catalog
 
   // ---------------------------------------------------------------- DOM
   const btn = (label, title, onclick, extra = {}) => h('button', { type: 'button', class: 'tb fd-btn', title, 'aria-label': title, onclick, ...extra }, label);
@@ -133,7 +136,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     const id = loc.nodeId || rig.id;
     const my = ++seq;
     let r;
-    try { r = await api(listUrl(id, loc.path)); } catch (e) { if (my === seq) toast(`${nameOf(id)}: ${e.message}`, 'error'); return false; }
+    try { r = isAppsPlace(loc.path) ? await loadApps(id) : await api(listUrl(id, loc.path)); } catch (e) { if (my === seq) toast(`${nameOf(id)}: ${e.message}`, 'error'); return false; }
     if (my !== seq || closed) return false;
     if (id !== rig.id) switchRig(id);
     const moved = !samePath(r.path, cur.path);
@@ -153,6 +156,13 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     if (pickPath) { scrollToSel(); setSheet(true); }
     return true;
   }
+  /** The Applications place: the machine's catalog as browser entries (never files?path=). */
+  async function loadApps(id, refresh = false) {
+    const c = await api(`${node(id)}/appstream/catalog${refresh ? '?refresh=1' : ''}`);
+    appsHost = c.host || { supported: true };
+    return { path: APPS_PLACE, entries: appEntries(c.items), parent: null, sep: '/', roots: [], apps: true, host: appsHost, os: c.os };
+  }
+  const inApps = () => isAppsPlace(cur.path);
   const reload = (opts = {}) => go({ nodeId: rig.id, path: cur.path }, { push: false, keepSel: true, ...opts });
   function goHistory(d) {
     const r = histGo(hist, d);
@@ -160,6 +170,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   }
   /** ⌘↑: the enclosing folder, with the folder we came from selected. */
   function goUp() {
+    if (inApps()) return;
     const up = cur.parent || parentOf(cur.path, cur.sep);
     if (up) go({ nodeId: rig.id, path: up }, { select: cur.path });
   }
@@ -179,7 +190,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   // ---------------------------------------------------------------- rendering
   function reshape() {
-    shown = sortEntries(filterEntries(cur.entries, query), prefs.sort);
+    shown = inApps() ? filterApps(cur.entries, query).slice().sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })) : sortEntries(filterEntries(cur.entries, query), prefs.sort);
   }
 
   function render() {
@@ -191,29 +202,35 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   }
 
   function renderChrome() {
-    const name = baseName(cur.path) || cur.path;
+    const name = inApps() ? 'Applications' : baseName(cur.path) || cur.path;
     titleEl.textContent = name;
     titleEl.title = cur.path;
     w.setTitle(`${rig.name} — ${name}`);
     backBtn.disabled = !canBack(hist);
     fwdBtn.disabled = !canForward(hist);
-    upBtn.disabled = !(cur.parent || parentOf(cur.path, cur.sep));
-    for (const [k, b] of Object.entries(viewBtns)) { b.classList.toggle('on', prefs.view === k); b.setAttribute('aria-pressed', String(prefs.view === k)); }
+    upBtn.disabled = inApps() || !(cur.parent || parentOf(cur.path, cur.sep));
+    search.placeholder = inApps() ? 'Search apps' : 'Search';
+    search.setAttribute('aria-label', inApps() ? 'Search applications' : 'Search this folder');
+    viewBtns.column.hidden = inApps(); // columns make no sense for a flat catalog
+    root.classList.toggle('apps-place', inApps());
+    for (const [k, b] of Object.entries(viewBtns)) { b.classList.toggle('on', appsView() === k); b.setAttribute('aria-pressed', String(appsView() === k)); }
     hiddenBtn.classList.toggle('on', showHidden);
     hiddenBtn.setAttribute('aria-pressed', String(showHidden));
     previewBtn.classList.toggle('on', prefs.previewOpen);
     previewBtn.setAttribute('aria-pressed', String(prefs.previewOpen));
-    pathInput.value = cur.path;
-    content.dataset.dropPath = cur.path;
-    root.dataset.view = prefs.view;
+    pathInput.value = inApps() ? APPS_PLACE : cur.path;
+    if (inApps()) delete content.dataset.dropPath; else content.dataset.dropPath = cur.path; // nothing can be dropped into the catalog
+    root.dataset.view = appsView();
   }
+  /** The view in use: the Applications place has icons and a list only. */
+  const appsView = () => (inApps() && prefs.view === 'column' ? 'icon' : prefs.view);
 
   let sideSig = '';
   function renderSidebar(force = true) {
     const nodes = rigs() || [];
     const model = sidebarModel(nodes.length ? nodes : [{ id: rig.id, name: rig.name, online: true, rigs: true }], { current: rig.id });
     const fav = activeFavourite(model.favourites, cur.path);
-    const sig = JSON.stringify([model.locations.map((l) => [l.id, l.name, l.badge, l.current]), fav, rig.id]);
+    const sig = JSON.stringify([model.locations.map((l) => [l.id, l.name, l.badge, l.current]), fav, rig.id, inApps()]);
     if (!force && sig === sideSig) return;
     sideSig = sig;
     const item = (attrs, icon, label, extra) => h('button', { type: 'button', class: 'fd-side-item', ...attrs }, h('span', { class: 'fd-si-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'fd-si-label' }, label), extra);
@@ -228,20 +245,104 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
             'aria-disabled': l.browsable ? null : 'true', 'aria-current': l.current ? 'true' : null,
             onclick: () => { if (!l.browsable) return; setDrawer(false); go({ nodeId: l.id, path: '~' }); },
           }, l.icon, l.name, h('span', { class: `fd-badge ${l.badge === 'online' ? 'up' : 'down'}`, title: l.badge, 'aria-label': l.badge }, l.badge === 'online' ? '' : l.badge));
-          return tagCtx(b, 'node', l.id, { node: (rigs() || []).find((n) => n.id === l.id) });
-        }))));
+          const machine = tagCtx(b, 'node', l.id, { node: (rigs() || []).find((n) => n.id === l.id) });
+          // Applications of that machine: a child row, greyed out when the machine can't be asked.
+          const here = l.id === rig.id && inApps();
+          const apps = item({
+            class: 'fd-side-item fd-side-child' + (here ? ' on' : '') + (l.apps.enabled ? '' : ' off'), 'data-apps-node': l.id,
+            title: l.apps.enabled ? `Applications installed on ${l.name}` : `${l.name} is ${l.badge === 'offline' ? 'offline' : 'not running RIGS'}`,
+            'aria-disabled': l.apps.enabled ? null : 'true', 'aria-current': here ? 'true' : null,
+            onclick: () => { if (!l.apps.enabled) return; setDrawer(false); go({ nodeId: l.id, path: APPS_PLACE }); },
+          }, l.apps.icon, l.apps.label);
+          return [machine, apps];
+        }).flat())));
   }
 
   function renderView() {
     const focusIn = root.contains(document.activeElement) && document.activeElement !== search && document.activeElement !== pathInput;
     content.classList.toggle('empty', !shown.length);
-    if (prefs.view === 'column') renderColumns();
+    if (inApps()) renderApps();
+    else if (prefs.view === 'column') renderColumns();
     else if (prefs.view === 'icon') content.replaceChildren(...kids(h('div', { class: 'fd-grid' }, ...shown.map((e) => itemEl(e, 'tile'))), emptyNote()));
     else content.replaceChildren(...kids(listHead(), h('div', { class: 'fd-rows' }, ...shown.map((e) => itemEl(e, 'row'))), emptyNote()));
-    status.textContent = statusText({ total: cur.entries.length, shown: shown.length, selected: sel.picked.length, filtered: !!query });
+    status.textContent = inApps() ? appsStatus() : statusText({ total: cur.entries.length, shown: shown.length, selected: sel.picked.length, filtered: !!query });
     if (focusIn && !root.contains(document.activeElement)) content.focus({ preventScroll: true });
   }
-  const emptyNote = () => (shown.length ? null : h('div', { class: 'muted pad fd-empty' }, query ? `No items match “${query}”` : 'Empty folder'));
+  const emptyNote = () => (shown.length ? null : h('div', { class: 'muted pad fd-empty' }, query ? `No items match “${query}”` : inApps() ? `No applications found on ${rig.name}` : 'Empty folder'));
+
+  // ---------------------------------------------------------------- Applications (the @apps place)
+  const appIcon = (a, cls = 'fi') => (a.icon
+    ? h('span', { class: cls + ' fd-app-icon' }, h('img', { src: `${node(rig.id)}/${a.icon}?size=64`, alt: '', loading: 'lazy', draggable: false, onerror: (ev) => ev.target.replaceWith(document.createTextNode('🚀')) }))
+    : h('span', { class: cls + ' fd-app-icon' }, '🚀'));
+  function renderApps() {
+    const note = !cur.host?.supported ? h('div', { class: 'fd-apps-note muted', role: 'note' }, `${rig.name} can't host app streaming yet: ${cur.host?.why || 'unsupported'}. The list is shown, Open is disabled.`) : null;
+    const rows = appsView() === 'list'
+      ? [h('div', { class: 'fd-head fd-apps-head', role: 'row' }, h('span', { class: 'fd-hcell c-name' }, 'Name'), h('span', { class: 'fd-hcell c-kind' }, 'Kind'), h('span', { class: 'fd-hcell c-status' }, 'Status')),
+        h('div', { class: 'fd-rows' }, ...shown.map((e) => appEl(e, 'row')))]
+      : [h('div', { class: 'fd-grid' }, ...shown.map((e) => appEl(e, 'tile')))];
+    content.replaceChildren(...kids(note, ...rows, emptyNote()));
+    status.textContent = appsStatus();
+  }
+  const appsStatus = () => `${statusText({ total: cur.entries.length, shown: shown.length, selected: sel.picked.length, filtered: !!query })} · ${rig.name}`;
+  function appEl(e, kind) {
+    const a = e.app;
+    const st = appOpenState(a, { host: cur.host, online: true });
+    const picked = sel.picked.includes(e.path);
+    const nameEl = h('span', { class: 'fn' }, e.name);
+    const el = kind === 'tile'
+      ? h('div', { class: 'file-row fd-tile fd-app' }, appIcon(a), nameEl)
+      : h('div', { class: 'file-row fd-row fd-app' },
+        h('span', { class: 'c-name' }, appIcon(a), nameEl),
+        h('span', { class: 'c-kind' }, appKind(a)),
+        h('span', { class: 'c-status' }, st.ok ? (a.running?.length ? 'Running' : '') : 'Not streamable'));
+    el.classList.toggle('sel', picked);
+    el.classList.toggle('app-off', !st.ok);
+    el.title = a.comment ? `${e.name} — ${a.comment}` : e.name;
+    el.setAttribute('role', 'option');
+    el.setAttribute('aria-selected', String(picked));
+    el.dataset.path = e.path;
+    el.dataset.app = a.id;
+    el.addEventListener('click', (ev) => {
+      if (isPhone() && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
+        setSel({ picked: [e.path], anchor: e.path, focus: e.path });
+        setSheet(true);
+        return;
+      }
+      const next = clickSelect(sel, shown.map((x) => x.path), e.path, { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey });
+      setSel({ ...next, focus: e.path });
+    });
+    el.addEventListener('dblclick', () => { if (!isPhone()) openApp(a); });
+    return tagCtx(el, 'app', a.id, { app: a, node: rig, actions: { open: () => openApp(a), openNew: () => openApp(a, { fresh: true }), refresh: () => reload() } });
+  }
+  /** Start (or reuse) a session of an app on this machine and open its viewer. */
+  async function openApp(a, { fresh = false } = {}) {
+    const st = appOpenState(a, { host: cur.host, online: true });
+    if (!st.ok) { toast(`${a.name}: ${st.why}`, 'info'); return; }
+    const id = rig.id, name = rig.name;
+    toast(`Starting ${a.name} on ${name}…`, 'info', 2500);
+    try {
+      const r = await api(`${node(id)}/appstream/sessions`, { method: 'POST', body: appSessionRequest(a, { fresh, size: { width: window.innerWidth, height: window.innerHeight } }) });
+      const sid = r.session?.id || r.id;
+      if (!sid) throw new Error('the host answered without a session');
+      openAppStream({ nodeId: id, nodeName: name, sessionId: sid, app: r.session?.app || { id: a.id, name: a.name, icon: a.icon } });
+    } catch (e) { toast(`${a.name}: ${appOpenError(e, name)}`, 'error', 7000); }
+  }
+  /** The preview pane for the Applications place: icon, name, comment, source, path and the Open buttons. */
+  function appPreview(el, items) {
+    if (items.length !== 1) { el.append(h('div', { class: 'muted pad fd-pv-empty' }, h('div', { class: 'fd-pv-big', 'aria-hidden': 'true' }, '🚀'), h('div', {}, `Applications on ${rig.name}`), h('div', { class: 'muted' }, appsStatus()))); return; }
+    const a = items[0].app;
+    const st = appOpenState(a, { host: cur.host, online: true });
+    el.append(h('div', { class: 'fd-pv-head fd-app-pv' }, appIcon(a, 'fd-pv-big'), h('div', { class: 'fd-pv-name' }, a.name), a.generic ? h('div', { class: 'muted' }, a.generic) : null),
+      a.comment ? h('p', { class: 'muted pad' }, a.comment) : null,
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', type: 'button', disabled: !st.ok, title: st.ok ? `Open ${a.name} on ${rig.name}` : st.why, onclick: () => openApp(a) }, 'Open'),
+        h('button', { class: 'btn', type: 'button', disabled: !st.ok, title: st.ok ? 'Start another session of it' : st.why, onclick: () => openApp(a, { fresh: true }) }, 'Open new session')),
+      st.ok ? null : h('div', { class: 'fd-app-why muted pad', role: 'note' }, st.why),
+      h('dl', { class: 'fd-info' }, h('dt', {}, 'Kind'), h('dd', {}, appKind(a)),
+        a.categories?.length ? [h('dt', {}, 'Categories'), h('dd', {}, a.categories.join(', '))] : null,
+        h('dt', {}, 'Path'), h('dd', {}, a.path || ''),
+        a.note ? [h('dt', {}, 'Note'), h('dd', {}, a.note)] : null));
+  }
 
   function listHead() {
     return h('div', { class: 'fd-head', role: 'row' }, ...Object.entries(SORT_LABELS).map(([k, label]) => {
@@ -346,6 +447,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   }
 
   function renderPathbar() {
+    if (inApps()) {
+      pathbar.replaceChildren(h('button', { type: 'button', class: 'fd-crumb', title: 'Home folder', onclick: () => go({ nodeId: rig.id, path: '~' }) }, h('span', { 'aria-hidden': 'true' }, '💻'), ' ', rig.name),
+        h('span', { class: 'fd-crumb-sep', 'aria-hidden': 'true' }, '›'), h('button', { type: 'button', class: 'fd-crumb cur', title: 'Applications' }, h('span', { 'aria-hidden': 'true' }, '🚀'), ' Applications'));
+      return;
+    }
     const cs = crumbs(cur.path, { sep: cur.sep, rootName: rig.name });
     pathbar.replaceChildren(...kids(cs.flatMap((c, i) => [
       i ? h('span', { class: 'fd-crumb-sep', 'aria-hidden': 'true' }, '›') : null,
@@ -359,11 +465,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   function setSel(next) {
     sel = { picked: next.picked || [], anchor: next.anchor ?? null, focus: next.focus ?? next.anchor ?? null };
     for (const el of content.querySelectorAll('.file-row')) {
-      const on = sel.picked.includes(el.dataset.path) && (prefs.view !== 'column' || el.closest('.fd-col.cur'));
+      const on = sel.picked.includes(el.dataset.path) && (appsView() !== 'column' || el.closest('.fd-col.cur'));
       el.classList.toggle('sel', !!on);
       el.setAttribute('aria-selected', String(!!on));
     }
-    status.textContent = statusText({ total: cur.entries.length, shown: shown.length, selected: sel.picked.length, filtered: !!query });
+    status.textContent = inApps() ? appsStatus() : statusText({ total: cur.entries.length, shown: shown.length, selected: sel.picked.length, filtered: !!query });
     updatePreview();
   }
   function scrollToSel() {
@@ -379,6 +485,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     previewKey = key;
     runPreviewCleanup();
     preview.replaceChildren();
+    if (inApps()) { appPreview(preview, items); if (!items.length) setSheet(false); return; }
     const entry = items.length === 1 ? items[0] : null;
     const ctx = previewCtx(entry, items);
     const r = (previewRenderer || defaultPreview)(preview, ctx);
@@ -485,7 +592,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     root.dataset.view = prefs.view;
   }
   function setView(v) {
-    if (v === prefs.view) return;
+    if (v === prefs.view || (inApps() && v === 'column')) return;
     prefs = savePrefs(storage(), { ...prefs, view: v });
     applyLayout();
     renderChrome();
@@ -604,11 +711,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   function arrow(e) {
     // Column view: ← goes to the enclosing folder (this one selected), → opens the selected folder.
-    if (prefs.view === 'column' && !e.shiftKey) {
+    if (appsView() === 'column' && !e.shiftKey) {
       if (e.key === 'ArrowLeft') return goUp();
       if (e.key === 'ArrowRight') { const x = selectedEntries()[0]; if (x?.type === 'dir') go({ nodeId: rig.id, path: x.path }); return undefined; }
     }
-    const next = arrowSelect(sel, shown.map((x) => x.path), e.key, { cols: prefs.view === 'icon' ? gridCols() : 1, shift: e.shiftKey });
+    const next = arrowSelect(sel, shown.map((x) => x.path), e.key, { cols: appsView() === 'icon' ? gridCols() : 1, shift: e.shiftKey });
     setSel(next);
     requestAnimationFrame(() => content.querySelector(`.file-row[data-path="${cssEsc(next.focus)}"]`)?.scrollIntoView?.({ block: 'nearest' }));
     return undefined;
@@ -643,6 +750,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   // ---------------------------------------------------------------- open, rename, new folder, trash, zip
   function openEntry(e) {
+    if (e.type === 'app') return openApp(e.app);
     if (e.type === 'dir') return go({ nodeId: rig.id, path: e.path });
     return toolFor(e.name) ? openTool(e) : download(e); // a file opens in the built-in tool for its type, else downloads
   }
@@ -654,7 +762,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** Finder's in-place rename: the name turns into a field; Enter saves, Esc cancels. */
   function startRename(p) {
-    if (!cur.entries.some((x) => x.path === p)) return;
+    if (inApps() || !cur.entries.some((x) => x.path === p)) return;
     renaming = p;
     if (!sel.picked.includes(p)) sel = { picked: [p], anchor: p, focus: p };
     renderView();
@@ -693,6 +801,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** ⌘⇧N: an "untitled folder" here, selected and in rename. */
   async function newFolder() {
+    if (inApps()) return;
     const name = uniqueName('untitled folder', cur.entries.map((x) => x.name));
     const p = joinPath(cur.path, name, cur.sep);
     try {
@@ -704,6 +813,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** Move to ~/.rigs/trash on that machine (never unlinks). ⌘⌫ goes straight there, like Finder; menus ask first. */
   async function trashItems(paths, { ask = false } = {}) {
+    if (inApps()) return;
     if (!paths.length) return;
     const label = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;
     if (ask && !confirm(`Move ${label} on ${rig.name} to ~/.rigs/trash?`)) return;
@@ -721,6 +831,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** Zip the given paths into one archive next to them (a " (2)" suffix when the name is taken). */
   async function zipItems(paths) {
+    if (inApps()) return;
     if (!paths.length) return;
     toast(`Compressing ${paths.length === 1 ? baseName(paths[0]) : paths.length + ' items'}…`);
     try {
@@ -922,6 +1033,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** ⌘Z: put the last move or rename back (a clash on the way back asks like any other). */
   async function undo() {
+    if (inApps()) return;
     const entry = peekUndo(undoStack);
     if (!entry) { toast('Nothing to undo'); return; }
     undoStack = popUndo(undoStack);
@@ -987,6 +1099,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
 
   /** Upload into `dest` { nodeId, path } with a progress row; a name that is already there asks Keep both / Replace / Skip. */
   async function uploadItems(list, dest) {
+    if (inApps()) return;
     if (!list.length) return;
     let listing;
     try { listing = await api(`${node(dest.nodeId)}/files?path=${encodeURIComponent(dest.path)}&hidden=1`); } catch (e) { toast(`${nameOf(dest.nodeId)}: ${e.message}`, 'error'); return; }

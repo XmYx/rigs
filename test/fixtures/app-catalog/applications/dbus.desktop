@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Exec=nautilus --new-window %U
+DBusActivatable=true
+Icon=org.gnome.Nautilus
+[Desktop Action new-window]
+Name=New Window
+Exec=nautilus --new-window

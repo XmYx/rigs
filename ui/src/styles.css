@@ -2096,6 +2096,21 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 .fd-row.sel .c-mtime, .fd-row.sel .c-size, .fd-row.sel .c-kind { color: #cfe; }
 /* icon view */
 .fd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; padding: 12px; align-content: start; }
+/* Applications place (@apps): app icons from the catalog, a child row under each machine in the sidebar */
+.fd-side-child { padding-left: 26px; font-size: 12px; }
+.fd-app-icon { display: inline-flex; align-items: center; justify-content: center; }
+.fd-app-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.fd-tile .fi.fd-app-icon { width: 56px; height: 56px; padding: 4px; font-size: 36px; }
+.fd-row .fi.fd-app-icon { width: 20px; height: 20px; font-size: 16px; }
+.fd-pv-big.fd-app-icon { width: 96px; height: 96px; font-size: 64px; margin: 0 auto; }
+.fd-app-pv { text-align: center; padding: 16px 12px 4px; }
+.fd-app-pv .fd-pv-name { font-size: 16px; font-weight: 600; margin-top: 8px; }
+.file-row.fd-app.app-off { opacity: .6; }
+.fd-apps-note { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid rgba(255, 255, 255, .06); }
+.fd-apps-head, .fd-app.fd-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px 110px; align-items: center; }
+.fd-app.fd-row .c-status { font-size: 12px; opacity: .7; }
+.fd-app-why { font-size: 12px; color: var(--warn, #e0a030); }
+.finder.apps-place .fd-toolbar [aria-label="New folder (⌘⇧N)"], .finder.apps-place .fd-toolbar [title^="Upload"] { display: none; }
 .file-row.fd-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; border-radius: 8px; text-align: center; }
 .fd-content .file-row.fd-tile.sel, .fd-content:not(:focus-within) .file-row.fd-tile.sel { background: none; }
 .fd-tile .fi { font-size: 40px; line-height: 1.15; padding: 4px 8px; border-radius: 8px; }
