@@ -243,3 +243,85 @@ test('status line', () => {
   assert.equal(F.statusText({ total: 12, shown: 3, filtered: true }), '3 items of 12');
   assert.equal(F.statusText({ total: 12, shown: 12, selected: 2 }), '2 of 12 items selected');
 });
+
+// ------------------------------------------------------------------ drag and drop
+
+import {
+  clashText, dragPayload, dropAction, dropEffect, findClashes, parseDrag, peekUndo, popUndo, pushUndo, undoCalls, UNDO_LIMIT, shortcutFor,
+} from '../ui/src/finder-model.js';
+
+const srcOf = (nodeId, ...paths) => ({ nodeId, nodeName: nodeId, items: paths.map((p) => ({ path: p, name: p.split('/').pop(), type: p.endsWith('/') ? 'dir' : undefined })) });
+
+test('dropAction: same rig moves, Option copies, another rig always copies', () => {
+  const s = srcOf('a', '/h/x/f.txt');
+  assert.equal(dropAction(s, { nodeId: 'a', path: '/h/y' }), 'move');
+  assert.equal(dropAction(s, { nodeId: 'a', path: '/h/y' }, { alt: true }), 'copy');
+  assert.equal(dropAction(s, { nodeId: 'b', path: '~' }), 'pull');
+  assert.equal(dropAction(s, { nodeId: 'b', path: '~' }, { alt: true }), 'pull');
+  assert.equal(dropEffect('move'), 'move');
+  assert.equal(dropEffect('copy'), 'copy');
+  assert.equal(dropEffect('pull'), 'copy', 'the copy badge shows for a cross-rig drop');
+  assert.equal(dropEffect('none'), 'none');
+});
+
+test('dropAction: no drop onto where it already is, onto itself, or a folder into its own subtree', () => {
+  const f = srcOf('a', '/h/x/f.txt');
+  assert.equal(dropAction(f, { nodeId: 'a', path: '/h/x' }), 'none', 'a move to its own folder');
+  assert.equal(dropAction(f, { nodeId: 'a', path: '/h/x' }, { alt: true }), 'copy', 'Option duplicates beside itself');
+  const d = { nodeId: 'a', nodeName: 'a', items: [{ path: '/h/dir', name: 'dir', type: 'dir' }] };
+  assert.equal(dropAction(d, { nodeId: 'a', path: '/h/dir' }), 'none');
+  assert.equal(dropAction(d, { nodeId: 'a', path: '/h/dir/sub' }), 'none');
+  assert.equal(dropAction(d, { nodeId: 'a', path: '/h/dir/sub' }, { alt: true }), 'none');
+  assert.equal(dropAction(d, { nodeId: 'a', path: '/h/dir2' }), 'move', 'a sibling with the same prefix is not inside it');
+  assert.equal(dropAction(d, { nodeId: 'b', path: '/h/dir' }), 'pull', 'another rig has its own /h/dir');
+  const mixed = srcOf('a', '/h/x/a.txt', '/h/y/b.txt');
+  assert.equal(dropAction(mixed, { nodeId: 'a', path: '/h/x' }), 'move', 'one item elsewhere makes it a move');
+  assert.equal(dropAction(null, { nodeId: 'a', path: '/h' }), 'none');
+  assert.equal(dropAction(f, { nodeId: 'a', path: '' }), 'none');
+});
+
+test('dragPayload / parseDrag: multi-item drags round-trip; the older single-item form still parses', () => {
+  const p = dragPayload({ nodeId: 'a', nodeName: 'Mac', entries: [{ path: '/h/a.txt', name: 'a.txt', type: 'file' }, { path: '/h/d', name: 'd', type: 'dir' }] });
+  assert.equal(p.path, '/h/a.txt', 'the first item stays at the top level for desktop.js');
+  const back = parseDrag(JSON.stringify(p));
+  assert.deepEqual(back.items.map((i) => i.path), ['/h/a.txt', '/h/d']);
+  assert.equal(back.nodeName, 'Mac');
+  assert.deepEqual(parseDrag(JSON.stringify({ nodeId: 'a', path: '/h/z.txt', name: 'z.txt' })).items, [{ path: '/h/z.txt', name: 'z.txt', type: undefined }]);
+  for (const bad of ['', 'nope', '{}', JSON.stringify({ nodeId: 'a' }), JSON.stringify({ path: '/x' }), JSON.stringify({ nodeId: 'a', items: [{ name: 'no path' }] })]) assert.equal(parseDrag(bad), null, bad);
+});
+
+test('findClashes / clashText: names that exist, worded like Finder', () => {
+  assert.deepEqual(findClashes(['a', 'b', 'c'], ['c', 'a', 'z']), ['a', 'c']);
+  assert.deepEqual(findClashes(['a'], []), []);
+  const one = clashText(['Report.pdf'], { verb: 'moving', where: '“Docs”' });
+  assert.match(one.title, /An item named “Report.pdf” already exists in “Docs”/);
+  assert.match(one.detail, /keep both, replace.*moving.*skip.*~\/\.rigs\/trash/);
+  const many = clashText(['a', 'b', 'c', 'd', 'e', 'f'], { verb: 'copying' });
+  assert.match(many.title, /6 items already exist/);
+  assert.match(many.detail, /“a”, “b”, “c”, “d” and 2 more/);
+});
+
+test('undo stack: newest last, capped, and undoCalls moves items back to their original folder under their old name', () => {
+  let st = [];
+  assert.equal(peekUndo(st), null);
+  st = pushUndo(st, { kind: 'move', nodeId: 'a', items: [{ from: '/h/x/a.txt', to: '/h/y/a.txt' }, { from: '/h/x/b.txt', to: '/h/y/b (2).txt' }, { from: '/h/z/c.txt', to: '/h/y/c.txt' }] });
+  st = pushUndo(st, { kind: 'rename', nodeId: 'a', items: [{ from: '/h/y/old.txt', to: '/h/y/new.txt' }] });
+  assert.equal(pushUndo(st, { kind: 'move', items: [] }), st, 'an empty entry is ignored');
+  assert.equal(peekUndo(st).kind, 'rename');
+  assert.deepEqual(undoCalls(peekUndo(st)), [{ dest: '/h/y', paths: [{ from: '/h/y/new.txt', name: 'old.txt' }] }]);
+  st = popUndo(st);
+  assert.deepEqual(undoCalls(peekUndo(st)), [
+    { dest: '/h/x', paths: [{ from: '/h/y/a.txt', name: 'a.txt' }, { from: '/h/y/b (2).txt', name: 'b.txt' }] },
+    { dest: '/h/z', paths: [{ from: '/h/y/c.txt', name: 'c.txt' }] },
+  ]);
+  let big = [];
+  for (let i = 0; i < UNDO_LIMIT + 5; i++) big = pushUndo(big, { kind: 'move', items: [{ from: `/a/${i}`, to: `/b/${i}` }] });
+  assert.equal(big.length, UNDO_LIMIT);
+  assert.equal(peekUndo(big).items[0].from, `/a/${UNDO_LIMIT + 4}`);
+});
+
+test('shortcutFor: ⌘Z is undo, but not while typing', () => {
+  assert.equal(shortcutFor({ metaKey: true, key: 'z', code: 'KeyZ' }), 'undo');
+  assert.equal(shortcutFor({ ctrlKey: true, key: 'z', code: 'KeyZ' }), 'undo');
+  assert.equal(shortcutFor({ metaKey: true, key: 'z', code: 'KeyZ' }, { typing: true }), '');
+});

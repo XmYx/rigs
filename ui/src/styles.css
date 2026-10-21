@@ -2159,3 +2159,27 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
   .tp { padding: 8px; }
 }
 /* === END PREVIEW + QUICK LOOK === */
+
+/* === FINDER DRAG AND DROP === (ui/src/files.js: drop targets, transfer rows, clash dialog) */
+.finder .drop-target { background: rgba(var(--accent-rgb), .28) !important; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 6px; }
+.finder .fd-content.drop-target { background: none !important; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 0; }
+.finder .fd-col.drop-target { border-radius: 0; }
+.finder .drop-target.copy { position: relative; }
+.finder .drop-target.copy::after { content: '+'; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; line-height: 16px; text-align: center; border-radius: 50%; background: #22c55e; color: #04210f; font: 700 13px/16px var(--mono, monospace); pointer-events: none; }
+.finder .fd-content.drop-target.copy::after { top: 10px; right: 14px; transform: none; }
+.fd-ghost { position: fixed; left: -999px; top: -999px; padding: 4px 10px; border-radius: 8px; background: var(--accent); color: #fff; font: 600 12px system-ui, sans-serif; }
+.fd-xfer:empty { display: none; }
+.fd-xfer { display: flex; flex-direction: column; gap: 3px; padding: 4px 8px; border-top: 1px solid var(--line); background: rgba(var(--accent-rgb), .06); }
+.fd-xrow { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; align-items: center; gap: 8px; font-size: 11.5px; }
+.fd-xtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-xbar { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.fd-xbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+.fd-xrow.indeterminate .fd-xbar i { width: 35%; animation: fd-slide 1.1s ease-in-out infinite alternate; }
+@keyframes fd-slide { from { margin-left: 0; } to { margin-left: 65%; } }
+.fd-xcancel { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; }
+.fd-modal { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(0, 0, 0, .45); padding: 16px; }
+.fd-dialog { max-width: 420px; width: 100%; box-sizing: border-box; padding: 16px 18px; border-radius: 12px; background: var(--panel); border: 1px solid rgba(var(--accent-rgb), .45); box-shadow: 0 8px 30px rgba(0, 0, 0, .55); display: flex; flex-direction: column; gap: 8px; }
+.fd-dlg-title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.fd-dlg-text { font-size: 12px; overflow-wrap: anywhere; }
+.fd-dialog .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+@media (prefers-reduced-motion: reduce) { .fd-xrow.indeterminate .fd-xbar i { animation: none; } }

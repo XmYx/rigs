@@ -281,6 +281,7 @@ export function shortcutFor(e, { typing = false } = {}) {
     if (key === 'Backspace' || key === 'Delete') return typing ? '' : 'trash';
     if (code === 'KeyA' || key.toLowerCase() === 'a') return typing ? '' : 'selectAll';
     if (code === 'KeyF' || key.toLowerCase() === 'f') return 'find';
+    if (code === 'KeyZ' || key.toLowerCase() === 'z') return typing ? '' : 'undo';
     if (key === '1' || code === 'Digit1') return 'view:icon';
     if (key === '2' || code === 'Digit2') return 'view:list';
     if (key === '3' || code === 'Digit3') return 'view:column';
@@ -326,4 +327,85 @@ export function statusText({ total = 0, shown = total, selected = 0, filtered = 
   const items = (n) => `${n} item${n === 1 ? '' : 's'}`;
   if (selected) return `${selected} of ${items(shown)} selected`;
   return filtered ? `${items(shown)} of ${total}` : items(total);
+}
+
+// ------------------------------------------------------------------ drag and drop
+// What a drag carries (application/x-rigs-file): the first item as { nodeId, nodeName, path, name } (desktop.js reads
+// those) plus `items` for a multi-item drag. Which action a drop means is decided here; files.js does the I/O.
+
+export const SPRING_MS = 800; // a folder opens after the drag has hovered over it this long
+
+/** The JSON a drag carries: every picked item, or just the dragged one when it is not part of the selection. */
+export function dragPayload({ nodeId, nodeName, entries }) {
+  const items = entries.map((e) => ({ path: e.path, name: e.name, type: e.type }));
+  return { nodeId, nodeName, path: items[0]?.path, name: items[0]?.name, items };
+}
+
+/** Parse what a drag carried (also the single-item form older windows write) → { nodeId, nodeName, items } | null. */
+export function parseDrag(text) {
+  let o;
+  try { o = typeof text === 'string' ? JSON.parse(text) : text; } catch { return null; }
+  if (!o || typeof o !== 'object' || !o.nodeId) return null;
+  const items = (Array.isArray(o.items) && o.items.length ? o.items : o.path ? [{ path: o.path, name: o.name }] : [])
+    .filter((x) => x && typeof x.path === 'string' && x.path)
+    .map((x) => ({ path: x.path, name: x.name || baseName(x.path), type: x.type }));
+  return items.length ? { nodeId: o.nodeId, nodeName: o.nodeName || o.nodeId, items } : null;
+}
+
+const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+const insideOrSame = (child, parent) => { const c = norm(child); const q = norm(parent); return c === q || c.startsWith(q + '/'); };
+
+/**
+ * What dropping `src` (parseDrag) on a folder `dest` { nodeId, path } means: 'move' | 'copy' | 'pull' | 'none'.
+ * Same machine: move, Option (alt) copies. Another machine: always a copy (a 'pull' on the destination machine).
+ * 'none': dropped where it already is (a move), onto itself, or a folder into its own subtree.
+ */
+export function dropAction(src, dest, { alt = false } = {}) {
+  if (!src?.items?.length || !dest?.path) return 'none';
+  if (src.nodeId !== dest.nodeId) return 'pull';
+  for (const it of src.items) {
+    if (it.type === 'dir' && insideOrSame(dest.path, it.path)) return 'none';
+    if (!alt && norm(it.path) === norm(dest.path)) return 'none';
+  }
+  const parents = src.items.map((it) => norm(parentOf(it.path) || ''));
+  if (!alt && parents.every((p) => p === norm(dest.path))) return 'none'; // already in that folder
+  return alt ? 'copy' : 'move';
+}
+
+/** The dropEffect to show: the copy badge for copies and cross-machine drops, the plain arrow for moves. */
+export const dropEffect = (action) => (action === 'move' ? 'move' : action === 'none' ? 'none' : 'copy');
+
+/** Names that already exist in a folder (case-insensitively on macOS/Windows listings: exact match is enough here). */
+export function findClashes(names, existing) {
+  const have = new Set(existing);
+  return names.filter((n) => have.has(n));
+}
+
+/** Finder-like wording of the clash dialog → { title, detail, many }. `verb` = 'moving' | 'copying' | 'uploading'. */
+export function clashText(names, { verb = 'copying', where = 'this location' } = {}) {
+  const many = names.length > 1;
+  return {
+    many,
+    title: many ? `${names.length} items already exist in ${where}` : `An item named “${names[0]}” already exists in ${where}`,
+    detail: many
+      ? `${names.slice(0, 4).map((n) => `“${n}”`).join(', ')}${names.length > 4 ? ` and ${names.length - 4} more` : ''}. Choose what to do with the items you are ${verb}.`
+      : `Do you want to keep both, replace it with the one you are ${verb}, or skip it? A replaced item goes to ~/.rigs/trash.`,
+  };
+}
+
+// Undo (⌘Z): the last moves and renames, newest last. An entry = { kind: 'move'|'rename', nodeId, nodeName, items: [{ from, to }] }
+// where `from` is where the item was and `to` where it is now.
+export const UNDO_LIMIT = 20;
+export const pushUndo = (stack, entry) => (entry?.items?.length ? [...stack, entry].slice(-UNDO_LIMIT) : stack);
+export const peekUndo = (stack) => stack[stack.length - 1] || null;
+export const popUndo = (stack) => stack.slice(0, -1);
+/** The files/move call that puts an undo entry's items back: { paths: [{from, name}], dest } per original folder. */
+export function undoCalls(entry) {
+  const by = new Map();
+  for (const it of entry?.items || []) {
+    const dest = parentOf(it.from) || '/';
+    if (!by.has(dest)) by.set(dest, []);
+    by.get(dest).push({ from: it.to, name: baseName(it.from) });
+  }
+  return [...by].map(([dest, paths]) => ({ dest, paths }));
 }

@@ -9,12 +9,18 @@ import {
   SORT_LABELS, actionTargets, activeFavourite, arrowSelect, badName, baseName, canBack, canForward, clickSelect,
   columnPaths, crumbs, emptyHistory, filterEntries, histGo, histPush, histReplace, iconOf, joinPath, kindOf, loadPrefs,
   nextSort, normalizePrefs, parentOf, samePath, savePrefs, selectAll, shortcutFor, sidebarModel, sortEntries, statusText, typeSelect,
-  uniqueName,
+  uniqueName, SPRING_MS, clashText, dragPayload, dropAction, dropEffect, findClashes, parseDrag, peekUndo, popUndo, pushUndo, undoCalls,
 } from './finder-model.js';
 
 const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
 const TEXT = /\.(txt|md|json|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|c|h|cpp|cs|sh|zsh|ps1|yml|yaml|toml|ini|cfg|conf|log|csv|html|css|xml|sql|env|gitignore|dockerfile)$/i;
 const FILE_TYPE = 'application/x-rigs-file'; // what a dragged row carries (desktop.js and other file windows read it)
+// What a drag in progress carries, shared by every file window (dragover can't read dataTransfer data), and the
+// moves/renames ⌘Z puts back (newest last; entries say which machine they happened on).
+let dragging = null;
+let undoStack = [];
+/** A file window changed these machines' folders: every file window showing one of them reloads. */
+const announce = (nodes) => window.dispatchEvent(new CustomEvent('rigs-files-changed', { detail: { nodes } }));
 const storage = () => { try { return localStorage; } catch { return null; } };
 
 // ------------------------------------------------------------------ preview pane slot
@@ -86,7 +92,8 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
   const splitL = h('div', { class: 'fd-split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize sidebar', tabindex: '0' });
   const splitR = h('div', { class: 'fd-split fd-split-r', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize preview', tabindex: '0' });
   const scrim = h('div', { class: 'fd-scrim', onclick: () => setDrawer(false) });
-  const main = h('div', { class: 'fd-main' }, toolbar, gotoBar, content, h('div', { class: 'fd-foot' }, pathbar, status));
+  const tray = h('div', { class: 'fd-xfer', 'aria-live': 'polite', 'aria-label': 'Transfers' });
+  const main = h('div', { class: 'fd-main' }, toolbar, gotoBar, content, tray, h('div', { class: 'fd-foot' }, pathbar, status));
   const root = h('div', { class: 'finder' }, side, splitL, main, splitR, previewWrap, scrim);
 
   const w = openWindow({
@@ -106,7 +113,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     download: (e) => download(e),
     rename: (e) => startRename(e.path),
     trash: (e) => trashItems(actionTargets(sel.picked, e.path), { ask: true }),
-    copyTo: (e, m) => copyBetween(rig.id, rig.name, e.path, m.id, m.name, `~/Downloads/${e.name}`),
+    copyTo: (e, m) => copyToMachine(e, m),
     terminalHere: onTerminalHere ? (p) => onTerminalHere(p) : undefined,
   };
   tagCtx(content, 'folder', nodeId, {
@@ -196,6 +203,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     previewBtn.classList.toggle('on', prefs.previewOpen);
     previewBtn.setAttribute('aria-pressed', String(prefs.previewOpen));
     pathInput.value = cur.path;
+    content.dataset.dropPath = cur.path;
     root.dataset.view = prefs.view;
   }
 
@@ -210,11 +218,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     const item = (attrs, icon, label, extra) => h('button', { type: 'button', class: 'fd-side-item', ...attrs }, h('span', { class: 'fd-si-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'fd-si-label' }, label), extra);
     side.replaceChildren(...kids(
       model.favourites.length ? h('div', { class: 'fd-side-sec' }, h('div', { class: 'fd-side-h' }, 'Favourites'),
-        ...model.favourites.map((f) => item({ class: 'fd-side-item' + (f.id === fav ? ' on' : ''), 'data-fav': f.id, title: f.full || f.path, onclick: () => { setDrawer(false); go({ nodeId: rig.id, path: f.path }); } }, f.icon, f.label))) : null,
+        ...model.favourites.map((f) => item({ class: 'fd-side-item' + (f.id === fav ? ' on' : ''), 'data-fav': f.id, 'data-drop-path': f.path, title: f.full || f.path, onclick: () => { setDrawer(false); go({ nodeId: rig.id, path: f.path }); } }, f.icon, f.label))) : null,
       h('div', { class: 'fd-side-sec' }, h('div', { class: 'fd-side-h' }, 'Locations'),
         ...model.locations.map((l) => {
           const b = item({
-            class: 'fd-side-item rig' + (l.current ? ' on' : '') + (l.browsable ? '' : ' off'), 'data-node': l.id,
+            class: 'fd-side-item rig' + (l.current ? ' on' : '') + (l.browsable ? '' : ' off'), 'data-node': l.id, ...(l.browsable ? { 'data-drop-node': l.id, 'data-drop-path': '~' } : {}),
             title: l.browsable ? `${l.name} — browse its home folder` : `${l.name} is ${l.badge === 'offline' ? 'offline' : 'not running RIGS'}`,
             'aria-disabled': l.browsable ? null : 'true', 'aria-current': l.current ? 'true' : null,
             onclick: () => { if (!l.browsable) return; setDrawer(false); go({ nodeId: l.id, path: '~' }); },
@@ -267,7 +275,9 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     el.draggable = true;
     el.addEventListener('click', (ev) => onItemClick(ev, e, { inColumn, colIndex }));
     el.addEventListener('dblclick', () => { if (!isPhone()) openEntry(e); }); // phones: the tap handler opens it
-    el.addEventListener('dragstart', (ev) => ev.dataTransfer.setData(FILE_TYPE, JSON.stringify({ nodeId: rig.id, nodeName: rig.name, path: e.path, name: e.name })));
+    if (e.type === 'dir') el.dataset.dropPath = e.path; // a folder is a drop target (move / Option-copy into it)
+    el.addEventListener('dragstart', (ev) => startDrag(ev, e, inColumn && colIndex >= 0));
+    el.addEventListener('dragend', () => { dragging = null; clearHover(); });
     if (renaming === e.path) nameEl.replaceChildren(renameInput(e));
     return tagCtx(el, 'file', e.path, {
       entry: e, actions: fileActions, zip: isZip(e.name),
@@ -308,7 +318,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     paths.forEach((p, i) => {
       const last = i === paths.length - 1;
       const entries = last ? shown : colCache.get(`${rig.id}|${p}`);
-      const col = h('div', { class: 'fd-col' + (last ? ' cur' : ''), 'data-path': p });
+      const col = h('div', { class: 'fd-col' + (last ? ' cur' : ''), 'data-path': p, 'data-drop-path': p });
       if (!entries) { col.append(h('div', { class: 'muted pad' }, '…')); fetchColumn(p); }
       else {
         const list = last ? entries : sortEntries(filterEntries(entries, ''), prefs.sort);
@@ -338,7 +348,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     const cs = crumbs(cur.path, { sep: cur.sep, rootName: rig.name });
     pathbar.replaceChildren(...kids(cs.flatMap((c, i) => [
       i ? h('span', { class: 'fd-crumb-sep', 'aria-hidden': 'true' }, '›') : null,
-      h('button', { type: 'button', class: 'fd-crumb' + (i === cs.length - 1 ? ' cur' : ''), title: c.path, onclick: () => go({ nodeId: rig.id, path: c.path }) },
+      h('button', { type: 'button', class: 'fd-crumb' + (i === cs.length - 1 ? ' cur' : ''), title: c.path, 'data-drop-path': c.path, onclick: () => go({ nodeId: rig.id, path: c.path }) },
         h('span', { 'aria-hidden': 'true' }, i ? '📁' : '💻'), ' ', c.name),
     ])));
     requestAnimationFrame(() => { pathbar.scrollLeft = pathbar.scrollWidth; });
@@ -411,7 +421,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     const send = h('select', { class: 'mini', 'aria-label': 'Copy to machine' }, h('option', { value: '' }, 'Copy to machine…'), ...others.map((m) => h('option', { value: m.id }, m.name)));
     send.addEventListener('change', () => {
       const m = others.find((x) => x.id === send.value);
-      if (m) copyBetween(rig.id, rig.name, e.path, m.id, m.name, `~/Downloads/${e.name}`);
+      if (m) copyToMachine(e, m);
       send.value = '';
     });
     const tools = e.type === 'dir' ? [] : toolsFor(e.name);
@@ -586,6 +596,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       case 'view:list': return setView('list');
       case 'view:column': return setView('column');
       case 'arrow': return arrow(e);
+      case 'undo': return undo();
       default: return undefined;
     }
   }
@@ -660,7 +671,11 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       if (why) { toast(why, 'error'); renderView(); content.focus(); return; }
       if (cur.entries.some((x) => x.name === name)) { toast(`The name “${name}” is already taken. Please choose a different name.`, 'error'); renderView(); return; }
       const to = joinPath(parentOf(e.path, cur.sep) || cur.path, name, cur.sep);
-      try { await api(`${node(rig.id)}/files/rename`, { method: 'POST', body: { from: e.path, to } }); await reload({ select: to }); }
+      try {
+        await api(`${node(rig.id)}/files/rename`, { method: 'POST', body: { from: e.path, to } });
+        undoStack = pushUndo(undoStack, { kind: 'rename', nodeId: rig.id, nodeName: rig.name, items: [{ from: e.path, to }] });
+        await reload({ select: to });
+      }
       catch (err) { toast(err.message, 'error'); renderView(); }
       content.focus();
     };
@@ -731,35 +746,291 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
     a.remove();
   }
 
-  // ---------------------------------------------------------------- upload and drops
-  upload.addEventListener('change', async () => {
-    for (const f of upload.files) {
-      try {
-        await api(`${node(rig.id)}/files/write?path=${encodeURIComponent(joinPath(cur.path, f.name, cur.sep))}`, { method: 'PUT', body: f });
-        toast(`Uploaded ${f.name} → ${rig.name}`, 'ok');
-      } catch (e) { toast(`Upload failed: ${e.message}`, 'error'); }
+  // ---------------------------------------------------------------- drag and drop
+  // Drag rows onto a folder (any view, the sidebar, the path bar): same machine = move, Option = copy, another
+  // machine = copy streamed by the destination (files/pull). Files from the desktop upload. Logic: finder-model.js
+  // (dropAction); server: src/file-transfer.js. Name clashes ask Keep both / Replace / Skip; ⌘Z undoes a move/rename.
+  let hoverEl = null;
+  let springTimer = 0;
+  let springEl = null;
+  const setHover = (el, effect) => {
+    if (hoverEl && hoverEl !== el) hoverEl.classList.remove('drop-target', 'copy');
+    hoverEl = el;
+    if (el) { el.classList.add('drop-target'); el.classList.toggle('copy', effect === 'copy'); }
+  };
+  function clearHover() { setHover(null); clearTimeout(springTimer); springEl = null; }
+
+  /** Start dragging a row: every picked item when it is part of the selection, else just that row. */
+  function startDrag(ev, e, single) {
+    if (renaming) { ev.preventDefault(); return; }
+    let entries = single || !sel.picked.includes(e.path) ? [e] : selectedEntries();
+    if (!entries.length) entries = [e];
+    if (!single && !sel.picked.includes(e.path)) setSel({ picked: [e.path], anchor: e.path, focus: e.path });
+    const payload = dragPayload({ nodeId: rig.id, nodeName: rig.name, entries });
+    dragging = parseDrag(payload);
+    const dt = ev.dataTransfer;
+    dt.effectAllowed = 'copyMove';
+    dt.setData(FILE_TYPE, JSON.stringify(payload));
+    // To the desktop: Chrome saves a DownloadURL drag as a file (one file; folders and multi-drags stay inside RIGS).
+    if (entries.length === 1 && entries[0].type !== 'dir') {
+      try { dt.setData('DownloadURL', `application/octet-stream:${entries[0].name.replace(/:/g, '_')}:${location.origin}${node(rig.id)}/files/raw?path=${encodeURIComponent(entries[0].path)}&download=1`); } catch {}
     }
-    upload.value = '';
-    reload();
+    if (entries.length > 1) {
+      const ghost = h('div', { class: 'fd-ghost' }, `${entries.length} items`);
+      document.body.append(ghost);
+      dt.setDragImage?.(ghost, 12, 12);
+      setTimeout(() => ghost.remove(), 0);
+    }
+  }
+
+  /** The folder under the pointer: the nearest [data-drop-path] (a folder row, sidebar place, crumb, column, the view). */
+  function dropTargetOf(ev) {
+    const el = ev.target?.closest?.('[data-drop-path]');
+    if (el && root.contains(el)) return { el, nodeId: el.dataset.dropNode || rig.id, path: el.dataset.dropPath, spring: el !== content };
+    if (ev.target && main.contains(ev.target)) return { el: content, nodeId: rig.id, path: cur.path, spring: false };
+    return null;
+  }
+  function armSpring(t) {
+    if (!t.spring || (t.nodeId === rig.id && samePath(t.path, cur.path))) { clearTimeout(springTimer); springEl = null; return; }
+    const key = `${t.nodeId}|${t.path}`; // by folder, not element: a reload swaps the rows under the pointer
+    if (springEl === key) return;
+    clearTimeout(springTimer);
+    springEl = key;
+    springTimer = setTimeout(() => { springEl = null; clearHover(); if (!closed) go({ nodeId: t.nodeId, path: t.path }); }, SPRING_MS); // spring-loaded: the folder opens
+  }
+
+  root.addEventListener('dragover', (ev) => {
+    const types = [...(ev.dataTransfer?.types || [])];
+    const internal = types.includes(FILE_TYPE);
+    if (!internal && !types.includes('Files')) return;
+    const t = dropTargetOf(ev);
+    if (!t) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'none'; clearHover(); return; } // never let the browser open a dropped file
+    let effect = 'copy';
+    if (internal && dragging) {
+      const action = dropAction(dragging, t, { alt: ev.altKey });
+      effect = dropEffect(action);
+      if (action === 'none') { ev.preventDefault(); ev.dataTransfer.dropEffect = 'none'; setHover(null); clearTimeout(springTimer); springEl = null; return; }
+    }
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = effect;
+    setHover(t.el, effect);
+    armSpring(t);
   });
-  // Files from the desktop upload to the open folder; a row from another file window is copied here.
-  main.addEventListener('dragover', (e) => { e.preventDefault(); content.classList.add('drop'); });
-  main.addEventListener('dragleave', (e) => { if (!main.contains(e.relatedTarget)) content.classList.remove('drop'); });
-  main.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    content.classList.remove('drop');
-    const remote = e.dataTransfer.getData(FILE_TYPE);
-    if (remote) {
-      const src = JSON.parse(remote);
-      if (src.nodeId === rig.id && samePath(parentOf(src.path), cur.path)) return; // dropped where it already is
-      await copyBetween(src.nodeId, src.nodeName, src.path, rig.id, rig.name, joinPath(cur.path, src.name, cur.sep));
-      return reload();
+  root.addEventListener('dragleave', (ev) => { if (!root.contains(ev.relatedTarget)) clearHover(); });
+  root.addEventListener('drop', (ev) => {
+    const dt = ev.dataTransfer;
+    const types = [...(dt?.types || [])];
+    const internal = types.includes(FILE_TYPE);
+    if (!internal && !types.includes('Files')) return;
+    ev.preventDefault();
+    clearHover();
+    const t = dropTargetOf(ev);
+    if (!t) return;
+    ev.stopPropagation();
+    if (internal) {
+      const src = parseDrag(dt.getData(FILE_TYPE)) || dragging;
+      dragging = null;
+      const dest = { nodeId: t.nodeId, path: t.path };
+      const action = dropAction(src, dest, { alt: ev.altKey });
+      if (action !== 'none') transferItems(src, dest, action);
+      return;
     }
-    for (const f of e.dataTransfer.files) {
-      try { await api(`${node(rig.id)}/files/write?path=${encodeURIComponent(joinPath(cur.path, f.name, cur.sep))}`, { method: 'PUT', body: f }); }
-      catch (err) { toast(`Upload failed: ${err.message}`, 'error'); }
+    const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean); // must be read before the first await
+    const plain = [...(dt.files || [])];
+    collectDropped(entries, plain).then((list) => uploadItems(list, { nodeId: t.nodeId, path: t.path })).catch((err) => toast(`Upload failed: ${err.message}`, 'error'));
+  });
+
+  const destLabel = (dest) => (dest.path === '~' ? nameOf(dest.nodeId) : `“${baseName(dest.path) || dest.path}”`);
+
+  /** A progress row above the path bar; progress(done, total) fills it, remove() clears it. */
+  function xferRow(label, { onCancel } = {}) {
+    const fill = h('i');
+    const txt = h('span', { class: 'fd-xtxt' }, label);
+    const el = h('div', { class: 'fd-xrow indeterminate', role: 'progressbar', 'aria-label': label }, txt, h('div', { class: 'fd-xbar' }, fill),
+      onCancel ? h('button', { type: 'button', class: 'fd-xcancel', title: 'Cancel', 'aria-label': 'Cancel', onclick: onCancel }, '✕') : null);
+    tray.append(el);
+    return {
+      progress(done, total) {
+        el.classList.remove('indeterminate');
+        const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+        fill.style.width = `${pct}%`;
+        el.setAttribute('aria-valuenow', String(pct));
+        txt.textContent = `${label} — ${fmtBytes(done)} of ${fmtBytes(total)}`;
+      },
+      remove() { el.remove(); },
+    };
+  }
+
+  /** Finder's name-clash question → 'keep' | 'replace' | 'skip' | null (cancelled). */
+  function askClash(names, { verb, where }) {
+    const t = clashText(names, { verb, where });
+    return new Promise((resolve) => {
+      const done = (v) => { overlay.remove(); content.focus({ preventScroll: true }); resolve(v); };
+      const b = (label, v, cls = '') => h('button', { type: 'button', class: `btn ${cls}`.trim(), 'data-clash': v || 'cancel', onclick: () => done(v) }, label);
+      const overlay = h('div', {
+        class: 'fd-modal', onclick: (ev) => { if (ev.target === overlay) done(null); },
+        onkeydown: (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); done(null); } },
+      }, h('div', { class: 'fd-dialog', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': t.title },
+        h('div', { class: 'fd-dlg-title' }, t.title), h('div', { class: 'muted fd-dlg-text' }, t.detail),
+        h('div', { class: 'actions' }, b('Keep both', 'keep', 'primary'), b('Replace', 'replace', 'danger'), b('Skip', 'skip'), b('Cancel', null))));
+      root.append(overlay);
+      overlay.querySelector('button').focus();
+    });
+  }
+
+  /** Move / copy / pull the dragged items into `dest` { nodeId, path }; a clash asks, then repeats with the answer. */
+  async function transferItems(src, dest, action, onClash) {
+    const paths = src.items.map((i) => i.path);
+    const what = src.items.length === 1 ? `“${src.items[0].name}”` : `${src.items.length} items`;
+    const verb = action === 'move' ? 'moving' : 'copying';
+    const row = xferRow(`${action === 'move' ? 'Moving' : 'Copying'} ${what} → ${nameOf(dest.nodeId)}`);
+    try {
+      let r;
+      if (action === 'pull') {
+        const id = `xf-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+        const poll = setInterval(async () => {
+          try { const p = await api(`${node(dest.nodeId)}/files/progress?id=${id}`); if (p.total) row.progress(p.bytes, p.total); } catch {}
+        }, 500);
+        try { r = await api(`${node(dest.nodeId)}/files/pull`, { method: 'POST', body: { node: src.nodeId, paths, dest: dest.path, onClash, id } }); } finally { clearInterval(poll); }
+      } else r = await api(`${node(dest.nodeId)}/files/${action}`, { method: 'POST', body: { paths, dest: dest.path, onClash } });
+      row.remove();
+      if (r.ok === false) {
+        const choice = await askClash(r.clashes.map((c) => c.name), { verb, where: destLabel(dest) });
+        if (choice) await transferItems(src, dest, action, choice);
+        return;
+      }
+      const n = r.done.length;
+      const doneWhat = n === 1 ? `“${baseName(r.done[0].to)}”` : `${n} items`;
+      if (action === 'move' && n) {
+        undoStack = pushUndo(undoStack, { kind: 'move', nodeId: dest.nodeId, nodeName: nameOf(dest.nodeId), items: r.done.map((d) => ({ from: d.from, to: d.to })) });
+        toast(`Moved ${doneWhat} to ${destLabel(dest)}`, 'ok', 7000, { label: 'Undo', run: () => undo() });
+      } else if (n) toast(`Copied ${doneWhat} to ${destLabel(dest)}${dest.nodeId === rig.id ? '' : ` on ${nameOf(dest.nodeId)}`}${r.skipped.length ? ` (${r.skipped.length} skipped)` : ''}`, 'ok', 7000);
+      else toast(r.skipped.length ? `Nothing ${action === 'move' ? 'moved' : 'copied'}: ${r.skipped.length} skipped` : 'Nothing to do', 'info');
+      announce([src.nodeId, dest.nodeId]);
+    } catch (err) {
+      row.remove();
+      toast(`${action === 'move' ? 'Move' : 'Copy'} failed: ${err.message}`, 'error', 9000);
     }
-    return reload();
+  }
+
+  /** "Copy to machine…": into that machine's Downloads (made when missing). */
+  async function copyToMachine(e, m) {
+    try { await api(`${node(m.id)}/files/mkdir`, { method: 'POST', body: { path: '~/Downloads' } }); } catch {}
+    return transferItems({ nodeId: rig.id, nodeName: rig.name, items: [{ path: e.path, name: e.name, type: e.type }] }, { nodeId: m.id, path: '~/Downloads' }, 'pull');
+  }
+
+  /** ⌘Z: put the last move or rename back (a clash on the way back asks like any other). */
+  async function undo() {
+    const entry = peekUndo(undoStack);
+    if (!entry) { toast('Nothing to undo'); return; }
+    undoStack = popUndo(undoStack);
+    try {
+      for (const call of undoCalls(entry)) {
+        const url = `${node(entry.nodeId)}/files/move`;
+        let r = await api(url, { method: 'POST', body: call });
+        if (r.ok === false) {
+          const choice = await askClash(r.clashes.map((c) => c.name), { verb: 'moving back', where: destLabel({ nodeId: entry.nodeId, path: call.dest }) });
+          if (!choice) { undoStack = pushUndo(undoStack, entry); return; }
+          r = await api(url, { method: 'POST', body: { ...call, onClash: choice } });
+        }
+      }
+      const one = entry.items.length === 1 ? `“${baseName(entry.items[0].from)}”` : `${entry.items.length} items`;
+      toast(`Undid ${entry.kind === 'rename' ? 'renaming' : 'moving'} ${one}`, 'ok');
+      announce([entry.nodeId]);
+    } catch (err) {
+      undoStack = pushUndo(undoStack, entry);
+      toast(`Undo failed: ${err.message}`, 'error', 9000);
+    }
+  }
+  const onChanged = (ev) => { if (!closed && !renaming && ev.detail?.nodes?.includes(rig.id)) { colCache.clear(); reload(); } };
+  window.addEventListener('rigs-files-changed', onChanged);
+  w.onCleanup(() => window.removeEventListener('rigs-files-changed', onChanged));
+
+  // ---------------------------------------------------------------- upload (toolbar button and files from the desktop)
+  /** Dropped entries (folders included, through webkitGetAsEntry) → [{ rel: 'dir/sub/file', file } | { rel, dir: true }]. */
+  async function collectDropped(entries, plain) {
+    const out = [];
+    const walk = async (ent, prefix) => {
+      if (ent.isFile) out.push({ rel: prefix + ent.name, file: await new Promise((res, rej) => ent.file(res, rej)) });
+      else if (ent.isDirectory) {
+        const rd = ent.createReader();
+        const kids = [];
+        for (;;) { const batch = await new Promise((res, rej) => rd.readEntries(res, rej)); if (!batch.length) break; kids.push(...batch); }
+        if (!kids.length) out.push({ rel: prefix + ent.name, dir: true });
+        for (const k of kids) await walk(k, `${prefix}${ent.name}/`);
+      }
+    };
+    if (entries.length) for (const e of entries) await walk(e, '');
+    else for (const f of plain) out.push({ rel: f.name, file: f });
+    return out;
+  }
+
+  /** PUT one file with upload progress (fetch can't report it). `hold.abort` cancels. */
+  function putFile(url, file, onProgress, hold) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', url);
+      x.upload.onprogress = (e) => onProgress(e.loaded);
+      x.onload = () => {
+        if (x.status >= 200 && x.status < 300) return resolve();
+        let msg = '';
+        try { msg = JSON.parse(x.responseText).error; } catch {}
+        return reject(new Error(msg || `HTTP ${x.status}`));
+      };
+      x.onerror = () => reject(new Error('network error'));
+      x.onabort = () => reject(new Error('cancelled'));
+      hold.abort = () => x.abort();
+      x.send(file);
+    });
+  }
+
+  /** Upload into `dest` { nodeId, path } with a progress row; a name that is already there asks Keep both / Replace / Skip. */
+  async function uploadItems(list, dest) {
+    if (!list.length) return;
+    let listing;
+    try { listing = await api(`${node(dest.nodeId)}/files?path=${encodeURIComponent(dest.path)}&hidden=1`); } catch (e) { toast(`${nameOf(dest.nodeId)}: ${e.message}`, 'error'); return; }
+    const { sep, path: base } = listing;
+    const existing = listing.entries.map((x) => x.name);
+    const tops = [...new Set(list.map((x) => x.rel.split('/')[0]))];
+    const clash = findClashes(tops, existing);
+    let policy = null;
+    if (clash.length) { policy = await askClash(clash, { verb: 'uploading', where: destLabel(dest) }); if (!policy) return; }
+    const names = new Map(tops.map((n) => [n, n]));
+    const taken = [...existing];
+    for (const n of clash) {
+      if (policy === 'skip') names.set(n, null);
+      else if (policy === 'keep') { const u = uniqueName(n, [...taken, ...tops]); names.set(n, u); taken.push(u); }
+      else {
+        try { await api(`${node(dest.nodeId)}/files/trash`, { method: 'POST', body: { path: joinPath(base, n, sep) } }); } // the old one goes to ~/.rigs/trash
+        catch (e) { toast(`Could not replace “${n}”: ${e.message}`, 'error'); names.set(n, null); }
+      }
+    }
+    const todo = list.map((x) => { const parts = x.rel.split('/'); const top = names.get(parts[0]); return top == null ? null : { ...x, to: joinPath(base, [top, ...parts.slice(1)].join(sep), sep) }; }).filter(Boolean);
+    if (!todo.length) { toast('Nothing uploaded: all skipped'); return; }
+    const total = todo.reduce((n, x) => n + (x.file?.size || 0), 0);
+    const hold = { stop: false, abort: null };
+    const row = xferRow(`Uploading ${todo.length === 1 ? `“${baseName(todo[0].rel)}”` : `${todo.length} items`} → ${nameOf(dest.nodeId)}`, { onCancel: () => { hold.stop = true; hold.abort?.(); } });
+    let sent = 0;
+    let ok = 0;
+    const failed = [];
+    for (const x of todo) {
+      if (hold.stop) break;
+      try {
+        if (x.dir) await api(`${node(dest.nodeId)}/files/mkdir`, { method: 'POST', body: { path: x.to } });
+        else await putFile(`${node(dest.nodeId)}/files/write?path=${encodeURIComponent(x.to)}`, x.file, (n) => row.progress(sent + n, total), hold);
+        sent += x.file?.size || 0;
+        ok++;
+      } catch (err) { if (!hold.stop) failed.push(`${baseName(x.rel)}: ${err.message}`); }
+    }
+    row.remove();
+    if (failed.length) toast(`Upload failed — ${failed.slice(0, 3).join('; ')}${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}`, 'error', 9000);
+    if (ok) toast(`Uploaded ${ok === 1 ? `“${baseName(todo[0].rel)}”` : `${ok} items`} to ${nameOf(dest.nodeId)}${hold.stop ? ' (cancelled)' : ''}`, 'ok');
+    announce([dest.nodeId]);
+  }
+  upload.addEventListener('change', async () => {
+    const list = [...upload.files].map((f) => ({ rel: f.name, file: f }));
+    upload.value = '';
+    await uploadItems(list, { nodeId: rig.id, path: cur.path });
   });
 
   // The sidebar follows the mesh: a machine coming online or going away shows up within a few seconds.
@@ -792,14 +1063,17 @@ function fmtDate(ms) {
   return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} at ${t}`;
 }
 
-/** Stream a file from one machine to another through this gateway. */
-export async function copyBetween(fromId, fromName, path, toId, toName, dest) {
+/**
+ * Copy a file or folder from one machine to another into the folder `destDir` there. The destination machine fetches it
+ * from the source and streams it to disk (POST files/pull, src/file-transfer.js): nothing is buffered in the browser.
+ * A name that is already there is kept as "name (2)". The file windows' drops use the window's own transferItems,
+ * which asks Keep both / Replace / Skip instead.
+ */
+export async function copyBetween(fromId, fromName, path, toId, toName, destDir) {
   toast(`Copying ${path.split(/[\\/]/).pop()} ${fromName} → ${toName}…`);
   try {
-    const src = await api(`${node(fromId)}/files/raw?path=${encodeURIComponent(path)}`, { raw: true });
-    if (!src.ok) throw new Error(`read failed (${src.status})`);
-    const blob = await src.blob();
-    const r = await api(`${node(toId)}/files/write?path=${encodeURIComponent(dest)}`, { method: 'PUT', body: blob });
-    toast(`Copied to ${toName}:${r.path} (${fmtBytes(r.size)})`, 'ok', 7000);
+    const r = await api(`${node(toId)}/files/pull`, { method: 'POST', body: { node: fromId, paths: [path], dest: destDir, onClash: 'keep' } });
+    toast(`Copied to ${toName}:${r.done[0]?.to || destDir}`, 'ok', 7000);
+    announce([toId]);
   } catch (e) { toast(`Copy failed: ${e.message}`, 'error'); }
 }
