@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-trace-'));
 Object.assign(process.env, {
@@ -216,7 +217,7 @@ test('API: one JARVIS request → one trace (intake → router, brain turn → t
   const BIN = path.join(TMP, 'bin');
   fs.mkdirSync(BIN, { recursive: true });
   fs.writeFileSync(path.join(BIN, 'claude'), FAKE_CLAUDE, { mode: 0o755 });
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  const PORT = await freePort();
   const BASE = `http://127.0.0.1:${PORT}`;
   const env = {
     ...process.env, HOME, RIGS_HOME: path.join(HOME, '.rigs'), RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_CLAUDE_DIR: path.join(HOME, 'claude'), RIGS_CODEX_DIR: path.join(HOME, 'codex'),

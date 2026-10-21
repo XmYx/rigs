@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePorts } from './ports.js';
 
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-media-unit-'));
 const { mimeOf, parseRange } = await import('../src/files.js');
@@ -50,8 +51,7 @@ test('mimeOf: audio and video types the media player streams', () => {
 const TOKEN = 'media-test-token';
 const homes = [];
 const procs = [];
-const B_PORT = 20000 + Math.floor(Math.random() * 20000);
-const A_PORT = B_PORT + 1;
+const [B_PORT, A_PORT] = await freePorts(2);
 const A = `http://127.0.0.1:${A_PORT}`;
 const B = `http://127.0.0.1:${B_PORT}`;
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-media-data-'));

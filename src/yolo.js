@@ -334,6 +334,7 @@ function onChange(r, name) {
   if (r.closed) return;
   const rel = String(name || '').replace(/\\/g, '/');
   if (!rel || IGNORED.test(rel) || rel.split('/').some((s) => s.startsWith('.'))) return;
+  if (rel === r.meta.runId) return; // macOS (FSEvents) also reports the run folder's own creation, named after it
   r.pending.add(rel);
   r.lastFile = rel;
   clearTimeout(r.timer);

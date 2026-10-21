@@ -36,6 +36,7 @@ import * as models from './models.js';
 import * as hubs from './hubs.js';
 import * as openrig from './openrig.js';
 import * as planner from './planner.js';
+import * as fileTransfer from './file-transfer.js';
 import { appRefererRedirect, appRoute, forwardHttp, forwardWs, peerJson, proxyApp, proxyAppWs, rejectUpgrade, relayApp, relayAppWs } from './proxy.js';
 import * as pty from './pty.js';
 import * as senses from './senses.js';
@@ -737,6 +738,19 @@ export async function startServer() {
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
     if (sub === 'files/rename' && method === 'POST') { const b = await body(); return files.rename(b.from, b.to); }
     if (sub === 'files/trash' && method === 'POST') return files.trash((await body()).path);
+    if (sub === 'files/copy' && method === 'POST') { const b = await body(); return fileTransfer.transfer('copy', b.paths, b.dest, { onClash: b.onClash }); }
+    if (sub === 'files/move' && method === 'POST') { const b = await body(); return fileTransfer.transfer('move', b.paths, b.dest, { onClash: b.onClash }); }
+    if (sub === 'files/progress') return fileTransfer.progressOf(q.get('id')) || { done: true, bytes: 0, total: 0, unknown: true };
+    if (sub === 'files/pull' && method === 'POST') {
+      // This machine fetches from `node` (a peer, or itself) and streams to disk: nothing passes through the browser.
+      const b = await body();
+      const from = b.node ? discovery.get(String(b.node)) : null;
+      if (!from) throw new HttpError(404, `unknown node ${b.node}`);
+      if (from.self) return fileTransfer.pull(fileTransfer.localSource(), b.paths, b.dest, { onClash: b.onClash, id: b.id });
+      if (!from.rigs || !from.online) throw new HttpError(503, `${from.name} is not running RIGS`);
+      const fetchPeer = (rest) => fetch(from.url.replace(/\/$/, '') + '/api/local/' + rest, { headers: from.viaToken ? { 'x-rigs-token': config().meshToken } : {}, signal: AbortSignal.timeout(60 * 60 * 1000) });
+      return fileTransfer.pull(fileTransfer.peerSource(fetchPeer), b.paths, b.dest, { onClash: b.onClash, id: b.id });
+    }
     if (sub === 'files/zip' && method === 'POST') { const b = await body(); return files.zip(b.paths, b.dest, { config: config().files?.zip }); }
     if (sub === 'files/unzip' && method === 'POST') { const b = await body(); return files.unzip(b.path, b.dest, { config: config().files?.zip }); }
 

@@ -3,17 +3,17 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { speakable } from '../src/tts.js';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-test-'));
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token',
   // App Store: launcher scripts instead of systemd units, and nothing outside this throwaway home.
@@ -203,20 +203,7 @@ test('attention: feed per node + mesh-wide, codex hook endpoint', async () => {
 
 // ---------------------------------------------------------------- App Store (src/appstore.js)
 
-// The hello app's port: free when the first App Store test starts, and below every OS's ephemeral range (Linux 32768+, macOS and
-// Windows 49152+, where Windows also reserves whole blocks), so a busy machine's own connections cannot hold it.
-async function freePort() {
-  for (let i = 0; i < 50; i++) {
-    const port = 10000 + Math.floor(Math.random() * 10000);
-    const free = await new Promise((res) => {
-      const s = net.createServer();
-      s.once('error', () => res(false));
-      s.listen(port, '127.0.0.1', () => s.close(() => res(true)));
-    });
-    if (free) return port;
-  }
-  throw new Error('no free port for the hello app');
-}
+// The hello app's port: free when the first App Store test starts (test/ports.js: below every OS's ephemeral range).
 let HELLO_PORT; // picked by the first putHello()
 // Why an install failed, up front (the steward keeps only the start of a failure): the error, then the last log
 // lines, which hold the app's own output when it did not come up.

@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-exhibits-'));
 Object.assign(process.env, {
@@ -384,13 +385,16 @@ test('API: off by default (no files); switched on, one JARVIS request → a fina
   const BIN = path.join(TMP, 'bin');
   fs.mkdirSync(BIN, { recursive: true });
   fs.writeFileSync(path.join(BIN, 'claude'), FAKE_CLAUDE, { mode: 0o755 });
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  const PORT = await freePort();
   const BASE = `http://127.0.0.1:${PORT}`;
   const env = {
     ...process.env, HOME, RIGS_HOME: path.join(HOME, '.rigs'), RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_CLAUDE_DIR: path.join(HOME, 'claude'), RIGS_CODEX_DIR: path.join(HOME, 'codex'),
     RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token', RIGS_OLLAMA_URL: 'http://127.0.0.1:9', PATH: `${BIN}${path.delimiter}${process.env.PATH}`,
   };
-  fs.mkdirSync(HOME, { recursive: true });
+  fs.mkdirSync(env.RIGS_HOME, { recursive: true });
+  // No ComfyUI, like no Ollama: on a machine running one (8188 is detected) images: 'auto' would swap an SVG for a
+  // real generated PNG mid-test, and spend that machine's GPU on every run.
+  fs.writeFileSync(path.join(env.RIGS_HOME, 'config.json'), JSON.stringify({ comfyui: { url: 'http://127.0.0.1:9' } }));
   const server = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'serve'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   server.stdout.on('data', (d) => { log += d; });

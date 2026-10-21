@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-control-api-'));
@@ -177,7 +178,7 @@ test('MCP sends an ASCII-only caller header naming the agent and seat', () => {
 
 // ---- smoke: a real node with the default (on) configuration ----
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-test-'));
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 let server;
 

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { freePort } from './ports.js';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-starnet-'));
 Object.assign(process.env, { RIGS_HOME: path.join(TMP, 'unit'), RIGS_NO_OPENRIG: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_MIGRATIONS: '1' });
@@ -237,7 +238,7 @@ test('off means off: the main bundle only imports the switch; the view chunk is 
 // ------------------------------------------------------------------ end to end on a scratch node
 
 const HOME = path.join(TMP, 'node');
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const env = { ...process.env, RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
 let server;

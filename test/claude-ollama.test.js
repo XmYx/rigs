@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-claude-ollama-'));
@@ -106,7 +107,7 @@ test('API: a turn on Claude via Ollama spawns claude against Ollama only, traces
   await new Promise((r) => ollama.listen(0, '127.0.0.1', r));
   const OLLAMA = `http://127.0.0.1:${ollama.address().port}`;
 
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  const PORT = await freePort();
   const BASE = `http://127.0.0.1:${PORT}`;
   const env = {
     ...process.env, HOME, RIGS_HOME: path.join(HOME, '.rigs'), RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_CLAUDE_DIR: path.join(HOME, 'claude'), RIGS_CODEX_DIR: path.join(HOME, 'codex'),

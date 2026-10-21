@@ -15,6 +15,7 @@ import {
 } from '../ui/src/file-tools-model.js';
 import { archiveName, extractFolderName, planExtract, safeEntryPath, splitExt, uniqueName, zipLimits } from '../src/zip-model.js';
 import * as files from '../src/files.js';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-file-tools-'));
@@ -318,7 +319,7 @@ test('zip and unzip enforce the size cap; zip skips symlinks', async () => {
 // ------------------------------------------------------------------ HTTP routes on a throwaway node
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-ft-home-'));
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 let server;
 before(async () => {

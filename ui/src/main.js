@@ -694,9 +694,14 @@ async function installDesktop(d) {
 // The latest file-browser window per machine: a ui_open push for that machine navigates it instead of opening another.
 const filesWins = new Map();
 function filesOn(m, path = '~', { select = '', showHidden = false } = {}) {
-  const w = openFiles({ nodeId: m.id, nodeName: m.name, path, select, showHidden, machines, onTerminalHere: (p) => openTerminal({ nodeId: m.id, nodeName: m.name, cwd: p }) });
+  const w = openFiles({
+    nodeId: m.id, nodeName: m.name, path, select, showHidden, machines, rigs: () => snap.map((e) => e.node),
+    onTerminalHere: (p) => openTerminal({ nodeId: w.nodeId, nodeName: w.nodeName, cwd: p }),
+    // The sidebar moved the window to another machine: it is that machine's window now.
+    onNodeChange: (id, _name, prev) => { if (filesWins.get(prev) === w) filesWins.delete(prev); filesWins.set(id, w); },
+  });
   filesWins.set(m.id, w);
-  w.onCleanup(() => { if (filesWins.get(m.id) === w) filesWins.delete(m.id); });
+  w.onCleanup(() => { for (const [id, x] of filesWins) if (x === w) filesWins.delete(id); });
   return w;
 }
 

@@ -14,6 +14,7 @@ const MIME = {
   '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.flac': 'audio/flac', '.ogg': 'audio/ogg',
   '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.weba': 'audio/webm', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm',
   '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg',
+  '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
 };
 
 /**
@@ -54,7 +55,7 @@ export async function list(p, { showHidden = false } = {}) {
     entries.push({
       name: d.name, path: full, hidden,
       type: st?.isDirectory() ? 'dir' : d.isSymbolicLink() && !st ? 'link' : 'file',
-      size: st?.size ?? 0, mtime: st?.mtimeMs ?? 0,
+      size: st?.size ?? 0, mtime: st?.mtimeMs ?? 0, ...(d.isSymbolicLink() ? { link: true } : {}),
     });
   }));
   entries.sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -168,9 +169,16 @@ export async function mkdir(p) {
   return { path: dir };
 }
 
+/** Never overwrites: fs.rename would silently replace what is at `to` (a hidden file, or one made since the listing). */
 export async function rename(from, to) {
   const a = resolvePath(from);
   const b = resolvePath(to);
+  const there = a === b ? null : await fsp.lstat(b).catch(() => null);
+  if (there) {
+    const src = await fsp.lstat(a).catch(() => null);
+    const same = src && src.ino === there.ino && src.dev === there.dev; // a case-only rename on a case-insensitive disk
+    if (!same) throw Object.assign(new Error(`“${path.basename(b)}” already exists`), { status: 409 });
+  }
   await fsp.rename(a, b);
   return { from: a, to: b };
 }

@@ -33,6 +33,9 @@ const savePrefs = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p
 let deps = { browse: null };
 /** main.js hands over what the empty player's "Browse files…" opens. */
 export function configureMediaPlayer(d) { deps = { ...deps, ...d }; }
+/** Other media elements (the file browser's preview pane, finder-preview.js) join the one-at-a-time rule. */
+export const claimPlayback = (el) => arbiter.claim(el);
+export const releasePlayback = (el) => arbiter.release(el);
 
 let session = null; // { nodeId, nodeName, list, index, kind, el, watchdog, startAt } — what is loaded; null = nothing
 let player = null; // { w, ui } — the open window; null = closed
