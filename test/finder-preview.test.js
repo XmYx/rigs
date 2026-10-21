@@ -138,7 +138,7 @@ test('parseRange: open-ended, bounded, suffix, clamped, unsatisfiable and ignore
   assert.deepEqual(parseRange('bytes=-5000', 1000), { start: 0, end: 999 }, 'suffix longer than the file = all of it');
   assert.deepEqual(parseRange('bytes=900-5000', 1000), { start: 900, end: 999 }, 'end clamped to the file');
   assert.equal(parseRange('bytes=1000-', 1000), 'unsatisfiable');
-  assert.equal(parseRange('bytes=50-10', 1000), 'unsatisfiable');
+  assert.equal(parseRange('bytes=50-10', 1000), null, 'last < first is an invalid range: ignored, the whole file (RFC 9110 §14.1.1)');
   assert.equal(parseRange('bytes=-5', 0), 'unsatisfiable', 'an empty file has no last bytes');
   assert.equal(parseRange('bytes=-0', 1000), 'unsatisfiable');
   assert.equal(parseRange(undefined, 1000), null);

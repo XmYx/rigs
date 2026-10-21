@@ -5,9 +5,15 @@
 //
 //   boot        refresh() reads the daemon's { keys }: a key whose stamp is newer than the one cached here is taken
 //               (written to the cache, listeners told); a key the daemon does not have yet is uploaded from the cache
-//               once (the migration that keeps a localStorage-only layout).
+//               once (the migration that keeps a localStorage-only layout) — unless the cache only holds what auto()
+//               wrote (defaults on a fresh page): those never go to the daemon.
 //   writes      setItem writes the cache at once and sends a PUT `debounceMs` after the last change (a drag is not
-//               sent every frame). An unchanged value (same JSON as the daemon's) is not sent.
+//               sent every frame). An unchanged value (same JSON as the daemon's) is not sent. A change made before
+//               the first refresh answered is marked `early` in the meta, so it loses to the daemon's value even
+//               after a reload (it was made without the saved layout: boot defaults, not a newer edit).
+//   auto        auto(fn): writes inside are derived, not chosen by a person (defaults on load, the app dock following
+//               the live mesh snapshot). They go to the cache only and are never stamped or sent, so a page that
+//               booted on defaults or saw a peer missing mid-update never overwrites the layout saved on the mesh.
 //   events      receive({ key, value, rev, by }) from the `ui-layout` WebSocket event: a newer value from elsewhere
 //               is applied; our own change coming back (same value) only records its stamp, so nothing echoes.
 //               While `busy()` (a pointer is held: a drag) it waits for resume(); a key changed here in the meantime
@@ -54,6 +60,8 @@ export function createSyncedStorage({
   const early = new Set(); // keys written before the first refresh answered: the daemon's value wins over them
   const checked = new Set(); // keys already compared with the daemon (migration done or not needed)
   const seen = new Set(); // keys read before the first refresh answered: compared then
+  const touched = new Set(); // keys read or written by this page
+  const blank = new Set(); // keys whose cache was empty when this page first touched them
   const inflight = new Map(); // key → JSON being sent
   const pending = new Map(); // key → entry waiting for resume() (a drag was in progress)
   const listeners = new Set();
@@ -64,6 +72,7 @@ export function createSyncedStorage({
   let last = null; // { key, rev, by } of the newest stamp seen
   let timer = null;
   let quiet = 0;
+  let auto = 0;
 
   const current = (k) => { const raw = lget(k); return raw === null ? null : prepare(k, encode(raw)); };
   const json = (v) => JSON.stringify(v ?? null);
@@ -73,6 +82,7 @@ export function createSyncedStorage({
   const note = (k, e) => { if (!last || isNewer(e, last)) last = { key: k, ...stamp(e) }; };
   const dirty = () => Object.values(meta).some((m) => m?.dirty);
   const tellStatus = () => { const s = api.status(); for (const fn of statusListeners) { try { fn(s); } catch { /* keep going */ } } };
+  const touch = (k) => { if (touched.has(k)) return; touched.add(k); if (lget(k) === null) blank.add(k); };
 
   function schedule(ms) {
     if (timer) clearTimer(timer);
@@ -84,13 +94,25 @@ export function createSyncedStorage({
     const v = current(k);
     if (v === null) return; // nothing to send (the daemon has no delete)
     if (!force && synced.has(k) && json(v) === synced.get(k)) {
-      if (meta[k]?.dirty) { delete meta[k].dirty; saveMeta(); }
+      if (meta[k]?.dirty) { delete meta[k].dirty; delete meta[k].early; saveMeta(); }
       return;
     }
-    if (!ready) early.add(k);
-    meta[k] = { ...(meta[k] || {}), dirty: at() };
+    const m = { ...(meta[k] || {}), dirty: at() };
+    delete m.auto; // a person changed it: the cache is theirs now
+    if (ready) delete m.early;
+    else { early.add(k); m.early = true; } // kept across a reload: still made before the daemon's value was loaded
+    meta[k] = m;
     saveMeta();
     if (ready) schedule(debounceMs);
+  }
+
+  /** A derived write (inside auto()): cache only. A key that held nothing saved is marked so it is never uploaded. */
+  function derived(k) {
+    if (blocked(k)) return;
+    const m = meta[k];
+    if (m?.dirty || m?.rev || m?.by || m?.auto || !blank.has(k)) return; // the cache already holds a saved or chosen value
+    meta[k] = { auto: true };
+    saveMeta();
   }
 
   /** Send every changed key now (the debounce timer calls this). Resolves when the PUTs answered. */
@@ -146,9 +168,11 @@ export function createSyncedStorage({
     checked.add(k);
     if (disabled || unsynced.has(k) || k === metaKey) return;
     const m = meta[k];
-    const wasEarly = early.delete(k);
+    const wasEarly = early.delete(k) || !!m?.early;
     if (!d) {
-      if (lget(k) !== null) markDirty(k, { force: true }); // the daemon has none yet: upload the localStorage-only value once
+      // The daemon has none yet: upload the localStorage-only value once — never mere defaults (auto), which would carry
+      // a fresh stamp to every peer and replace the layout saved there.
+      if (lget(k) !== null && !m?.auto) markDirty(k, { force: true });
       return;
     }
     note(k, d);
@@ -164,14 +188,18 @@ export function createSyncedStorage({
 
   const api = {
     getItem(k) {
+      touch(k);
       const raw = lget(k);
       if (!ready) seen.add(k);
       else if (!checked.has(k)) reconcile(k, undefined); // first read after boot of a key the daemon did not have
       return raw;
     },
     setItem(k, v) {
+      touch(k);
       lset(k, String(v));
-      if (!quiet) markDirty(k); // while applying the daemon's value nothing is sent back
+      if (quiet) return; // while applying the daemon's value nothing is sent back
+      if (auto) derived(k);
+      else markDirty(k);
     },
     removeItem(k) { try { local?.removeItem?.(k); } catch { /* ignore */ } },
 
@@ -211,7 +239,7 @@ export function createSyncedStorage({
         tellStatus();
         return false;
       }
-      if (m?.dirty || inflight.has(k)) return false; // a newer change of ours is on its way and will win
+      if ((m?.dirty && !m.early) || inflight.has(k)) return false; // a newer change of ours is on its way and will win
       return apply(k, ev);
     },
 
@@ -228,6 +256,8 @@ export function createSyncedStorage({
 
     /** Run fn with writes going to the cache only (re-applying a value that came from the daemon). */
     quiet(fn) { quiet++; try { return fn(); } finally { quiet--; } },
+    /** Run fn with writes that no person chose (load-time defaults, following the live snapshot): cache only, never sent. */
+    auto(fn) { auto++; try { return fn(); } finally { auto--; } },
     /** fn(key, raw, entry) after a value from elsewhere was written to the cache. */
     onRemote(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     onStatus(fn) { statusListeners.add(fn); return () => statusListeners.delete(fn); },

@@ -7,7 +7,7 @@ import { createConnectors } from './connectors-panel.js';
 const AGENTS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['ollama', 'Ollama'], ['rig', 'OpenRig'], ['rea', 'REA'], ['sunshine', 'Sunshine'], ['moonlight', 'Moonlight'], ['tmux', 'tmux']];
 
 /** Machines, versions, rollout of updates from GitHub, and JARVIS settings. */
-export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun, onInstallDesktop }) {
+export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun, onInstallDesktop, tab }) {
   let timer = null;
   const w = openWindow({ title: 'Mesh control', icon: '⚙', width: 1080, height: 640, className: 'mesh-win', onClose: () => clearInterval(timer) });
   const table = h('div', { class: 'mesh-table' });
@@ -20,6 +20,7 @@ export function openMesh({ snapshot, voice, onTerminal, onDesktop, onSsh, onRun,
   const tabs = [['Machines', table], ['Changes', changesEl], ['Tools', toolsEl], ['Routing', routingEl], ['Connectors', connectorsEl], ['Updates', updates], ['JARVIS', settings]];
   const tabBar = h('div', { class: 'tabs' }, ...tabs.map(([name, el], i) => h('button', { class: 'tab' + (i ? '' : ' on'), onclick: (e) => { tabBar.querySelectorAll('.tab').forEach((t) => t.classList.remove('on')); e.target.classList.add('on'); tabs.forEach(([, x]) => (x.style.display = 'none')); el.style.display = ''; } }, name)));
   w.body.append(tabBar, ...tabs.map(([, el], i) => { el.style.display = i ? 'none' : ''; return el; }));
+  if (tab) [...tabBar.children].find((b) => b.textContent === tab)?.click(); // opened on a tab (System Preferences' Open… actions)
 
   function renderMachines() {
     const data = snapshot();

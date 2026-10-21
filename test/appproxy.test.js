@@ -11,6 +11,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import WebSocket, { WebSocketServer } from 'ws';
+import { freePorts } from './ports.js';
 
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-proxy-unit-'));
 process.env.RIGS_NAME = 'unit-node';
@@ -133,9 +134,7 @@ const procs = [];
 let appServer;
 let appPort;
 let releaseSse = () => {};
-const B_PORT = 20000 + Math.floor(Math.random() * 20000);
-const A_PORT = B_PORT + 1;
-const DEAD_PORT = B_PORT + 2;
+const [B_PORT, A_PORT, DEAD_PORT] = await freePorts(3);
 // A non-loopback, non-tailnet address lets us prove the app-node daemon authorizes the relayed hop itself.
 const LAN = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal && !/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(i.address))?.address;
 const B_HOST = LAN || '127.0.0.1';

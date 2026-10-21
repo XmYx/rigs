@@ -32,7 +32,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
   const html = fs.readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8');
   const bar = html.slice(html.indexOf('<nav id="bar"'), html.indexOf('</nav>', html.indexOf('<nav id="bar"')));
   const buttons = [...bar.matchAll(/<button id="([\w-]+)"/g)].map((m) => m[1]);
-  assert.equal(buttons.length, 15);
+  assert.equal(buttons.length, 16);
   assert.deepEqual(S.TOOLS.map((t) => t.button).sort(), [...buttons].sort(), 'one tool per toolbar button, none missing, none extra');
   assert.equal(new Set(S.TOOLS.map((t) => t.id)).size, S.TOOLS.length, 'tool ids are unique');
   for (const t of S.TOOLS) {
@@ -41,7 +41,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
     assert.equal(t.button, `btn-${t.id}`);
   }
   const of = (id) => S.TOOL_GROUPS.find((g) => g.tools.some((t) => t.id === id)).name;
-  assert.deepEqual(['term', 'files', 'desk'].map(of), ['This machine', 'This machine', 'This machine']);
+  assert.deepEqual(['term', 'files', 'desk', 'player'].map(of), Array(4).fill('This machine'));
   assert.deepEqual(['proj', 'work', 'ask', 'agents', 'sess'].map(of), Array(5).fill('Work'));
   assert.deepEqual(['usage', 'traces', 'graphify', 'desktops'].map(of), Array(4).fill('Insight'));
   assert.deepEqual(['apps', 'mesh', 'mute'].map(of), Array(3).fill('System'));
@@ -67,7 +67,7 @@ test('tool items: kind tool, stable id tool:<name>, title, icon and the action/b
 test('a fresh dock: tools seeded into their four groups in table order, then app groups and Machines', () => {
   const s = check(fresh({ applets: [applet('krea'), applet('fuel', 'lin')], rigs: [rig('mac'), rig('lin')] }));
   assert.deepEqual(view(s), [
-    '[This machine:tool:term,tool:files,tool:desk]',
+    '[This machine:tool:term,tool:files,tool:desk,tool:player]',
     '[Work:tool:ask,tool:agents,tool:proj,tool:work,tool:sess]',
     '[Insight:tool:usage,tool:traces,tool:graphify,tool:desktops]',
     '[System:tool:apps,tool:mesh,tool:mute]',
@@ -133,16 +133,36 @@ test('never override: moved, ungrouped, hidden or re-grouped items stay where th
   s = S.mergeSources(s, { applets: [], rigs: [] });
   assert.equal(Object.keys(s.items).filter((id) => !id.startsWith('tool:')).length, 0);
   assert.ok(s.groups['g-node-mac'] && s.groups['g-machines'], 'default groups stay, empty');
-  // … and comes back: placed items come back loose (never re-grouped); the hidden one stays hidden
-  s = check(S.mergeSources(s, { applets: [applet('krea'), applet('notes'), applet('maps')], rigs: [rig('mac'), rig('lin')] }));
-  for (const id of [A('krea'), A('notes'), A('maps'), 'rig:mac', 'rig:lin']) assert.equal(M.groupOf(s, id), null, `${id} is not pulled into a default group again`);
+  // … and comes back (in any order): every item returns to the spot it left — its group or its top-level place — and
+  // the hidden one stays hidden
+  s = check(S.mergeSources(s, { applets: [applet('maps'), applet('notes'), applet('krea')], rigs: [rig('lin'), rig('mac')] }));
+  for (const id of [A('krea'), A('notes'), A('maps'), 'rig:mac', 'rig:lin']) assert.equal(M.groupOf(s, id)?.id ?? null, M.groupOf(arranged, id)?.id ?? null, `${id} is back in the group it left`);
+  assert.deepEqual(s.order, arranged.order, 'the top level is as it was');
+  for (const [gid, g] of Object.entries(arranged.groups)) assert.deepEqual(s.groups[gid].items, g.items, `${gid} has its members back in order`);
   assert.equal(s.items['rig:lin'].hidden, true, 'hidden before it went → hidden when it returns');
   assert.equal(s.items['rig:mac'].hidden, false);
   assert.equal(M.groupOf(s, T('mute')), null);
-  assert.equal(M.groupOf(arranged, A('notes')).id, 'g-tools-work');
+  assert.equal(M.groupOf(s, A('notes')).id, 'g-tools-work');
   // a never-seen applet still joins its group
   s = S.mergeSources(s, { applets: [applet('krea'), applet('notes'), applet('maps'), applet('new')] });
-  assert.deepEqual(s.groups['g-node-mac'].items, [A('new')]);
+  assert.deepEqual(s.groups['g-node-mac'].items, [A('maps'), A('new')], 'after the returning one, at the end of its group');
+});
+
+test('items that leave together (a machine updating) come back in their own order, whichever returns first', () => {
+  let s = fresh({ applets: [applet('krea'), applet('notes'), applet('maps')], rigs: [rig('mac'), rig('lin')] });
+  s = S.moveItem(s, 'rig:lin', { group: null, index: 1 });
+  s = S.moveItem(s, 'rig:mac', { group: null, index: 2 }); // top level: …, lin, mac, …
+  const arranged = s;
+  const gone = S.mergeSources(s, { applets: [], rigs: [] });
+  for (const back of [[['krea', 'notes', 'maps'], ['lin', 'mac']], [['maps', 'notes', 'krea'], ['mac', 'lin']]]) {
+    let t = gone;
+    for (let n = 1; n <= back[0].length; n++) t = S.mergeSources(t, { applets: back[0].slice(0, n).map((a) => applet(a)) }); // one by one
+    t = S.mergeSources(t, { applets: back[0].map((a) => applet(a)), rigs: [rig(back[1][0])] });
+    t = check(S.mergeSources(t, { applets: back[0].map((a) => applet(a)), rigs: [rig('mac'), rig('lin')] }));
+    assert.deepEqual(t.order, arranged.order, `top level as it was (back: ${back[1]})`);
+    assert.deepEqual(t.groups['g-node-mac'].items, arranged.groups['g-node-mac'].items, `group order as it was (back: ${back[0]})`);
+  }
+  assert.deepEqual(S.deserialize(S.serialize(gone)).placed, gone.placed, 'the spots survive a reload');
 });
 
 test('a default group the user dissolved is not brought back; its new members stay loose', () => {

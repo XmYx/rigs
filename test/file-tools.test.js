@@ -15,6 +15,7 @@ import {
 } from '../ui/src/file-tools-model.js';
 import { archiveName, extractFolderName, planExtract, safeEntryPath, splitExt, uniqueName, zipLimits } from '../src/zip-model.js';
 import * as files from '../src/files.js';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-file-tools-'));
@@ -37,7 +38,7 @@ test('toolFor: double-click opens txt/md in the editor, png/jpg in the image vie
   assert.equal(toolFor('Makefile'), 'text', 'no extension = text');
   assert.equal(toolFor('.bashrc'), 'text');
   assert.equal(toolFor('server.js'), 'text');
-  assert.equal(toolFor('movie.mp4'), null, 'no built-in tool: the browser downloads it');
+  assert.equal(toolFor('movie.mp4'), 'media', 'audio and video: the media player');
   assert.equal(toolFor('archive.zip'), null);
   assert.ok(isZip('x/Archive.ZIP'));
   assert.ok(!isZip('zip.txt'));
@@ -318,7 +319,7 @@ test('zip and unzip enforce the size cap; zip skips symlinks', async () => {
 // ------------------------------------------------------------------ HTTP routes on a throwaway node
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-ft-home-'));
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 let server;
 before(async () => {

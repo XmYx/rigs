@@ -11,6 +11,7 @@ export const GLOBAL_PATHS = [
   ['brain.core', []],
   ['brain.chat', []],
   ['brain.home', []],
+  ['brain.compact', []], // self-compaction of the JARVIS main thread (src/compact.js): it lives on the main-brain machine
   ['router', ['jev.url', 'jev.apiKey']],
   ['routing', []],
   ['quick', []],

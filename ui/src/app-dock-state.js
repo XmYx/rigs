@@ -8,7 +8,9 @@
 //   items:     { [id]: { id, kind, title, icon, ref, pinned, hidden, live, badge?, pressed? } }    id = `${kind}:${key}`
 //   groups:    { [gid]: { id, name, collapsed, items: [itemId] } }
 //   order:     [{ type: 'item'|'group', id }]   top level, left→right / top→bottom; grouped items live only in their group
-//   placed:    { [itemId]: true | 'hidden' }    applets, rigs and tools that have had their place once (see "default groups")
+//   placed:    { [itemId]: true | 'hidden' | { g?, i?, after?, hidden? } }   applets, rigs and tools that have had their
+//                                            place once (see "default groups"); the object is the spot one left: group g
+//                                            (or the top level), right after `after` (index i), so it comes back there
 //   dismissed: [gid]                            default groups the user dissolved: never re-created by themselves
 // }
 // Item kinds mirror the real sources: applet (App Cloud entry from /api/apps: { node, id, name, icon, category?, nodeName? }),
@@ -78,6 +80,7 @@ export const TOOL_GROUPS = Object.freeze([
     { id: 'term', button: 'btn-term', title: 'Terminal', icon: '⌨', hint: 'Terminal on the focused machine' },
     { id: 'files', button: 'btn-files', title: 'Files', icon: '📁', hint: 'Files on the focused machine' },
     { id: 'desk', button: 'btn-desk', title: 'Remote desktop', icon: '🖥', hint: 'Remote desktop to the focused machine' },
+    { id: 'player', button: 'btn-player', title: 'Media player', icon: '▶', hint: 'Media player — audio and video from any machine' },
   ] },
   { id: 'g-tools-work', name: 'Work', tools: [
     { id: 'ask', button: 'btn-ask', title: 'Questions', icon: '❓', hint: 'Questions — agents waiting for your answer', badge: true },
@@ -141,6 +144,39 @@ function draft(s) {
 
 const topIndex = (s, type, id) => s.order.findIndex((e) => e.type === type && e.id === id);
 
+const entryKey = (e) => `${e.type}:${e.id}`;
+
+/**
+ * Where an item sits: { g, i, after } in group g, { i, after } on the top level ({} when it is nowhere). `after` is what
+ * came right before it — an item id in a group, an entry key ('item:<id>' / 'group:<gid>') on the top level — or null
+ * when it was first.
+ */
+function spotOf(s, id) {
+  for (const g of Object.values(s.groups)) { const i = g.items.indexOf(id); if (i >= 0) return { g: g.id, i, after: i ? g.items[i - 1] : null }; }
+  const i = topIndex(s, 'item', id);
+  return i >= 0 ? { i, after: i ? entryKey(s.order[i - 1]) : null } : {};
+}
+
+/**
+ * Where an item returning to `spot` goes in `list` (a group's items or the top-level order): right after its `after`,
+ * or after that one's own `after` while it is still away too (a machine's items leave together and come back one by
+ * one), at the start when the chain began there. -1 when the chain is broken (then spot.i is used).
+ */
+function returnIndex(d, list, keyOf, spot) {
+  let after = spot.after;
+  const seen = new Set();
+  while (typeof after === 'string' && !seen.has(after)) {
+    seen.add(after);
+    const at = list.findIndex((x) => keyOf(x) === after);
+    if (at >= 0) return at + 1;
+    const id = spot.g ? after : after.startsWith('item:') ? after.slice(5) : '';
+    const prev = isObj(d.placed[id]) ? d.placed[id] : null;
+    if (!prev || (prev.g || null) !== (spot.g || null) || !('after' in prev)) return -1;
+    after = prev.after;
+  }
+  return after === null ? 0 : -1;
+}
+
 /** Detach an item from wherever it sits (top level or a group) inside a draft. */
 function detach(d, id) {
   d.order = d.order.filter((e) => !(e.type === 'item' && e.id === id));
@@ -169,14 +205,25 @@ function intoDefault(d, item, home) {
 /**
  * Give a brand-new item (already in d.items, not yet placed) its slot, in a draft. An applet, rig or tool seen for the
  * first time joins its default group (with settings.autoGroup on, unless the user dissolved that group); one that was
- * placed before — the user may have moved, ungrouped or hidden it, then it vanished and came back — goes to the end
- * of the top level as a plain item and keeps being hidden if it was. Default groups are never forced on a placed item.
+ * placed before — the user may have moved, ungrouped or hidden it, then it vanished (its machine restarting for an
+ * update, asleep, the app stopped) and came back — returns to the spot it left (that group, or that place on the top
+ * level; the end of the top level when the group is gone or the spot is unknown) and keeps being hidden if it was.
+ * Default groups are never forced on a placed item.
  */
 function place(d, item) {
   const before = d.placed[item.id];
+  const spot = isObj(before) ? before : null;
   const home = before || !d.settings.autoGroup ? null : defaultGroupOf(item);
-  if (before === 'hidden') item.hidden = true;
-  if (home && !d.dismissed.includes(home.id)) intoDefault(d, item, home);
+  if (before === 'hidden' || spot?.hidden) item.hidden = true;
+  if (spot?.g && d.groups[spot.g]) {
+    const g = d.groups[spot.g];
+    const at = returnIndex(d, g.items, (x) => x, spot);
+    insertAt(g.items, at >= 0 ? at : spot.i, item.id);
+  } else if (spot && !spot.g && (Number.isInteger(spot.i) || 'after' in spot)) {
+    const at = returnIndex(d, d.order, entryKey, spot);
+    insertAt(d.order, at >= 0 ? at : spot.i, { type: 'item', id: item.id });
+  }
+  else if (home && !d.dismissed.includes(home.id)) intoDefault(d, item, home);
   else d.order.push({ type: 'item', id: item.id });
   if (DEFAULT_KINDS.includes(item.kind)) d.placed[item.id] = true;
 }
@@ -395,8 +442,8 @@ const SOURCE_KEYS = { tools: 'tool', applets: 'applet', rigs: 'rig', panels: 'pa
  *                      group, pin and hide and only refresh title/icon/ref. Rigs count only while { online && rigs }.
  *   panels/windows/    never added by a merge (that is the user's choice, or auto-docking); items already in the dock
  *   terminals          get their title refreshed.
- * Items whose source is gone are removed — unless pinned, which keep their slot and turn `live: false`. A hidden
- * applet/rig/tool that goes is remembered as hidden and comes back hidden.
+ * Items whose source is gone are removed — unless pinned, which keep their slot and turn `live: false`. An applet/rig/
+ * tool that goes is remembered with its spot (and hidden flag) and comes back there (place()).
  */
 export function mergeSources(state, sources = {}) {
   if (!isObj(sources)) return state;
@@ -416,7 +463,7 @@ export function mergeSources(state, sources = {}) {
     for (const it of Object.values(d.items)) {
       if (it.kind !== kind || seen.has(it.id)) continue;
       if (it.pinned) it.live = false;
-      else { if (it.hidden && DEFAULT_KINDS.includes(kind)) d.placed[it.id] = 'hidden'; detach(d, it.id); delete d.items[it.id]; }
+      else { if (DEFAULT_KINDS.includes(kind)) d.placed[it.id] = { ...spotOf(state, it.id), ...(it.hidden ? { hidden: true } : {}) }; detach(d, it.id); delete d.items[it.id]; }
     }
   }
   return d;
@@ -592,7 +639,16 @@ export function normalize(raw) {
   const used = Object.keys(groups).map((g) => Number(g.slice(1))).filter(Number.isInteger).map((n) => n + 1);
   const next = Number.isInteger(r.nextGroup) && r.nextGroup > 0 ? r.nextGroup : 1;
   const seen = {};
-  for (const [id, v] of isObj(r.placed) ? Object.entries(r.placed) : []) if (isItemId(id) && (v === true || v === 'hidden')) seen[id] = v;
+  for (const [id, v] of isObj(r.placed) ? Object.entries(r.placed) : []) {
+    if (!isItemId(id)) continue;
+    if (v === true || v === 'hidden') seen[id] = v;
+    else if (isObj(v)) {
+      seen[id] = {
+        ...(isGroupId(v.g) ? { g: v.g } : {}), ...(Number.isInteger(v.i) && v.i >= 0 ? { i: v.i } : {}),
+        ...(v.after === null || typeof v.after === 'string' ? { after: v.after } : {}), ...(v.hidden === true ? { hidden: true } : {}),
+      };
+    }
+  }
   for (const it of Object.values(items)) if (DEFAULT_KINDS.includes(it.kind)) seen[it.id] = true; // in the dock = placed
   const dismissed = [...new Set((Array.isArray(r.dismissed) ? r.dismissed : []).filter(isDefaultGroup))];
   return { v: VERSION, nextGroup: Math.max(next, ...used), settings: sanitizeSettings(r.settings), items, groups, order, placed: seen, dismissed };

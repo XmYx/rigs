@@ -74,27 +74,35 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
   function load() {
     try { return deserialize(storage?.getItem(STORAGE_KEY)); } catch { return deserialize(null); }
   }
-  function save() {
-    try { storage?.setItem(STORAGE_KEY, serialize(state)); } catch { /* private mode / quota: the dock still works this session */ }
+  /**
+   * Persist the dock. `auto`: the change follows the live mesh or the page loading, not a person, so a synced storage
+   * keeps it in this browser only (synced-storage-model.js auto) and never sends it over the dock saved on the mesh.
+   */
+  function save({ auto = false } = {}) {
+    const write = () => storage?.setItem(STORAGE_KEY, serialize(state));
+    try { if (auto && storage?.auto) storage.auto(write); else write(); } catch { /* private mode / quota: the dock still works this session */ }
   }
 
-  /** Apply `fn(state) → state`; re-render and persist when it changed something. */
-  function act(fn) {
+  /** Apply `fn(state) → state`; re-render and persist when it changed something (`auto`: see save()). */
+  function act(fn, { auto = false } = {}) {
     let next;
     try { next = fn(state); } catch { return state; }
     if (!next || next === state) return state;
     state = next;
-    save();
+    save({ auto });
     render();
     return state;
   }
 
-  /** Fold the latest snapshot in (new applets/rigs appended, vanished ones dropped unless pinned). */
+  /**
+   * Fold the latest snapshot in (new applets/rigs appended, vanished ones dropped unless pinned). Saved as automatic:
+   * right after an update the snapshot misses the peers that are still restarting, and that must not reach the mesh.
+   */
   function sync() {
     const next = mergeSources(state, sources() || {});
     if (serialize(next) === serialize(state)) { refreshRunning(); return; }
     state = next;
-    save();
+    save({ auto: true });
     if (!drag) render(); // mid-drag the drop re-renders; doing it now would pull the tiles out from under the pointer
   }
 
@@ -537,7 +545,7 @@ export function createAppDock({ storage = globalThis.localStorage, sources = () 
     get state() { return state; },
     act,
     /** Live state of a tool (badge count, toggle on/off): shown on its tile, never saved. */
-    setTool: (id, patch) => act((s) => setToolState(s, id, patch)),
+    setTool: (id, patch) => act((s) => setToolState(s, id, patch), { auto: true }),
     sync,
     render,
     /**

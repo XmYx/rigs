@@ -10,10 +10,11 @@ import readline from 'node:readline';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-ui-open-'));
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token', RIGS_NO_SYSTEMD: '1' };
 Object.assign(process.env, { RIGS_HOME: HOME, RIGS_NO_OPENRIG: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_MIGRATIONS: '1', RIGS_NAME: 'test-node' });
@@ -190,7 +191,7 @@ test('uiOpenAction: a push → open the file browser for that machine at that fo
   assert.equal(M.uiOpenAction({ type: 'ui-open', view: 'terminal', nodeId: 'n-mac', path: '/x' }), null);
   assert.equal(M.uiOpenAction({ type: 'ui-open', view: 'files', path: '/x' }), null);
   const a = M.uiOpenAction({ type: 'ui-open', id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'mac', path: '/Users/mix/Downloads', select: '', missing: false, requested: '~/Downloads' }, { machines });
-  assert.deepEqual(a, { id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'macbookpro', path: '/Users/mix/Downloads', select: '', showHidden: false, toast: '' });
+  assert.deepEqual(a, { id: 'uo-1', view: 'files', nodeId: 'n-mac', nodeName: 'macbookpro', path: '/Users/mix/Downloads', select: '', showHidden: false, play: '', toast: '' });
   const f = M.uiOpenAction({ type: 'ui-open', view: 'files', nodeId: 'n-x', nodeName: 'magix-system', path: '/home/mix', select: '/home/mix/.bashrc', missing: false }, { machines });
   assert.deepEqual([f.nodeName, f.select, f.showHidden], ['magix-system', '/home/mix/.bashrc', true]);
   const m = M.uiOpenAction({ type: 'ui-open', view: 'files', nodeId: 'n-mac', path: '/Users/mix', missing: true, requested: '~/gone/deep' }, { machines });

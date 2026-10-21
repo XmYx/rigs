@@ -46,6 +46,8 @@ import * as exhibits from './exhibits.js';
 import * as starnet from './starnet.js';
 import * as prerouteStats from './preroute-stats.js';
 import { applyQuickPatch, localSettings, quickSettings } from './quick.js';
+import { applyCompactPatch } from './compact.js';
+import * as settingsApi from './settings-api.js';
 import * as responder from './responder.js';
 import { applyRouterPatch, routerView } from './router.js';
 import * as sessions from './sessions.js';
@@ -702,6 +704,15 @@ export async function startServer() {
       return r;
     }
     if (sub === 'config' && method === 'GET') return publicConfig();
+    // Unified settings (src/settings-api.js, docs/settings.md): every setting of the schema, read and patched in one place.
+    if (sub === 'settings' && method === 'GET') return settingsApi.readSettings({ node: config().name });
+    if (sub === 'settings' && method === 'POST') {
+      return settingsApi.patchSettings(await body(), {
+        node: config().name, discovery, comfy, linear, drive,
+        warm: (local) => responder.warm(local, { soul: chat.soul() }),
+        emit: (what, v) => { if (what === 'starnet') starnet.events.emit('config', v); },
+      });
+    }
     if (sub === 'config' && method === 'POST') {
       const b = await body();
       patchConfig(b);
@@ -717,7 +728,11 @@ export async function startServer() {
     // files
     if (sub === 'files' && method === 'GET') return files.list(q.get('path') || '~', { showHidden: q.get('hidden') === '1' || config().files.showHidden });
     if (sub === 'files/read') return files.readText(q.get('path'));
-    if (sub === 'files/raw') { if (!res) throw new HttpError(400, 'stream only'); await files.sendFile(q.get('path'), res, { download: q.get('download') === '1', range: req?.headers?.range }); return undefined; }
+    if (sub === 'files/raw') { // GET or HEAD; Range → 206 (media seeking), see files.sendFile
+      if (!res) throw new HttpError(400, 'stream only');
+      await files.sendFile(q.get('path'), res, { download: q.get('download') === '1', range: req.headers?.range, ifRange: req.headers?.['if-range'], head: method === 'HEAD' });
+      return undefined;
+    }
     if (sub === 'files/write' && method === 'PUT') return files.writeStream(q.get('path'), req);
     if (sub === 'files/text' && method === 'POST') { const b = await body(); return files.writeText(b.path, b.text ?? ''); }
     if (sub === 'files/mkdir' && method === 'POST') return files.mkdir((await body()).path);
@@ -1008,6 +1023,25 @@ export async function startServer() {
       return routerView();
     }
     if (sub === 'preroute/stats' && method === 'GET') return prerouteStats.report(Object.fromEntries(q));
+    // Self-compaction of the JARVIS thread (src/compact.js). The thread lives on the main-brain machine: relayed there
+    // like jarvis/send. GET = context size, threshold, last compaction (read-only); POST = settings (mesh-global);
+    // POST compact/now = compact it now (rigs compact now).
+    if (sub === 'compact' || sub === 'compact/now') {
+      const relay = relayTarget(config(), config().name, { via: req?.headers?.['x-rigs-relayed'] || '' });
+      const home = relay ? discovery.get(relay) : null;
+      if (home && !home.self && home.online && home.rigs && res) { req.headers['x-rigs-relayed'] = config().name; forwardHttp(home, req, res, sub); return undefined; }
+      if (sub === 'compact' && method === 'GET') return chat.mainCompactStatus();
+      if (sub === 'compact' && method === 'POST') {
+        let next;
+        try { next = applyCompactPatch(config().brain?.compact, await body()); } catch (e) { throw new HttpError(400, e.message); }
+        const cfg = config();
+        cfg.brain = { ...cfg.brain, compact: next };
+        saveConfig(cfg);
+        markGlobalChanged();
+        return chat.mainCompactStatus();
+      }
+      if (sub === 'compact/now' && method === 'POST') return chat.compactMainNow();
+    }
     // Quick-task fast path (src/quick.js): on/off and the model per tier; `local` = the local responder (src/responder.js).
     if (sub === 'quick' && method === 'GET') return { ...quickSettings(config().quick), local: localSettings(config().quick?.local) };
     if (sub === 'quick' && method === 'POST') {
@@ -1019,10 +1053,8 @@ export async function startServer() {
       const cfg = config();
       cfg.quick = next;
       saveConfig(cfg);
-      if (b.local !== undefined) {
-        markGlobalChanged(); // config.quick is a mesh-global setting: the main-brain machine must see the switch
-        if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
-      }
+      markGlobalChanged(); // config.quick is a mesh-global setting (rigs quick on|off, the tray toggle too): the main-brain machine must see it
+      if (b.local !== undefined && next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
       return { ...next, local: localSettings(next.local) };
     }
     // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files
@@ -1468,7 +1500,7 @@ export async function startServer() {
       if (out !== undefined && !res.headersSent) json(res, 200, out);
     } catch (e) {
       const status = e.status || (e.code === 'ENOENT' ? 404 : e.code === 'EACCES' || e.code === 'EPERM' ? 403 : 500);
-      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
+      if (!res.headersSent) json(res, status, { error: e.message, ...(e.name === 'SettingsError' ? { errors: e.errors, applied: e.applied } : {}), ...(e.name === 'ToolError' || e.name === 'LinearError' ? { code: e.code } : {}), ...(e.name === 'SlackError' ? { code: e.code, ...(e.retryAfter !== undefined ? { retryAfter: e.retryAfter } : {}) } : {}), ...(e.name === 'ControlError' ? { code: e.code, ...(e.fix ? { fix: e.fix } : {}) } : {}) });
       else res.end();
       if (status >= 500) log('error', req.method, url.pathname, e.stack || e.message);
     }

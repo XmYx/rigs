@@ -4,6 +4,7 @@
 // that is wanted. Playback stops when the selection changes, Quick Look closes or the window closes (the cleanups).
 import { api, fmtBytes, h, node } from './api.js';
 import { iconOf, kindOf } from './finder-model.js';
+import { claimPlayback, openMediaPlayer, releasePlayback } from './media-player.js';
 import { nativeCtx } from './ctx-tag.js';
 import {
   TEXT_SHOWN, fmtTime, highlight, langOf, parseInline, parseMarkdown, progressOf, quickLookSet, quickLookStep, seekTime, skipTime, viewerFor,
@@ -141,10 +142,18 @@ function drawViewer(el, e, ctx, { big = false } = {}) {
     img.addEventListener('error', () => { cap.textContent = 'Could not load this image'; });
     el.append(h('div', { class: `pv-stage${cls}` }, img), cap);
   } else if (kind === 'video' || kind === 'audio') {
-    const media = h(kind, { class: `pv-media pv-${kind}${cls}`, preload: 'metadata', playsinline: '', 'aria-label': e.name });
+    const media = h(kind, { class: `pv-el pv-${kind}${cls}`, preload: 'metadata', playsinline: '', 'aria-label': e.name });
     const wrap = h('div', { class: `pv-player pv-${kind}-wrap${cls}` });
     const note = h('div', { class: 'pv-cap muted' });
     media.addEventListener('error', () => { note.textContent = `This browser can't play ${kind === 'video' ? 'this video' : 'this audio'} (${kindOf(e)}). Download it to open it elsewhere.`; });
+    media.addEventListener('play', () => claimPlayback(media)); // one media element plays at a time (media-player.js)
+    // The media player window carries on from the same moment (playlist, mini-player, keeps playing when closed).
+    const toPlayer = h('button', { type: 'button', class: 'btn pv-to-player', title: 'Open in the media player, from this moment', onclick: () => {
+      const at = media.currentTime || 0;
+      const was = !media.paused;
+      media.pause();
+      openMediaPlayer({ nodeId: ctx.nodeId, nodeName: ctx.nodeName, path: e.path, name: e.name, startAt: at, autoplay: was || !at });
+    } }, '▶ Open in Player');
     let bar;
     if (kind === 'video') {
       media.src = `${url}${url.includes('#') ? '' : '#t=0.1'}`; // #t=0.1 shows the first frame as the poster without playing
@@ -157,7 +166,7 @@ function drawViewer(el, e, ctx, { big = false } = {}) {
       bar = transport(media);
       wrap.append(media, h('div', { class: 'pv-art', 'aria-hidden': 'true' }, iconOf(e)), h('div', { class: 'pv-track' }, e.name), bar);
     }
-    el.append(wrap, note);
+    el.append(wrap, h('div', { class: 'actions pv-media-actions' }, toPlayer), note);
   } else if (kind === 'pdf') {
     el.append(h('iframe', { class: `pv-frame${cls}`, src: url, title: e.name }));
   } else if (kind === 'text' || kind === 'markdown') {
@@ -176,7 +185,7 @@ function drawViewer(el, e, ctx, { big = false } = {}) {
     el.append(h('div', { class: `pv-info${cls}` }, h('div', { class: 'fd-pv-big', 'aria-hidden': 'true' }, iconOf(e)), h('div', { class: 'pv-title' }, e.name),
       big ? info(e, { rigName: ctx.nodeName, sep: ctx.sep }) : null));
   }
-  return () => { alive = false; stopMedia(el); };
+  return () => { alive = false; for (const m of el.querySelectorAll('video,audio')) releasePlayback(m); stopMedia(el); };
 }
 
 // ------------------------------------------------------------------ pane

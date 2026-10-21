@@ -1,6 +1,7 @@
 // Pure logic of the built-in file tools (ui/src/file-tools.js): which tool opens which file, the CSV parser,
 // JSON validation with an error position, image stepping/zoom and the file browser's multi-selection. No DOM, so it
 // is unit-tested in Node (test/file-tools.test.js).
+import { mediaKind } from './media-player-model.js';
 
 export const TOOLS = Object.freeze({
   text: { id: 'text', label: 'Text editor', icon: '📝' },
@@ -8,6 +9,7 @@ export const TOOLS = Object.freeze({
   pdf: { id: 'pdf', label: 'PDF viewer', icon: '📕' },
   csv: { id: 'csv', label: 'CSV viewer', icon: '▦' },
   json: { id: 'json', label: 'JSON viewer', icon: '{}' },
+  media: { id: 'media', label: 'Media player', icon: '▶' },
 });
 
 const IMAGE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
@@ -31,6 +33,7 @@ export function toolFor(name) {
   if (PDF.test(n)) return 'pdf';
   if (CSV.test(n)) return 'csv';
   if (JSONX.test(n)) return 'json';
+  if (mediaKind(n)) return 'media'; // audio and video: the media player (media-player.js)
   if (isText(n)) return 'text';
   return null;
 }

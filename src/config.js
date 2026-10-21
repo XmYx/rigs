@@ -9,7 +9,8 @@ export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
 export const DEFAULT_PORT = 4719;
 const RULES_VERSION = 4;
 
-function defaults() {
+/** The default config. Every key must be in the settings schema (ui/src/settings-model.js) or its HIDDEN list. */
+export function defaults() {
   return {
     nodeId: crypto.randomUUID(),
     name: shortHost(),
@@ -45,6 +46,10 @@ function defaults() {
       claudePermissionMode: 'auto',
       claudeAllowedTools: ['mcp__rigs', 'mcp__rea', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'WebSearch', 'WebFetch'],
       codexSandbox: 'workspace-write',
+      // Self-compaction of the JARVIS main thread (src/compact.js): when the full brain's context (the last API call's
+      // input + cache tokens) reaches atTokens, one summarisation call on `model` replaces everything but the last
+      // keepMessages conversation messages, and the next turn starts a fresh session from that summary. Mesh-global.
+      compact: { enabled: true, atTokens: 100000, keepMessages: 12, model: 'claude-sonnet-5-5', timeoutMs: 180000 },
     },
     // How agents RIGS starts (terminal agents, project tasks, OpenRig seats) handle permissions. "auto" = work
     // unattended: Claude's auto mode (a classifier approves safe actions), Codex in its workspace-write sandbox
@@ -207,13 +212,15 @@ export function saveConfig(cfg = current) {
   current = cfg;
 }
 
+// Top-level keys patchConfig drops: identity, secrets and screen control. comfyui, linear and connectors (Slack, Google
+// Drive) hold secrets and have their own validated endpoints (/api/local/comfyui/config, linear/config,
+// /api/local/connectors/google-drive/config); control is switched on only by a confirmed human surface (src/control.js).
+export const PATCH_BLOCKED = Object.freeze(['nodeId', 'meshToken', 'desktop', 'comfyui', 'linear', 'connectors', 'control']);
+
 /** Shallow-safe patch used by the settings API; never lets the UI change identity or secrets. */
 export function patchConfig(patch) {
   const cfg = config();
-  // comfyui, linear and connectors (Slack, Google Drive) hold secrets and have their own validated endpoints
-  // (/api/local/comfyui/config, linear/config, /api/local/connectors/google-drive/config).
-  const blocked = new Set(['nodeId', 'meshToken', 'desktop', 'comfyui', 'linear', 'connectors', 'control']);
-  for (const k of Object.keys(patch || {})) if (blocked.has(k)) delete patch[k];
+  for (const k of Object.keys(patch || {})) if (PATCH_BLOCKED.includes(k)) delete patch[k];
   // publicConfig masks the LocalJev key; a settings form saving that mask back must not overwrite the real one.
   if (patch?.router?.jev?.apiKey === '••••') delete patch.router.jev.apiKey;
   const next = merge(cfg, patch);

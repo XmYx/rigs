@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-hubs-'));
@@ -248,7 +249,7 @@ test('rig resolves outside the service PATH: RIGS\'s pinned wrapper first, then 
 
 // ---------------------------------------------------------------- the intake route on a real node
 
-const PORT = 20000 + Math.floor(Math.random() * 20000);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const NODE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-intake-node-'));
 let server;

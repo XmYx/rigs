@@ -38,6 +38,14 @@ const tile = (zone) => ({
 export function registerJarvisCommands(deps) {
   const machine = () => deps.machine?.() || null;
   const list = [
+    // ------------------------------------------------------------ JARVIS (the menu at the far left, like the Apple menu)
+    { id: 'jarvis.prefs', label: 'System Preferences…', icon: '⚙', shortcut: 'Mod+,', when: () => !!deps.preferences, run: () => deps.preferences() },
+    { id: 'jarvis.rescan', label: 'Rescan the mesh', icon: '↻', when: () => !!deps.rescan, run: () => deps.rescan() },
+    {
+      id: 'jarvis.mute', icon: '🔇', when: () => !!deps.voice, checked: () => !!deps.voice?.muted(),
+      label: () => (deps.voice?.muted() ? 'Muted — JARVIS stands down' : 'Stand down — mute JARVIS'), run: () => deps.voice.setMuted(!deps.voice.muted()),
+    },
+
     // ------------------------------------------------------------ File
     { id: 'file.newProject', label: 'New project / task…', icon: '📋', run: () => deps.projects() },
     { id: 'file.openApp', label: 'Open app…', icon: '▦', run: () => deps.openApps() },
@@ -77,7 +85,7 @@ export function registerJarvisCommands(deps) {
       },
     },
     { id: 'edit.find', label: 'Find in mesh…', icon: '⌕', shortcut: '/', run: () => deps.find() },
-    { id: 'edit.settings', label: 'Settings — mesh, updates…', icon: '⚙', shortcut: 'Mod+,', run: () => deps.mesh() },
+    { id: 'edit.settings', label: 'Settings — mesh, updates…', icon: '⚙', run: () => deps.mesh() },
     { id: 'edit.display', label: 'Display & theme…', icon: '🎨', run: () => deps.display() },
 
     // ------------------------------------------------------------ Window (per item: args = { kind, id, title, open })
@@ -134,6 +142,7 @@ export function registerJarvisCommands(deps) {
     { id: 'tools.terminal', label: () => `Terminal on ${machine()?.name || 'this machine'}`, icon: '⌨', enabled: () => !!machine(), run: () => deps.terminal(machine()) },
     { id: 'tools.control', label: () => `Screen control on ${machine()?.name || 'this machine'}…`, icon: '🛡', enabled: () => !!machine(), run: () => deps.control(machine()) },
     { id: 'tools.desktops', label: 'Desktops (live screens)', icon: '🖼', run: () => focusPanel('desktops') },
+    { id: 'tools.player', label: 'Media player', icon: '▶', run: () => deps.player() },
 
     // ------------------------------------------------------------ Experimental
     {
@@ -149,7 +158,7 @@ export function registerJarvisCommands(deps) {
     // ------------------------------------------------------------ Help
     { id: 'help.shortcuts', label: 'Keyboard shortcuts', icon: '⌨', shortcut: '?', run: (ctx) => openShortcuts(ctx) },
     { id: 'help.docs', label: 'Documentation (AGENTS.md)', icon: '📖', run: () => window.open(DOCS_URL, '_blank', 'noopener') },
-    { id: 'help.about', label: 'About RIGS', icon: 'ⓘ', run: () => openAbout(deps) },
+    { id: 'help.about', label: 'About RIGS OS', icon: 'ⓘ', run: () => openAbout(deps) },
     { id: 'help.issue', label: 'Report an issue…', icon: '🐞', run: () => window.open(issueUrl(deps), '_blank', 'noopener') },
   ];
   commands.registerAll(list);
@@ -173,6 +182,12 @@ export function menuModel() {
     ],
   });
   return [
+    { id: 'jarvis', label: '◆ JARVIS', items: () => [
+      { cmd: 'help.about' }, { sep: true },
+      { cmd: 'jarvis.prefs' }, { cmd: 'tools.appStore' }, { sep: true },
+      { cmd: 'jarvis.rescan' }, { cmd: 'jarvis.mute' }, { sep: true },
+      { cmd: 'file.reload' },
+    ], brand: true },
     { id: 'file', label: 'File', items: () => [
       { cmd: 'file.newProject' }, { cmd: 'file.openApp' }, { cmd: 'file.openFile' }, { cmd: 'file.openSession' },
       { sep: true }, { cmd: 'file.close' }, { cmd: 'file.reload' },
@@ -203,7 +218,7 @@ export function menuModel() {
     ] },
     { id: 'tools', label: 'Tools', items: () => [
       { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.graphify' }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
-      { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' },
+      { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' }, { cmd: 'tools.player' },
     ] },
     { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }, { sep: true }, { cmd: 'experimental.starnet' }] },
     { id: 'help', label: 'Help', items: () => [
@@ -231,13 +246,14 @@ function selfInfo(deps) {
 
 function openAbout(deps) {
   const me = selfInfo(deps);
-  const w = openWindow({ title: 'About RIGS', icon: 'ⓘ', width: 420, height: 320 });
+  const w = openWindow({ title: 'About RIGS OS', icon: 'ⓘ', width: 420, height: 340 });
   w.body.append(h('div', { class: 'about' },
     h('h3', {}, 'RIGS OS · JARVIS'),
     h('p', { class: 'muted' }, 'A control plane for your mesh of machines and agents.'),
     h('dl', { class: 'about-dl' },
       h('dt', {}, 'Version'), h('dd', {}, me.version),
       h('dt', {}, 'This node'), h('dd', {}, me.name),
+      h('dt', {}, 'Brain'), h('dd', {}, deps.brain?.() || '—'),
       h('dt', {}, 'Machines online'), h('dd', {}, String(deps.machines?.().length ?? '?'))),
     h('p', {}, h('a', { href: DOCS_URL, target: '_blank', rel: 'noopener' }, 'Documentation'), ' · ', h('a', { href: issueUrl(deps), target: '_blank', rel: 'noopener' }, 'Report an issue'))));
 }

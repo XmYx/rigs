@@ -144,6 +144,10 @@ let calView = null;
 
 function tickNow() { clearTimeout(clockTimer); tickClock(); }
 
+/** The menu bar clock's 12/24-hour setting (also System Preferences › Appearance › 12-hour clock). */
+export const clock12 = () => hour12;
+export function setClock12(on) { hour12 = !!on; store.set(hour12 ? 'h12' : 'h24'); tickNow(); }
+
 function calendarPopover({ rerender, fresh }) {
   const now = new Date();
   if (fresh || !calView) calView = { year: now.getFullYear(), month: now.getMonth() };

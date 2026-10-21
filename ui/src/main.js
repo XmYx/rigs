@@ -1,5 +1,6 @@
 import { bannerVisible, closedTexts, prefs } from './toasts.js';
 import { CAPS, capMap, createSweeper } from './cleanup.js';
+import { compactedLabel, transcriptRows } from './compact-model.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -8,7 +9,7 @@ import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isDoc
 import { onRemoteKey, prepareKey, receiveLayout, syncedStorage } from './synced-storage.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
 import { sourcesFromSnapshot, STORAGE_KEY as APPDOCK_KEY } from './app-dock-model.js';
-import { TOOLS, deserialize as deserializeDock, serialize as serializeDock } from './app-dock-state.js';
+import { TOOLS, deserialize as deserializeDock, serialize as serializeDock, setSettings as setDockSettings } from './app-dock-state.js';
 import { menuModel, registerJarvisCommands } from './jarvis-commands.js';
 import { closeMenus, initMenubar } from './menubar.js';
 import { askMode, dockAskToTopbar, floatAsk, focusAsk, hideAsk, initAskPanel, rememberAsk } from './ask-panel.js';
@@ -32,6 +33,7 @@ import { onYoloEvent } from './yolo.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
+import { configureMediaPlayer, openMediaPlayer } from './media-player.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
@@ -55,6 +57,10 @@ import { SEPARATOR, spokenText } from './sentences.js';
 import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
 import { closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, minimizeWindow, openWindow, toggleMaximize, windowCount } from './wm.js';
 import { THEMES, applyTheme, themeId } from './themes.js';
+// System Preferences (last, so the modules above keep their evaluation order)
+import { openPreferences } from './prefs-window.js';
+import { createPrefBridge } from './prefs-bridge.js';
+import { clock12, setClock12 } from './tray.js';
 
 applyTheme();
 
@@ -706,13 +712,14 @@ function showInFiles(path, select = '') {
   if (w) { w.navigate(path, { select }); w.raise(); } else filesOn(self, path, { select });
 }
 
-/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — today the file browser at a folder. */
+/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — the file browser at a folder, the media player for an audio or video file. */
 const uiOpenSeen = new Set();
 function onUiOpen(m) {
   const a = uiOpenAction(m, { machines: snap.map((e) => e.node) });
   if (!a || (a.id && uiOpenSeen.has(a.id))) return;
   if (a.id) { uiOpenSeen.add(a.id); if (uiOpenSeen.size > 50) uiOpenSeen.delete(uiOpenSeen.values().next().value); }
-  if (a.view === 'files') {
+  if (a.view === 'files' && a.play) openMediaPlayer({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.play }); // an audio or video file: play it
+  else if (a.view === 'files') {
     const w = filesTarget(filesWins, a.nodeId);
     if (w) { w.navigate(a.path, { select: a.select, showHidden: a.showHidden }); w.raise(); }
     else filesOn({ id: a.nodeId, name: a.nodeName }, a.path, { select: a.select, showHidden: a.showHidden });
@@ -853,8 +860,16 @@ function projectsWindow(openId) {
   return pw;
 }
 
-function meshWindow() {
-  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo, onSsh: sshTo, onRun: runOn, onInstallDesktop: installDesktop });
+function meshWindow(tab) {
+  openMesh({ snapshot: () => snap, voice, onTerminal: (n) => openTerminal({ nodeId: n.id, nodeName: n.name }), onDesktop: desktopTo, onSsh: sshTo, onRun: runOn, onInstallDesktop: installDesktop, tab });
+}
+
+/** Mute or unmute JARVIS's voice (🔊 button, JARVIS › Stand down, System Preferences) and keep the button in step. */
+function setMuted(on) {
+  voice.setMuted(!!on);
+  const b = $('#btn-mute');
+  if (b) { b.textContent = voice.muted ? '🔇' : '🔊'; b.setAttribute('aria-pressed', String(voice.muted)); }
+  syncToolBadges();
 }
 
 // ------------------------------------------------------------------ brain
@@ -1336,7 +1351,10 @@ async function conversationWindow() {
   try {
     const c = await api(`${node(chatRef.nodeId)}/chats/${chatRef.chatId}`);
     const older = Math.max(0, c.messages.length - CAPS.chatMessages); // a long conversation shows its latest messages, not thousands of nodes
-    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...c.messages.slice(older).map((x) => h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`), h('div', { class: 'mt' }, x.text))));
+    // a divider where the brain's context was compacted (src/compact.js): the messages above are kept, JARVIS goes on from their summary
+    const divider = (k) => { const l = compactedLabel(k); return h('div', { class: 'compact-divider', title: l.title, role: 'separator' }, h('span', {}, l.text)); };
+    list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...transcriptRows(c.messages, c.compactions, older).map(({ kind, m: x, c: k }) => kind === 'compacted' ? divider(k)
+      : h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, `${x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`}${x.mirror ? ` · ${x.route || 'work'} thread` : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
 }
@@ -1450,7 +1468,7 @@ function wire() {
   syncToolBadges();
   // Auto-docking: panels and floating windows (wm.js) and terminals (terminal.js) announce open / close on the bus; the
   // dock turns them into items only when its autoDock / autoTabTerminals settings are on (both off by default).
-  appDock.act((s) => reconcileOnLoad(s, listPanels())); // a reload leaves no window or terminal open: drop their stale items
+  appDock.act((s) => reconcileOnLoad(s, listPanels()), { auto: true }); // a reload leaves no window or terminal open: drop their stale items (this page only)
   bindDock(openBus, appDock);
   onRemoteKey(APPDOCK_KEY, () => syncedStorage.quiet(() => appDock.reload(keepTransient))); // changed on another machine: redraw live
   trackPanels({ list: listPanels, subscribe: (fn) => dockManager.subscribe(fn) });
@@ -1476,12 +1494,14 @@ function wire() {
   };
   $('#btn-term').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; const m = n || machineById(selfId); if (m) openTerminal({ nodeId: m.id, nodeName: m.name }); };
   $('#btn-files').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; filesOn(n || machineById(selfId)); };
+  configureMediaPlayer({ browse: () => filesOn(machineById(selfId) || { id: 'self', name: 'this machine' }) }); // the empty player's Browse files…
+  $('#btn-player').onclick = () => openMediaPlayer();
   $('#btn-desk').onclick = () => { const n = graph.focused ? machineById(graph.get(graph.focused)?.machine) : null; if (n && !n.self) desktopTo(n); else toast('Focus another machine first (click it in the galaxy), then press 🖥.'); };
   $('#btn-sess').onclick = () => sessionsWindow();
-  $('#btn-mesh').onclick = meshWindow;
+  $('#btn-mesh').onclick = () => meshWindow();
   $('#btn-proj').onclick = () => projectsWindow();
   $('#btn-apps').onclick = () => openApps();
-  $('#btn-mute').onclick = () => { voice.setMuted(!voice.muted); $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊'; $('#btn-mute').setAttribute('aria-pressed', String(voice.muted)); syncToolBadges(); };
+  $('#btn-mute').onclick = () => setMuted(!voice.muted);
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
   $('#btn-mute').setAttribute('aria-label', 'Mute voice output');
@@ -1602,11 +1622,67 @@ function wireMenus() {
     if (isPhone()) openDrawer({ focus: false }); else showPanel('left');
     setTimeout(() => { const el = $(sel); el?.scrollIntoView?.({ block: 'center' }); el?.focus({ preventScroll: true }); }, 60);
   };
-  registerJarvisCommands({
+  // System Preferences (prefs-window.js): UI prefs go through the same code as the left panel, menus and app dock.
+  const setBox = (sel, prop, v) => { const el = $(sel); if (el) el[prop] = v; };
+  const prefBridge = createPrefBridge({
+    theme: { get: () => themeId(), set: (id) => { applyTheme(id); setBox('#d-theme', 'value', themeId()); } },
+    face: { get: () => !$('#face').classList.contains('off'), set: (on) => showFace(on) },
+    menubar: { get: () => bar?.isHidden(), set: (on) => bar?.setHidden(on) },
+    clock12: { get: clock12, set: setClock12 },
+    ask: {
+      get: askMode,
+      set: (mode) => {
+        if (mode === 'topbar') dockAskToTopbar();
+        else if (mode === 'floating') floatAsk();
+        else if (mode === 'hidden') hideAsk();
+        else throw new Error('To dock the Ask field, turn on the docking layout and drag the Ask panel onto another panel.');
+      },
+    },
+    cloud: { get: () => graph.visible, set: (on) => setCloud(on) },
+    display: { get: (k) => store.get('d-' + k, k === 'particles' || k === 'rotate' ? !lowPower() : true), set: (k, on) => { store.set('d-' + k, on); graph.setDisplay({ [k]: on }); setBox('#d-' + k, 'checked', on); } },
+    forces: {
+      get: (k) => store.get(k === 'repel' ? 'repel' : 'linklen', k === 'repel' ? 120 : 24),
+      set: (k, n) => { const key = k === 'repel' ? 'repel' : 'linklen'; store.set(key, Number(n)); graph.setForces({ [k]: Number(n) }); setBox('#' + key, 'value', n); },
+    },
+    exhibitAnim: { get: exhibitAnim, set: setExhibitAnim },
+    // the Panels menu's switches (importing docking.js / scaling.js here would reorder the bundle's module cycle)
+    docking: { get: () => jarvisCmds.isChecked('panels.docking', {}), set: (on) => { if (jarvisCmds.isChecked('panels.docking', {}) !== !!on) jarvisCmds.run('panels.docking', {}); } },
+    scaling: { get: () => jarvisCmds.isChecked('panels.scaling', {}), set: (on) => { if (jarvisCmds.isChecked('panels.scaling', {}) !== !!on) jarvisCmds.run('panels.scaling', {}); } },
+    dock: {
+      get: (f) => appDock?.state.settings?.[f],
+      set: (f, v) => { if (!appDock) throw new Error('The app dock is not on this page.'); appDock.act((s) => setDockSettings(s, { [f]: v })); },
+    },
+    notify: {
+      get: (k) => prefs()[k],
+      set: (k, on) => { prefs()[k] = on; if (!on && k === 'notifications') $('#toasts')?.querySelectorAll('.toast').forEach((t) => t.remove()); syncNotifyChecks(); renderAttention(); },
+    },
+    autoOpen: { get: () => store.get('autoOpenSessions', true), set: (on) => { store.set('autoOpenSessions', on); setBox('#d-autosess', 'checked', on); } },
+    voice: { get muted() { return voice.muted; }, setMuted, get voiceId() { return voice.voiceId; }, setVoice: (id) => voice.setVoice(id) },
+  });
+  // The existing UI behind a setting's Open… action (settings-model.js UI_SURFACES).
+  const MESH_TABS = { 'mesh.routing': 'Routing', 'mesh.tools': 'Tools', 'mesh.connectors': 'Connectors', 'mesh.updates': 'Updates', 'mesh.changes': 'Changes' };
+  const openSurface = (name, m) => {
+    if (MESH_TABS[name]) return meshWindow(MESH_TABS[name]);
+    if (name === 'control') return openControl({ machine: machineById(m?.id) || machineById(selfId) });
+    if (name === 'apps') return openApps();
+    if (name === 'appstore') return openAppStore();
+    if (name === 'hubs') return reveal('#hubs');
+    throw new Error(`Nothing opens ${name} here`);
+  };
+  const preferences = (category) => openPreferences({
+    prefs: prefBridge, machines, selfId: () => selfId, voices: () => voice.voices(), themes: THEMES, openSurface,
+  }, { category });
+  window.__rigsPrefs = { bridge: prefBridge, open: preferences }; // read by scripts/prefs-check.js
+  const jarvisCmds = registerJarvisCommands({
+    preferences: () => preferences(),
+    rescan: async () => { await api('/api/mesh/refresh', { method: 'POST' }); refresh(); toast('Rescanning the mesh…', 'info'); },
+    voice: { muted: () => voice.muted, setMuted },
+    brain: () => { const b = currentBrain(); return b ? `${shortModel(b)}${b.effort ? ` · ${b.effort}` : ''} on ${b.nodeName}` : 'none'; },
     projects: () => projectsWindow(),
     openApps: () => openApps(),
     openAppStore: () => openAppStore(),
     files: (m) => filesOn(m),
+    player: () => openMediaPlayer(),
     sessions: () => sessionsWindow(),
     mesh: () => meshWindow(),
     find: () => reveal('#search'),

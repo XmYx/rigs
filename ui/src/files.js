@@ -3,6 +3,7 @@ import { openWindow } from './wm.js';
 import { isPhone } from './mobile.js';
 import { nativeCtx, tagCtx } from './ctx-tag.js';
 import { openFileTool } from './file-tools.js';
+import { mediaKind, mediaPreview } from './media-player.js';
 import { quickLook, renderPreview } from './finder-preview.js';
 import { TOOLS, isZip, toolFor, toolsFor } from './file-tools-model.js';
 import {
@@ -459,7 +460,7 @@ export function openFiles({ nodeId, nodeName, path = '~', select = '', showHidde
       api(`${node(rig.id)}/files/read?path=${encodeURIComponent(e.path)}`)
         .then((r) => { if (alive) el.append(nativeCtx(h('pre', { class: 'pv-text' }, r.text.slice(0, 200000)))); }) // file text: the browser's menu (copy, search)
         .catch((err) => { if (alive) el.append(h('div', { class: 'muted pad' }, err.message)); });
-    } else if (/\.(mp4|webm|mov)$/i.test(e.name)) el.append(h('video', { class: 'pv-img', src: raw, controls: true }));
+    } else if (mediaKind(e.name)) el.append(mediaPreview({ nodeId: rig.id, nodeName: rig.name, path: e.path, name: e.name, entries: cur.entries })); // <audio>/<video> + Open in Player
     else if (/\.pdf$/i.test(e.name)) el.append(h('iframe', { class: 'pv-frame', src: raw, title: e.name }));
     return () => { alive = false; for (const m of el.querySelectorAll('video,audio')) { m.pause(); m.removeAttribute('src'); m.load?.(); } };
   }

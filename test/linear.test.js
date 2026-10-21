@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './ports.js';
 
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-linear-'));
 process.env.RIGS_NO_OPENRIG = '1';
@@ -342,7 +343,7 @@ test('end to end: a node with a key serves linear/*, `rigs mcp` lists the linear
   await new Promise((r) => linearServer.listen(0, '127.0.0.1', r));
   const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-linear-e2e-'));
   fs.writeFileSync(path.join(HOME, 'config.json'), JSON.stringify({ linear: { apiKey: KEY, url: `http://127.0.0.1:${linearServer.address().port}/graphql` } }));
-  const PORT = 20000 + Math.floor(Math.random() * 20000);
+  const PORT = await freePort();
   const BASE = `http://127.0.0.1:${PORT}`;
   const env = { ...process.env, RIGS_NO_MIGRATIONS: '1', RIGS_NO_AUTOUPDATE: '1', RIGS_NO_OPENRIG: '1', RIGS_HOME: HOME, RIGS_SSH_DIR: path.join(HOME, 'ssh'), RIGS_PORT: String(PORT), RIGS_NAME: 'test-node', RIGS_PEERS: '', RIGS_MESH_TOKEN: 'test-token' };
   delete env.LINEAR_API_KEY;

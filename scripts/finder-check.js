@@ -307,6 +307,19 @@ try {
   check('…and previews it', (await page.$eval(`${W} .fd-preview .pv-title`, (e) => e.textContent)).includes('notes.md'));
   await shot(page, 'desktop-ui-open-rig-b.png');
 
+  // audio in the preview pane hands over to the media player window (media-player.js)
+  await page.locator(`${W} .fd-side-item.rig`, { hasText: 'mac-a' }).click();
+  await page.waitForFunction((p) => document.querySelector('.files-win .path-input')?.value === p, A.home);
+  await page.locator(`${W} .fd-side-item[data-fav="downloads"]`).click();
+  await row(page, 'song.mp3').waitFor();
+  await row(page, 'song.mp3').click();
+  await page.locator(`${W} .pv-to-player`).waitFor();
+  check('an audio preview offers Open in Player', true);
+  await page.locator(`${W} .pv-to-player`).click();
+  await page.waitForSelector('.mp-win');
+  check('…which opens the media player window', true);
+  await page.locator('.mp-win .win-btn.close').click();
+
   // the view is remembered across a reload
   await page.reload();
   await sleep(1500);

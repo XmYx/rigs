@@ -3,6 +3,7 @@ import { isPhone } from './mobile.js';
 import { dockManager, panelWindowState, setActiveTab, emptyLayout } from './dock-layout.js';
 import { initDocking, registerDockable, render, clampPanel, STAGE } from './docking.js';
 import { tagCtx } from './ctx-tag.js';
+import { syncedStorage } from './synced-storage.js';
 import { buildChrome } from './window-state.js';
 import { pushBack, dropBack } from './wm.js';
 
@@ -192,7 +193,8 @@ export function makeFloating(el, { id, title, into = el, handle, keep = [], onTo
 
   // Some panels start closed the first time (and on a phone), so the galaxy is not buried on first load.
   if (closedByDefault) startHidden.add(id);
-  dockManager.registerPanel(id, { title, hidden: closedByDefault || (closedOnPhone && isPhone()) || inherited.has(id) });
+  // A panel joining the layout is automatic: saved in this browser, never sent over the layout saved on the mesh.
+  syncedStorage.auto(() => dockManager.registerPanel(id, { title, hidden: closedByDefault || (closedOnPhone && isPhone()) || inherited.has(id) }));
   registerDockable(id, {
     el, title, kind: 'panel',
     handles: [bar, grip],

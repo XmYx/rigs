@@ -119,13 +119,16 @@ export function trackPanels({ list, subscribe, bus = openBus, icon = '▤' }) {
  *   minimized / restored   a minimized window is reached from the dock (onMinimized / onRestored)
  */
 export function bindDock(bus, dock) {
+  // The dock following what opens and closes on this page is automatic (app-dock.js act auto): kept in this browser,
+  // never sent to the mesh on its own — a restart closing every terminal must not publish the dock.
+  const act = (fn) => dock.act(fn, { auto: true });
   return bus.on((ev) => {
     const it = toItem(ev?.kind, ev?.source);
     if (!it) return;
-    if (ev.type === 'opened') dock.act((s) => (s.items[it.id] ? addItem(s, it) : onOpened(s, ev)));
-    else if (ev.type === 'closed') dock.act((s) => (ev.kind === 'terminal' ? dropEmptyTerminalGroup(onClosed(s, ev)) : onClosed(s, ev)));
-    else if (ev.type === 'title') dock.act((s) => (s.items[it.id] ? addItem(s, it) : s));
-    else if (ev.type === 'minimized') dock.act((s) => onMinimized(s, ev));
-    else if (ev.type === 'restored') dock.act((s) => onRestored(s, ev));
+    if (ev.type === 'opened') act((s) => (s.items[it.id] ? addItem(s, it) : onOpened(s, ev)));
+    else if (ev.type === 'closed') act((s) => (ev.kind === 'terminal' ? dropEmptyTerminalGroup(onClosed(s, ev)) : onClosed(s, ev)));
+    else if (ev.type === 'title') act((s) => (s.items[it.id] ? addItem(s, it) : s));
+    else if (ev.type === 'minimized') act((s) => onMinimized(s, ev));
+    else if (ev.type === 'restored') act((s) => onRestored(s, ev));
   });
 }

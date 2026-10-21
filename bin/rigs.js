@@ -229,6 +229,38 @@ const commands = {
     console.log(`quick fast path ${r.enabled ? 'on' : 'off'} · simple ${t(r.simple)} · standard ${t(r.standard)} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s`);
   },
   /**
+   * rigs compact [status|now|at <tokens>|keep <n>|on|off] — self-compaction of the JARVIS thread (src/compact.js):
+   * its context size against the threshold and the last compaction; `now` compacts it at once; the rest change
+   * config.brain.compact (mesh-global).
+   */
+  async compact() {
+    const [sub = 'status', value = ''] = argv;
+    const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    const usage = 'usage: rigs compact [status|now|at <tokens>|keep <messages>|on|off]';
+    const n = Number(String(value).replace(/[_,]/g, '').replace(/k$/i, '000'));
+    const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : sub === 'at' ? { atTokens: n } : sub === 'keep' ? { keepMessages: n } : null;
+    if (!patch && !['status', 'now'].includes(sub)) fail(usage);
+    if ((sub === 'at' || sub === 'keep') && (!value || !Number.isInteger(n))) fail(usage);
+    let r;
+    if (sub === 'now') {
+      console.log('compacting the JARVIS thread…');
+      r = await daemonFetch('/api/local/compact/now', { method: 'POST', timeout: 300000 }).catch((e) => ({ error: e.message }));
+      if (!r.status) fail(r.error);
+      console.log(r.ok ? `compacted: ${r.upto} messages summarised in ${r.chars} chars; the next turn starts a fresh session` : `not compacted: ${r.error}`);
+      r = r.status;
+    } else {
+      r = await daemonFetch('/api/local/compact', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
+      if (!r.settings) fail(r.error);
+    }
+    const k = (t) => (t == null ? '?' : t >= 1000 ? `${Math.round(t / 100) / 10}k` : String(t));
+    const when = (ts) => new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const s = r.settings;
+    console.log(`compaction ${s.enabled ? 'on' : 'off'} · at ${k(s.atTokens)} tokens · keeps the last ${s.keepMessages} messages · summary by ${s.model}`);
+    console.log(`JARVIS thread ${r.chatId.slice(0, 8)} (${r.brain}) · ${r.messages} messages · context ${r.contextTokens == null ? 'not measured yet (fresh session)' : `${k(r.contextTokens)} tokens (${r.percent}%)`}${r.running ? ' · compacting now' : ''}`);
+    console.log(r.last ? `last compaction ${when(r.last.ts)} (${r.last.reason}) at ${k(r.last.tokensBefore)} tokens: messages 1–${r.last.upto} → ${r.last.chars} chars · ${r.compactions} in all` : 'never compacted');
+    if (r.failed) console.log(`last attempt failed ${when(r.failed.ts)}: ${r.failed.error} (retried next turn)`);
+  },
+  /**
    * rigs yolo [on|off|status|list|keep <runId> [--name …] [--id …] [--icon …]] — YOLO mode (src/yolo.js): "yolo …" requests
    * build a page live in a sandbox window, no project/review/commit/merge. on/off switch config.yolo.enabled (mesh-global);
    * list shows the runs kept here; keep publishes a finished run as an App Cloud app (src/yolo-keep.js).
@@ -528,6 +560,56 @@ const commands = {
     try { await createControl().kill({ reason }, caller); } catch (e) { console.error(`kill: ${e.message}`); process.exit(1); }
     console.log('OS control is off on this machine (daemon not running; kill recorded, it stays off at next start).');
   },
+  async settings() {
+    // rigs settings [get [id] | set <id> <value>] [--node <machine>] [--json] — the unified settings API (docs/settings.md).
+    const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
+    const args = [...argv];
+    const take = (flag) => { const i = args.indexOf(flag); if (i < 0) return ''; const v = args[i + 1] || ''; args.splice(i, 2); return v; };
+    const node = take('--node');
+    const asJson = args.includes('--json'); if (asJson) args.splice(args.indexOf('--json'), 1);
+    const [sub = 'get', id, ...rest] = args;
+    const base = node ? `/api/nodes/${encodeURIComponent(node)}/settings` : '/api/local/settings';
+    const { SECRET_MASK, formatSecret, itemById, validateValue } = await import('../ui/src/settings-model.js');
+    const call = (opts) => daemonFetch(base, opts).catch((e) => ({ error: e.message }));
+    const show = (e) => (e.secret ? formatSecret(e.secret) : typeof e.value === 'string' ? e.value : JSON.stringify(e.value)) + (e.overridden ? `  (overridden by ${e.env})` : '');
+    if (sub === 'get') {
+      const r = await call();
+      if (r.error || !r.categories) fail(r.error);
+      const all = r.categories.flatMap((c) => c.items.map((e) => ({ ...e, category: c.id })));
+      if (id) {
+        const e = all.find((x) => x.id === id);
+        if (!e) fail(`unknown setting ${id} (rigs settings get lists them all)`);
+        console.log(asJson ? JSON.stringify(e) : show(e));
+      } else if (asJson) console.log(JSON.stringify(r, null, 2));
+      else {
+        let cat = '';
+        for (const e of all) { if (e.category !== cat) { cat = e.category; console.log(`\n${cat}`); } console.log(`  ${e.id.padEnd(40)} ${show(e)}${e.readOnly ? '  [read-only]' : ''}${e.scope === 'global' ? '  [mesh]' : ''}`); }
+      }
+      return;
+    }
+    if (sub !== 'set' || !id) fail('usage: rigs settings [get [id]] | rigs settings set <id> <value> [--node <machine>] [--json]');
+    const it = itemById(id);
+    if (!it) fail(`unknown setting ${id}`);
+    let value;
+    if (it.control === 'secret-status') {
+      if (rest.length) fail('a secret is never passed as an argument: rigs settings set <id>  (paste it when asked, or pipe it in) — or  rigs settings set <id> --clear');
+      value = process.argv.includes('--clear') ? null : await readSecret(`${it.label || id}: `);
+      if (value === '' ) fail('no value given — nothing changed');
+      if (value === SECRET_MASK) fail('that is the mask, not a value');
+    } else {
+      const raw = rest.join(' ');
+      if (it.control === 'switch') value = /^(on|true|1|yes)$/i.test(raw) ? true : /^(off|false|0|no)$/i.test(raw) ? false : raw;
+      else if (it.control === 'number' || it.control === 'slider') value = raw === '' ? raw : Number(raw);
+      else if (it.control === 'list') value = raw.split(',').map((x) => x.trim()).filter(Boolean);
+      else value = raw;
+      const v = validateValue(it, value);
+      if (!v.ok) fail(`${id}: ${v.error}`);
+    }
+    const r = await call({ method: 'POST', body: JSON.stringify({ values: { [id]: value } }), timeout: 60000 });
+    if (r.error || !r.applied) fail(r.error);
+    const e = r.categories.flatMap((c) => c.items).find((x) => x.id === id);
+    console.log(asJson ? JSON.stringify(r) : `${id} = ${e ? show(e) : 'ok'}${r.restart?.length ? '  (applies after a restart)' : ''}`);
+  },
   async help() {
     console.log(`rigs — RIGS OS mesh node  (changes: rigs dev <topic> → commit → rigs propose; never main)
 
@@ -538,6 +620,7 @@ const commands = {
   rigs status          list machines in the mesh
   rigs open            open the JARVIS UI
   rigs ssh <machine>   ssh to another node
+  rigs settings [get [id]|set <id> <value>] [--node m] [--json]  read or change any RIGS OS / JARVIS setting (the System Preferences schema; secrets show as set/len only)
   rigs shared [status|sync|path]  the shared folder synced across the mesh (apps/, files/, reports/): state per peer, sync now, or its path
   rigs update [--all]  pull the latest code from GitHub (this node or every node) and restart
   rigs notify <text>   speak a message on every open JARVIS UI
@@ -554,6 +637,7 @@ const commands = {
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs linear [status]  is the Linear connector configured and reachable (never prints the key)
   rigs linear key [--clear]  set the Linear API key (asked for, or piped in on stdin) or remove it
+  rigs compact [status|now|at <tokens>|keep <n>|on|off]  JARVIS thread self-compaction: context size, threshold, last compaction
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
   rigs quick local [on|off|status|warm|model <m>|node <machine>]  the local responder: a local Ollama model answers the fast path (read-only tools)
   rigs yolo [on|off|status|list]  YOLO mode: "yolo …" requests build a page live in a sandbox window (no project, review, commit or merge)
