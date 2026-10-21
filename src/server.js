@@ -1015,10 +1015,8 @@ export async function startServer() {
       const cfg = config();
       cfg.quick = next;
       saveConfig(cfg);
-      if (b.local !== undefined) {
-        markGlobalChanged(); // config.quick is a mesh-global setting: the main-brain machine must see the switch
-        if (next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
-      }
+      markGlobalChanged(); // config.quick is a mesh-global setting (rigs quick on|off, the tray toggle too): the main-brain machine must see it
+      if (b.local !== undefined && next.local?.enabled && next.local.node === config().name) responder.warm(next.local, { soul: chat.soul() }); // background
       return { ...next, local: localSettings(next.local) };
     }
     // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files

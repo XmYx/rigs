@@ -128,6 +128,11 @@ function build(deps, startCategory) {
       if (data?.categories) st.values = valuesById(data); // the fresh payload (also after a partial apply)
       if (!resp.ok) throw new Error(errorFor(it.id, data));
       indicate(row, savedText(it, { machine: machineName() }), 'ok');
+      // This page's JARVIS (main.js) picks up its name, address and thinking phrases at once, as after Mesh › JARVIS › Save.
+      if (it.id.startsWith('persona.') && [self().id, deps.selfId?.(), 'self'].includes(st.machineId)) { // 'self': opened before the first snapshot
+        const v = (k) => st.values?.[`persona.${k}`]?.value;
+        window.dispatchEvent(new CustomEvent('rigs:persona', { detail: { name: v('name'), address: v('address'), thinkingPhrases: v('thinkingPhrases') } }));
+      }
     } catch (e) {
       indicate(row, e.message, 'err');
     }

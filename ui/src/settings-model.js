@@ -44,7 +44,7 @@ export const WRITERS = {
   router: { prefix: 'router', endpoint: 'POST /api/local/router', setter: 'applyRouterPatch (src/router.js), then markGlobalChanged', read: 'routerSettings(config().router)' },
   quick: {
     prefix: 'quick', endpoint: 'POST /api/local/quick', setter: 'applyQuickPatch (src/quick.js)', read: 'quickSettings(config().quick), local: localSettings(config().quick.local)',
-    note: 'local switched on without a node gets this machine as host; a local change warms the responder. The endpoint stamps globalRev only for `local`; the settings API stamps every quick change (quick is in GLOBAL_PATHS).',
+    note: 'local switched on without a node gets this machine as host; a local change warms the responder. Every quick change stamps globalRev (quick is in GLOBAL_PATHS).',
   },
   yolo: { prefix: 'yolo', endpoint: 'POST /api/local/yolo/config', setter: 'applyYoloPatch (src/yolo.js), then markGlobalChanged', read: 'yoloSettings(config().yolo)' },
   brainHome: { prefix: 'brain.home', field: 'node', endpoint: 'POST /api/local/brain/home', setter: 'server.js brain/home (machine checked against discovery), patchConfig', read: 'homeNode(config())' },
@@ -447,6 +447,7 @@ export const HIDDEN = [
   { pref: 'rigs.usage.range', reason: 'Time range of the Tokens & time panel: remembered panel state.' },
   { prefPrefix: 'rigs.traces.', reason: 'Request traces panel and explorer view state (range, view, lane, size, even, limit).' },
   { prefPrefix: 'rigs.exhibits.', reason: 'Exhibit window view state (cards or document).' },
+  { prefPrefix: 'rigs.desktop.pos.', reason: 'Where you dragged the desktop icons, per folder (desktop.js positionsKey): layout state, not a preference.' },
 ];
 
 // ── derived ──────────────────────────────────────────────────────────────────────────────────────────────────────────

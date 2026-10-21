@@ -130,10 +130,8 @@ Every server-side item (`serverItems()`: the items with a `config` path), groupe
    once), the connectors' `saveSettings` / `setConfig`, and `patchConfig` for everything else. A setter's own validation
    error → 400 with its message; the writes before it stay applied and the answer lists them in `applied`.
 4. **Stamp.** A write that touched a mesh-global path is stamped and pushed once (`markGlobalChanged` /
-   `patchConfig`), exactly as the old endpoint does — with one deliberate difference: `POST /api/local/quick` stamps only
-   when the patch has `local`, so `rigs quick on|off` and the tray's fast-path toggle are not pushed to the peers until the
-   next global change. The settings API stamps every change under `quick`; fixing the old endpoint the same way is
-   recommended.
+   `patchConfig`), exactly as the old endpoint does. Every change under `quick` is stamped, here and in
+   `POST /api/local/quick` (so `rigs quick on|off` and the tray's fast-path toggle reach the peers too).
 5. **Answer.** The fresh GET payload plus `"applied": ["quick.enabled", …]` (and `"restart": [ids]` for items with
    `restart: true`, so the window can say so). Log the ids that changed, never the values of secret items.
 
@@ -166,7 +164,8 @@ with a `config` path: GET reports their value, the action opens their editor.
 
 ## Found during the audit
 
-- **Quick fast path not stamped mesh-global** by `POST /api/local/quick` unless the patch has `local` (see POST, step 4).
+- **Quick fast path not stamped mesh-global** by `POST /api/local/quick` unless the patch had `local` — fixed in the
+  review (t4): the endpoint now stamps every quick change (see POST, step 4).
 - **`agents.commitOtherProjects` is dead**: nothing reads it since audit A1 (`docs/audits/self-optimize-projects.md`);
   listed in `HIDDEN`.
 - **Settings outside `defaults()`**: about forty keys are read with defaults spread across their modules (see "What was
@@ -198,7 +197,7 @@ Each writable config item is saved by the writer whose prefix is the longest mat
 | Writer | Config prefix | Endpoint it mirrors | Setter | Reads with |
 | --- | --- | --- | --- | --- |
 | `router` | `router` | `POST /api/local/router` | applyRouterPatch (src/router.js), then markGlobalChanged | routerSettings(config().router) |
-| `quick` | `quick` | `POST /api/local/quick` | applyQuickPatch (src/quick.js) · local switched on without a node gets this machine as host; a local change warms the responder. The endpoint stamps globalRev only for `local`; the settings API stamps every quick change (quick is in GLOBAL_PATHS). | quickSettings(config().quick), local: localSettings(config().quick.local) |
+| `quick` | `quick` | `POST /api/local/quick` | applyQuickPatch (src/quick.js) · local switched on without a node gets this machine as host; a local change warms the responder. Every quick change stamps globalRev (quick is in GLOBAL_PATHS). | quickSettings(config().quick), local: localSettings(config().quick.local) |
 | `yolo` | `yolo` | `POST /api/local/yolo/config` | applyYoloPatch (src/yolo.js), then markGlobalChanged | yoloSettings(config().yolo) |
 | `brainHome` | `brain.home` | `POST /api/local/brain/home` | server.js brain/home (machine checked against discovery), patchConfig | homeNode(config()) |
 | `brainChat` | `brain.chat` | `POST /api/local/brain/chat` | server.js brain/chat (claude-ollama remembers its model), patchConfig · whole object: provider, model, effort | config().brain.chat |
@@ -566,4 +565,5 @@ Features that are still being tried out.
 | localStorage `rigs.usage.range` | Time range of the Tokens & time panel: remembered panel state. |
 | localStorage `rigs.traces.*` | Request traces panel and explorer view state (range, view, lane, size, even, limit). |
 | localStorage `rigs.exhibits.*` | Exhibit window view state (cards or document). |
+| localStorage `rigs.desktop.pos.*` | Where you dragged the desktop icons, per folder (desktop.js positionsKey): layout state, not a preference. |
 <!-- settings-inventory:end -->

@@ -1626,7 +1626,7 @@ function wireMenus() {
       },
     },
     cloud: { get: () => graph.visible, set: (on) => setCloud(on) },
-    display: { get: (k) => store.get('d-' + k, true), set: (k, on) => { store.set('d-' + k, on); graph.setDisplay({ [k]: on }); setBox('#d-' + k, 'checked', on); } },
+    display: { get: (k) => store.get('d-' + k, k === 'particles' || k === 'rotate' ? !lowPower() : true), set: (k, on) => { store.set('d-' + k, on); graph.setDisplay({ [k]: on }); setBox('#d-' + k, 'checked', on); } },
     forces: {
       get: (k) => store.get(k === 'repel' ? 'repel' : 'linklen', k === 'repel' ? 120 : 24),
       set: (k, n) => { const key = k === 'repel' ? 'repel' : 'linklen'; store.set(key, Number(n)); graph.setForces({ [k]: Number(n) }); setBox('#' + key, 'value', n); },
