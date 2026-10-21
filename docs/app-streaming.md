@@ -661,10 +661,14 @@ Session = { id, node, app:{id, name, icon}, mode, state, createdAt, lastViewerAt
 host through RIGS. Their `app` is `{id:'command', name:<argv[0] basename>}`. `files` are passed to
 the app as its `%f/%F/%u/%U` arguments.
 
-Daemon ↔ runner socket (`RIGS_HOME/run/appstream/<sid>.sock`). Frames: `u32 length` + `u8 type` +
-body. Type 1 is JSON; type 2 is a media frame with the §5.3 header, forwarded byte for byte.
+Daemon ↔ runner socket (`RIGS_HOME/run/appstream/<sid>.sock`). Frames: `u32 length` (little-endian, body
+only) + `u8 type` + body. Type 1 is JSON; type 2 is a media frame with the §5.3 header, forwarded byte for byte.
+The runner listens and the daemon connects (and reconnects after a restart); the runner sends `ready` on every
+connection once the session is up.
 
-- Daemon → runner: `{op:'start-stream', width, height, fps, bitrateKbps, transport}`, `{op:'stop-stream'}`,
+- Daemon → runner: `{op:'start-stream', width, height, fps, bitrateKbps, transport, kind, candidates:[{encoder, desc}]}`
+  (the daemon builds the pipelines with `pipelineFor`; the runner tries them in order and answers
+  `{ev:'stream', encoder, width, height, fps, fallback, fallbackReason}`), `{op:'stop-stream'}`,
   `{op:'resize', width, height}`, `{op:'keyframe'}`, `{op:'bitrate', kbps}`, `{op:'skip', on}`,
   `{op:'input', seq, e}`, `{op:'clipboard-set', text}`, `{op:'release-all'}`, `{op:'stop', force}`.
 - Runner → daemon: `{ev:'ready', compositor, display, encoder, width, height}`, `{ev:'meta', width, height}`,
@@ -852,7 +856,7 @@ temp icon tree.
 | Phone (iPhone, Wi-Fi, 1280×720) | 60 fps, glass-to-glass p50 ≤ 80 ms | to be measured (t6) |
 | Host CPU per 1080p60 session | compositor ≤ 25 %, runner ≤ 30 % of one core | 7–20 % / 19–23 % |
 
-**How to measure** (all built into the viewer's stats; t6 records the numbers in §14):
+**How to measure** (all built into the viewer's stats; t6 records the numbers in §15):
 
 - **Clock offset:** `ping {t0}` every second → `pong {t0, serverUs}`. With `t1` the arrival time,
   `offset = serverUs − (t0 + t1)/2` from the sample with the smallest RTT in the last 10 s (NTP-style).
@@ -920,20 +924,68 @@ temp icon tree.
 - **t5 (macOS host).** §3.6, §4.4, `control.inputStream`. Control is **off** on macbookpro (§2.6). If it
   is still off, report `control-off` precisely; never switch it on or bypass it.
 - **t6 (end-to-end).** §11 with FilmCraft (installed; Sir asked for it), including the phone path.
-  Write the results into §14.
+  Write the results into §15.
 - **t7 (review).** Check §6 on every path (start, view, input, relay, kill), orphan cleanup (§3.4
   reconcile, units, sockets, NVENC sessions), Sunshine/Moonlight unchanged, and no uinput/real-bus
   use in the runner.
 
 **System packages on Linux hosts:** present on magix-system already: `gstreamer1.0-pipewire`,
 `gstreamer1.0-plugins-bad` (nvcodec, va), `gstreamer1.0-gl`, `gstreamer1.0-plugins-ugly` (x264),
-`python3-gi`, `gir1.2-gstreamer-1.0`, PipeWire. To add through a root step: `mutter` (recommended);
-optionally `intel-media-va-driver` for VA-API on Intel. Report missing ones in `GET appstream`
-`host.why` and in `rigs doctor`.
+`python3-gi`, `gir1.2-gstreamer-1.0`, PipeWire (`pipewire-bin`: `pw-cli`/`pw-dump` for the per-session null sink),
+`dbus-daemon`, `systemd-run`, `gnome-shell` ≥ 45. To add through a root step: `mutter` (recommended);
+optionally `intel-media-va-driver` for VA-API on Intel. The runner does **not** need `gir1.2-gst-plugins-base-1.0`
+(GstVideo): magix-system lacks it, so the force-key-unit event is built by hand. Missing ones are reported in
+`GET appstream` (`host.why`, `host.missing`) and by `rigs appstream status` (there is no `rigs doctor`), which also
+prints the `apt-get` line.
 
 ---
 
-## 14. Measured results (filled in by t6)
+## 14. t2 — Linux host as built (2026-10-21)
+
+`src/app-stream.js`, `scripts/appstream/rigs-appstream-linux.py`, `scripts/appstream/gnome-shell/rigs-app.json`, server routes
+and upgrades, `config.appStream`, `rigs appstream`, `test/app-stream.test.js`. Verified on magix-system against a scratch
+daemon (own `RIGS_HOME`, port 4797, a copy of the branch outside `~/.rigs/app`), gnome-shell fallback compositor:
+
+| Check | Result |
+| --- | --- |
+| `POST appstream/sessions {command}` → ready (parked, no viewer) | 0.9 s; unit `rigs-appstream-<sid>`, private bus, `wayland-50`, Xwayland `:2` |
+| `POST appstream/sessions {app:'ai.storyteller.filmcraft'}` (catalog id via t3's `findItem`) | 0.9 s; FilmCraft renders; env: `WAYLAND_DISPLAY=wayland-50`, private `DBUS_SESSION_BUS_ADDRESS`, `PULSE_SINK=rigs-as-<sid>`, cgroup = the session unit |
+| WS 10 s, 1280x720, NVENC dmabuf-gl | 558 frames, ffprobe `h264 High level 32 1280x720`, 558/558 decodable, first frame 290 ms after connect, 55.6 fps |
+| FilmCraft 1920x1080 | ffprobe `h264 High level 42 1920x1080`, all frames decodable (`docs/screenshots/app-stream/t2-filmcraft-nvenc.png`) |
+| Resize 1280x720 → 780x1688 → 1920x1080 | new pipeline on the same node, IDR at each size, every frame decodable |
+| Input over the WS | click focuses, evdev keys type `rigs`, keysyms type ` t2 ok `, `őű` via the private clipboard + Ctrl+V, right click at the stream position (`docs/screenshots/app-stream/t2-isolated-input-nvenc.png`) |
+| Relay: second daemon → `/api/nodes/magix-t2/appstream/sessions/<sid>/stream` | 54 fps, input applied, decodable |
+| `appStream.encoder: 'x264'` | hello `x264enc/sw`, Constrained Baseline, decodable |
+| `POST control/kill` while streaming | viewer closed 4403 `killed` at once, session parked, app kept running |
+| `appstream/kill` | start → 403 `appstream-off`, viewer → 4403; agent `enable` refused; human `enable` with confirm restores |
+| Daemon restart | runner unit kept running; new daemon reattached the session (`reconcile`) |
+| `DELETE` (FilmCraft ignores SIGTERM) | 10.3 s (10 s grace, then SIGKILL); unit, processes, bus dir, socket, state file and null sink gone |
+
+Encode latency (capture at `pipewiresrc` → `appsink`, 1080p, the GTK test client drawing every frame): **dmabuf-gl**
+54 fps, p50 29–31 ms, p95 54–56 ms; **shm-cuda** 41–43 fps, p50 4–5 ms, p95 7–7.5 ms (the SHM copy also slows the
+client to ~43 fps). x264 at 720p: p50 3 ms. The order stays dmabuf-gl → shm-cuda (frame rate first, as in §4.1);
+dmabuf-gl misses the 8 ms encode target by the GL upload/convert stage, shm-cuda misses the 55 fps target. **t6 picks
+the default with glass-to-glass numbers.**
+
+Implementation notes that refine the design:
+- Encoders shift PTS (x264enc and nvh264enc add 1000 h), so capture times travel in a FIFO from the encoder's sink pad
+  (one in, one out: no B-frames, zero latency) rather than by PTS.
+- The encoder skip gate fires only when **every** viewer is over budget (frames in flight / bytes buffered). A viewer
+  that only waits for an IDR is not over budget; gating it starved the encoder in the first run.
+- A viewer resumes from `needsIdr` only with nothing in flight, and the ack baseline restarts at that IDR.
+- The pipeline's first IDR goes out before viewers have their hello, so the daemon asks for a fresh IDR on every
+  `stream` event (first frame 290 ms after connect).
+- Apps launched through `gio launch` (D-Bus-activatable apps, or with `files`) are not tracked for exit; others end the
+  session when their process group is gone.
+- HTTP refusals carry `code` = the WS `status` (`appstream-off`, `not-allowed`, …); the WS error keeps screen-stream's
+  `{type:'error', status, code, message}` with `code: 'off'` for a switched-off host.
+
+Open for later tasks: FilmCraft's timeline playback did not advance inside the headless session (Space toggles the
+play button and moves the audio meters, but the program monitor and timecode stay still, and no audio stream is
+opened); t6 should look at it with FilmCraft's own logging. The `mutter` root step is reported (`host.hint`), not
+yet offered as a button (t3/t4 UI).
+
+## 15. Measured results (filled in by t6)
 
 | Direction | App | Viewer | Decoder | Size | fps | kbit/s | glass-to-glass p50/p95 | input-to-photon p50 | host CPU (comp/runner) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

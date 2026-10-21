@@ -562,6 +562,34 @@ const commands = {
     try { await createControl().kill({ reason }, caller); } catch (e) { console.error(`kill: ${e.message}`); process.exit(1); }
     console.log('OS control is off on this machine (daemon not running; kill recorded, it stays off at next start).');
   },
+  async appstream() {
+    // rigs appstream [status|sessions|off [reason]|stop <sid> [--force]] — app streaming on this machine (docs/app-streaming.md §6).
+    // There is no `on`: like control, only a confirmed human surface in JARVIS switches it back on.
+    const [sub = 'status', ...rest] = argv;
+    const call = (p, o) => daemonFetch('/api/local/appstream' + p, { timeout: 30000, ...o });
+    try {
+      if (sub === 'status') {
+        const r = await call('');
+        const h = r.host || {};
+        console.log(`app streaming: ${r.enabled ? 'on' : 'off'}${r.killed ? ` (stopped ${r.killed.at}: ${r.killed.reason})` : ''}, input ${r.input ? 'on' : 'off'}`);
+        console.log(`host: ${h.supported ? 'can host sessions' : `cannot host sessions — ${h.why}`}${h.compositor ? `; compositor ${h.compositor}` : ''}${h.hint ? ` (${h.hint}: sudo apt-get install -y mutter)` : ''}`);
+        if (h.encoders?.length) console.log(`encoders: ${h.encoders.map((e) => `${e.name}/${e.path}`).join(', ')}`);
+        if (h.missing?.length) console.log(`missing packages: sudo apt-get install -y ${h.missing.join(' ')}`);
+        console.log(`sessions: ${r.sessions?.length || 0}`);
+      } else if (sub === 'sessions') {
+        const r = await call('/sessions');
+        for (const s of r.sessions || []) console.log(`${s.id}  ${s.state.padEnd(8)} ${s.app?.name}  ${s.width}x${s.height}  ${s.encoder ? `${s.encoder.name}/${s.encoder.path}` : '-'}  viewers ${s.viewers.length}${s.parkUntil ? `  closes ${s.parkUntil}` : ''}`);
+        if (!r.sessions?.length) console.log('no app sessions');
+      } else if (sub === 'off') {
+        const r = await call('/kill', { method: 'POST', body: JSON.stringify({ reason: rest.join(' ') || 'rigs appstream off' }) });
+        if (!r?.ok) throw new Error(r?.error || 'daemon refused');
+        console.log(`App streaming is off on this machine (${r.ended} viewer(s) ended; apps keep running, parked). Switch it on again in JARVIS → Access & control.`);
+      } else if (sub === 'stop' && rest[0]) {
+        const r = await call(`/sessions/${encodeURIComponent(rest[0])}${rest.includes('--force') ? '?force=1' : ''}`, { method: 'DELETE' });
+        console.log(r?.ok ? `stopped ${rest[0]}` : r?.error || JSON.stringify(r));
+      } else { console.log('usage: rigs appstream [status|sessions|off [reason]|stop <sid> [--force]]'); process.exit(1); }
+    } catch (e) { console.error(`appstream: ${e.message} (is the daemon running?)`); process.exit(1); }
+  },
   async settings() {
     // rigs settings [get [id] | set <id> <value>] [--node <machine>] [--json] — the unified settings API (docs/settings.md).
     const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
@@ -635,6 +663,7 @@ const commands = {
   rigs control off [reason]  kill switch: stop OS control (screen + input) on this machine, stays off
   rigs control helper [status|install|stop|remove]
                        macOS: build/start RIGS Control.app (holds Screen Recording + Accessibility)
+  rigs appstream [status|sessions|off [reason]|stop <sid>]  app streaming on this machine: host support and missing packages, sessions, kill switch
   rigs usage [--since 7d] [--group model|project|task|node|day]  tokens and time per model/task across the mesh
   rigs preroute [on|off|engine jev|claude|rules|stats]  pre-routing toggle (LocalJev router) and the time it saves
   rigs linear [status]  is the Linear connector configured and reachable (never prints the key)
