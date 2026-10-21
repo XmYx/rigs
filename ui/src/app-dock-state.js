@@ -74,7 +74,8 @@ export const itemId = (kind, key) => `${kind}:${key}`;
 //                 delegate), active projects (running ones) and all sessions.
 //   Insight       read-only views onto the mesh: tokens & time, request traces, the Graphify mesh graph, and the
 //                 desktops wall (live screens of every machine — watching, not driving one, so not "This machine").
-//   System        running the mesh itself: hosted apps, mesh control/updates/settings, and voice output on/off.
+//   System        running JARVIS and the mesh itself: Mission Control (every window and desktop), hosted apps, mesh
+//                 control/updates/settings, and voice output on/off.
 export const TOOL_GROUPS = Object.freeze([
   { id: 'g-tools-machine', name: 'This machine', tools: [
     { id: 'term', button: 'btn-term', title: 'Terminal', icon: '⌨', hint: 'Terminal on the focused machine' },
@@ -96,6 +97,7 @@ export const TOOL_GROUPS = Object.freeze([
     { id: 'desktops', button: 'btn-desktops', title: 'Desktops', icon: '🖼', hint: 'Desktops — live screens of your machines' },
   ] },
   { id: 'g-tools-system', name: 'System', tools: [
+    { id: 'mission', button: 'btn-mission', title: 'Mission Control', icon: '⊞', hint: 'Mission Control — every window and desktop at a glance' },
     { id: 'apps', button: 'btn-apps', title: 'Apps', icon: '▦', hint: 'Apps — web apps hosted on your machines, opened right here' },
     { id: 'mesh', button: 'btn-mesh', title: 'Mesh & settings', icon: '⚙', hint: 'Mesh control, updates, settings' },
     { id: 'mute', button: 'btn-mute', title: 'Voice', icon: '🔊', hint: 'Voice output on/off', toggle: true },

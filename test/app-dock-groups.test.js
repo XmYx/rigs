@@ -32,7 +32,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
   const html = fs.readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8');
   const bar = html.slice(html.indexOf('<nav id="bar"'), html.indexOf('</nav>', html.indexOf('<nav id="bar"')));
   const buttons = [...bar.matchAll(/<button id="([\w-]+)"/g)].map((m) => m[1]);
-  assert.equal(buttons.length, 16);
+  assert.equal(buttons.length, 17);
   assert.deepEqual(S.TOOLS.map((t) => t.button).sort(), [...buttons].sort(), 'one tool per toolbar button, none missing, none extra');
   assert.equal(new Set(S.TOOLS.map((t) => t.id)).size, S.TOOLS.length, 'tool ids are unique');
   for (const t of S.TOOLS) {
@@ -44,7 +44,7 @@ test('the table: 3–5 named groups covering every #bar button exactly once, eac
   assert.deepEqual(['term', 'files', 'desk', 'player'].map(of), Array(4).fill('This machine'));
   assert.deepEqual(['proj', 'work', 'ask', 'agents', 'sess'].map(of), Array(5).fill('Work'));
   assert.deepEqual(['usage', 'traces', 'graphify', 'desktops'].map(of), Array(4).fill('Insight'));
-  assert.deepEqual(['apps', 'mesh', 'mute'].map(of), Array(3).fill('System'));
+  assert.deepEqual(['mission', 'apps', 'mesh', 'mute'].map(of), Array(4).fill('System'));
   assert.deepEqual(S.TOOLS.filter((t) => t.badge).map((t) => t.id), ['ask', 'agents']);
   assert.deepEqual(S.TOOLS.filter((t) => t.toggle).map((t) => t.id), ['mute']);
   assert.ok(Object.isFrozen(S.TOOL_GROUPS) && Object.isFrozen(S.TOOLS[0]), 'the table cannot be changed by accident');
@@ -70,7 +70,7 @@ test('a fresh dock: tools seeded into their four groups in table order, then app
     '[This machine:tool:term,tool:files,tool:desk,tool:player]',
     '[Work:tool:ask,tool:agents,tool:proj,tool:work,tool:sess]',
     '[Insight:tool:usage,tool:traces,tool:graphify,tool:desktops]',
-    '[System:tool:apps,tool:mesh,tool:mute]',
+    '[System:tool:mission,tool:apps,tool:mesh,tool:mute]',
     `[mac box:${A('krea')}]`,
     `[lin box:${A('fuel', 'lin')}]`,
     '[Machines:rig:mac,rig:lin]',

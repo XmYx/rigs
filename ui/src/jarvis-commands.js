@@ -7,6 +7,8 @@ import { isPhone } from './mobile.js';
 import { canTileActive, tileActive } from './tiling.js';
 import { tileShortcuts, zoneLabel } from './tiling-model.js';
 import { desktopShortcuts, targetOf } from './spaces-model.js';
+import { isMissionControlOpen, toggleMissionControl } from './mission-control.js';
+import { missionShortcuts } from './mission-control-model.js';
 import {
   focusPanel, hideOthers, hidePanel, lastFocusedPanel, listPanels, listRemoved, openPanel, removePanel, removed, resetLayout, restorePanel, showAll,
 } from './layout-actions.js';
@@ -74,12 +76,13 @@ const SPACE_COMMANDS = [
 ];
 
 /**
- * The desktops menu (the menu bar indicator and Window › Desktops): one row per desktop (the active one checked; the
- * first nine with their Ctrl+n), previous / next, then add, rename and remove.
+ * The desktops menu (the menu bar indicator and Window › Desktops): Mission Control, one row per desktop (the active
+ * one checked; the first nine with their Ctrl+n), previous / next, then add, rename and remove.
  */
 export function desktopMenu() {
   const ds = listDesktops();
   return [
+    { cmd: 'window.missionControl' }, { sep: true },
     ...ds.map((d, i) => (i < 9 ? { cmd: `space.go${i + 1}` } : { label: d.name, checked: d.active, run: () => switchDesktop(d.id) })),
     { sep: true }, { cmd: 'space.prev' }, { cmd: 'space.next' },
     { sep: true }, { cmd: 'space.add' }, { cmd: 'space.rename' }, { cmd: 'space.remove' },
@@ -181,6 +184,13 @@ export function registerJarvisCommands(deps) {
     { id: 'window.tileFill', ...tile('fill') },
     { id: 'window.tileRestore', ...tile('restore') },
     ...SPACE_COMMANDS,
+    // Mission Control (mission-control.js): every window of the desktop and every desktop at a glance. Ctrl+↑ / F3 (not
+    // while typing or in a terminal), Window › Mission Control, the desktops menu, the app dock, and JARVIS ("show me
+    // all my windows", main.js). The shortcut or the menu again closes it.
+    {
+      id: 'window.missionControl', label: 'Mission Control', icon: '⊞', shortcut: missionShortcuts(isMac()),
+      checked: () => isMissionControlOpen(), run: () => toggleMissionControl(),
+    },
     { id: 'view.menubarFocus', label: 'Go to the menu bar', shortcut: 'F10', global: true, when: (ctx) => !ctx.phone, run: () => deps.menubar.focus() },
 
     // ------------------------------------------------------------ Tools
@@ -254,6 +264,7 @@ export function menuModel() {
       { sep: true }, { cmd: 'window.hideOthers' }, { cmd: 'window.showAll' }, { cmd: 'window.reset' },
     ] },
     { id: 'window', label: 'Window', items: () => [
+      { cmd: 'window.missionControl' },
       ...(isPhone() ? [] : [{ id: 'tile', label: 'Tile', icon: '◫', submenu: () => [
         { cmd: 'window.tileLeft' }, { cmd: 'window.tileRight' }, { cmd: 'window.tileTop' }, { cmd: 'window.tileBottom' }, { sep: true },
         { cmd: 'window.tileTopLeft' }, { cmd: 'window.tileTopRight' }, { cmd: 'window.tileBottomLeft' }, { cmd: 'window.tileBottomRight' }, { sep: true },

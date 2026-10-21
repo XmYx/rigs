@@ -2388,3 +2388,75 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 @media (prefers-reduced-motion: reduce) { .pr-switch, .pr-switch .knob, .pr-state { transition: none; } }
 :root[data-theme="atari"] .prefs-title, :root[data-theme="atari"] .prefs-sec { font-family: var(--pixel); font-size: 11px; }
 /* === END SYSTEM PREFERENCES === */
+
+/* === MISSION CONTROL (mission-control.js) ===
+   The real windows stay where they are in the DOM: .mc-win only adds a transform (and a z-index above the dim), so
+   terminals and iframes keep running. Everything here is position: fixed with its own z-index (no wrapping stacking
+   context): dim 12000 < windows 12001… < previews' buttons and labels < the Spaces bar. */
+.mc { display: block; }
+.mc:focus { outline: none; }
+.mc-dim { position: fixed; inset: 0; z-index: 12000; background: rgba(3, 7, 12, .62); backdrop-filter: blur(10px) saturate(.8); -webkit-backdrop-filter: blur(10px) saturate(.8); }
+.mc-in .mc-dim { animation: mc-fade .26s ease both; }
+.mc-leaving .mc-dim, .mc-leaving .mc-spaces, .mc-leaving .mc-layer, .mc-leaving .mc-minrow, .mc-leaving .mc-empty { opacity: 0; transition: opacity .26s ease; pointer-events: none; }
+@keyframes mc-fade { from { opacity: 0; } }
+.win.mc-win { z-index: var(--mc-z) !important; pointer-events: none !important; transform-origin: 0 0 !important; translate: none !important; scale: none !important; animation: none !important; resize: none; }
+.win.mc-win.mc-anim { transition: transform .32s cubic-bezier(.2, .8, .2, 1) !important; }
+.win.mc-win.mc-drag { z-index: 12970 !important; opacity: .88; transition: none !important; box-shadow: 0 30px 80px rgba(0, 0, 0, .7), 0 0 0 2px var(--accent); } /* over the Spaces bar while it is carried */
+.mc-layer { position: fixed; inset: 0; z-index: 12950; pointer-events: none; }
+.mc-hit { position: fixed; pointer-events: auto; margin: 0; padding: 0; border: 0; border-radius: 10px; background: transparent; cursor: pointer; touch-action: none; }
+.mc-hit:hover, .mc-hit:focus-visible { box-shadow: 0 0 0 3px var(--accent), 0 0 24px rgba(var(--accent-rgb), .45); outline: none; }
+.mc-hit.dragging { cursor: grabbing; box-shadow: none; }
+.mc-label { position: absolute; top: calc(100% + 7px); left: 50%; transform: translateX(-50%); max-width: max(100%, 140px); display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+  border-radius: 999px; background: rgba(8, 14, 22, .78); border: 1px solid var(--line); color: #e6eef4; font: 600 12px var(--sans); white-space: nowrap; pointer-events: none; }
+.mc-hit:hover .mc-label, .mc-hit:focus-visible .mc-label { background: rgba(var(--accent-rgb), .3); border-color: var(--accent); }
+.mc-hit.dragging .mc-label { display: none; }
+.mc-label-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mc-label-icon { flex: none; }
+.mc-in .mc-layer, .mc-in .mc-spaces, .mc-in .mc-minrow { animation: mc-fade .3s ease both; }
+.mc-still .mc-dim, .mc-still .mc-layer, .mc-still .mc-spaces, .mc-still .mc-minrow { animation: none !important; transition: none !important; }
+.mc-empty { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 12950; color: #b9c8d2; font: 15px var(--sans); text-align: center; }
+
+/* The Spaces bar: a miniature of each desktop's windows; hover one for its remove × */
+.mc-spaces { position: fixed; top: 14px; left: 32px; right: 32px; z-index: 12960; display: flex; justify-content: center; align-items: flex-start; gap: 16px; padding: 10px 14px 8px; overflow-x: auto; scrollbar-width: thin; }
+.mc-desk-cell { position: relative; flex: none; }
+.mc-desk { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #cfdbe3; cursor: pointer; font: 12px var(--sans); }
+.mc-thumb { position: relative; display: block; overflow: hidden; border-radius: 6px; border: 2px solid rgba(255, 255, 255, .16); background: linear-gradient(160deg, rgba(var(--accent-rgb), .16), rgba(10, 18, 28, .9)); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); transition: border-color .15s, transform .15s; }
+.mc-desk:hover .mc-thumb, .mc-desk:focus-visible .mc-thumb { border-color: rgba(var(--accent-rgb), .7); }
+.mc-desk:focus-visible { outline: none; }
+.mc-desk.on .mc-thumb { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 22px rgba(var(--accent-rgb), .35); }
+.mc-desk.on .mc-desk-name { color: #fff; font-weight: 600; }
+.mc-desk.drop .mc-thumb, .mc-add.drop { border-color: #fff; transform: scale(1.07); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .7), 0 8px 26px rgba(var(--accent-rgb), .45); }
+.mc-mini { position: absolute; box-sizing: border-box; border-radius: 2px; background: rgba(214, 228, 238, .78); border: 1px solid rgba(0, 0, 0, .35); }
+.mc-desk-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-desk-x { position: absolute; top: -8px; left: -8px; width: 22px; height: 22px; padding: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .5); background: #e6eef4; color: #111;
+  font: 700 14px/1 var(--sans); cursor: pointer; opacity: 0; transform: scale(.7); transition: opacity .12s, transform .12s; }
+.mc-desk-cell:hover .mc-desk-x, .mc-desk-x:focus-visible { opacity: 1; transform: none; }
+.mc-desk-x:hover { background: #f87171; color: #fff; }
+.mc-add { flex: none; width: 46px; border-radius: 6px; border: 2px dashed rgba(255, 255, 255, .28); background: rgba(255, 255, 255, .05); color: #e6eef4; font: 300 26px/1 var(--sans); cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
+.mc-add:hover, .mc-add:focus-visible { border-color: var(--accent); background: rgba(var(--accent-rgb), .15); outline: none; }
+.mc-add:disabled { opacity: .35; cursor: default; }
+
+/* Minimized windows: a smaller row along the bottom */
+.mc-minrow { position: fixed; left: 32px; right: 32px; bottom: 18px; z-index: 12955; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; max-height: 96px; overflow-y: auto; }
+.mc-minwin { display: inline-flex; align-items: center; gap: 7px; max-width: 260px; padding: 7px 12px; border-radius: 9px; border: 1px dashed rgba(255, 255, 255, .3); background: rgba(10, 18, 28, .82); color: #dfe8ee; font: 12px var(--sans); cursor: pointer; }
+.mc-minwin:hover, .mc-minwin:focus-visible { border-color: var(--accent); border-style: solid; outline: none; }
+.mc-min-tag { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+/* Phones: a full-screen list of window cards and a desktop row, no previews */
+.mc-phone { position: fixed; inset: 0; z-index: 12000; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; overflow: hidden;
+  padding: calc(var(--sat, 0px) + 10px) calc(var(--sar, 0px) + 12px) calc(var(--sab, 0px) + 12px) calc(var(--sal, 0px) + 12px); background: var(--panel-solid); }
+.mc-phone-head { display: flex; align-items: center; gap: 10px; min-height: 44px; font: 16px var(--sans); }
+.mc-phone-count { flex: 1; color: var(--muted); font-size: 13px; }
+.mc-phone-close { flex: none; width: 44px; height: 44px; }
+.mc-phone-desks { display: flex; gap: 8px; overflow-x: auto; flex: none; }
+.mc-phone-desk { flex: none; min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--line); background: transparent; color: inherit; font: 13px var(--sans); }
+.mc-phone-desk.on { border-color: var(--accent); background: rgba(var(--accent-rgb), .18); }
+.mc-cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.mc-card { display: flex; align-items: center; gap: 12px; min-height: 60px; width: 100%; box-sizing: border-box; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: inherit; text-align: left; }
+.mc-card.min { border-style: dashed; opacity: .8; }
+.mc-card-icon { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; background: rgba(var(--accent-rgb), .14); font-size: 18px; }
+.mc-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mc-card-title { font: 600 14px var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-card-meta { font: 12px var(--sans); color: var(--muted); }
+.mc-phone-empty { color: var(--muted); text-align: center; margin-top: 30px; }
+/* === END MISSION CONTROL === */

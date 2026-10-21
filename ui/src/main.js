@@ -35,6 +35,8 @@ import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starne
 import { openFiles } from './files.js';
 import { configureMediaPlayer, openMediaPlayer } from './media-player.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
+import { openMissionControl, toggleMissionControl } from './mission-control.js';
+import { isMissionControlAsk } from './mission-control-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
 import { createDesktopMode } from './desktop.js';
@@ -1017,6 +1019,7 @@ async function intent(text) {
     say(on ? `The cloud is back, ${persona.address}.` : 'Cloud hidden. Nothing of it renders until you ask for it again.');
     return true;
   }
+  if (isMissionControlAsk(t)) { openMissionControl(); say(`Every window, ${persona.address}.`); return true; } // before "show me <node>" below
   if ((m = t.match(/^(?:open |start |launch |give me )?(?:a |new )*(?:terminal|shell|console|command line)(?: on| for| at| to)?\s+(.+)$/i))) {
     const n = findMachine(m[1]);
     if (n?.rigs) { openTerminal({ nodeId: n.id, nodeName: n.name }); say(`Terminal on ${n.name}, ${persona.address}.`); return true; }
@@ -1483,6 +1486,7 @@ function wire() {
   $('#btn-desktops').onclick = () => togglePanel('desktops');
   $('#btn-traces').onclick = () => togglePanel('traces');
   $('#btn-graphify').onclick = () => togglePanel('graphify');
+  $('#btn-mission').onclick = () => toggleMissionControl();
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();
