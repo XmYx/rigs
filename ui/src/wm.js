@@ -1,5 +1,5 @@
 import { h } from './api.js';
-import { isPhone } from './mobile.js';
+import { isPhone, PHONE_QUERY } from './mobile.js';
 import { dialogify } from './a11y.js';
 import { registerDockable, unregisterDockable, setDockTitle, stowDockable, unstowDockable } from './docking.js';
 import { dockManager } from './dock-layout.js';
@@ -7,7 +7,9 @@ import { tagCtx } from './ctx-tag.js';
 import { createDisposer } from './cleanup.js';
 import { dockableWindow, emitClosed, emitMinimized, emitOpened, emitRestored, emitTitle } from './open-events.js';
 import { buildChrome, cleanRect, isVisible, transition } from './window-state.js';
-import './tiling.js'; // drag a window to a screen edge or corner to tile it (macOS style); tileWindow / untile live there
+import { refitTiles } from './tiling.js'; // drag a window to a screen edge or corner to tile it (macOS style); tileWindow / untile live there
+import { activeDesktop, assignKey, switchDesktop, desktopOfKey, forgetKey, moveKey, onSpacesChange, setOpenKeys, spacesOn, spacesState } from './spaces.js';
+import { TRANSIENT } from './spaces-model.js';
 
 // Floating window manager: drag by the whole title bar (docking.js; buttons in it still click), resize from the
 // corner, click to raise; dragged to a screen edge or corner it tiles into that half or quarter (tiling.js). Every window has the same three title bar buttons, in this order: minimize (–),
@@ -16,6 +18,10 @@ import './tiling.js'; // drag a window to a screen edge or corner to tile it (ma
 // key), so it reopens where and how it was. A minimized window is reached from the app dock (its applet or
 // terminal item, else a window item of its own) and comes back in place. With the docking layout on, a window docks
 // beside a panel or another window, or as a tab. Terminals, file browsers and session viewers live here.
+// Spaces (spaces.js): every window is on one virtual desktop, the active one when it opens (a keyed window goes back to
+// the desktop it was on). Only the active desktop's windows are on the stage: the others are hidden (`.win.off-space`,
+// out of the docking layout like a minimized window) with their state, rect and tile kept, and come back as they were.
+// Raising or focusing a window on another desktop switches to that desktop first, as on a Mac. Phones: one desktop.
 
 let z = 100;
 let cascade = 0;
@@ -46,10 +52,17 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const titleEl = h('span', { class: 'win-title-text' }, title);
   const storeKey = (() => { const k = String(key ?? `t:${title}`).slice(0, 200); return keysInUse.has(k) ? null : k; })();
   if (storeKey) keysInUse.add(storeKey);
+  const winNo = nextId++;
+  const spaceKey = storeKey || `${TRANSIENT}${winNo}`; // which desktop it is on (spaces.js); a second window with a key in use is on it for this page only
+  assignKey(spaceKey);
+  // Back on a desktop other than the active one (it was there before a reload): a window opened by hand takes you there,
+  // one that opens by itself (focus: false) waits there.
+  if (focus && spacesOn() && desktopOfKey(spaceKey) !== spacesState().active) switchToKey(spaceKey);
+  const away = spacesOn() && desktopOfKey(spaceKey) !== spacesState().active;
   const saved = storeKey ? dockManager.getWindow(storeKey) : null;
   let rec = transition(saved, 'open', { at: Date.now() }); // closed / minimized last time → normal or maximized again
   const chrome = buildChrome(h, (action) => act(action));
-  const win = h('div', { class: `win ${className}`, 'data-win-id': String(nextId++) },
+  const win = h('div', { class: `win ${className}${away ? ' off-space' : ''}`, 'data-win-id': String(winNo), 'data-desktop': desktopOfKey(spaceKey) },
     h('div', { class: 'win-bar' },
       h('span', { class: 'win-icon' }, icon),
       titleEl,
@@ -69,14 +82,18 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   document.body.append(win);
   requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove('win-enter'))); // fade/scale in
   windows.add(win);
-  const dlg = dialogify(win, { label: title, onClose: () => close(), focus }); // role=dialog, focus in (focus:false for a window that opens by itself, so it never takes the cursor from a text field), Tab trap, Esc closes, focus returns on close
+  const dlg = dialogify(win, { label: title, onClose: () => close(), focus: focus && !away }); // role=dialog, focus in (focus:false for a window that opens by itself, so it never takes the cursor from a text field), Tab trap, Esc closes, focus returns on close
 
   tagCtx(win, 'window', win.dataset.winId, { get title() { return titleEl.textContent; } }); // right-click on the title bar: front, minimize, maximize, close…
   const dockSource = () => ({ id: win.dataset.winId, title: titleEl.textContent, icon });
   const front = () => { win.style.zIndex = ++z; };
-  /** Bring the window to the front; a minimized one comes back first (the app dock, Window menu and openApp all land here). */
-  const raise = () => { if (rec.state === 'minimized') act('restore'); else front(); };
-  win._wm = { title: () => titleEl.textContent, icon, raise, close: () => close(), act: (a) => act(a), state: () => rec.state };
+  /** Bring the window to the front; on another desktop, switch there first; a minimized one comes back (the app dock, Window menu and openApp all land here). */
+  const raise = () => { reveal(); if (rec.state === 'minimized') act('restore'); else front(); };
+  const reveal = () => { if (spacesOn() && desktopOfKey(spaceKey) !== spacesState().active) switchToKey(spaceKey); };
+  win._wm = {
+    title: () => titleEl.textContent, icon, raise, reveal, close: () => close(), act: (a) => act(a), state: () => rec.state,
+    spaceKey, desktop: () => desktopOfKey(spaceKey), syncSpace: (dir) => syncSpace(dir),
+  };
   win.addEventListener('pointerdown', front);
 
   const bar = win.querySelector('.win-bar');
@@ -94,7 +111,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   // A drag, a tile or a corner resize ends with the pointer let go: remember where the window is now.
   win.addEventListener('pointerup', () => setTimeout(remember, 0));
 
-  const ro = new ResizeObserver(() => { if (rec.state !== 'minimized') win.dispatchEvent(new CustomEvent('winresize')); }); // a minimized window has no size: its content must not fit itself to 0×0
+  const ro = new ResizeObserver(() => { if (rec.state !== 'minimized' && !win.classList.contains('off-space')) win.dispatchEvent(new CustomEvent('winresize')); }); // a minimized window (or one on another desktop) has no size: its content must not fit itself to 0×0
   ro.observe(body);
   const dockable = dockableWindow(className); // open / close / title are announced for the app dock's auto-docking (open-events.js)
   if (dockable) emitOpened('window', { id: win.dataset.winId, title, icon });
@@ -152,6 +169,29 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     if (hadFocus) focusTop(win);
   }
 
+  /**
+   * Show or hide the window for the active desktop. Hidden, it keeps its state, rect and tile; a docked one leaves the
+   * docking layout as a minimized one does (its place is kept) and goes back into it. `dir` (1 / -1): the way the
+   * desktops moved, for the slide in.
+   */
+  function syncSpace(dir = 0) {
+    win.dataset.desktop = desktopOfKey(spaceKey);
+    const off = spacesOn() && win.dataset.desktop !== spacesState().active;
+    if (off === win.classList.contains('off-space') || closing) return;
+    win.classList.toggle('off-space', off);
+    win.classList.add('space-back'); // its opening animation never replays (styles.css)
+    win.classList.remove('space-in-next', 'space-in-prev');
+    if (off) { if (rec.state !== 'minimized') stowDockable(id); return; }
+    if (rec.state === 'minimized') return;
+    unstowDockable(id);
+    if (dir && !reducedMotion()) {
+      const cls = dir > 0 ? 'space-in-next' : 'space-in-prev';
+      win.classList.add(cls);
+      setTimeout(() => win.classList.remove(cls), 260);
+    }
+    win.dispatchEvent(new CustomEvent('winresize'));
+  }
+
   function restoreIn() {
     win.classList.remove('min', 'win-minimizing');
     unstowDockable(id);
@@ -170,6 +210,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     save();
     closing = true;
     if (storeKey) keysInUse.delete(storeKey);
+    forgetKey(spaceKey); // it opens on the active desktop next time
     const i = backStack.indexOf(close);
     if (i >= 0) { backStack.splice(i, 1); if (!fromBack) { skipPop++; history.back(); } }
     ro.disconnect();
@@ -204,17 +245,20 @@ function savedPlace(r, vw, vh) {
   return { w, h, x: Math.min(Math.max(0, r.x), Math.max(0, vw - Math.min(w, 120))), y: Math.min(Math.max(0, r.y), Math.max(0, vh - 60)) };
 }
 
-/** Focus the topmost window still on the stage (not `except`), else let focus fall back to the page. */
+/** Focus the topmost window still on the stage (not `except`, on the active desktop), else let focus fall back to the page. */
 function focusTop(except) {
-  const next = listWindows().find((w) => w.el !== except && isVisible({ state: w.state }));
+  const next = listWindows({ desktop: activeDesktop().id }).find((w) => w.el !== except && isVisible({ state: w.state }));
   if (next) next.el.focus({ preventScroll: true });
   else document.activeElement?.blur?.();
 }
 
-/** Open windows, topmost first: { id, title, icon, state, raise(), close(), el }. */
-export function listWindows() {
-  return [...windows].filter((w) => w._wm).sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))
-    .map((w) => ({ id: w.dataset.winId, title: w._wm.title(), icon: w._wm.icon, state: w._wm.state(), raise: w._wm.raise, close: w._wm.close, el: w }));
+/**
+ * Open windows, topmost first: { id, title, icon, state, desktop, raise(), close(), el }. `desktop`: only the windows on
+ * that desktop (an id from listDesktops(); on a phone every window is on the one desktop).
+ */
+export function listWindows({ desktop } = {}) {
+  return [...windows].filter((w) => w._wm && (desktop == null || w._wm.desktop() === desktop)).sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))
+    .map((w) => ({ id: w.dataset.winId, title: w._wm.title(), icon: w._wm.icon, state: w._wm.state(), desktop: w._wm.desktop(), raise: w._wm.raise, close: w._wm.close, el: w }));
 }
 
 const byId = (id) => [...windows].find((w) => w._wm && w.dataset.winId === String(id)) || null;
@@ -236,6 +280,7 @@ export const isMinimized = (id) => windowState(id) === 'minimized';
 export function windowAction(id, action) {
   const w = byId(id);
   if (!w) return false;
+  if (action !== 'minimize' && action !== 'close') w._wm.reveal(); // on another desktop: go there first
   w._wm.act(action);
   if (action !== 'minimize' && action !== 'close') w._wm.raise();
   return true;
@@ -243,7 +288,39 @@ export function windowAction(id, action) {
 export const minimizeWindow = (id) => windowAction(id, 'minimize');
 export const restoreWindow = (id) => windowAction(id, 'restore');
 export const toggleMaximize = (id) => windowAction(id, 'toggleMaximize');
-/** Close every window except `id`. */
-export function closeOthers(id) { for (const w of listWindows()) if (w.id !== String(id)) w.close(); }
+/** Close every window on the desktop of window `id` except that one. */
+export function closeOthers(id) {
+  const desktop = byId(id)?._wm.desktop();
+  for (const w of listWindows({ desktop })) if (w.id !== String(id)) w.close();
+}
 
 export function closeAll() { for (const w of [...windows]) w.querySelector('.win-btn.close')?.click(); }
+
+// ---------------------------------------------------------------- Spaces (spaces.js): the API other modules use
+
+export { listDesktops, activeDesktop, switchDesktop, addDesktop, removeDesktop, renameDesktop, onSpacesChange, canAddDesktop, canRemoveDesktop } from './spaces.js';
+
+/** Move window `id` to desktop `desktopId` (it hides when that is not the active desktop). */
+export function moveWindowToDesktop(id, desktopId) {
+  const w = byId(id);
+  return !!w && moveKey(w._wm.spaceKey, desktopId);
+}
+/** The desktop window `id` is on, or null. */
+export const windowDesktop = (id) => byId(id)?._wm.desktop() ?? null;
+
+function switchToKey(key) { switchDesktop(desktopOfKey(key)); }
+
+setOpenKeys(() => [...windows].filter((w) => w._wm).map((w) => w._wm.spaceKey));
+
+// The active desktop changed (or a window moved, a desktop went): put each window on or off the stage. Focus that was in
+// a window now hidden goes to the top window of the new desktop.
+function syncSpaces({ state, prev } = {}) {
+  const order = (s, id) => s?.desktops.findIndex((d) => d.id === id) ?? -1;
+  const dir = state && prev && prev.active !== state.active ? Math.sign(order(state, state.active) - order(state, prev.active)) || 1 : 0;
+  const lost = document.activeElement?.closest?.('.win');
+  for (const w of [...windows]) w._wm?.syncSpace(dir);
+  if (lost?.classList.contains('off-space') || (dir && (!document.activeElement || document.activeElement === document.body))) focusTop(null);
+  refitTiles(); // a tiled window follows its zone if the screen changed while it was away
+}
+onSpacesChange(syncSpaces);
+window.matchMedia?.(PHONE_QUERY)?.addEventListener?.('change', () => syncSpaces()); // a phone shows every window

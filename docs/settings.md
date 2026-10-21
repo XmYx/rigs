@@ -558,6 +558,8 @@ Features that are still being tried out.
 | config `persona.overseer` | Internal pointer to JARVIS's overseer session (default tmux jarvis-overseer), set by RIGS. |
 | localStorage `rigs.dock` | The dock layout itself (arranged by dragging; reset in the Panels menu), not a preference. |
 | localStorage `rigs.panels` | Legacy dock layout, migrated into rigs.dock. |
+| localStorage `rigs.spaces` | The virtual desktops (Spaces) and which desktop each window is on, arranged from the menu bar desktop indicator, not a preference. |
+| localStorage `rigs.spaces.active` | The desktop this browser was last on (Spaces, switched with Ctrl+arrows or the menu bar indicator), not a preference. |
 | localStorage `rigs.sync` | Bookkeeping of the synced storage (revisions of rigs.dock and friends). |
 | localStorage `rigs.removed` | Removed panels and apps with their undo history; restored from the Window menu. |
 | localStorage `rigs.agents.dismissed` | Agent cards you dismissed: state, not a preference. |

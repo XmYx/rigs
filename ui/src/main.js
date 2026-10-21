@@ -35,6 +35,8 @@ import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starne
 import { openFiles } from './files.js';
 import { configureMediaPlayer, openMediaPlayer } from './media-player.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
+import { openMissionControl, toggleMissionControl } from './mission-control.js';
+import { isMissionControlAsk } from './mission-control-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
 import { cloudCommand, createCloud } from './cloud.js';
 import { createDesktopMode } from './desktop.js';
@@ -55,7 +57,10 @@ import { dockManager } from './dock-layout.js';
 import { createVoice } from './voice.js';
 import { SEPARATOR, spokenText } from './sentences.js';
 import { allPhrases, pickPhrase, thinkingEnabled } from '../../src/thinking-phrases.js';
-import { closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, minimizeWindow, openWindow, toggleMaximize, windowCount } from './wm.js';
+import {
+  addDesktop, closeAll as closeAllWindows, closeOthers, isMaximized, isMinimized, listDesktops, minimizeWindow, moveWindowToDesktop, openWindow, toggleMaximize, windowCount, windowDesktop,
+} from './wm.js';
+import './spaces-indicator.js'; // the desktop indicator in the menu bar tray (Spaces)
 import { THEMES, applyTheme, themeId } from './themes.js';
 // System Preferences (last, so the modules above keep their evaluation order)
 import { openPreferences } from './prefs-window.js';
@@ -1014,6 +1019,7 @@ async function intent(text) {
     say(on ? `The cloud is back, ${persona.address}.` : 'Cloud hidden. Nothing of it renders until you ask for it again.');
     return true;
   }
+  if (isMissionControlAsk(t)) { openMissionControl(); say(`Every window, ${persona.address}.`); return true; } // before "show me <node>" below
   if ((m = t.match(/^(?:open |start |launch |give me )?(?:a |new )*(?:terminal|shell|console|command line)(?: on| for| at| to)?\s+(.+)$/i))) {
     const n = findMachine(m[1]);
     if (n?.rigs) { openTerminal({ nodeId: n.id, nodeName: n.name }); say(`Terminal on ${n.name}, ${persona.address}.`); return true; }
@@ -1480,6 +1486,7 @@ function wire() {
   $('#btn-desktops').onclick = () => togglePanel('desktops');
   $('#btn-traces').onclick = () => togglePanel('traces');
   $('#btn-graphify').onclick = () => togglePanel('graphify');
+  $('#btn-mission').onclick = () => toggleMissionControl();
   $('#dock-target').onclick = conversationWindow;
   $('#dock-detach').onclick = detachChat;
   renderDock();
@@ -1744,7 +1751,10 @@ function wireContextMenus() {
   registerJarvisProviders(providers, {
     copy: copyText,
     layout: { state: panelWindowState, act: panelWindowAction, resetPanel, canDock, isDocked, dock: dockPanel, float: floatPanel, removed: listRemoved },
-    window: { minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount },
+    window: {
+      minimize: minimizeWindow, isMin: isMinimized, toggleMax: toggleMaximize, isMax: isMaximized, closeOthers, closeAll: closeAllWindows, count: windowCount,
+      desktops: listDesktops, desktopOf: windowDesktop, moveTo: moveWindowToDesktop, addDesktop: () => addDesktop(),
+    },
     app: {
       key: appKey, isOpen: isAppOpen, status: (a) => a.health?.status, url: (a) => `${location.origin}${appPath(a)}`,
       open: openApp, openTab: (a) => window.open(appPath(a), '_blank', 'noopener'), reload: reloadApp,
