@@ -39,6 +39,16 @@ const tool = (name, input) => out({ type: 'assistant', session_id: 'yolo-sess', 
   out({ type: 'system', subtype: 'init', session_id: 'yolo-sess' });
   const mode = process.env.FAKE_YOLO || 'page';
   if (mode === 'hang') { fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(rec) + '\\n'); await sleep(60000); return; }
+  if (args.includes('--resume')) {
+    // a YOLOv2 follow-up: the same session changes the page and suggests an icon
+    tool('Write', { file_path: 'ball.js' });
+    fs.writeFileSync('ball.js', 'const c = document.getElementById("c"); const g = c.getContext("2d"); g.fillStyle = "red"; g.fillRect(10, 10, 40, 40);');
+    fs.writeFileSync('icon.json', JSON.stringify({ emoji: '🔴' }));
+    await sleep(350);
+    fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(rec) + '\\n');
+    out({ type: 'result', session_id: 'yolo-sess', is_error: false, result: 'The ball is red and bigger now, sir.', usage: { input_tokens: 5, output_tokens: 4 } });
+    return;
+  }
   tool('Write', { file_path: 'index.html' });
   fs.writeFileSync('index.html', '<!doctype html><html><head><title>Ball</title></head><body><canvas id="c"></canvas><script src="ball.js"></script></body></html>');
   await sleep(350);
@@ -170,7 +180,7 @@ test('yoloSettings / applyYoloPatch: defaults, validation, a fixed sandbox root'
   assert.equal(d.root, path.join(HOME, 'yolo'));
   const s = Y.yoloSettings({ enabled: 'off', provider: 'codex', effort: 'turbo', maxTurns: 999, timeoutMs: 5, model: '  ' });
   assert.deepEqual([s.enabled, s.provider, s.effort, s.maxTurns, s.timeoutMs, s.model], [false, 'claude', 'low', 100, 10000, 'claude-sonnet-5-5']);
-  assert.deepEqual(Y.applyYoloPatch({}, { enabled: false }), { enabled: false, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50 });
+  assert.deepEqual(Y.applyYoloPatch({}, { enabled: false }), { enabled: false, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50, v2: false });
   assert.equal(Y.applyYoloPatch({ enabled: false }, { model: 'claude-haiku-5-5', effort: 'medium' }).effort, 'medium');
   for (const [b, re] of [[{ enabled: 'maybe' }, /enabled/], [{ provider: 'ollama' }, /provider/], [{ effort: 'turbo' }, /effort/], [{ model: '' }, /model/], [{ maxTurns: 'lots' }, /maxTurns/], [{ root: '/tmp' }, /fixed/], [[], /expected/]]) {
     assert.throws(() => Y.applyYoloPatch({}, b), re);
@@ -268,6 +278,11 @@ test('createRun: the placeholder page and yolo-start exist before anything else 
     assert.deepEqual(seen.map((e) => e.type), ['yolo-start'], 'emitted on the bus too, with no update for the placeholder');
     const mine = [];
     Y.onRun(run.runId, (e) => mine.push(e));
+    // the placeholder reported late (macOS FSEvents does that for the write right before the watch): no update, no first frame
+    fs.writeFileSync(path.join(run.dir, 'index.html'), fs.readFileSync(path.join(run.dir, 'index.html')));
+    await sleep(Y.YOLO_DEBOUNCE_MS + 250);
+    assert.equal(mine.filter((e) => e.type === 'yolo-update').length, 0, 'the placeholder is not an update');
+    assert.equal((await Y.getRun(run.runId, root)).firstFrameAt, null, 'nor the first frame');
     Y.setActivity(run.runId, 'Write index.html');
     for (const f of ['index.html', 'a.js', 'b.json']) fs.writeFileSync(path.join(run.dir, f), f);
     fs.writeFileSync(path.join(run.dir, '.hidden'), 'x');
@@ -560,6 +575,17 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     assert.match(cli, new RegExp(`${start.runId}\\s+done`));
     const st = await new Promise((resolve) => { const c = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), 'yolo', 'status'], { env }); let o = ''; c.stdout.on('data', (d) => { o += d; }); c.on('close', () => resolve(o)); });
     assert.match(st, /^yolo mode on · claude claude-sonnet-5-5 \(low\) · max 20 turns, 180 s/);
+    assert.doesNotMatch(st, /v2/, 'v2 is off by default');
+    // YOLOv2 follow-ups: never from the page itself; a v1 run takes none
+    for (const u of [`${start.localUrl}message`, `${start.url}message`]) assert.equal((await nullPost(u, { text: 'make it red' })).status, 403, u);
+    const v1msg = await fetch(`${BASE}${start.localUrl}message`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'make it red' }) });
+    assert.equal(v1msg.status, 409);
+    const cliRun = (...a) => new Promise((resolve) => { const c = spawn(process.execPath, [path.join(ROOT, 'bin/rigs.js'), ...a], { env }); let o = ''; c.stdout.on('data', (d) => { o += d; }); c.stderr.on('data', (d) => { o += d; }); c.on('close', (code) => resolve({ code, o })); });
+    assert.match((await cliRun('yolo', 'v2', 'on')).o, /^yolo mode on .* · v2 on \(multi-turn, subagents\)/);
+    assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).v2, true);
+    assert.doesNotMatch((await cliRun('yolo', 'v2', 'off')).o, /v2 on/);
+    assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).v2, false);
+    assert.equal((await cliRun('yolo', 'v2', 'maybe')).code, 1);
   } finally { ws.close(); daemon.kill(); daemon = null; }
 });
 
@@ -830,4 +856,271 @@ test('the generated static server: /healthz, index.html and assets with their ty
     assert.equal(pre.status, 204);
     assert.equal(pre.headers.get('access-control-allow-origin'), '*');
   } finally { await new Promise((res) => mod.server.close(res)); }
+});
+
+// ---------------------------------------------------------------- YOLOv2: multi-turn runs, subagents; suggested icons
+
+const nextEvent = (pred, ms = 20000) => new Promise((resolve, reject) => {
+  const fn = (e) => { if (pred(e)) { clearTimeout(t); Y.events.off('event', fn); resolve(e); } };
+  const t = setTimeout(() => { Y.events.off('event', fn); reject(new Error('timed out waiting for a YOLO event')); }, ms);
+  Y.events.on('event', fn);
+});
+const tinyPng = `data:image/png;base64,${Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64')}`;
+
+test('yolo.v2: a mesh-global switch, off by default, validated by applyYoloPatch', () => {
+  assert.equal(Y.yoloSettings().v2, false);
+  assert.equal(Y.yoloSettings({ v2: 'on' }).v2, true);
+  assert.equal(Y.applyYoloPatch({}, { v2: true }).v2, true);
+  assert.equal(Y.applyYoloPatch({ v2: true }, { enabled: false }).v2, true, 'other patches keep it');
+  assert.equal(Y.applyYoloPatch({ v2: true }, { v2: 'off' }).v2, false);
+  assert.throws(() => Y.applyYoloPatch({}, { v2: 'maybe' }), /v2/);
+  assert.equal(config().yolo.v2, false, 'the default config has it off');
+});
+
+test('yoloPrompt v2 and the --agents JSON: delegation, a conversation, blocked tools stay blocked in subagents', () => {
+  const base = { dir: '/r/y-1', base: 'http://127.0.0.1:4719/api/local/yolo/y-1/', model: 'claude-sonnet-5-5', maxTurns: 20, timeoutMs: 180000 };
+  const v1 = Y.yoloPrompt(base);
+  assert.doesNotMatch(v1, /web-research|quick-builder|conversation/, 'v1 has no subagents and no follow-ups');
+  assert.match(v1, /icon\.json[\s\S]*icon\.svg/, 'both modes may suggest an icon');
+  assert.match(v1, /8\. Finish with ONE short spoken line/);
+  const v2 = Y.yoloPrompt({ ...base, v2: true });
+  for (const re of [/180 s per turn/, /web-research/, /quick-builder/, /first frame yourself first/, /conversation/, /same session/, /icon\.json/, /never run git/, /Finish every turn with ONE short spoken line/]) assert.match(v2, re);
+  const agents = Y.yoloAgents();
+  assert.deepEqual(Object.keys(agents).sort(), ['quick-builder', 'web-research']);
+  assert.deepEqual(agents['web-research'].tools, ['WebSearch', 'WebFetch']);
+  assert.ok(['sonnet', 'haiku'].includes(agents['web-research'].model));
+  assert.equal(agents['quick-builder'].model, 'haiku');
+  assert.ok(agents['quick-builder'].tools.includes('Write'));
+  for (const [name, a] of Object.entries(agents)) {
+    assert.ok(a.description && a.prompt, name);
+    assert.ok(!a.tools.some((t) => /^(?:Bash|mcp__)/.test(t) || Y.YOLO_BLOCKED_TOOLS.includes(t)), `${name}: no blocked, Bash or MCP tool`);
+    assert.deepEqual(a.disallowedTools, Y.YOLO_BLOCKED_TOOLS, `${name} denies every blocked tool too`);
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(agents)), agents, 'plain JSON for --agents');
+  const f = Y.yoloFollowUp({ text: 'make it red', feedback: { text: 'too small', console: 'warn x' }, errors: [{ type: 'error', message: 'boom', source: 'ball.js', line: 3 }], turn: 3, screenshot: '.feedback/turn-3.png' });
+  for (const re of [/^Turn 3/, /make it red/, /too small/, /warn x/, /\.feedback\/turn-3\.png/, /\[error\] boom \(ball\.js:3\)/]) assert.match(f, re);
+  assert.match(Y.yoloFollowUp({ text: 'ok' }), /No page errors/);
+  assert.equal(Y.feedbackBlock(undefined), null);
+  assert.equal(Y.feedbackBlock({}), null);
+  assert.deepEqual(Y.feedbackBlock('looks off'), { text: 'looks off', console: '', screenshot: null });
+  assert.equal(Y.feedbackBlock({ screenshot: tinyPng }).screenshot.ext, 'png');
+  assert.equal(Y.feedbackBlock({ console: ['a', { b: 1 }] }).console, 'a\n{"b":1}');
+  for (const bad of [{ screenshot: 'http://x/y.png' }, { screenshot: 'data:image/svg+xml;base64,PHN2Zz4=' }, { screenshot: `data:image/png;base64,${'A'.repeat(6 * 1024 * 1024)}` }, [1], 42]) {
+    assert.throws(() => Y.feedbackBlock(bad), (e) => e.status === 400, JSON.stringify(bad).slice(0, 60));
+  }
+});
+
+test('readSuggestedIcon: an emoji or a confined, small, script-free SVG — never traversal, scripts, oversize or symlinks out', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'icon-'));
+  const w = (rel, body) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), body); };
+  const clear = () => { for (const n of fs.readdirSync(dir)) fs.rmSync(path.join(dir, n), { recursive: true, force: true }); };
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="red"/></svg>';
+  assert.equal(Y.readSuggestedIcon(dir), null, 'none suggested');
+  w('icon.json', JSON.stringify({ emoji: '🪐' }));
+  assert.deepEqual(Y.readSuggestedIcon(dir), { emoji: '🪐' });
+  w('icon.json', JSON.stringify({ emoji: 'CPU' }));
+  assert.deepEqual(Y.readSuggestedIcon(dir), { emoji: 'CPU' }, 'short text is fine');
+  w('art/logo.svg', SVG);
+  w('icon.json', JSON.stringify({ emoji: '🪐', svg: './art/logo.svg' }));
+  assert.deepEqual(Y.readSuggestedIcon(dir), { emoji: '🪐', svg: 'art/logo.svg' });
+  clear();
+  w('icon.svg', SVG);
+  assert.deepEqual(Y.readSuggestedIcon(dir), { svg: 'icon.svg' }, 'a plain icon.svg');
+  // refused parts are left out; nothing valid → null (or the plain icon.svg)
+  w('icon.json', JSON.stringify({ emoji: 'x'.repeat(17), svg: '../outside.svg' }));
+  fs.writeFileSync(path.join(TMP, 'outside.svg'), SVG);
+  assert.deepEqual(Y.readSuggestedIcon(dir), { svg: 'icon.svg' }, 'too long and traversal refused; icon.svg used instead');
+  fs.rmSync(path.join(dir, 'icon.svg'));
+  assert.equal(Y.readSuggestedIcon(dir), null);
+  for (const svg of ['/etc/x.svg', '%2e%2e/outside.svg', '.hidden/x.svg', 'art/logo.png', 'icon.json']) {
+    w('icon.json', JSON.stringify({ svg }));
+    assert.equal(Y.readSuggestedIcon(dir), null, svg);
+  }
+  for (const [name, body] of [['script', '<svg><script>alert(1)</script></svg>'], ['handler', '<svg onload="alert(1)"></svg>'], ['foreign', '<svg><foreignObject><div/></foreignObject></svg>'],
+    ['js-href', '<svg><a href="javascript:alert(1)"><circle r="1"/></a></svg>'], ['external', '<svg><image href="https://evil.example/x.png"/></svg>'], ['entity', '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY x "y">]><svg/>'],
+    ['not-svg', '<html><body>hi</body></html>'], ['oversize', `<svg>${'<!-- pad -->'.repeat(4000)}</svg>`]]) {
+    w('bad.svg', body);
+    w('icon.json', JSON.stringify({ svg: 'bad.svg' }));
+    assert.equal(Y.readSuggestedIcon(dir), null, name);
+    assert.ok(Y.svgProblem(body), name);
+  }
+  assert.equal(Y.svgProblem(SVG), '');
+  for (const bad of ['<b>', 'a"b', '', '   ', null, {}, '\u0007']) assert.equal(Y.iconText(bad), '', JSON.stringify(bad));
+  if (posix) {
+    clear();
+    fs.symlinkSync(path.join(TMP, 'outside.svg'), path.join(dir, 'icon.svg'));
+    assert.equal(Y.readSuggestedIcon(dir), null, 'a symlink out of the sandbox');
+  }
+  clear();
+  w('icon.json', '{ not json');
+  assert.equal(Y.readSuggestedIcon(dir), null);
+});
+
+test('a run picks up a suggested icon as it is written: meta.icon and a yolo-icon event (v1 too)', async () => {
+  const root = path.join(TMP, 'icon-run');
+  const run = await Y.createRun({ text: 'yolo a clock', task: 'a clock', node: 'test-node', root });
+  const got = nextEvent((e) => e.type === 'yolo-icon' && e.runId === run.runId);
+  fs.writeFileSync(path.join(run.dir, 'index.html'), '<!doctype html><title>Clock</title>');
+  fs.writeFileSync(path.join(run.dir, 'icon.json'), JSON.stringify({ emoji: '⏰' }));
+  const ev = await got;
+  assert.equal(ev.icon.emoji, '⏰');
+  assert.equal((await Y.getRun(run.runId, root)).icon.emoji, '⏰');
+  await Y.finishRun(run.runId, { ok: true });
+  const disk = JSON.parse(fs.readFileSync(path.join(root, `${run.runId}.json`), 'utf8'));
+  assert.equal(disk.icon.emoji, '⏰');
+  assert.equal(disk.v2, undefined, 'a v1 run has no conversation fields');
+  assert.equal(disk.messages, undefined);
+});
+
+test('POST …/message: v2 only, 409 while a turn runs (not queued), 400 empty, Origin: null refused; idle → running → idle with messages[]', async () => {
+  const root = path.join(TMP, 'msg');
+  const { srv, base } = await sandboxServer(root);
+  const post = (runId, b, headers = {}) => fetch(`${base}/yolo/${runId}/message`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(b) });
+  const begun = [];
+  let release = null;
+  Y.setTurnRunner(async (b) => { begun.push(b); await new Promise((r) => { release = r; }); await Y.endTurn(b.runId, { ok: true, summary: 'Red now, sir.', reply: 'Red now, sir.' }); });
+  try {
+    // a v1 run takes no messages
+    const v1 = await Y.createRun({ text: 'yolo a ball', task: 'a ball', node: 'test-node', root });
+    await Y.finishRun(v1.runId, { ok: true });
+    const r1 = await post(v1.runId, { text: 'more' });
+    assert.equal(r1.status, 409);
+    assert.match((await r1.json()).error, /not a YOLOv2 run/);
+    assert.equal((await post('y-20200101-000000-abcdef', { text: 'x' })).status, 404);
+    // a v2 run: refused while its first turn runs, then idle and ready
+    const run = await Y.createRun({ text: 'yolo a ball', task: 'a ball', node: 'test-node', root, v2: true });
+    Y.addMessage(run.runId, { role: 'user', text: 'a ball' });
+    Y.setSession(run.runId, 'sess-1');
+    const busy = await post(run.runId, { text: 'make it red' });
+    assert.equal(busy.status, 409);
+    assert.match((await busy.json()).error, /still running[\s\S]*not queued/);
+    const idleDone = await Y.endTurn(run.runId, { ok: true, summary: 'A ball, sir.', reply: 'A ball, sir.' });
+    assert.deepEqual([idleDone.type, idleDone.idle, idleDone.turn], ['yolo-done', true, 1]);
+    assert.equal((await Y.getRun(run.runId, root)).status, 'idle');
+    assert.equal(Y.isLive(run.runId), false, 'idle is not live: Keep works on it');
+    assert.equal((await post(run.runId, {})).status, 400);
+    assert.equal((await post(run.runId, { text: '   ' })).status, 400);
+    assert.equal((await post(run.runId, { feedback: { screenshot: 'nope' } })).status, 400);
+    // the page itself (an opaque origin) may not drive the conversation
+    assert.equal(Y.opaqueOriginRefused({ method: 'POST', pathname: `/api/local/yolo/${run.runId}/message`, origin: 'null' }), true);
+    assert.equal(Y.opaqueOriginRefused({ method: 'POST', pathname: `/api/nodes/test-node/yolo/${run.runId}/message`, origin: 'null' }), true);
+    Y.recordError(run.runId, { type: 'error', message: 'TypeError: x is undefined', source: 'ball.js', line: 7 });
+    const ok = await post(run.runId, { text: 'make it red', feedback: { text: 'too small', screenshot: tinyPng } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { ok: true, runId: run.runId, turn: 2, status: 'running', errors: 1 });
+    await sleep(20);
+    assert.equal(begun.length, 1);
+    assert.equal(begun[0].sessionId, 'sess-1');
+    assert.equal(begun[0].dir, run.dir);
+    assert.match(begun[0].prompt, /Turn 2[\s\S]*make it red[\s\S]*too small[\s\S]*\.feedback\/turn-2\.png[\s\S]*TypeError: x is undefined/);
+    assert.ok(fs.existsSync(path.join(run.dir, '.feedback', 'turn-2.png')), 'the screenshot is in the sandbox (a dot-folder: never served or kept)');
+    assert.equal((await rawGet(base, `/yolo/${run.runId}/.feedback/turn-2.png`)).status, 403);
+    const again = await post(run.runId, { text: 'and bigger' });
+    assert.equal(again.status, 409, 'one turn at a time');
+    const done = nextEvent((e) => e.type === 'yolo-done' && e.runId === run.runId);
+    release();
+    assert.deepEqual([(await done).turn, (await done).idle], [2, true]);
+    const meta = await (await fetch(`${base}/yolo/${run.runId}/meta`)).json();
+    assert.deepEqual([meta.v2, meta.status, meta.turn, meta.sessionId], [true, 'idle', 2, 'sess-1']);
+    assert.deepEqual(meta.messages.map((m) => [m.role, m.text, m.turn]), [['user', 'a ball', 1], ['assistant', 'A ball, sir.', 1], ['user', 'make it red', 2], ['assistant', 'Red now, sir.', 2]]);
+    assert.deepEqual(meta.messages[2].feedback, { text: 'too small', screenshot: '.feedback/turn-2.png' });
+    assert.equal(meta.messages[2].errors, 1);
+    // after a daemon restart the idle run is picked up again from its meta
+    Y._resetRuns();
+    const back = await post(run.runId, { text: 'and bigger' });
+    assert.equal(back.status, 200);
+    assert.equal((await back.json()).turn, 3);
+    const done3 = nextEvent((e) => e.type === 'yolo-done' && e.runId === run.runId && e.turn === 3);
+    await sleep(20);
+    release();
+    await done3;
+    assert.equal((await Y.getRun(run.runId, root)).messages.length, 6);
+  } finally { Y.setTurnRunner(null); srv.close(); }
+});
+
+test('YOLOv2 end to end: --agents at the start, the session resumed in the same sandbox, feedback + errors in the turn, icon, Keep', { skip: !posix && 'stand-in claude is a POSIX script' }, async () => {
+  setYolo({ enabled: true, v2: true });
+  fs.rmSync(FAKE_LOG, { force: true });
+  process.env.FAKE_YOLO = 'page';
+  Y.setTurnRunner((b) => chat.yoloFollowUp(b, {}));
+  const events = [];
+  const all = (e) => events.push(e);
+  Y.events.on('event', all);
+  try {
+    const out = await chat.jarvisSend('yolo a bouncing ball in p5', {}, () => {}, { router: noRouter, onWork: noWork, send: noSend, sendQuick: noSend });
+    const runId = out.runId;
+    assert.equal(out.text, 'A bouncing ball is on screen, sir.');
+    let meta = await Y.getRun(runId);
+    assert.deepEqual([meta.v2, meta.status, meta.ok, meta.turn, meta.sessionId], [true, 'idle', true, 1, 'yolo-sess'], 'idle, not done; the session kept');
+    assert.deepEqual(meta.messages.map((m) => m.role), ['user', 'assistant']);
+    const [first] = fakeRuns();
+    const arg = (r, k) => r.args[r.args.indexOf(k) + 1];
+    assert.deepEqual(Object.keys(JSON.parse(arg(first, '--agents'))).sort(), ['quick-builder', 'web-research']);
+    assert.match(arg(first, '--disallowedTools'), /mcp__rigs__jarvis_task.*Bash\(git:\*\)/, 'still blocked for the session and its subagents');
+    assert.match(arg(first, '--append-system-prompt'), /web-research[\s\S]*conversation/);
+    assert.ok(!first.args.includes('--resume'));
+    const done1 = events.find((e) => e.type === 'yolo-done' && e.runId === runId);
+    assert.deepEqual([done1.idle, done1.turn], [true, 1]);
+    // Sir tests it: an error shows up, then he sends feedback
+    Y.recordError(runId, { type: 'rejection', message: 'NotAllowedError: play() failed', source: 'ball.js', line: 2 });
+    const r = await Y.messageRun(runId, { text: 'make it red and bigger', feedback: { text: 'hard to see', console: ['warn: tiny'] } });
+    assert.deepEqual([r.ok, r.turn, r.errors], [true, 2, 1]);
+    await nextEvent((e) => e.type === 'yolo-done' && e.runId === runId && e.turn === 2);
+    const second = fakeRuns().at(-1);
+    assert.equal(arg(second, '--resume'), 'yolo-sess', 'the same Claude session');
+    assert.equal(second.cwd, first.cwd, 'in the same sandbox');
+    assert.ok(second.args.includes('--agents'));
+    assert.match(arg(second, '--disallowedTools'), /mcp__rigs__project_create/);
+    assert.match(second.args[1], /^Turn 2[\s\S]*make it red and bigger[\s\S]*hard to see[\s\S]*warn: tiny[\s\S]*NotAllowedError: play\(\) failed/);
+    meta = await Y.getRun(runId);
+    assert.deepEqual([meta.status, meta.turn, meta.ok], ['idle', 2, true]);
+    assert.deepEqual(meta.messages.map((m) => [m.role, m.turn]), [['user', 1], ['assistant', 1], ['user', 2], ['assistant', 2]]);
+    assert.equal(meta.messages[3].text, 'The ball is red and bigger now, sir.');
+    assert.equal(meta.icon?.emoji, '🔴', 'the icon the agent suggested');
+    const mine = events.filter((e) => e.runId === runId);
+    for (const t of ['yolo-message', 'yolo-update', 'yolo-icon', 'yolo-done']) assert.ok(mine.some((e) => e.type === t), t);
+    assert.ok(mine.findIndex((e) => e.type === 'yolo-message' && e.turn === 2 && e.role === 'assistant') < mine.findIndex((e) => e.type === 'yolo-done' && e.turn === 2));
+    assert.ok(mine.some((e) => e.type === 'yolo-update' && e.files.includes('ball.js') && mine.indexOf(e) > mine.indexOf(done1)), 'the follow-up\'s writes reload the window');
+    // traced as its own request, with the run id
+    await trace.flush();
+    const turnSpan = (await trace.readSpans({})).filter((s) => s.kind === 'brain-turn' && s.meta?.runId === runId && s.meta?.turn === 2);
+    assert.equal(turnSpan.length, 1);
+    assert.equal(turnSpan[0].meta.v2, true);
+    // Keep as app on the idle run takes the suggested icon
+    const kbase = path.join(TMP, 'keep-v2');
+    const { deps, calls } = keepDeps(kbase);
+    const kept = await K.keepRun(runId, { name: 'Red ball' }, { deps });
+    assert.equal(kept.ok, true);
+    assert.equal(calls.register[0].icon, '🔴');
+    assert.equal(kept.keptAs.icon, '🔴');
+  } finally {
+    Y.events.off('event', all);
+    Y.setTurnRunner(null);
+    setYolo({ v2: false });
+  }
+});
+
+test('keepRequest: the suggested icon when the body has none — emoji as the app icon, svg as iconSvg; ⚡ stays the fallback', () => {
+  const meta = { title: 'Orbits', task: 'orbits' };
+  assert.equal(K.keepRequest({}, meta).icon, '⚡');
+  assert.equal(K.keepRequest({}, { ...meta, icon: { emoji: '🪐', at: 1 } }).icon, '🪐');
+  assert.equal(K.keepRequest({ icon: '🚀' }, { ...meta, icon: { emoji: '🪐', svg: 'icon.svg' } }).icon, '🚀', 'the body wins');
+  assert.equal(K.keepRequest({ icon: '🚀' }, { ...meta, icon: { emoji: '🪐', svg: 'icon.svg' } }).iconSvg, undefined);
+  const svgOnly = K.keepRequest({}, { ...meta, icon: { svg: 'art/icon.svg' } });
+  assert.deepEqual([svgOnly.icon, svgOnly.iconSvg], ['⚡', 'art/icon.svg']);
+  assert.equal(K.keepRequest({}, { ...meta, icon: { emoji: '<script>' } }).icon, '⚡', 'a meta icon is re-checked');
+  assert.equal(K.keepRequest({}, { ...meta, icon: { svg: '../../etc/x.svg' } }).iconSvg, undefined);
+});
+
+test('keepRun on a v1 run with a suggested icon.svg: the kept app records iconSvg', async () => {
+  const base = path.join(TMP, 'keep-icon');
+  const root = path.join(base, 'yolo');
+  const { deps, calls } = keepDeps(base, { systemd: false });
+  const run = await keptFixture(root, { finish: false });
+  fs.writeFileSync(path.join(run.dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><rect width="4" height="4"/></svg>');
+  await Y.finishRun(run.runId, { ok: true, summary: 'Planets, sir.' });
+  assert.deepEqual((await Y.getRun(run.runId, root)).icon && { svg: (await Y.getRun(run.runId, root)).icon.svg }, { svg: 'icon.svg' });
+  const r = await K.keepRun(run.runId, {}, { root, deps });
+  assert.deepEqual([r.keptAs.icon, r.keptAs.iconSvg, calls.register[0].icon], ['⚡', 'icon.svg', '⚡']);
+  assert.ok(fs.existsSync(path.join(r.keptAs.dir, 'icon.svg')), 'the svg is in the kept folder');
 });

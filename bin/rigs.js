@@ -261,14 +261,16 @@ const commands = {
     if (r.failed) console.log(`last attempt failed ${when(r.failed.ts)}: ${r.failed.error} (retried next turn)`);
   },
   /**
-   * rigs yolo [on|off|status|list|keep <runId> [--name …] [--id …] [--icon …]] — YOLO mode (src/yolo.js): "yolo …" requests
-   * build a page live in a sandbox window, no project/review/commit/merge. on/off switch config.yolo.enabled (mesh-global);
-   * list shows the runs kept here; keep publishes a finished run as an App Cloud app (src/yolo-keep.js).
+   * rigs yolo [on|off|status|list|v2 on|off|keep <runId> [--name …] [--id …] [--icon …]] — YOLO mode (src/yolo.js): "yolo …"
+   * requests build a page live in a sandbox window, no project/review/commit/merge. on/off switch config.yolo.enabled
+   * (mesh-global); v2 on|off switches config.yolo.v2 (YOLOv2: multi-turn runs with subagents); list shows the runs kept
+   * here; keep publishes a finished run as an App Cloud app (src/yolo-keep.js).
    */
   async yolo() {
     const [sub = 'status'] = argv;
     const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
-    if (!['on', 'off', 'status', 'list', 'keep'].includes(sub)) fail('usage: rigs yolo [on|off|status|list|keep <runId> [--name …]]');
+    if (!['on', 'off', 'status', 'list', 'keep', 'v2'].includes(sub)) fail('usage: rigs yolo [on|off|status|list|v2 on|off|keep <runId> [--name …]]');
+    if (sub === 'v2' && argv[1] !== undefined && !['on', 'off'].includes(argv[1])) fail('usage: rigs yolo v2 on|off');
     if (sub === 'keep') {
       const runId = argv[1];
       const opt = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
@@ -291,10 +293,10 @@ const commands = {
       }
       return;
     }
-    const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : null;
+    const patch = sub === 'on' ? { enabled: true } : sub === 'off' ? { enabled: false } : sub === 'v2' && argv[1] ? { v2: argv[1] === 'on' } : null;
     const r = await daemonFetch('/api/local/yolo/config', patch ? { method: 'POST', body: JSON.stringify(patch) } : {}).catch((e) => ({ error: e.message }));
     if (r?.error || r?.enabled === undefined) fail(r?.error);
-    console.log(`yolo mode ${r.enabled ? 'on' : 'off'} · ${r.provider} ${r.model}${r.effort ? ` (${r.effort})` : ''} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s · sandbox ${r.root} (keeps ${r.keep} runs)`);
+    console.log(`yolo mode ${r.enabled ? 'on' : 'off'} · ${r.provider} ${r.model}${r.effort ? ` (${r.effort})` : ''} · max ${r.maxTurns} turns, ${Math.round(r.timeoutMs / 1000)} s · sandbox ${r.root} (keeps ${r.keep} runs)${r.v2 ? ' · v2 on (multi-turn, subagents)' : ''}`);
   },
   /** rigs linear [status] · rigs linear key [--clear] — the Linear connector (the key is read from stdin, never argv) */
   async linear() {
@@ -641,6 +643,7 @@ const commands = {
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
   rigs quick local [on|off|status|warm|model <m>|node <machine>]  the local responder: a local Ollama model answers the fast path (read-only tools)
   rigs yolo [on|off|status|list]  YOLO mode: "yolo …" requests build a page live in a sandbox window (no project, review, commit or merge)
+  rigs yolo v2 on|off             YOLOv2: runs stay open for feedback turns in the same window, with research/builder subagents
   rigs yolo keep <runId> [--name …]  publish a finished YOLO run as an App Cloud app (copied to <shared>/apps/<id>/)
   rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
   rigs usage backfill  estimate ledger records from earlier project tasks and chats

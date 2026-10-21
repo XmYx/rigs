@@ -1058,7 +1058,8 @@ export async function startServer() {
       return { ...next, local: localSettings(next.local) };
     }
     // YOLO mode (src/yolo.js, contract at its top): the runs kept here, the settings, and each run's sandbox — its files
-    // (path-confined, served as an opaque-origin sandbox), live-reload events, the page's runtime errors, stop.
+    // (path-confined, served as an opaque-origin sandbox), live-reload events, the page's runtime errors, stop, and a
+    // YOLOv2 run's follow-up messages (POST yolo/<runId>/message; refused from Origin: null by opaqueOriginRefused).
     if (sub === 'yolo' && method === 'GET') return { settings: yolo.yoloSettings(config().yolo), runs: await yolo.listRuns({ limit: Number(q.get('limit')) || 50 }) };
     if (sub === 'yolo/config' && method === 'GET') return yolo.yoloSettings(config().yolo);
     if (sub === 'yolo/config' && method === 'POST') {
@@ -1726,7 +1727,9 @@ export async function startServer() {
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
   // Request traces: each span written here goes to the open UIs as it happens (live view); old day files are pruned.
   trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
-  yolo.events.on('event', (e) => broadcast(e)); // yolo-start · yolo-update · yolo-done (src/yolo.js)
+  yolo.events.on('event', (e) => broadcast(e)); // yolo-start · -update · -done · -message · -icon · -kept (src/yolo.js)
+  // YOLOv2 follow-up turns (POST yolo/<runId>/message): resume the run's session with the persona's mesh context
+  yolo.setTurnRunner(async (begun) => chat.yoloFollowUp(begun, { meshSummary: meshSummary(), projects: await projectsSummary().catch(() => '') }));
   // Exhibits: fed from the same span stream and the planner's saves; each new entry is pushed live ('exhibit').
   trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
   planner.onProjectSaved((p) => exhibitSvc.handleProject(p));
