@@ -922,9 +922,11 @@ def main():
         start_bus()
         st['compositor'] = start_compositor()
         start_session()
-        # The first key event of a fresh session is dropped (spike 3): spend it on a Shift tap.
+        # The first key event and the first pointer motion of a fresh session are dropped (spike 3; t4): spend them on a
+        # Shift tap and a move near the corner (not onto it: (0,0) is a hot corner in shell modes).
         rdc('NotifyKeyboardKeysym', '(ub)', (KEYSYM_SHIFT, True))
         rdc('NotifyKeyboardKeysym', '(ub)', (KEYSYM_SHIFT, False))
+        rdc('NotifyPointerMotionAbsolute', '(sdd)', (st['stream'], 8.0, 8.0))
         STREAM.idle_on(int(SPEC.get('width') or 1920), int(SPEC.get('height') or 1080))
         start_null_sink()
         # The app starts only once the monitor exists.

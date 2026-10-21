@@ -623,8 +623,11 @@ into kind-2 frames. The viewer plays them with `AudioDecoder('opus')` → an Aud
 - **Audit:** `RIGS_HOME/logs/appstream.jsonl` (0600, rotated at 5 MB like `control.jsonl`): `start`,
   `stop`, `end`, `join`, `leave`, `role`, `refused`, `kill`, `enable`, `clipboard` (direction and
   byte count only, never the text) and `input-on/off`. Individual input events are not logged.
-- **Announcement:** while a session has viewers, an attention item
-  `{key:'appstream:<node>:<sid>', kind:'appstream', title:'FilmCraft on magix-system is being streamed to <viewer node>', since, stop:{method:'DELETE', path:'appstream/sessions/<sid>'}}`.
+- **Announcement:** while an **agent** watches a session (agents may view, never send input), an attention item
+  `{key:'appstream:<node>:<sid>', kind:'appstream', title:'FilmCraft on magix-system is being watched by an agent', since (epoch ms), stop:{method:'DELETE', path:'appstream/sessions/<sid>'}}`,
+  like control's "JARVIS is watching this screen". Human viewers raise none: every attention item lands in the "agents
+  need you" banner, and a person streaming their own app (on a phone, too) must not get it over the stream (t4 finding).
+  Human sessions are visible in the audit log, `GET appstream` and the Applications view's Running section.
 - `GET /api/local/appstream` reports `{enabled, input, killed, sessions}`, and `mesh_access` (`src/mcp.js`)
   shows that block next to the control status. `src/access.js` needs no new grant on Linux. On macOS the existing
   Screen Recording and Accessibility grants of RIGS Control.app cover t5.
@@ -979,6 +982,8 @@ Implementation notes that refine the design:
 - A viewer resumes from `needsIdr` only with nothing in flight, and the ack baseline restarts at that IDR.
 - The pipeline's first IDR goes out before viewers have their hello, so the daemon asks for a fresh IDR on every
   `stream` event (first frame 290 ms after connect).
+- The first pointer motion of a fresh session is dropped as well as the first key (t4): the runner's warm-up also moves
+  the pointer to (8, 8) before the app starts (first click on fresh sessions: 0/3 → 3/3 on magix-system).
 - Apps launched through `gio launch` (D-Bus-activatable apps, or with `files`) are not tracked for exit; others end the
   session when their process group is gone.
 - HTTP refusals carry `code` = the WS `status` (`appstream-off`, `not-allowed`, …); the WS error keeps screen-stream's

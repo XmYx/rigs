@@ -1093,12 +1093,21 @@ export function createAppStream(deps) {
     throw new AppStreamError('bad-args', `unknown appstream route ${method} ${sub}`);
   }
 
-  /** Attention items: one per session while it has viewers (§6 announcement). */
-  const attentionItems = () => [...sessions.values()].filter((s) => s.viewers.size).map((s) => ({
-    key: `appstream:${nodeName()}:${s.id}`, kind: 'appstream', agent: 'jarvis',
-    title: `${s.app.name} on ${nodeName()} is being streamed to ${[...new Set([...s.viewers.values()].map((v) => v.caller.from || 'a viewer'))].join(', ')}`,
-    reason: 'app stream', since: s.lastViewerAt, stop: { method: 'DELETE', path: `appstream/sessions/${s.id}` },
-  }));
+  /**
+   * Attention items (§6 announcement): one per session while an agent watches it, like control's "JARVIS is watching this
+   * screen". A person streaming their own app is not an agent that needs them: those sessions raise no item (every item
+   * lands in the "agents need you" banner). `since` is epoch ms, as the UI's ago() expects.
+   */
+  const attentionItems = () => [...sessions.values()].flatMap((s) => {
+    const agents = [...s.viewers.values()].filter((v) => v.caller.agent || v.caller.human === false);
+    if (!agents.length) return [];
+    return [{
+      key: `appstream:${nodeName()}:${s.id}`, kind: 'appstream', agent: agents[0].caller.agent || 'agent',
+      title: `${s.app.name} on ${nodeName()} is being watched by an agent`,
+      reason: `app stream · ${[...new Set(agents.map((v) => v.caller.seat || v.caller.session || v.caller.from || 'agent'))].join(', ')}`,
+      since: Math.min(...agents.map((v) => v.since)), actions: 0, session: null, stop: { method: 'DELETE', path: `appstream/sessions/${s.id}` },
+    }];
+  });
 
   function close() {
     closing = true;

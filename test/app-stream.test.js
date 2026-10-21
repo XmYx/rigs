@@ -253,7 +253,9 @@ test('lifecycle transitions', () => {
  * session on macOS: `opts` gives its encoder, its own size and its ready event) and records the ops.
  */
 function fakeRunner(socketPath, opts = {}) {
-  const r = { ops: [], conns: [], width: 0, height: 0, seq: 0, timer: null, stopped: false };
+  const r = { ops: [], conns: [], width: 0, height: 0, seq: 0, timer: null, stopped: false, skip: false };
+  // opts.honorSkip: like the real runner, a set skip gate drops raw frames before the encoder, so nothing comes out.
+  const gated = () => opts.honorSkip && r.skip;
   const sendTo = (c, type, body) => c.write(S.packMessage(type, body));
   r.event = (obj) => { for (const c of r.conns) sendTo(c, 1, obj); };
   r.frame = (key) => {
@@ -273,8 +275,9 @@ function fakeRunner(socketPath, opts = {}) {
           r.event({ ev: 'stream', encoder: opts.encoder || op.candidates[0].encoder, width: r.width, height: r.height, fps: op.fps, fallback: false });
           r.frame(true);
           clearInterval(r.timer);
-          r.timer = setInterval(() => r.frame(false), 10);
-        } else if (op.op === 'keyframe') r.frame(true);
+          r.timer = setInterval(() => { if (!gated()) r.frame(false); }, 10);
+        } else if (op.op === 'skip') r.skip = op.on;
+        else if (op.op === 'keyframe') { if (!gated()) r.frame(true); }
         else if (op.op === 'stop-stream') clearInterval(r.timer);
         else if (op.op === 'stop') { r.stop(); }
       }
@@ -298,7 +301,7 @@ function host(over = {}) {
     run: async () => ({ code: 0, stdout: '', stderr: '' }), which: () => null, systemd: false, platform: 'linux',
     probe: async () => ({ platform: 'linux', gnomeShell: 50, mutter: false, nvidia: true, gst: { nvh264enc: true, glupload: true, cudaupload: true, x264enc: true }, missing: [] }),
     spawn: (cmd, args) => {
-      runners.push(fakeRunner(args[args.indexOf('--socket') + 1]));
+      runners.push(fakeRunner(args[args.indexOf('--socket') + 1], over.runner));
       return { pid: 0, unref() {} };
     },
   });
@@ -376,8 +379,7 @@ test('host: start a session, stream to a viewer through the peer relay, input re
   assert.equal(start.candidates[0].encoder.name, 'nvh264enc');
   assert.match(start.candidates.at(-1).desc, /x264enc/);
   assert.equal((await h.as.api('sessions/' + sess.id, 'GET', null, null, caller)).session.state, 'running');
-  assert.equal(h.as.attentionItems().length, 1);
-  assert.match(h.as.attentionItems()[0].title, /FilmCraft on magix is being streamed/);
+  assert.deepEqual(h.as.attentionItems(), []); // a person streaming their own app is not an "agent needs you" item
 
   v.send({ type: 'in', seq: 3, e: [{ k: 'pm', x: 10, y: 20 }, { k: 'pb', b: 0, d: 1 }, { k: 'pb', b: 0, d: 0 }, { k: 'kc', c: 'KeyA', d: 1 }, { k: 'bogus' }] });
   await until(() => run.ops.some((o) => o.op === 'input'));
@@ -392,6 +394,11 @@ test('host: start a session, stream to a viewer through the peer relay, input re
   const agent = viewer(`ws://127.0.0.1:${front.address().port}/api/nodes/magix/appstream/sessions/${sess.id}/stream`, { headers: { 'x-rigs-caller': JSON.stringify({ agent: 'claude' }) } });
   await until(() => agent.text.some((m) => m.type === 'hello'));
   assert.equal(agent.text.find((m) => m.type === 'hello').role, 'viewer');
+  const items = h.as.attentionItems();
+  assert.equal(items.length, 1);
+  assert.match(items[0].title, /FilmCraft on magix is being watched by an agent/);
+  assert.equal(typeof items[0].since, 'number');
+  assert.equal(items[0].agent, 'claude');
   const before = run.ops.filter((o) => o.op === 'input').length;
   agent.send({ type: 'in', seq: 9, e: [{ k: 'pm', x: 1, y: 1 }] });
   await until(() => agent.text.some((m) => m.type === 'status' && m.code === 'agent'));
