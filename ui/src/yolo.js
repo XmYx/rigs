@@ -1,7 +1,8 @@
 import { api, h } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
-import { STATUS_LABEL, applyEvent, elapsed, errorCount, errorsUrl, eventKey, isYoloEvent, keepBody, keepButton, keepUrl, keptApp, metaUrl, startRun, stopUrl, windowTitle, withKept, withMeta } from './yolo-model.js';
+import { isPhone } from './mobile.js';
+import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
 
 // YOLO windows: "yolo a bouncing ball in p5" opens a floating window the moment the daemon pushes yolo-start (before the
 // agent writes anything), shows the run's sandbox page in an iframe through /api/nodes/<node>/yolo/<runId>/ (so a run
@@ -11,6 +12,11 @@ import { STATUS_LABEL, applyEvent, elapsed, errorCount, errorsUrl, eventKey, isY
 // full-screen sheet) is wm.js's. ★ Keep as app asks for a name (prefilled from the run title) and an icon, stops a live
 // run first, POSTs …/keep through the run's node (src/yolo-keep.js) and opens the new app with the Apps list's opener;
 // a kept run (yolo-kept, or keptAs in the run's meta when the window opens) reads ★ Kept and opens its app.
+// YOLOv2 runs (config.yolo.v2) add a conversation pane in the same window: the run's messages, the agent's current step,
+// a composer (POST …/message; disabled while a turn runs, the server does not queue) and ✉ Send feedback, which bundles
+// the note with the page errors since the last turn (and an optional screenshot). The pane is hidden or shown with a
+// toggle: remembered per window, hidden by default on a phone. The page keeps reloading on yolo-update, so the user can
+// test while the agent works. The agent's suggested icon (yolo-icon / meta.icon) replaces ⚡ in the title bar and the dock.
 
 const runs = new Map(); // runId → { state, win, frame, ... }
 const seen = new Set();
@@ -35,6 +41,7 @@ export function onYoloEvent(m) {
   render(r);
   if (m.type === 'yolo-update') postReload(r);
   if (m.type === 'yolo-done') finish(r);
+  if (m.type === 'yolo-message' && m.role === 'assistant' && r.state.status === 'live' && r.state.v2) postReload(r);
 }
 
 /** For tests and the context menu: the runs with an open window. */
@@ -56,11 +63,65 @@ async function stop(r) {
 }
 
 function finish(r) {
-  clearInterval(r.timer);
   r.time.textContent = elapsed(r.state);
   pollErrors(r);
-  r.win.el.classList.add('yolo-finished');
+  if (r.state.status !== 'idle') { clearInterval(r.timer); r.win.el.classList.add('yolo-finished'); } // a YOLOv2 run only waits for feedback
   for (const fn of r.doneWaiters.splice(0)) fn();
+}
+
+// ── Conversation (YOLOv2) ───────────────────────────────────────────────────────────────────────────────────────────
+const readMap = () => { try { return readHiddenMap(localStorage.getItem(CONVO_KEY)); } catch { return {}; } };
+const hiddenNow = (r) => convoHidden(readMap(), r.state.runId, isPhone());
+
+function setConvoHidden(r, hidden) {
+  try { localStorage.setItem(CONVO_KEY, JSON.stringify(withConvoHidden(readMap(), r.state.runId, hidden))); } catch { /* private mode: the choice lasts for this window only */ }
+  r.convoHidden = hidden;
+  render(r);
+}
+
+function renderMessages(r) {
+  const ms = r.state.messages;
+  const sig = `${ms.length}|${ms.at(-1)?.at ?? ''}`;
+  if (sig === r.msgSig) return;
+  r.msgSig = sig;
+  const near = r.log.scrollHeight - r.log.scrollTop - r.log.clientHeight < 40;
+  r.log.replaceChildren(...(ms.length ? ms.map((m) => h('div', { class: `yolo-msg ${m.role}` },
+    h('div', { class: 'yolo-msg-meta' }, m.role === 'user' ? 'You' : 'Agent', ` · turn ${m.turn ?? 1}`,
+      m.feedback ? h('b', { class: 'yolo-msg-tag' }, 'feedback') : '', m.errors ? h('b', { class: 'yolo-msg-tag bad' }, `${m.errors} page error${m.errors === 1 ? '' : 's'}`) : ''),
+    h('div', { class: 'yolo-msg-text' }, m.text))) : [h('div', { class: 'yolo-convo-empty' }, 'The agent answers here once its first turn is done. Test the page meanwhile.')]));
+  if (near) r.log.scrollTop = r.log.scrollHeight;
+}
+
+async function send(r, feedback) {
+  if (r.sending || composerState(r.state).disabled) return;
+  const note = r.input.value;
+  r.sending = true;
+  r.convoMsg.textContent = '';
+  render(r);
+  try {
+    let errors = [];
+    if (feedback) { try { errors = (await api(`${errorsUrl(r.state)}?after=${r.errAfter || 0}`)).errors || []; } catch { /* the server adds the page errors itself */ } }
+    const body = messageBody({ text: note, errors, screenshot: r.shot || '', feedback });
+    if (!canSendBody(body)) { r.convoMsg.textContent = 'Write a message first.'; return; }
+    const res = await api(messageUrl(r.state), { method: 'POST', body });
+    r.errAfter = Math.max(r.errAfter || 0, ...errors.map((e) => e.seq || 0));
+    r.input.value = '';
+    r.shot = ''; r.shotName.textContent = '';
+    r.state = turnStarted(r.state, res.turn);
+  } catch (e) {
+    r.convoMsg.textContent = `Could not send: ${e.message}`;
+  } finally {
+    r.sending = false;
+    render(r);
+  }
+}
+
+function attach(r, file) {
+  if (!file) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > SCREENSHOT_MAX * 0.7) { r.convoMsg.textContent = 'Attach a PNG, JPEG or WebP image under 2.8 MB.'; return; }
+  const fr = new FileReader();
+  fr.onload = () => { r.shot = String(fr.result); r.shotName.textContent = `📎 ${file.name}`; };
+  fr.readAsDataURL(file);
 }
 
 // ── Keep as app ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -168,10 +229,31 @@ function render(r) {
   r.keepBtn.setAttribute('aria-label', k.title);
   r.keepBtn.disabled = k.disabled;
   r.keepBtn.classList.toggle('kept', k.kept);
+  const ic = iconView(s);
+  const icKey = `${ic.text}|${ic.img}`;
+  if (icKey !== r.iconKey) { r.iconKey = icKey; r.win.setIcon(ic.text, ic.img); }
+  const c = composerState(s, r.sending);
+  r.convo.hidden = !c.shown || r.convoHidden;
+  r.convoBtn.hidden = !c.shown;
+  const t = convoToggle(r.convoHidden, s.messages.length);
+  r.convoBtn.textContent = t.label;
+  r.convoBtn.title = t.title;
+  r.convoBtn.setAttribute('aria-label', t.title);
+  r.convoBtn.setAttribute('aria-pressed', String(t.pressed));
+  r.input.disabled = c.disabled;
+  r.input.placeholder = c.placeholder;
+  r.sendBtn.disabled = c.disabled;
+  r.fbBtn.disabled = c.disabled;
+  r.attachBtn.disabled = c.disabled;
+  r.hint.textContent = c.hint;
+  r.activity.textContent = s.status === 'live' ? s.activity : '';
+  r.activity.hidden = s.status !== 'live';
+  if (c.shown) renderMessages(r);
 }
 
 function openRun(state) {
-  const r = { state, phase: '', keepForm: null, doneWaiters: [] };
+  const r = { state, phase: '', keepForm: null, doneWaiters: [], sending: false, msgSig: '', iconKey: '', shot: '', errAfter: 0 };
+  r.convoHidden = hiddenNow(r);
   r.frame = h('iframe', { class: 'app-frame yolo-frame', title: state.title, src: state.url, allow: 'fullscreen; clipboard-write', sandbox: 'allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock' });
   r.dot = h('i', { class: 'yolo-dot live' });
   r.label = h('b', { class: 'yolo-label' }, 'live');
@@ -181,21 +263,38 @@ function openRun(state) {
   const btn = (text, title, fn, extra = {}) => h('button', { class: 'btn yolo-btn', title, 'aria-label': title, onclick: fn, ...extra }, text);
   r.stopBtn = btn('■ Stop', 'Stop the agent', () => stop(r));
   r.win = openWindow({
-    title: windowTitle(state), icon: '⚡', width: 960, height: 680, className: 'yolo-win', focus: false,
+    title: windowTitle(state), icon: iconView(state).text, width: 960, height: 680, className: 'yolo-win', focus: false,
     onClose: () => { clearInterval(r.timer); runs.delete(state.runId); },
   });
   r.keepBtn = btn('★ Keep as app', 'Keep this page as an App Cloud app', () => onKeep(r), { class: 'btn yolo-btn yolo-keep-btn' });
   r.keepMsg = h('span', { class: 'yolo-keep-msg', role: 'status', 'aria-live': 'polite' });
   r.keepRow = h('div', { class: 'yolo-keep', hidden: true }, r.keepMsg);
+  r.convoBtn = btn('💬 Hide chat', 'Hide the conversation', () => setConvoHidden(r, !r.convoHidden), { class: 'btn yolo-btn yolo-convo-btn', hidden: !state.v2 });
   const strip = h('div', { class: 'yolo-strip' },
     h('div', { class: 'yolo-status' }, r.dot, r.label, r.step, r.time, r.errs),
     h('div', { class: 'yolo-btns' }, r.stopBtn,
       btn('↻ Reload', 'Reload the page', () => reload(r)),
       btn('↗ Open', 'Open in a new tab', () => window.open(r.state.url, '_blank', 'noopener')),
       btn('⤢ Full size', 'Pop the window to full size', () => r.win.el.querySelector('.win-btn[aria-label="Maximize"]')?.click()),
-      r.keepBtn),
+      r.convoBtn, r.keepBtn),
     r.keepRow);
-  r.win.body.append(strip, h('div', { class: 'app-stage yolo-stage' }, r.frame));
+  r.log = h('div', { class: 'yolo-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
+  r.activity = h('div', { class: 'yolo-convo-activity', hidden: true });
+  r.input = h('textarea', { class: 'yolo-input', rows: '2', maxlength: '8000', 'aria-label': 'Message to the agent', onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(r, false); } } });
+  r.sendBtn = h('button', { class: 'btn primary yolo-btn', type: 'button', title: 'Send the message', onclick: () => send(r, false) }, 'Send');
+  r.fbBtn = h('button', { class: 'btn yolo-btn', type: 'button', title: 'Send the note with the page errors since the last turn', onclick: () => send(r, true) }, '✉ Send feedback');
+  const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, onchange: () => { attach(r, file.files[0]); file.value = ''; } });
+  r.attachBtn = h('button', { class: 'btn yolo-btn', type: 'button', title: 'Attach a screenshot to the feedback', 'aria-label': 'Attach a screenshot', onclick: () => file.click() }, '📎');
+  r.shotName = h('span', { class: 'yolo-shot' });
+  r.hint = h('span', { class: 'yolo-convo-hint' });
+  r.convoMsg = h('span', { class: 'yolo-convo-msg bad', role: 'status' });
+  r.convo = h('aside', { class: 'yolo-convo', 'aria-label': 'Conversation', hidden: true },
+    h('div', { class: 'yolo-convo-head' }, h('b', {}, 'Conversation'), h('button', { class: 'btn yolo-btn yolo-convo-close', type: 'button', title: 'Hide the conversation', 'aria-label': 'Hide the conversation', onclick: () => setConvoHidden(r, true) }, '✕')),
+    r.log, r.activity,
+    h('form', { class: 'yolo-composer', onsubmit: (e) => { e.preventDefault(); send(r, false); } }, r.input,
+      h('div', { class: 'yolo-composer-row' }, r.sendBtn, r.fbBtn, r.attachBtn, file, r.shotName),
+      r.convoMsg, r.hint));
+  r.win.body.append(strip, h('div', { class: 'yolo-main' }, h('div', { class: 'app-stage yolo-stage' }, r.frame), r.convo));
   r.timer = setInterval(() => { r.time.textContent = elapsed(r.state); }, 1000);
   r.win.interval(() => { if (r.state.status === 'live') pollErrors(r); }, 2500);
   render(r);

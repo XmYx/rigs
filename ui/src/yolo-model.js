@@ -1,12 +1,22 @@
 // YOLO window model (ui/src/yolo.js): the pure part — a run's events (src/yolo.js contract: yolo-start, yolo-update,
-// yolo-done, which can arrive twice, on /ws and in the jarvis/send stream; yolo-kept on /ws) folded into the state the
-// window shows, and the Keep as app button. No DOM. Unit-tested in test/yolo-ui.test.js.
+// yolo-done, which can arrive twice, on /ws and in the jarvis/send stream; yolo-kept on /ws; YOLOv2: yolo-message and
+// yolo-icon, and a yolo-done per turn with idle: true) folded into the state the window shows, the conversation pane's
+// logic (message merge, composer, feedback bundle, hidden state), the suggested icon and the Keep as app button. No DOM.
+// Unit-tested in test/yolo-ui.test.js.
 
-export const YOLO_TYPES = ['yolo-start', 'yolo-update', 'yolo-done', 'yolo-kept'];
+export const YOLO_TYPES = ['yolo-start', 'yolo-update', 'yolo-done', 'yolo-kept', 'yolo-message', 'yolo-icon'];
+export const DEFAULT_ICON = '⚡';
 export const isYoloEvent = (m) => !!m && YOLO_TYPES.includes(m.type) && typeof m.runId === 'string' && m.runId !== '';
 
-/** The key an event is deduped by: (type, runId, step). Starts carry no step. */
-export const eventKey = (m) => `${m.type}|${m.runId}|${m.step ?? ''}`;
+/**
+ * The key an event is deduped by: (type, runId, step). Starts carry no step. A YOLOv2 run is idle after each turn, and a
+ * turn that wrote nothing ends at the same step as the last one, so a done also keys on its turn; a message on its role,
+ * turn and time; an icon on when it was suggested.
+ */
+export const eventKey = (m) => {
+  const extra = m.type === 'yolo-message' ? `${m.role}|${m.turn ?? ''}|${m.at ?? ''}` : m.type === 'yolo-icon' ? `${m.icon?.at ?? m.at ?? ''}` : m.type === 'yolo-done' ? `${m.turn ?? ''}` : '';
+  return `${m.type}|${m.runId}|${m.step ?? ''}|${extra}`;
+};
 
 /** A run's initial state from its yolo-start. `url` already goes through the node proxy (works from any machine's UI). */
 export function startRun(m) {
@@ -15,6 +25,7 @@ export function startRun(m) {
     url: m.url || (m.node ? `/api/nodes/${encodeURIComponent(m.node)}/yolo/${encodeURIComponent(m.runId)}/` : ''),
     status: 'live', step: 0, activity: 'Starting…', files: [], reloads: 0, errors: 0, ok: null, summary: '',
     startedAt: Number(m.at) || 0, endedAt: 0, timeToFirstFrameMs: null, keptAs: m.keptAs || null,
+    v2: !!m.v2, turn: 1, messages: [], icon: null,
   };
 }
 
@@ -25,11 +36,21 @@ export function startRun(m) {
 export function applyEvent(state, m) {
   if (!state || !isYoloEvent(m) || m.runId !== state.runId) return state;
   if (m.type === 'yolo-update') {
-    if (state.status !== 'live') return state;
+    if (state.status !== 'live' && !(state.status === 'idle')) return state;
     if (Number.isFinite(m.step) && m.step <= state.step) return state; // the /ws and stream copies of one update
-    return { ...state, step: Number.isFinite(m.step) ? m.step : state.step + 1, activity: prettyActivity(m.activity) || state.activity, files: Array.isArray(m.files) ? m.files : state.files, reloads: state.reloads + 1 };
+    // A YOLOv2 follow-up turn is writing (its yolo-message may not have reached this socket): the run is live again.
+    return { ...state, ...(state.status === 'idle' ? { status: 'live', endedAt: 0 } : {}), step: Number.isFinite(m.step) ? m.step : state.step + 1, activity: prettyActivity(m.activity) || state.activity, files: Array.isArray(m.files) ? m.files : state.files, reloads: state.reloads + 1 };
   }
   if (m.type === 'yolo-done') {
+    const turn = Number(m.turn) || 0;
+    if (m.idle) { // YOLOv2: the turn ended, the run waits for feedback
+      if (state.status !== 'live' && !(turn > state.turn)) return state;
+      return {
+        ...state, status: 'idle', ok: !!m.ok, summary: m.summary || '', endedAt: Number(m.at) || Date.now(), turn: Math.max(state.turn, turn),
+        timeToFirstFrameMs: state.timeToFirstFrameMs ?? m.timeToFirstFrameMs ?? null, errors: Math.max(state.errors, Number(m.errors) || 0),
+        activity: m.ok ? 'Ready for your feedback' : (m.summary || 'Stopped — ready for your feedback'),
+      };
+    }
     if (state.status !== 'live') return state;
     return {
       ...state, status: m.ok ? 'done' : 'failed', ok: !!m.ok, summary: m.summary || '', endedAt: Number(m.at) || Date.now(),
@@ -38,6 +59,16 @@ export function applyEvent(state, m) {
     };
   }
   if (m.type === 'yolo-kept') return withKept(state, m.keptAs);
+  if (m.type === 'yolo-icon') return withIcon(state, m.icon);
+  if (m.type === 'yolo-message') {
+    const messages = mergeMessages(state.messages, [m]);
+    const turn = Number(m.turn) || state.turn;
+    // A user message past the current turn starts a follow-up turn: the run is live again, its clock restarts.
+    if (m.role === 'user' && turn > state.turn && state.status === 'idle') {
+      return { ...state, v2: true, messages, turn, status: 'live', ok: null, summary: '', startedAt: Number(m.at) || Date.now(), endedAt: 0, activity: 'Working on your feedback…' };
+    }
+    return messages === state.messages ? state : { ...state, v2: true, messages, turn: Math.max(state.turn, turn) };
+  }
   return state; // a repeated yolo-start
 }
 
@@ -69,7 +100,7 @@ export function elapsed(state, now = Date.now()) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export const STATUS_LABEL = { live: 'live', done: 'done', failed: 'failed' };
+export const STATUS_LABEL = { live: 'live', idle: 'ready', done: 'done', failed: 'failed' };
 export const windowTitle = (s) => `YOLO — ${s.title}${s.node ? ` · ${s.node}` : ''}`;
 const base = (s) => (s.url.endsWith('/') ? s.url : `${s.url}/`);
 export const stopUrl = (s) => `${base(s)}stop`;
@@ -80,8 +111,19 @@ export const errorsUrl = (s) => `${base(s)}errors`;
  */
 export function withMeta(state, meta) {
   if (!state || !meta || meta.runId !== state.runId) return state;
-  let s = withKept(state, meta.keptAs);
-  if (s.status === 'live' && ['done', 'failed', 'stopped'].includes(meta.status)) {
+  let s = withIcon(withKept(state, meta.keptAs), meta.icon);
+  if (meta.v2 || Array.isArray(meta.messages)) {
+    const v2 = !!meta.v2 || s.v2;
+    const turn = Math.max(s.turn, Number(meta.turn) || 1);
+    if (v2 !== s.v2 || turn !== s.turn) s = { ...s, v2, turn };
+    const messages = mergeMessages(s.messages, meta.messages);
+    if (messages !== s.messages) s = { ...s, messages };
+  }
+  if (meta.v2 && meta.status === 'idle' && s.status === 'live') {
+    s = applyEvent(s, { type: 'yolo-done', runId: s.runId, ok: meta.ok !== false, summary: meta.summary, errors: meta.errors, at: meta.endedAt, idle: true, turn: meta.turn || 1,
+      timeToFirstFrameMs: meta.firstFrameAt && meta.startedAt ? Math.max(0, meta.firstFrameAt - meta.startedAt) : null });
+    s = { ...s, step: Math.max(s.step, Number(meta.updates) || 0) };
+  } else if (s.status === 'live' && ['done', 'failed', 'stopped'].includes(meta.status)) {
     s = applyEvent(s, { type: 'yolo-done', runId: s.runId, ok: !!meta.ok, summary: meta.summary || (meta.status === 'stopped' ? 'Stopped' : ''), errors: meta.errors, at: meta.endedAt,
       timeToFirstFrameMs: meta.firstFrameAt && meta.startedAt ? Math.max(0, meta.firstFrameAt - meta.startedAt) : null });
     s = { ...s, step: Math.max(s.step, Number(meta.updates) || 0) };
@@ -122,3 +164,113 @@ export function keptApp(keptAs, catalog = [], fromServer = null) {
   if (fromServer?.id === keptAs.id) return { ...fromServer, node: keptAs.node };
   return { id: keptAs.id, node: keptAs.node, name: keptAs.name || keptAs.id, icon: keptAs.icon || '⚡', health: { status: 'unknown' }, launchHere: { kept: true } };
 }
+
+// ── YOLOv2: the conversation, the composer, the suggested icon ───────────────────────────────────────────────────────
+
+const messageKey = (m) => `${m.role}|${m.turn ?? ''}|${m.at ?? ''}|${String(m.text ?? '').slice(0, 40)}`;
+
+/**
+ * The run's messages merged with `incoming` (yolo-message events, or meta.messages): deduped by role, turn, time and text
+ * start, oldest first, capped at 200 like the server's. Same array when nothing is new.
+ */
+export function mergeMessages(current = [], incoming = []) {
+  const have = new Set(current.map(messageKey));
+  const fresh = [];
+  for (const m of Array.isArray(incoming) ? incoming : []) {
+    if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.text !== 'string') continue;
+    const k = messageKey(m);
+    if (have.has(k)) continue;
+    have.add(k);
+    const { runId, type, ...rest } = m; // eslint-disable-line no-unused-vars
+    fresh.push(rest);
+  }
+  if (!fresh.length) return current;
+  return [...current, ...fresh].sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0) || (a.turn ?? 0) - (b.turn ?? 0)).slice(-200);
+}
+
+/** The agent's suggested icon (yolo-icon / meta.icon: { emoji?, svg?, at }). Same object when it adds nothing. */
+export function withIcon(state, icon) {
+  if (!state || !icon || (typeof icon !== 'object') || (!icon.emoji && !icon.svg)) return state;
+  const cur = state.icon;
+  if (cur && cur.emoji === icon.emoji && cur.svg === icon.svg) return state;
+  return { ...state, icon: { ...(icon.emoji ? { emoji: String(icon.emoji) } : {}), ...(icon.svg ? { svg: String(icon.svg) } : {}), at: icon.at || 0 } };
+}
+
+/**
+ * What to show for the run's icon, for the title bar and the dock entry: { text, img } — `text` is always set (the
+ * emoji, else ⚡: the dock only draws text), `img` is the sandbox SVG's URL for the title bar when there is one and no emoji.
+ */
+export function iconView(state) {
+  const ic = state?.icon;
+  const emoji = ic?.emoji ? String(ic.emoji).trim() : '';
+  if (emoji) return { text: emoji, img: '' };
+  if (ic?.svg && state.url && !/^[a-z]+:|^\/\/|\.\.\//i.test(ic.svg)) return { text: DEFAULT_ICON, img: `${base(state)}${String(ic.svg).replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}` };
+  return { text: DEFAULT_ICON, img: '' };
+}
+
+export const messageUrl = (s) => `${base(s)}message`;
+export const FEEDBACK_MAX_CONSOLE = 20;
+export const SCREENSHOT_MAX = 4 * 1024 * 1024;
+
+/**
+ * Can the user send now, and what does the composer say? A turn runs → disabled (the server does not queue: 409), a run
+ * that is not YOLOv2 → no composer at all. { shown, disabled, placeholder, hint }.
+ */
+export function composerState(state, sending = false) {
+  if (!state?.v2) return { shown: false, disabled: true, placeholder: '', hint: '' };
+  if (sending) return { shown: true, disabled: true, placeholder: 'Sending…', hint: 'Sending…' };
+  if (state.status === 'live') return { shown: true, disabled: true, placeholder: 'The agent is working — you can test the page meanwhile', hint: 'Messages are not queued: send when this turn ends.' };
+  if (state.status === 'idle') return { shown: true, disabled: false, placeholder: 'Tell the agent what to change…', hint: 'Enter sends, Shift+Enter adds a line.' };
+  return { shown: true, disabled: true, placeholder: 'This run is over', hint: 'This run ended and takes no more messages.' };
+}
+
+/** A page error report as one console line for the feedback bundle. */
+export const errorLine = (e) => `${e.type ? `${e.type}: ` : ''}${String(e.message || '').slice(0, 300)}${e.source ? ` (${String(e.source).split('/').pop()}${e.line ? `:${e.line}` : ''})` : ''}`;
+
+/**
+ * The POST …/message body for a message or a 'Send feedback': the note plus the page errors since the last turn
+ * (`errors`: GET …/errors entries, newest last) and an optional screenshot data URL. A feedback with no note says so.
+ */
+export function messageBody({ text = '', errors = [], screenshot = '', feedback = false } = {}) {
+  const note = String(text).trim();
+  const lines = (Array.isArray(errors) ? errors : []).slice(-FEEDBACK_MAX_CONSOLE).map(errorLine).filter(Boolean);
+  if (!feedback && !screenshot) return { text: note };
+  const fb = { ...(note ? { text: note } : {}), ...(lines.length ? { console: lines } : {}), ...(screenshot ? { screenshot } : {}) };
+  return { text: note || (lines.length ? 'The page shows errors — please fix them.' : 'Feedback on the page.'), feedback: fb };
+}
+
+/** Can this be sent? A message needs text; a feedback needs a note, errors or a screenshot. */
+export const canSendBody = (b) => !!b && (!!b.text || !!b.feedback);
+
+// The conversation pane's shown / hidden choice: remembered per window (run), collapsed by default on a narrow screen.
+export const CONVO_KEY = 'rigs.yolo.convoHidden';
+export const CONVO_CAP = 60;
+
+/** Parse the stored map {runId: hidden}; anything else → {}. */
+export function readHiddenMap(raw) {
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    return Object.fromEntries(Object.entries(v).filter(([, b]) => typeof b === 'boolean'));
+  } catch { return {}; }
+}
+/** Is the conversation hidden for this run? A saved choice wins; none → hidden on a narrow screen, shown otherwise. */
+export const convoHidden = (map, runId, narrow = false) => (typeof map?.[runId] === 'boolean' ? map[runId] : !!narrow);
+/** The map with this run's choice set (the oldest entries drop past CONVO_CAP). */
+export function withConvoHidden(map, runId, hidden) {
+  const next = { ...readHiddenMap(map) };
+  delete next[runId]; // re-insert last: insertion order = recency
+  next[runId] = !!hidden;
+  const keys = Object.keys(next);
+  for (const k of keys.slice(0, Math.max(0, keys.length - CONVO_CAP))) delete next[k];
+  return next;
+}
+/** The toggle button for the pane: { label, title, pressed }. */
+export function convoToggle(hidden, count = 0) {
+  const n = count ? ` (${count})` : '';
+  return { label: hidden ? `💬 Show chat${n}` : '💬 Hide chat', title: hidden ? 'Show the conversation' : 'Hide the conversation', pressed: !hidden };
+}
+
+/** A follow-up the server accepted (the …/message answer) before its yolo-message arrives: the run is live again on that turn. */
+export const turnStarted = (state, turn, at = Date.now()) => (state.status === 'live' ? state
+  : { ...state, status: 'live', turn: Math.max(state.turn, Number(turn) || state.turn + 1), ok: null, summary: '', startedAt: at, endedAt: 0, activity: 'Working on your feedback…' });

@@ -140,3 +140,133 @@ test('withMeta: a window opened for a run takes keptAs and, for a run that alrea
   const ended = M.applyEvent(live, done(true));
   assert.equal(M.withMeta(ended, { runId: 'r1', status: 'done', ok: true }), ended, 'already ended: unchanged');
 });
+
+// ── YOLOv2: conversation, composer, icon, hidden state ──────────────────────────────────────────────────────────────
+const v2start = { ...start, v2: true };
+const msg = (role, turn, at, text, extra = {}) => ({ type: 'yolo-message', runId: 'r1', role, turn, at, text, ...extra });
+const idleDone = (turn, extra = {}) => done(true, { idle: true, turn, step: 2, at: 5000 + turn, ...extra });
+
+test('mergeMessages dedupes by role/turn/time, keeps order, returns the same array when nothing is new', () => {
+  const a = [msg('user', 1, 1000, 'hi')];
+  assert.equal(M.mergeMessages(a, [msg('user', 1, 1000, 'hi')]), a, 'the /ws and meta copies of one message');
+  const b = M.mergeMessages(a, [msg('assistant', 1, 3000, 'done'), msg('user', 2, 2000, 'bigger'), { role: 'system', text: 'x' }, null, { role: 'user' }]);
+  assert.deepEqual(b.map((m) => m.text), ['hi', 'bigger', 'done']);
+  assert.ok(b.slice(1).every((m) => !('type' in m) && !('runId' in m)), 'event envelope stripped');
+  assert.equal(M.mergeMessages(b, undefined), b);
+  const many = M.mergeMessages([], Array.from({ length: 230 }, (_, i) => msg('user', 1, i + 1, `m${i}`)));
+  assert.equal(many.length, 200);
+  assert.equal(many.at(-1).text, 'm229');
+});
+
+test('a v2 run: idle after each turn, live again on the follow-up, turns of the same step still count', () => {
+  let s = M.startRun(v2start);
+  assert.ok(s.v2);
+  s = M.applyEvent(s, update(1));
+  s = M.applyEvent(s, msg('assistant', 1, 4000, 'Made a ball.'));
+  s = M.applyEvent(s, idleDone(1));
+  assert.equal(s.status, 'idle');
+  assert.equal(M.STATUS_LABEL[s.status], 'ready');
+  assert.equal(s.messages.length, 1);
+  assert.equal(M.applyEvent(s, idleDone(1)), s, 'a repeated done');
+  const s2 = M.applyEvent(s, msg('user', 2, 6000, 'make it blue', { feedback: { text: 'blue' } }));
+  assert.equal(s2.status, 'live');
+  assert.equal(s2.turn, 2);
+  assert.equal(s2.endedAt, 0);
+  assert.equal(M.elapsed(s2, 9000), '0:03', 'the clock restarts per turn');
+  // the next turn wrote nothing: its done has the same step; it must not be deduped with the first
+  assert.notEqual(M.eventKey(idleDone(1)), M.eventKey(idleDone(2)));
+  assert.equal(M.applyEvent(s2, idleDone(2)).status, 'idle');
+  // the user message never arrived on this socket: the update, then the done of turn 3 still move the run
+  const lost = M.applyEvent(s, update(5));
+  assert.equal(lost.status, 'live');
+  assert.equal(M.applyEvent(s, idleDone(3)).turn, 3);
+  // v1 behaviour is untouched
+  const v1 = M.applyEvent(M.applyEvent(M.startRun(start), update(1)), done(true));
+  assert.equal(v1.status, 'done');
+  assert.equal(M.applyEvent(v1, msg('user', 2, 7000, 'more')).status, 'done', 'a finished run does not come back');
+});
+
+test('withMeta restores an idle v2 run with its conversation and icon', () => {
+  const meta = { runId: 'r1', v2: true, status: 'idle', turn: 2, ok: true, summary: 'ok', updates: 4, startedAt: 1000, firstFrameAt: 1800, endedAt: 8000,
+    icon: { emoji: '🏀', at: 3 }, messages: [msg('user', 1, 1000, 'a ball'), msg('assistant', 1, 4000, 'done')] };
+  const s = M.withMeta(M.startRun(start), meta);
+  assert.equal(s.status, 'idle');
+  assert.equal(s.turn, 2);
+  assert.equal(s.step, 4);
+  assert.equal(s.messages.length, 2);
+  assert.equal(s.icon.emoji, '🏀');
+  assert.equal(M.withMeta(s, meta), s, 'idempotent');
+  assert.equal(M.withMeta(M.startRun(start), { runId: 'r1', v2: true, status: 'running', turn: 2, messages: [] }).status, 'live');
+});
+
+test('icon: emoji, svg in the sandbox, fallback ⚡', () => {
+  let s = M.startRun(v2start);
+  assert.deepEqual(M.iconView(s), { text: '⚡', img: '' }, 'none suggested');
+  s = M.applyEvent(s, { type: 'yolo-icon', runId: 'r1', icon: { svg: 'icon.svg', at: 5 }, at: 5 });
+  assert.deepEqual(M.iconView(s), { text: '⚡', img: '/api/nodes/magix-system/yolo/r1/icon.svg' }, 'the bar draws the svg, the dock keeps text');
+  const withEmoji = M.applyEvent(s, { type: 'yolo-icon', runId: 'r1', icon: { emoji: '🏀', svg: 'icon.svg', at: 6 } });
+  assert.deepEqual(M.iconView(withEmoji), { text: '🏀', img: '' });
+  assert.equal(M.applyEvent(withEmoji, { type: 'yolo-icon', runId: 'r1', icon: { emoji: '🏀', svg: 'icon.svg', at: 7 } }), withEmoji, 'same icon again');
+  for (const bad of ['../x.svg', 'https://evil/x.svg', '//evil/x.svg']) assert.equal(M.iconView({ ...s, icon: { svg: bad } }).img, '', bad);
+  assert.equal(M.applyEvent(s, { type: 'yolo-icon', runId: 'r1', icon: {} }), s, 'an empty icon changes nothing');
+  assert.equal(M.iconView(M.startRun(start)).text, '⚡', 'a v1 run too');
+  assert.equal(M.applyEvent(M.startRun(start), { type: 'yolo-icon', runId: 'r1', icon: { emoji: '🎲' } }).icon.emoji, '🎲', 'v1 runs suggest icons as well');
+});
+
+test('composerState: shown for v2 only, disabled while a turn runs or the run is over', () => {
+  assert.equal(M.composerState(M.startRun(start)).shown, false);
+  const live = M.startRun(v2start);
+  assert.deepEqual([M.composerState(live).shown, M.composerState(live).disabled], [true, true]);
+  const idle = M.applyEvent(live, idleDone(1));
+  assert.equal(M.composerState(idle).disabled, false);
+  assert.equal(M.composerState(idle, true).disabled, true, 'while sending');
+  assert.equal(M.composerState({ ...idle, status: 'failed' }).disabled, true);
+});
+
+test('messageBody: a plain message, and feedback bundled with the page errors', () => {
+  assert.deepEqual(M.messageBody({ text: '  bigger  ' }), { text: 'bigger' });
+  assert.equal(M.canSendBody(M.messageBody({ text: '  ' })), false);
+  const errs = [{ type: 'error', message: 'x is not defined', source: 'http://h/r1/game.js', line: 12 }, { type: 'unhandledrejection', message: 'boom' }];
+  const b = M.messageBody({ text: 'ball sticks', errors: errs, feedback: true });
+  assert.equal(b.text, 'ball sticks');
+  assert.deepEqual(b.feedback.console, ['error: x is not defined (game.js:12)', 'unhandledrejection: boom']);
+  assert.equal(b.feedback.text, 'ball sticks');
+  const bare = M.messageBody({ errors: errs, feedback: true });
+  assert.ok(bare.text && M.canSendBody(bare), 'errors alone are feedback');
+  assert.equal(M.canSendBody(M.messageBody({ feedback: true })), true, 'a bare feedback still has the default line');
+  assert.equal(M.messageBody({ errors: Array.from({ length: 50 }, (_, i) => ({ message: `e${i}` })), feedback: true }).feedback.console.length, M.FEEDBACK_MAX_CONSOLE);
+  assert.equal(M.messageBody({ text: 'look', screenshot: 'data:image/png;base64,AA==' }).feedback.screenshot, 'data:image/png;base64,AA==');
+  assert.equal(M.messageUrl(M.startRun(start)), '/api/nodes/magix-system/yolo/r1/message');
+});
+
+test('conversation visibility: saved choice per run, narrow default hidden, cap, junk tolerated', () => {
+  assert.equal(M.convoHidden({}, 'r1', false), false, 'wide: shown');
+  assert.equal(M.convoHidden({}, 'r1', true), true, 'narrow: collapsed by default');
+  assert.equal(M.convoHidden({ r1: false }, 'r1', true), false, 'a saved choice beats the default');
+  assert.equal(M.convoHidden({ r1: true }, 'r1', false), true);
+  assert.equal(M.convoHidden({ r2: true }, 'r1', false), false, 'per window');
+  const map = M.withConvoHidden({}, 'r1', true);
+  assert.deepEqual(M.readHiddenMap(JSON.stringify(map)), { r1: true }, 'survives the localStorage round trip');
+  let big = {};
+  for (let i = 0; i < M.CONVO_CAP + 10; i++) big = M.withConvoHidden(big, `run${i}`, i % 2 === 0);
+  assert.equal(Object.keys(big).length, M.CONVO_CAP);
+  assert.ok(!('run0' in big) && 'run69' in big);
+  for (const junk of ['', '{', 'null', '[1]', '7', undefined]) assert.deepEqual(M.readHiddenMap(junk), {}, String(junk));
+  assert.deepEqual(M.readHiddenMap('{"a":true,"b":"x"}'), { a: true });
+  assert.equal(M.convoToggle(true, 3).label, '💬 Show chat (3)');
+  assert.equal(M.convoToggle(false).pressed, true);
+});
+
+test('turnStarted makes an idle run live on the next turn and leaves a live one alone', () => {
+  const idle = M.applyEvent(M.startRun(v2start), idleDone(1));
+  const t = M.turnStarted(idle, 2, 9000);
+  assert.deepEqual([t.status, t.turn, t.endedAt, t.startedAt], ['live', 2, 0, 9000]);
+  assert.equal(M.turnStarted(t, 3), t);
+});
+
+test('the window wires the conversation, composer, feedback, icon and toggle', () => {
+  const ui = read('ui/src/yolo.js');
+  for (const needle of ['messageUrl(', 'messageBody(', 'composerState(', 'convoHidden(', 'iconView(', 'win.setIcon', 'yolo-convo', 'Send feedback']) assert.ok(ui.includes(needle), needle);
+  assert.ok(read('ui/src/wm.js').includes('setIcon'), 'wm.js lets a window change its icon (title bar + dock)');
+  assert.ok(read('ui/src/styles.css').includes('.yolo-convo'), 'styles');
+});

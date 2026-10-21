@@ -561,6 +561,7 @@ Features that are still being tried out.
 | localStorage `rigs.panels` | Legacy dock layout, migrated into rigs.dock. |
 | localStorage `rigs.spaces` | The virtual desktops (Spaces) and which desktop each window is on, arranged from the menu bar desktop indicator, not a preference. |
 | localStorage `rigs.spaces.active` | The desktop this browser was last on (Spaces, switched with Ctrl+arrows or the menu bar indicator), not a preference. |
+| localStorage `rigs.yolo.convoHidden` | Which YOLOv2 windows have their conversation pane hidden (per run, set by the ✕ / Hide chat button in the window), not a preference. |
 | localStorage `rigs.sync` | Bookkeeping of the synced storage (revisions of rigs.dock and friends). |
 | localStorage `rigs.removed` | Removed panels and apps with their undo history; restored from the Window menu. |
 | localStorage `rigs.agents.dismissed` | Agent cards you dismissed: state, not a preference. |

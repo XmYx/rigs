@@ -445,6 +445,7 @@ export const HIDDEN = [
   { pref: 'rigs.panels', reason: 'Legacy dock layout, migrated into rigs.dock.' },
   { pref: 'rigs.spaces', reason: 'The virtual desktops (Spaces) and which desktop each window is on, arranged from the menu bar desktop indicator, not a preference.' },
   { pref: 'rigs.spaces.active', reason: 'The desktop this browser was last on (Spaces, switched with Ctrl+arrows or the menu bar indicator), not a preference.' },
+  { pref: 'rigs.yolo.convoHidden', reason: 'Which YOLOv2 windows have their conversation pane hidden (per run, set by the ✕ / Hide chat button in the window), not a preference.' },
   { pref: 'rigs.sync', reason: 'Bookkeeping of the synced storage (revisions of rigs.dock and friends).' },
   { pref: 'rigs.removed', reason: 'Removed panels and apps with their undo history; restored from the Window menu.' },
   { pref: 'rigs.agents.dismissed', reason: 'Agent cards you dismissed: state, not a preference.' },

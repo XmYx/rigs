@@ -50,6 +50,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const body = h('div', { class: 'win-body' });
   const bin = createDisposer(); // what the window's owner hooked up (timers, sockets, listeners): undone on every close path
   const titleEl = h('span', { class: 'win-title-text' }, title);
+  const iconEl = h('span', { class: 'win-icon' }, icon);
   const storeKey = (() => { const k = String(key ?? `t:${title}`).slice(0, 200); return keysInUse.has(k) ? null : k; })();
   if (storeKey) keysInUse.add(storeKey);
   const winNo = nextId++;
@@ -64,7 +65,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
   const chrome = buildChrome(h, (action) => act(action));
   const win = h('div', { class: `win ${className}${away ? ' off-space' : ''}`, 'data-win-id': String(winNo), 'data-desktop': desktopOfKey(spaceKey) },
     h('div', { class: 'win-bar' },
-      h('span', { class: 'win-icon' }, icon),
+      iconEl,
       titleEl,
       h('span', { class: 'win-tools' }, ...tools),
       ...chrome.els),
@@ -86,12 +87,20 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
 
   tagCtx(win, 'window', win.dataset.winId, { get title() { return titleEl.textContent; } }); // right-click on the title bar: front, minimize, maximize, close…
   const dockSource = () => ({ id: win.dataset.winId, title: titleEl.textContent, icon });
+  /** A window that learns its icon later (a YOLO run's suggested one): text for the bar and the dock, an optional image URL for the bar. */
+  const setIcon = (next, imgUrl = '') => {
+    icon = next || icon;
+    iconEl.textContent = '';
+    if (imgUrl) iconEl.append(h('img', { class: 'win-icon-img', src: imgUrl, alt: '' })); else iconEl.textContent = icon;
+    win._wm.icon = icon;
+    if (dockable) emitTitle('window', { id: win.dataset.winId, title: titleEl.textContent, icon });
+  };
   const front = () => { win.style.zIndex = ++z; };
   /** Bring the window to the front; on another desktop, switch there first; a minimized one comes back (the app dock, Window menu and openApp all land here). */
   const raise = () => { reveal(); if (rec.state === 'minimized') act('restore'); else front(); };
   const reveal = () => { if (spacesOn() && desktopOfKey(spaceKey) !== spacesState().active) switchToKey(spaceKey); };
   win._wm = {
-    title: () => titleEl.textContent, icon, raise, reveal, close: () => close(), act: (a) => act(a), state: () => rec.state,
+    title: () => titleEl.textContent, icon, setIcon, raise, reveal, close: () => close(), act: (a) => act(a), state: () => rec.state,
     spaceKey, desktop: () => desktopOfKey(spaceKey), syncSpace: (dir) => syncSpace(dir),
   };
   win.addEventListener('pointerdown', front);
@@ -231,6 +240,7 @@ export function openWindow({ title, icon = '', width = 760, height = 480, classN
     el: win, body, close,
     /** Run fn when the window closes (✕, Esc, phone back, close others, hide). interval/listen: the same, pre-wired. */
     onCleanup: (fn) => bin.add(fn), interval: (fn, ms) => bin.interval(fn, ms), listen: (t, ev, fn, o) => bin.listen(t, ev, fn, o),
+    setIcon: (next, imgUrl) => setIcon(next, imgUrl),
     setTitle: (t) => { titleEl.textContent = t; win.setAttribute('aria-label', t); setDockTitle(id, t); if (dockable) emitTitle('window', { id: win.dataset.winId, title: t, icon }); }, onResize: (fn) => win.addEventListener('winresize', fn), raise,
     minimize: () => act('minimize'), maximize: () => act('maximize'), restore: () => act('restore'), state: () => rec.state,
     /** true when the window opened at the rect it had last time (its opener should not move it). */
