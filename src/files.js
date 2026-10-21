@@ -9,8 +9,11 @@ import { nearestExisting } from './ui-open.js';
 const MIME = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.ts': 'text/plain', '.html': 'text/html', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
-  '.mov': 'video/quicktime', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.zip': 'application/zip',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.zip': 'application/zip',
+  // audio and video (the media player, ui/src/media-player.js): the type decides what <audio>/<video> attempts
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.flac': 'audio/flac', '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.weba': 'audio/webm', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm',
+  '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg',
 };
 
 /**
@@ -75,14 +78,54 @@ export function mimeOf(p) {
   return MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
 }
 
-export async function sendFile(p, res, { download = false } = {}) {
+/**
+ * A `Range` request header against a file of `size` bytes (RFC 9110 §14): one `bytes=` range → { start, end } (inclusive),
+ * `bytes=-N` = the last N bytes, an open end runs to the last byte. null = serve the whole file (no header, another unit,
+ * a malformed or a multi-range header, which a server may ignore); 'unsatisfiable' = 416 (starts at or past the end).
+ */
+export function parseRange(header, size) {
+  if (typeof header !== 'string') return null;
+  const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i.exec(header);
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  if (m[1] === '') {
+    const n = Number(m[2]);
+    if (!n || !size) return 'unsatisfiable';
+    return { start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(m[1]);
+  if (m[2] !== '' && Number(m[2]) < start) return null;
+  if (start >= size) return 'unsatisfiable';
+  const end = m[2] === '' ? size - 1 : Number(m[2]);
+  return { start, end: Math.min(end, size - 1) };
+}
+
+/**
+ * Stream a file: 200 with the whole file, or 206 Partial Content for a `range` header (seeking in <video>/<audio>, and
+ * Safari/iOS, which will not play media without it); 416 + `Content-Range: bytes *\/size` when the range starts past
+ * the end. `head` sends the headers only. A client that hangs up mid-file (a media element seeking) is not an error.
+ * `no-cache`: Last-Modified alone would let a browser reuse a stale copy heuristically (an edited image or text file);
+ * an `ifRange` that is not the current Last-Modified (the file changed since the client cached part of it) = the whole file.
+ */
+export async function sendFile(p, res, { download = false, range, ifRange, head = false } = {}) {
   const file = resolvePath(p);
   const st = await fsp.stat(file);
   if (st.isDirectory()) throw Object.assign(new Error('is a directory'), { status: 400 });
-  const headers = { 'content-type': mimeOf(file), 'content-length': st.size };
+  const headers = { 'content-type': mimeOf(file), 'accept-ranges': 'bytes', 'last-modified': st.mtime.toUTCString(), 'cache-control': 'no-cache' };
   if (download) headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`;
-  res.writeHead(200, headers);
-  await pipeline(fs.createReadStream(file), res);
+  const r = ifRange && ifRange !== headers['last-modified'] ? null : parseRange(range, st.size);
+  if (r === 'unsatisfiable') {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${st.size}`, 'content-length': 0 });
+    res.end();
+    return;
+  }
+  if (r) res.writeHead(206, { ...headers, 'content-range': `bytes ${r.start}-${r.end}/${st.size}`, 'content-length': r.end - r.start + 1 });
+  else res.writeHead(200, { ...headers, 'content-length': st.size });
+  if (head) { res.end(); return; }
+  try {
+    await pipeline(fs.createReadStream(file, r ? { start: r.start, end: r.end } : {}), res);
+  } catch (e) {
+    if (e.code !== 'ERR_STREAM_PREMATURE_CLOSE' && !res.destroyed) throw e;
+  }
 }
 
 export async function readText(p, maxBytes = 2 * 1024 * 1024) {

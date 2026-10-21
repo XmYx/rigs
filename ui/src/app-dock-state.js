@@ -78,6 +78,7 @@ export const TOOL_GROUPS = Object.freeze([
     { id: 'term', button: 'btn-term', title: 'Terminal', icon: '⌨', hint: 'Terminal on the focused machine' },
     { id: 'files', button: 'btn-files', title: 'Files', icon: '📁', hint: 'Files on the focused machine' },
     { id: 'desk', button: 'btn-desk', title: 'Remote desktop', icon: '🖥', hint: 'Remote desktop to the focused machine' },
+    { id: 'player', button: 'btn-player', title: 'Media player', icon: '▶', hint: 'Media player — audio and video from any machine' },
   ] },
   { id: 'g-tools-work', name: 'Work', tools: [
     { id: 'ask', button: 'btn-ask', title: 'Questions', icon: '❓', hint: 'Questions — agents waiting for your answer', badge: true },

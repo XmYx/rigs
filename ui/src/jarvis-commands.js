@@ -134,6 +134,7 @@ export function registerJarvisCommands(deps) {
     { id: 'tools.terminal', label: () => `Terminal on ${machine()?.name || 'this machine'}`, icon: '⌨', enabled: () => !!machine(), run: () => deps.terminal(machine()) },
     { id: 'tools.control', label: () => `Screen control on ${machine()?.name || 'this machine'}…`, icon: '🛡', enabled: () => !!machine(), run: () => deps.control(machine()) },
     { id: 'tools.desktops', label: 'Desktops (live screens)', icon: '🖼', run: () => focusPanel('desktops') },
+    { id: 'tools.player', label: 'Media player', icon: '▶', run: () => deps.player() },
 
     // ------------------------------------------------------------ Experimental
     {
@@ -203,7 +204,7 @@ export function menuModel() {
     ] },
     { id: 'tools', label: 'Tools', items: () => [
       { cmd: 'tools.appStore' }, { cmd: 'tools.registry' }, { sep: true }, { cmd: 'tools.graphify' }, { cmd: 'tools.traces' }, { cmd: 'tools.usage' }, { cmd: 'tools.preroute' },
-      { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' },
+      { sep: true }, { cmd: 'tools.mesh' }, { cmd: 'tools.terminal' }, { cmd: 'tools.control' }, { cmd: 'tools.desktops' }, { cmd: 'tools.player' },
     ] },
     { id: 'experimental', label: 'Experimental', items: () => [{ cmd: 'experimental.exhibits' }, { cmd: 'experimental.exhibitWindow' }, { sep: true }, { cmd: 'experimental.starnet' }] },
     { id: 'help', label: 'Help', items: () => [
