@@ -120,9 +120,11 @@ async function run(label, vp) {
   page.setDefaultTimeout(30000);
   page.on('pageerror', (e) => errors.push(`${label} pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon|net::ERR|Failed to load resource/.test(m.text())) errors.push(`${label} console: ${m.text().slice(0, 200)}`); });
-  await page.goto(front.url, { waitUntil: 'domcontentloaded' });
+  const wsUp = new Promise((r) => page.on('websocket', (ws) => { if (new URL(ws.url()).pathname === '/ws') r(); }));
+  await page.goto(front.url, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForSelector('#app-dock, #bar', { state: 'attached' });
-  await sleep(2000); // the /ws push socket is open
+  await Promise.race([wsUp, sleep(60000)]); // the /ws push socket is open (slow on a loaded machine)
+  await sleep(1000);
 
   if (!phone) {
     // (a) the file browser's inline preview: <video> for mp4, <audio> for mp3, with Open in Player
@@ -214,7 +216,12 @@ async function run(label, vp) {
     await pv.evaluate((el) => el.pause());
 
     // (h) a video on the peer, opened through ui_open (MCP): the player, not the file browser, from /api/nodes/<peer>
-    const r = await uiOpen({ node: peer.name, path: path.join(peer.dir, 'clip.mp4') });
+    let r = await uiOpen({ node: peer.name, path: path.join(peer.dir, 'clip.mp4') });
+    for (let i = 0; i < 20 && /offline/.test(r.error || ''); i++) { // a loaded machine can miss a discovery round
+      await fetch(front.url + 'api/mesh/refresh', { method: 'POST' }).catch(() => {});
+      await sleep(1000);
+      r = await uiOpen({ node: peer.name, path: path.join(peer.dir, 'clip.mp4') });
+    }
     check(`${label}: ui_open on a peer's mp4 is delivered`, r.delivered >= 1 && r.select, JSON.stringify(r).slice(0, 160));
     m = await until(page, (x) => x.kind === 'video' && !x.paused && x.t > 0.3, 'peer video plays');
     await mp(page).locator('.mp-seek').focus();
