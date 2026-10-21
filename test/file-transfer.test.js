@@ -198,3 +198,19 @@ test('files.rename never overwrites (a hidden or newer file at the target answer
   await rename(path.join(src, 'A.txt'), path.join(src, 'b.txt'));
   assert.equal(read(path.join(src, 'b.txt')), 'A');
 });
+
+test('pull: a symlinked folder inside is skipped (a link to .. would copy forever); a symlinked file is copied', { skip: process.platform === 'win32' }, async () => {
+  const { list } = await import('../src/files.js');
+  const { src, dst } = fresh();
+  put(path.join(src, 'a/f.txt'), 'F');
+  fs.symlinkSync('..', path.join(src, 'a/up'));
+  fs.symlinkSync('f.txt', path.join(src, 'a/alias.txt'));
+  const listed = (await list(path.join(src, 'a'))).entries;
+  assert.equal(listed.find((e) => e.name === 'up').link, true, 'files.list says which entries are links');
+  assert.equal(listed.find((e) => e.name === 'f.txt').link, undefined);
+  const r = await pull(localSource(), [path.join(src, 'a')], dst);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.skipped.map((x) => [path.basename(x.from), x.reason]), [['up', 'symlink']]);
+  assert.deepEqual(fs.readdirSync(path.join(dst, 'a')).sort(), ['alias.txt', 'f.txt']);
+  assert.equal(read(path.join(dst, 'a/alias.txt')), 'F');
+});

@@ -53,7 +53,7 @@ export async function list(p, { showHidden = false } = {}) {
     entries.push({
       name: d.name, path: full, hidden,
       type: st?.isDirectory() ? 'dir' : d.isSymbolicLink() && !st ? 'link' : 'file',
-      size: st?.size ?? 0, mtime: st?.mtimeMs ?? 0,
+      size: st?.size ?? 0, mtime: st?.mtimeMs ?? 0, ...(d.isSymbolicLink() ? { link: true } : {}),
     });
   }));
   entries.sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));

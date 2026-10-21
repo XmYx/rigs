@@ -8,7 +8,9 @@
 //  - nothing is silently overwritten: a clash answers { ok:false, clashes:[…] } with NOTHING done, and the caller
 //    repeats with onClash 'keep' (a " (2)" name), 'replace' (the old one goes to ~/.rigs/trash) or 'skip';
 //  - a folder never goes into itself; a move to where the item already is does nothing;
-//  - a pulled name is a bare name (never a path): a peer cannot write outside the destination folder.
+//  - a pulled name is a bare name (never a path): a peer cannot write outside the destination folder;
+//  - a pull never follows a symlinked folder inside what it copies (a link to '..' or '/' would copy forever): it is
+//    skipped and listed in `skipped` with reason 'symlink' (a same-machine copy keeps links as links).
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -147,7 +149,7 @@ export function localSource() {
       for (const d of kids) {
         const f = path.join(full, d.name);
         const st = await fsp.stat(f).catch(() => null);
-        if (st) entries.push({ name: d.name, path: f, type: st.isDirectory() ? 'dir' : 'file', size: st.size });
+        if (st) entries.push({ name: d.name, path: f, type: st.isDirectory() ? 'dir' : 'file', size: st.size, link: d.isSymbolicLink() });
       }
       return entries;
     },
@@ -174,7 +176,7 @@ export function peerSource(fetchPeer) {
       if (!e) throw bad(`not found on the source: ${p}`, 404);
       return { path: e.path, name: e.name, type: e.type === 'dir' ? 'dir' : 'file', size: e.size, mtime: e.mtime };
     },
-    async list(p) { return ((await (await get(`files?path=${q(p)}&hidden=1`)).json()).entries || []).map((e) => ({ name: e.name, path: e.path, type: e.type === 'dir' ? 'dir' : 'file', size: e.size })); },
+    async list(p) { return ((await (await get(`files?path=${q(p)}&hidden=1`)).json()).entries || []).map((e) => ({ name: e.name, path: e.path, type: e.type === 'dir' ? 'dir' : 'file', size: e.size, link: !!e.link })); },
     async read(p) { const r = await get(`files/raw?path=${q(p)}`); return Readable.fromWeb(r.body); },
   };
 }
@@ -201,10 +203,13 @@ export async function pull(source, paths, dest, { onClash, id } = {}) {
     const clashes = clashRows(planned);
     if (clashes.length) { if (job) job.done = true; return { ok: false, clashes, done: [], skipped: [] }; }
 
+    const done = [];
+    const skipped = [];
+    const linkedDir = (e) => e.link && e.type === 'dir';
     const sizeOf = async (st, p) => {
       if (st.type !== 'dir') return st.size || 0;
       let n = 0;
-      for (const e of await source.list(p)) n += await sizeOf(e, e.path);
+      for (const e of await source.list(p)) if (!linkedDir(e)) n += await sizeOf(e, e.path);
       return n;
     };
     if (job) for (const x of planned) if (x.action !== 'skip') job.total += await sizeOf(x.st, x.src);
@@ -212,7 +217,10 @@ export async function pull(source, paths, dest, { onClash, id } = {}) {
     const copyTree = async (st, from, target) => {
       if (st.type === 'dir') {
         await fsp.mkdir(target);
-        for (const e of await source.list(from)) await copyTree(e, e.path, path.join(target, checkName(e.name)));
+        for (const e of await source.list(from)) {
+          if (linkedDir(e)) { skipped.push({ from: e.path, reason: 'symlink' }); continue; }
+          await copyTree(e, e.path, path.join(target, checkName(e.name)));
+        }
         return;
       }
       if (job) job.file = st.name;
@@ -223,8 +231,6 @@ export async function pull(source, paths, dest, { onClash, id } = {}) {
       if (job) job.files++;
     };
 
-    const done = [];
-    const skipped = [];
     for (const x of planned) {
       if (x.action === 'skip') { skipped.push({ from: x.src, reason: 'skip' }); continue; }
       if (x.action === 'replace') await trash(x.target);
