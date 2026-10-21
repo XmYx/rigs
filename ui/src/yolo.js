@@ -2,7 +2,7 @@ import { api, h } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
 import { isPhone } from './mobile.js';
-import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
+import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepIconField, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
 
 // YOLO windows: "yolo a bouncing ball in p5" opens a floating window the moment the daemon pushes yolo-start (before the
 // agent writes anything), shows the run's sandbox page in an iframe through /api/nodes/<node>/yolo/<runId>/ (so a run
@@ -146,7 +146,7 @@ function onKeep(r) {
   r.phase = 'asking';
   const live = r.state.status === 'live';
   const name = h('input', { class: 'yolo-keep-name', value: r.state.title, maxlength: '80', 'aria-label': 'App name', placeholder: 'App name', required: true });
-  const icon = h('input', { class: 'yolo-keep-icon', value: '⚡', maxlength: '8', 'aria-label': 'Icon (one emoji)', placeholder: '⚡' });
+  const icon = h('input', { class: 'yolo-keep-icon', maxlength: '8', 'aria-label': 'Icon (one emoji)', ...keepIconField(r.state) });
   r.keepForm = h('form', { class: 'yolo-keep-form', onsubmit: (e) => { e.preventDefault(); keep(r, { name: name.value, icon: icon.value }); } },
     h('label', {}, h('span', {}, 'App name'), name), h('label', { class: 'yolo-keep-icon-l' }, h('span', {}, 'Icon'), icon),
     h('button', { class: 'btn primary yolo-btn', type: 'submit' }, live ? '■ Stop & keep' : '★ Keep'),
@@ -296,7 +296,9 @@ function openRun(state) {
       r.convoMsg, r.hint));
   r.win.body.append(strip, h('div', { class: 'yolo-main' }, h('div', { class: 'app-stage yolo-stage' }, r.frame), r.convo));
   r.timer = setInterval(() => { r.time.textContent = elapsed(r.state); }, 1000);
-  r.win.interval(() => { if (r.state.status === 'live') pollErrors(r); }, 2500);
+  // A YOLOv2 follow-up's events go out only on the /ws of the machine that runs it (no jarvis/send stream carries them),
+  // so a JARVIS on another machine would never see the turn end: while one runs, its meta is read too.
+  r.win.interval(() => { if (r.state.status === 'live') { pollErrors(r); if (r.state.v2 && r.state.turn > 1) loadMeta(r); } }, 2500);
   render(r);
   loadMeta(r);
   return r;

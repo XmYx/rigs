@@ -111,6 +111,12 @@ test('Keep as app: the button per state, the kept event, the request body and th
   assert.equal(M.metaUrl(fin), '/api/nodes/magix-system/yolo/r1/meta');
   assert.deepEqual(M.keepBody({ name: '  Orbit   test ', icon: '🪐' }, fin), { name: 'Orbit test', icon: '🪐' });
   assert.deepEqual(M.keepBody({ name: '', icon: '' }, fin), { name: 'bouncing ball' }, 'the run title when the name is empty');
+  // the form starts with the agent's suggested emoji; with none (or only an svg) the field stays empty, so the server
+  // falls back to the suggestion itself or ⚡ — a prefilled ⚡ would override the suggested icon
+  assert.deepEqual(M.keepIconField({ ...fin, icon: { emoji: '🏀' } }), { value: '🏀', placeholder: '🏀' });
+  assert.deepEqual(M.keepIconField({ ...fin, icon: { svg: 'icon.svg' } }), { value: '', placeholder: 'agent’s icon' });
+  assert.deepEqual(M.keepIconField(fin), { value: '', placeholder: '⚡' });
+  assert.deepEqual(M.keepBody({ name: 'x', icon: M.keepIconField(fin).value }, fin), { name: 'x' }, 'no icon sent: the server picks it');
   const cat = [{ id: 'orbit-test', node: 'magix-system', name: 'Orbit test', health: { status: 'up' } }];
   assert.equal(M.keptApp(keptAs, cat), cat[0], 'the catalog entry when there is one');
   assert.equal(M.keptApp(keptAs, [], { id: 'orbit-test', node: 'x', name: 'From server' }).node, 'magix-system');
@@ -262,6 +268,11 @@ test('turnStarted makes an idle run live on the next turn and leaves a live one 
   const t = M.turnStarted(idle, 2, 9000);
   assert.deepEqual([t.status, t.turn, t.endedAt, t.startedAt], ['live', 2, 0, 9000]);
   assert.equal(M.turnStarted(t, 3), t);
+  // a JARVIS on another machine gets no /ws events for a follow-up turn: the meta it polls ends the turn instead
+  const msgs = [{ role: 'user', text: 'bigger', turn: 2, at: 9001 }, { role: 'assistant', text: 'Bigger now, sir.', turn: 2, at: 9500 }];
+  const polled = M.withMeta(t, { runId: t.runId, v2: true, status: 'idle', turn: 2, ok: true, summary: 'Bigger now, sir.', endedAt: 9600, messages: msgs });
+  assert.deepEqual([polled.status, polled.turn, polled.messages.length, M.composerState(polled).disabled], ['idle', 2, 2, false]);
+  assert.ok(read('ui/src/yolo.js').includes('r.state.v2 && r.state.turn > 1) loadMeta(r)'), 'the window polls the meta while a follow-up turn runs');
 });
 
 test('the window wires the conversation, composer, feedback, icon and toggle', () => {

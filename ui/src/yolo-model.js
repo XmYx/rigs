@@ -146,6 +146,15 @@ export function keepButton(state, phase = '') {
   return { label: '★ Keep as app', title: live ? 'Stop the agent and keep this page as an App Cloud app' : 'Keep this page as an App Cloud app', disabled: phase === 'asking', kept: false };
 }
 
+/**
+ * The Keep form's icon field: the agent's suggested emoji as its value (left empty otherwise, so an empty field lets the
+ * server use the suggested SVG or ⚡), and a placeholder that says which. Pure.
+ */
+export function keepIconField(state) {
+  const emoji = state?.icon?.emoji ? String(state.icon.emoji).trim() : '';
+  return { value: emoji, placeholder: emoji || (state?.icon?.svg ? 'agent’s icon' : DEFAULT_ICON) };
+}
+
 /** The POST …/keep body from the form: the name (else the run title) and an optional icon. Pure. */
 export function keepBody({ name = '', icon = '' } = {}, state = {}) {
   const n = String(name).replace(/\s+/g, ' ').trim() || state.title || '';

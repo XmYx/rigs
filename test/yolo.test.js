@@ -278,6 +278,11 @@ test('createRun: the placeholder page and yolo-start exist before anything else 
     assert.deepEqual(seen.map((e) => e.type), ['yolo-start'], 'emitted on the bus too, with no update for the placeholder');
     const mine = [];
     Y.onRun(run.runId, (e) => mine.push(e));
+    // the placeholder reported late (macOS FSEvents does that for the write right before the watch): no update, no first frame
+    fs.writeFileSync(path.join(run.dir, 'index.html'), fs.readFileSync(path.join(run.dir, 'index.html')));
+    await sleep(Y.YOLO_DEBOUNCE_MS + 250);
+    assert.equal(mine.filter((e) => e.type === 'yolo-update').length, 0, 'the placeholder is not an update');
+    assert.equal((await Y.getRun(run.runId, root)).firstFrameAt, null, 'nor the first frame');
     Y.setActivity(run.runId, 'Write index.html');
     for (const f of ['index.html', 'a.js', 'b.json']) fs.writeFileSync(path.join(run.dir, f), f);
     fs.writeFileSync(path.join(run.dir, '.hidden'), 'x');

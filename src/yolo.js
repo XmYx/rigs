@@ -532,6 +532,8 @@ function flush(r) {
   if (!r.pending.size) return null;
   const files = [...r.pending];
   r.pending.clear();
+  // macOS (FSEvents) reports createRun's own placeholder write once the watch starts: not an update, not a first frame
+  if (files.every((f) => f === 'index.html') && (() => { try { return isPlaceholder(fs.readFileSync(path.join(r.dir, 'index.html'), 'utf8')); } catch { return false; } })()) return null;
   r.meta.updates += 1;
   r.meta.files = [...new Set([...r.meta.files, ...files])].slice(-200);
   if (!r.meta.firstFrameAt) { r.meta.firstFrameAt = Date.now(); writeMeta(r); }
