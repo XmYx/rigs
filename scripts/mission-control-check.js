@@ -188,7 +188,8 @@ const errors = [];
   await sleep(450);
   check('F3 opens it', await isOpen(page));
   await page.mouse.click(10, 450);
-  await sleep(500);
+  await page.waitForFunction(() => !document.querySelector('.mc'), null, { timeout: 5000 }).catch(() => {}); // the close animation, slower under load
+  await sleep(150);
   check('a click on empty space closes it, windows back in place', !(await isOpen(page)) && (await Promise.all(D1.map((s) => look(page, s)))).every((b, i) => near(b.rect, before[D1[i]].rect, 0.5)));
 
   // ---- Window › Mission Control; the trigger again closes.
@@ -212,11 +213,11 @@ const errors = [];
   let dockOk = false;
   try {
     await page.evaluate(() => { const g = document.querySelector('.adock-group[data-gid="g-tools-system"]'); g.scrollIntoView?.(); });
-    await page.click('.adock-group[data-gid="g-tools-system"]', { timeout: 3000 });
+    await page.click('.adock-group[data-gid="g-tools-system"]', { timeout: 10000 });
     await sleep(350);
-    await page.click('.adock-pop-tile[data-id="tool:mission"]', { timeout: 3000 });
-    await sleep(450);
-    dockOk = await isOpen(page);
+    await page.click('.adock-pop-tile[data-id="tool:mission"]', { timeout: 10000 });
+    dockOk = await page.waitForFunction(() => !!document.querySelector('.mc'), null, { timeout: 5000 }).then(() => true, () => false);
+    await sleep(300);
   } catch (e) { console.log(`  (dock: ${e.message.split('\n')[0]})`); }
   check('the app dock\'s Mission Control tile opens it', dockOk);
   if (await isOpen(page)) { await page.keyboard.press('Escape'); await sleep(450); }
