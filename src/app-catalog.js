@@ -221,9 +221,12 @@ export function shapeItems(items, { host = { supported: true }, hasIcon = () => 
 const exists = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
 const readdir = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }); } catch { return []; } };
 
-function dataDirs(env = process.env, home = os.homedir()) {
+/** System-wide flatpak and snap export roots: not under $HOME or XDG_DATA_DIRS, so tests pass their own (or none). */
+const SYSTEM_DIRS = ['/var/lib/flatpak/exports/share', '/var/lib/snapd/desktop'];
+
+function dataDirs(env = process.env, home = os.homedir(), systemDirs = SYSTEM_DIRS) {
   const xdg = (env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(':').filter(Boolean);
-  return [path.join(home, '.local/share'), path.join(home, '.local/share/flatpak/exports/share'), '/var/lib/flatpak/exports/share', '/var/lib/snapd/desktop', ...xdg];
+  return [path.join(home, '.local/share'), path.join(home, '.local/share/flatpak/exports/share'), ...systemDirs, ...xdg];
 }
 
 function hasExecutable(name, env = process.env) {
@@ -241,8 +244,8 @@ function walkDesktop(dir, out = [], depth = 0) {
 }
 
 /** Linux: every visible Application in the .desktop directories, earlier directories winning over later ones. */
-export function scanLinux({ env = process.env, home = os.homedir() } = {}) {
-  const dirs = dataDirs(env, home);
+export function scanLinux({ env = process.env, home = os.homedir(), systemDirs = SYSTEM_DIRS } = {}) {
+  const dirs = dataDirs(env, home, systemDirs);
   const desktop = env.XDG_CURRENT_DESKTOP || 'GNOME';
   const seen = new Map();
   for (const base of dirs) {

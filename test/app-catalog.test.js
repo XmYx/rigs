@@ -142,11 +142,24 @@ test('scanLinux: fixture tree, hidden and TryExec-missing skipped, first directo
     fs.writeFileSync(path.join(userApps, 'filmcraft.desktop'), '[Desktop Entry]\nType=Application\nName=FilmCraft (mine)\nExec=fc\nIcon=/nonexistent.png\n');
     fs.mkdirSync(path.join(home, 'sys/share'), { recursive: true });
     fs.cpSync(path.join(FIX, 'applications'), path.join(home, 'sys/share/applications'), { recursive: true });
-    const items = C.scanLinux({ home, env: { XDG_DATA_DIRS: path.join(home, 'sys/share'), XDG_CURRENT_DESKTOP: 'ubuntu:GNOME', PATH: '' } });
+    const items = C.scanLinux({ home, systemDirs: [], env: { XDG_DATA_DIRS: path.join(home, 'sys/share'), XDG_CURRENT_DESKTOP: 'ubuntu:GNOME', PATH: '' } });
     const names = items.map((i) => i.name).sort();
     assert.deepEqual(names, ['FilmCraft (mine)', 'Files', 'Nested App', 'htop'].sort());
     assert.equal(items.find((i) => i.id === 'filmcraft').name, 'FilmCraft (mine)');
     assert.equal(items.find((i) => i.id === 'sub-nested').launch.acceptsFiles, true);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('scanLinux: the system flatpak/snap roots are scanned, and a caller can replace them (tests stay host-independent)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'appcat-'));
+  try {
+    const snap = path.join(home, 'snapd/desktop/applications');
+    fs.mkdirSync(snap, { recursive: true });
+    fs.writeFileSync(path.join(snap, 'steam.desktop'), '[Desktop Entry]\nType=Application\nName=Steam\nExec=steam\n');
+    const env = { XDG_DATA_DIRS: '/nonexistent', PATH: '' };
+    const withSnap = C.scanLinux({ home, env, systemDirs: [path.join(home, 'snapd/desktop')] });
+    assert.deepEqual(withSnap.map((i) => [i.name, i.source]), [['Steam', 'snap']]);
+    assert.deepEqual(C.scanLinux({ home, env, systemDirs: [] }), []);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -162,7 +175,7 @@ test('scanLinux: icons resolve from the theme tree; oversized SVG is not served'
     fs.mkdirSync(path.join(hi, 'scalable/apps'), { recursive: true });
     fs.writeFileSync(path.join(hi, '64x64/apps/aicon.png'), 'png');
     fs.writeFileSync(path.join(hi, 'scalable/apps/bicon.svg'), 'x'.repeat(300 * 1024));
-    const items = C.scanLinux({ home, env: { XDG_DATA_DIRS: '/nonexistent', PATH: '' } });
+    const items = C.scanLinux({ home, systemDirs: [], env: { XDG_DATA_DIRS: '/nonexistent', PATH: '' } });
     assert.equal(items.find((i) => i.id === 'a').iconPath, path.join(hi, '64x64/apps/aicon.png'));
     assert.equal(items.find((i) => i.id === 'b').iconPath, '');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
