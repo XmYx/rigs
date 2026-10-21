@@ -1,4 +1,4 @@
-// Keep as app: a finished YOLO run (src/yolo.js) becomes an App Cloud app. POST /api/local/yolo/<runId>/keep
+// Keep as app: a finished YOLO run (src/yolo.js), or an idle YOLOv2 one, becomes an App Cloud app. POST /api/local/yolo/<runId>/keep
 // { id?, name?, icon?, description?, tags? } copies the run's sandbox into the shared folder (<shared>/apps/<id>/),
 // writes a zero-dependency static server beside it, publishes it like every applet (an enabled `systemctl --user` unit
 // on Linux, else a launch command; the App Cloud registration through apps.upsertApp, the same code as
@@ -15,7 +15,7 @@ import * as appsReg from './apps.js';
 import { config, RIGS_HOME } from './config.js';
 import { sharedRoot } from './files.js';
 import { run as runCmd, which } from './util.js';
-import { confinePath, getRun, isLive, isPlaceholder, markKept, MIME_TYPES, SANDBOX_HEADERS, yoloRoot } from './yolo.js';
+import { confinePath, getRun, iconText, isLive, isPlaceholder, markKept, MIME_TYPES, SANDBOX_HEADERS, yoloRoot } from './yolo.js';
 
 /** The App Cloud id rule (src/apps.js ID_RE). */
 export const APP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -192,20 +192,25 @@ export function keepLaunch({ dir, port, unit = '', file = SERVER_FILE }) {
 }
 
 /**
- * The request body → { id (explicit or ''), name, icon, description, tags }. Throws { status: 400 } on bad values: an
- * explicit id must be a valid App Cloud id; tags are short words, 'yolo' first. Pure.
+ * The request body → { id (explicit or ''), name, icon, description, tags, iconSvg? }. Throws { status: 400 } on bad
+ * values: an explicit id must be a valid App Cloud id; tags are short words, 'yolo' first. Without an icon in the body
+ * the agent's suggested one (meta.icon, src/yolo.js readSuggestedIcon) is used: its emoji as the app icon, its SVG as
+ * `iconSvg` (a file in the kept folder); ⚡ when it suggested none. Pure.
  */
 export function keepRequest(b = {}, meta = {}) {
   if (!b || typeof b !== 'object' || Array.isArray(b)) throw fail(400, 'expected { id?, name?, icon?, description?, tags? }');
   const id = b.id === undefined || b.id === null || b.id === '' ? '' : String(b.id).trim().toLowerCase();
   if (id && !APP_ID_RE.test(id)) throw fail(400, 'id must be 1-40 chars of a-z, 0-9, - or _ (starting with a letter or digit)');
   const name = String(b.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || meta.title || 'YOLO app';
-  const icon = String(b.icon ?? '').trim().slice(0, 16) || '⚡';
+  const given = String(b.icon ?? '').trim().slice(0, 16);
+  const suggested = given ? null : meta.icon && typeof meta.icon === 'object' ? meta.icon : null;
+  const icon = given || iconText(suggested?.emoji) || '⚡';
+  const iconSvg = typeof suggested?.svg === 'string' && /^[\w./-]+\.svg$/i.test(suggested.svg) && !suggested.svg.split('/').some((x) => x === '..' || x.startsWith('.')) ? suggested.svg : '';
   const description = String(b.description ?? '').trim() || `Kept from a YOLO run: ${String(meta.task || meta.title || '').trim()}`;
   if (b.tags !== undefined && !Array.isArray(b.tags)) throw fail(400, 'tags must be an array of short words');
   const tags = [...new Set(['yolo', ...(b.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)])];
   if (!tags.every((t) => /^[\w.+-]{1,32}$/.test(t))) throw fail(400, 'tags must be short words (a-z, 0-9, . + - _)');
-  return { id, name, icon, description: description.slice(0, 500), tags: tags.slice(0, 20) };
+  return { id, name, icon, description: description.slice(0, 500), tags: tags.slice(0, 20), ...(iconSvg ? { iconSvg } : {}) };
 }
 
 // ── I/O ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -362,7 +367,7 @@ async function doKeep(runId, body, { root = yoloRoot(), deps: injected = {}, wai
   } else if (reg) {
     for (const until = Date.now() + waitMs; Date.now() < until; await d.sleep(300)) if ((await d.probe(reg)).ok) { health = 'up'; break; }
   }
-  const keptAs = { id, node, path: `/api/nodes/${encodeURIComponent(node)}/apps/${id}/`, name: req.name, icon: req.icon, port, dir, ...(unit ? { unit } : {}), at: Date.now() };
+  const keptAs = { id, node, path: `/api/nodes/${encodeURIComponent(node)}/apps/${id}/`, name: req.name, icon: req.icon, ...(req.iconSvg ? { iconSvg: req.iconSvg } : {}), port, dir, ...(unit ? { unit } : {}), at: Date.now() };
   await markKept(runId, keptAs, root);
   const final = (await d.localApps()).find((a) => a.id === id) || reg || app;
   return { ok: true, already: false, keptAs, app: { ...final, node }, health, files: copied.files, bytes: copied.bytes, skipped: copied.skipped, steps };

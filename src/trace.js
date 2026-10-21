@@ -225,7 +225,9 @@ export function toolCollector({ onStart = () => {}, onEnd = () => {} } = {}, now
       if (!e || typeof e !== 'object') return;
       if (provider === 'claude') {
         if (e.type === 'assistant') {
-          for (const b of e.message?.content || []) if (b.type === 'tool_use' && b.id && !open.has(b.id)) begin(b.id, { name: b.name, input: b.input, start: now(), meta: { toolUseId: b.id } });
+          // a subagent's own calls carry parent_tool_use_id (its Task/Agent call): kept so they nest under it
+          for (const b of e.message?.content || []) if (b.type === 'tool_use' && b.id && !open.has(b.id)) begin(b.id, { name: b.name, input: b.input, start: now(),
+            meta: { toolUseId: b.id, ...(e.parent_tool_use_id ? { parentToolUseId: e.parent_tool_use_id } : {}), ...(/^(?:Task|Agent)$/.test(b.name) && b.input?.subagent_type ? { subagent: String(b.input.subagent_type) } : {}) } });
         } else if (e.type === 'user' && Array.isArray(e.message?.content)) {
           for (const b of e.message.content) if (b.type === 'tool_result' && open.has(b.tool_use_id)) {
             const out = Array.isArray(b.content) ? b.content.map((x) => (x.type === 'text' ? x.text : `[${x.type}]`)).join('\n') : b.content;

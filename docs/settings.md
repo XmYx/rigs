@@ -12,7 +12,7 @@ tests all read. The inventory at the end of this page is generated from it (`nod
 | `src/config.js` `defaults()` | every key of `~/.rigs/config.json`, down to the leaves |
 | Keys read in `src/` that `defaults()` does not declare | `brain.home`, `brain.core.node`, `quick.local.*` (`src/quick.js` `localSettings`), `persona.soul`, `persona.neural`, `persona.voiceApp`, `persona.hearingApp`, `persona.emotionApp`, `persona.tts.{engine,piperUrl,trim}`, `persona.overseer`, `files.zip.{maxBytes,maxEntries}`, `openrig.keepDaemon`, `workspaces.roots`, `comfyui.*`, `linear.*`, `connectors.slack.{token,userToken}`, `connectors.googleDrive.*`, `globalRev` |
 | Per-feature endpoints | `config`, `brain/core`, `brain/chat`, `brain/home`, `global`, `router`, `quick`, `yolo/config`, `routing`, `exhibits/config`, `starnet/config`, `comfyui/config`, `linear/config`, `connectors/google-drive/config`, `connectors/slack/status`, `control/*`, `shared/*`, `ssh/sync`, `update`, `capabilities`, `pins`, `apps` |
-| `rigs` CLI toggles (`bin/rigs.js`) | `preroute on\|off\|engine`, `quick on\|off`, `quick local on\|off\|model\|node\|warm`, `yolo on\|off`, `starnet on\|off\|install`, `linear key [--clear]`, `control off`, `shared sync\|path`, `update [--all]`, `setup --name` |
+| `rigs` CLI toggles (`bin/rigs.js`) | `preroute on\|off\|engine`, `quick on\|off`, `quick local on\|off\|model\|node\|warm`, `yolo on\|off\|v2 on\|off`, `starnet on\|off\|install`, `linear key [--clear]`, `control off`, `shared sync\|path`, `update [--all]`, `setup --name` |
 | Mesh-global stamping | `src/globalbrain.js` `GLOBAL_PATHS`, `patchConfig` (`touchesGlobal`), `markGlobalChanged`, `adoptGlobal` |
 | UI prefs | left panel Display / Forces (`ui/index.html` `#d-*`, `#repel`, `#linklen`), every `rigs.*` localStorage key in `ui/src`, the synced keys of `src/uilayout.js`, the app dock's settings menu, the menu bar's checkable commands (docking, smart scaling, menu bar, Ask field), the brain badge / brain popover / tray JARVIS item, the local-responder and Connectors panels, Mesh control's JARVIS / Routing / Tools / Updates tabs |
 
@@ -367,6 +367,7 @@ A model on a machine's own Ollama answers the fast path, with read-only tools.
 | **Max turns** `yolo.maxTurns` | number 1–100 | global | `yolo.maxTurns` → `POST /api/local/yolo/config` | default `20` |
 | **Timeout** `yolo.timeoutMs` | number 10000–1800000 ms | global | `yolo.timeoutMs` → `POST /api/local/yolo/config` | default `180000` |
 | **Runs kept** `yolo.keep` | number 1–1000 | global | `yolo.keep` → `POST /api/local/yolo/config` | default `50` |
+| **YOLOv2 (multi-turn)** `yolo.v2` | switch | global | `yolo.v2` → `POST /api/local/yolo/config` | default `false` · `rigs yolo v2 on\|off` |
 
 ### 📋 Projects & Dispatch
 
