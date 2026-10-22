@@ -10,6 +10,8 @@ export const TOOLS = Object.freeze({
   csv: { id: 'csv', label: 'CSV viewer', icon: '▦' },
   json: { id: 'json', label: 'JSON viewer', icon: '{}' },
   media: { id: 'media', label: 'Media player', icon: '▶' },
+  html: { id: 'html', label: 'Rendered HTML', icon: '🌐' },
+  model: { id: 'model', label: '3D viewer', icon: '🧊' },
 });
 
 const IMAGE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
@@ -17,6 +19,9 @@ const PDF = /\.pdf$/i;
 const CSV = /\.(csv|tsv)$/i;
 const JSONX = /\.(json|geojson|webmanifest|har)$/i;
 const ZIP = /\.zip$/i;
+const HTML = /\.(html?|xhtml)$/i;
+/** 3D models the viewer (model-viewer.js) loads: glTF binary / JSON and Wavefront OBJ. */
+export const MODEL = /\.(glb|gltf|obj)$/i;
 const TEXT = /\.(txt|md|markdown|rst|json|jsonl|ndjson|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|c|h|cpp|hpp|cs|sh|bash|zsh|fish|ps1|bat|cmd|yml|yaml|toml|ini|cfg|conf|log|csv|tsv|html|htm|css|scss|less|xml|svg|sql|env|gitignore|dockerignore|dockerfile|lock|properties|tex|vue|svelte|lua|pl|php|r|gradle|service)$/i;
 // Names with no extension (or a dotfile) that are text all the same.
 const TEXT_NAMES = /^(readme|license|licence|makefile|dockerfile|changelog|authors|notice|procfile|gemfile|rakefile|\.[\w.-]+rc|\.env(\..+)?|\.gitignore|\.gitattributes|\.editorconfig)$/i;
@@ -24,6 +29,8 @@ const TEXT_NAMES = /^(readme|license|licence|makefile|dockerfile|changelog|autho
 const base = (name) => String(name || '').split(/[\\/]/).pop();
 
 export const isZip = (name) => ZIP.test(base(name));
+export const isModel = (name) => MODEL.test(base(name));
+export const isHtml = (name) => HTML.test(base(name));
 export const isText = (name) => { const n = base(name); return TEXT.test(n) || TEXT_NAMES.test(n) || !/.\.[^.]+$/.test(n); };
 
 /** The tool a double-click opens for `name`, or null (download). */
@@ -34,16 +41,18 @@ export function toolFor(name) {
   if (CSV.test(n)) return 'csv';
   if (JSONX.test(n)) return 'json';
   if (mediaKind(n)) return 'media'; // audio and video: the media player (media-player.js)
+  if (MODEL.test(n)) return 'model'; // glb / gltf / obj: the 3D viewer (model-viewer.js)
   if (isText(n)) return 'text';
   return null;
 }
 
-/** The tools "Open with" offers for `name`, the default first; the text editor for anything that is text. */
+/** The tools "Open with" offers for `name`, the default first; the text editor for anything that is text; rendered HTML for .html. */
 export function toolsFor(name) {
   const n = base(name);
   const first = toolFor(n);
   const out = first ? [first] : [];
   if (first && first !== 'text' && isText(n)) out.push('text');
+  if (HTML.test(n) && !out.includes('html')) out.push('html');
   return out;
 }
 

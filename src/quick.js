@@ -12,10 +12,30 @@ const DEFAULT_QUICK = {
   enabled: true,
   simple: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
   standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
-  maxTurns: 8, timeoutMs: 90000,
+  // stallMs: the quick-lane watchdog — a Claude fast turn that shows no progress (no delta, tool or tool-done event) for
+  // this long, once past the cold-start grace, is stopped and handed to the full brain like [[ESCALATE]]. 0 = off.
+  maxTurns: 8, timeoutMs: 90000, stallMs: 20000,
 };
 /** The fast brain says it needs the full brain with this marker (then a short reason); the request re-runs there. */
 export const ESCALATE_MARKER = '[[ESCALATE]]';
+/** A fast turn's first seconds (harness boot, MCP start, the first model call) count as progress: no stall before this. */
+export const QUICK_STALL_GRACE_MS = 8000;
+/** Stream events that show a fast turn is getting somewhere. */
+export const QUICK_PROGRESS_EVENTS = ['delta', 'tool', 'tool-done'];
+
+/**
+ * The quick-lane watchdog's timing decision: has the turn stalled? A turn stalls when nothing has arrived for `stallMs`
+ * since its last progress event — or, before any event, since the end of the cold-start grace (graceMs after start).
+ * → { stalled, reason, checkInMs }: checkInMs says when to look again if nothing else happens (0 when stalled or off). Pure.
+ */
+export function quickStall({ now = Date.now(), startedAt = now, lastEventAt = 0, stallMs = DEFAULT_QUICK.stallMs, graceMs = QUICK_STALL_GRACE_MS } = {}) {
+  const limit = Number(stallMs) || 0;
+  if (limit <= 0) return { stalled: false, reason: '', checkInMs: 0 };
+  const since = Math.max(Number(lastEventAt) || 0, startedAt + graceMs);
+  const idle = now - since;
+  if (idle >= limit) return { stalled: true, reason: `quick turn made no progress for ${Math.round(limit / 1000)} s`, checkInMs: 0 };
+  return { stalled: false, reason: '', checkInMs: limit - idle };
+}
 
 /**
  * The local first responder (config.quick.local, src/responder.js, design in docs/local-responder.md): a model on a
@@ -72,6 +92,7 @@ export function quickSettings(q = {}) {
     standard: tierSettings(q?.standard, d.standard),
     maxTurns: clampNum(q?.maxTurns, d.maxTurns, 1, 50),
     timeoutMs: clampNum(q?.timeoutMs, d.timeoutMs, 5000, 600000),
+    stallMs: clampNum(q?.stallMs, d.stallMs, 0, 600000),
     // only when configured: a config without it reads exactly as before (the responder's defaults: localSettings())
     ...(q?.local !== undefined && q?.local !== null ? { local: localSettings(q.local) } : {}),
   };
@@ -93,7 +114,7 @@ export function applyQuickPatch(current = {}, b = {}) {
     if (t.effort !== undefined && !PROVIDERS[provider].efforts.includes(t.effort)) throw new Error(`${k}.effort must be one of ${PROVIDERS[provider].efforts.join(', ')}`);
     if (t.model !== undefined && !String(t.model).trim()) throw new Error(`${k}.model must not be empty`);
   }
-  for (const k of ['maxTurns', 'timeoutMs']) if (b[k] !== undefined && !Number.isFinite(Number(b[k]))) throw new Error(`${k} must be a number`);
+  for (const k of ['maxTurns', 'timeoutMs', 'stallMs']) if (b[k] !== undefined && !Number.isFinite(Number(b[k]))) throw new Error(`${k} must be a number`);
   const local = b.local === undefined ? undefined : checkLocalPatch(b.local);
   return quickSettings({ ...cur, ...b, simple: { ...cur.simple, ...(b.simple || {}) }, standard: { ...cur.standard, ...(b.standard || {}) },
     ...(local ? { local: { ...localSettings(cur.local), ...local } } : {}) });
@@ -174,7 +195,7 @@ export function quickTier(request, routeInfo = {}) {
 
 /**
  * Does this request take the fast path, and on which model? → { on: true, tier, why, provider, model, effort,
- * maxTurns, timeoutMs, forced } or { on: false, reason }. Only requests routed "answer" qualify. A per-request
+ * maxTurns, timeoutMs, stallMs, forced } or { on: false, reason }. Only requests routed "answer" qualify. A per-request
  * override (`quick`) wins over config.quick.enabled: false keeps the previous behaviour exactly, true / 'haiku' /
  * 'sonnet' force the fast path (a tier name also forces that tier). Without an override the fast path also stays out
  * of the way when the request asked for a brain other than Claude (Codex, Ollama, Claude via Ollama). Pure.
@@ -188,7 +209,7 @@ export function resolveQuick({ text = '', route = '', override, brain = '', rout
   if (o === undefined && brain && !['auto', 'claude'].includes(brain)) return { on: false, reason: `the ${brain} brain was asked for` };
   const t = TIERS.includes(o) ? { tier: o, why: `quick: ${o} on this request` } : quickTierWhy(text, routeInfo);
   const cfg = t.tier === 'haiku' ? s.simple : s.standard;
-  return { on: true, tier: t.tier, why: t.why, provider: cfg.provider, model: cfg.model, effort: cfg.effort, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, forced: o !== undefined,
+  return { on: true, tier: t.tier, why: t.why, provider: cfg.provider, model: cfg.model, effort: cfg.effort, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, stallMs: s.stallMs, forced: o !== undefined,
     // a tier named on the request means that Claude model; 'local' means the local responder (localResponder)
     ...(TIERS.includes(o) ? { forcedTier: o } : {}), ...(o === 'local' ? { local: true } : {}) };
 }
@@ -273,6 +294,7 @@ export function quickNote({ model = '', maxTurns = DEFAULT_QUICK.maxTurns } = {}
     `This turn runs on JARVIS's fast path (${model || 'a smaller model'}, at most ${maxTurns} tool turns): answer the question, do the quick lookup, search or tool call, summary or short report yourself, briefly, in character.`,
     `Substantial work (writing or changing code, building, long multi-step jobs) is still filed with jarvis_task as usual.`,
     `Opening or showing a folder or file ("open my Downloads", "show me the files in …", "show it in Files") is one ui_open call: it opens the JARVIS file browser there. Never Finder, \`open\`, xdg-open, mesh_control or a text listing instead; don't search the disk first when Sir named the place.`,
+    'To find a named folder or file, use what you already know (the project record, the thread, mesh_workspaces), or mesh_list_dir / `find <likely parent> -maxdepth 3`; never `find ~` or a whole-disk search.',
     `If answering well needs the full JARVIS brain (deep reasoning, a long investigation, many steps), do not start it: reply with only ${ESCALATE_MARKER} followed by one short reason, and nothing else. The full brain then takes the request over.`,
   ].join('\n');
 }

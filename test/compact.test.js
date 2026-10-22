@@ -225,7 +225,7 @@ test('past atTokens the next turn starts a fresh session seeded with the summary
   await say(main.id, 'what is my cat called?');
   const t = turns().at(-1);
   assert.ok(!t.includes('--resume'), 'a fresh session');
-  assert.match(t[1], /^Summary of the conversation before this \(compacted\):\n## Facts to remember\n- FACT: my cat is called Pixel\n[\s\S]*?\n\nThe conversation since that summary:\nUser: tell me about szuf\nJARVIS \(claude\): Re: tell me about szuf\n\nNow the user says:\nwhat is my cat called\?$/);
+  assert.match(t[1], /^\[now: [^\]]+\]\nSummary of the conversation before this \(compacted\):\n## Facts to remember\n- FACT: my cat is called Pixel\n[\s\S]*?\n\nThe conversation since that summary:\nUser: tell me about szuf\nJARVIS \(claude\): Re: tell me about szuf\n\nNow the user says:\nwhat is my cat called\?$/);
   c = await chat.getChat(main.id);
   assert.ok(c.claudeSessionId && c.claudeSessionId !== s1);
   assert.equal(c.context.claude.tokens, 9000);
@@ -233,7 +233,7 @@ test('past atTokens the next turn starts a fresh session seeded with the summary
   // and the turn after resumes that new session with nothing replayed
   await say(main.id, 'thanks');
   assert.equal(turns().at(-1)[turns().at(-1).indexOf('--resume') + 1], c.claudeSessionId);
-  assert.equal(turns().at(-1)[1], 'thanks');
+  assert.match(turns().at(-1)[1], /^\[now: [^\]]+\]\nthanks$/, 'only the [now: …] block before the message');
   assert.equal((await chat.getChat(main.id)).messages.length, 10);
 });
 

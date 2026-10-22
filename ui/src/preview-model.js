@@ -7,6 +7,7 @@ const IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'
 const VIDEO = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv', 'ogv']);
 const AUDIO = new Set(['mp3', 'm4a', 'wav', 'flac', 'ogg', 'oga', 'opus', 'aac']);
 const MARKDOWN = new Set(['md', 'markdown']);
+const MODEL = new Set(['glb', 'gltf', 'obj']);
 const TEXT = new Set(['txt', 'rst', 'log', 'json', 'jsonl', 'ndjson', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java',
   'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd', 'yml', 'yaml', 'toml', 'ini', 'cfg',
   'conf', 'csv', 'tsv', 'html', 'htm', 'css', 'scss', 'less', 'xml', 'sql', 'env', 'lock', 'properties', 'tex', 'vue', 'svelte', 'lua',
@@ -17,7 +18,7 @@ export const TEXT_LIMIT = 2 * 1024 * 1024;
 export const TEXT_SHOWN = 200000;
 
 /**
- * Which viewer an entry gets: folder · image · video · audio · pdf · markdown · text · info (big icon plus details).
+ * Which viewer an entry gets: folder · image · video · audio · pdf · model (a .glb/.gltf/.obj in the 3D viewer) · markdown · text · info (big icon plus details).
  * A file with no extension (Makefile, LICENSE) is text unless it is too large to read.
  */
 export function viewerFor(entry) {
@@ -29,6 +30,7 @@ export function viewerFor(entry) {
   if (VIDEO.has(e)) return 'video';
   if (AUDIO.has(e)) return 'audio';
   if (e === 'pdf') return 'pdf';
+  if (MODEL.has(e)) return 'model';
   const textual = TEXT.has(e) || MARKDOWN.has(e) || !e;
   if (textual && (entry.size ?? 0) > TEXT_LIMIT) return 'info';
   if (MARKDOWN.has(e)) return 'markdown';

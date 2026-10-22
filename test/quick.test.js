@@ -85,8 +85,11 @@ test('quickTier: a router/request hint wins', () => {
 test('config.quick: on by default with Haiku low / Sonnet medium; bad values fall back', () => {
   assert.deepEqual(Q.quickSettings(config().quick), {
     enabled: true, simple: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
-    standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, maxTurns: 8, timeoutMs: 90000,
+    standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, maxTurns: 8, timeoutMs: 90000, stallMs: 20000,
   });
+  assert.equal(Q.quickSettings({ stallMs: 0 }).stallMs, 0, 'the watchdog can be switched off');
+  assert.equal(Q.quickSettings({ stallMs: 'soon' }).stallMs, 20000);
+  assert.throws(() => Q.applyQuickPatch({}, { stallMs: 'lots' }), /stallMs must be a number/);
   const s = Q.quickSettings({ enabled: 'nope', simple: { provider: 'codex', effort: 'ultra' }, standard: { model: 'opus' }, maxTurns: 999, timeoutMs: 'soon' });
   assert.equal(s.enabled, true);
   assert.deepEqual(s.simple, { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' });
@@ -121,7 +124,7 @@ test('quickOverride: true | false | haiku | sonnet, anything else = use config',
 
 test('resolveQuick: only "answer" requests, override beats config, other brains left alone', () => {
   const on = Q.resolveQuick({ text: 'what time is it in Tokyo', route: 'answer', settings: {} });
-  assert.deepEqual(on, { on: true, tier: 'haiku', why: 'a quick time', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low', maxTurns: 8, timeoutMs: 90000, forced: false });
+  assert.deepEqual(on, { on: true, tier: 'haiku', why: 'a quick time', provider: 'claude', model: 'claude-haiku-5-5', effort: 'low', maxTurns: 8, timeoutMs: 90000, stallMs: 20000, forced: false });
   const report = Q.resolveQuick({ text: 'write a short report of mesh load', route: 'answer', brain: 'claude', settings: {} });
   assert.equal(report.model, 'claude-sonnet-5-5');
   assert.equal(report.effort, 'medium');

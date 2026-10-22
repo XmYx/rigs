@@ -10,13 +10,13 @@ const STATUS_CLASS = { todo: '', starting: 'warn', running: 'run', review: 'warn
  * Projects: goal → tasks planned by the core brain → each task routed to machine + provider +
  * model + effort (editable, with the reason) → dispatched as OpenRig seats or direct agents.
  */
-export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached }) {
+export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, focus = true }) {
   let list = [];
   let current = null; // { owner (node id), project }
   const left = h('div', { class: 'proj-list' });
   const right = h('div', { class: 'proj-detail' });
   let timer = null;
-  const w = openWindow({ title: 'Projects — plan & delegate', icon: '📋', width: 1240, height: 680, className: 'proj-win', onClose: () => clearInterval(timer) });
+  const w = openWindow({ title: 'Projects — plan & delegate', icon: '📋', width: 1240, height: 680, className: 'proj-win', focus, onClose: () => clearInterval(timer) });
   const split = h('div', { class: 'files-split proj-split' }, left, right);
   w.body.append(split);
   // Phone: the list and the detail are two screens (CSS shows one); desktop shows both and ignores the class and the back button.

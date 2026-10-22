@@ -158,6 +158,9 @@ export async function startServer() {
   // Exhibits (src/exhibits.js, opt-in): spans + project saves → illustrated documents, off the request path.
   const exhibitSvc = exhibits.createExhibits({ comfy });
   const uiSockets = new Set();
+  const NOTIFY_HISTORY = 50;
+  const APP_START_WAIT_MS = 2000; // POST app-start/<id>: how long a start is awaited before it is reported { starting: true }
+  const notifyLog = []; // the last NOTIFY_HISTORY notices shown on this node (GET /api/local/notify/history), oldest first
   // Dock layout + app dock (src/uilayout.js): saved here, pushed to peers, pulled when they come back.
   const layoutStore = uilayout.createStore({ file: path.join(RIGS_HOME, 'ui-layout.json'), name: () => config().name });
   const layoutErr = (e) => { throw e instanceof uilayout.LayoutError ? new HttpError(e.status, e.message) : e; };
@@ -274,13 +277,19 @@ export async function startServer() {
     iAmSteward().then((yes) => yes && merge.processQueue(mergeCtx)).catch((e) => log('merge steward:', e.message));
   }
 
-  /** Projects on every machine, one line each, for JARVIS to file instructions under (cached 30 s). */
+  /**
+   * Projects on every machine, one line each, most recently touched first, for JARVIS to file instructions under.
+   * Stale-while-revalidate: once a list exists it is returned at once and refreshed in the background when older than
+   * 30 s (one refresh at a time); only the very first request waits for the mesh snapshot.
+   */
   let projCache = { at: 0, text: '' };
-  async function projectsSummary() {
-    if (Date.now() - projCache.at < 30000) return projCache.text;
+  let projRefresh = null;
+  const PROJECTS_TTL_MS = 30000;
+  async function refreshProjects() {
     try {
       const snap = await meshSnapshot();
-      const rows = snap.flatMap((e) => (e.projects || []).map((p) => {
+      const recency = (p) => Number(p.updatedAt || p.createdAt || 0);
+      const rows = snap.flatMap((e) => [...(e.projects || [])].sort((a, b) => recency(b) - recency(a)).map((p) => {
         const live = (p.tasks || []).filter((t) => t.status === 'running').length;
         return `- ${p.id} · ${p.name} · ${p.status}${live ? ` (${live} running)` : ''} · on ${e.node.name}`;
       }));
@@ -289,9 +298,32 @@ export async function startServer() {
     } catch { /* keep the old list */ }
     return projCache.text;
   }
+  async function projectsSummary() {
+    const age = Date.now() - projCache.at;
+    if (age < PROJECTS_TTL_MS) return projCache.text;
+    if (!projRefresh) projRefresh = refreshProjects().finally(() => { projRefresh = null; });
+    if (!projCache.at) return projRefresh; // nothing cached yet: this one waits
+    projRefresh.catch(() => {}); // stale: answer now, the refresh lands for the next caller
+    return projCache.text;
+  }
 
+  /**
+   * The mesh's lasting shape for the brain's system prompt: machine names, platform, agents and tools — nothing that
+   * changes minute to minute (online state, load), so a resumed session keeps its prompt cache. Live state: meshLive.
+   */
   function meshSummary() {
-    return discovery.list().map((n) => `- ${n.name}${n.self ? ' (this machine)' : ''}: ${n.platform || '?'} ${n.online ? 'online' : 'offline'}${n.rigs ? '' : ' (no RIGS agent)'}${n.tools ? ` · agents: ${['claude', 'codex', 'ollama', 'rig', 'rea'].filter((k) => n.tools[k]).join(', ') || 'none'}` : ''}${n.capabilities && Object.keys(n.capabilities).length ? ` · tools: ${Object.keys(n.capabilities).join(', ')}` : ''}${n.stats ? ` · cpu ${n.stats.cpu}% mem ${Math.round((n.stats.memUsed / n.stats.memTotal) * 100)}%` : ''}`).join('\n');
+    return discovery.list().map((n) => `- ${n.name}${n.self ? ' (this machine)' : ''}: ${n.platform || '?'}${n.rigs ? '' : ' (no RIGS agent)'}${n.tools ? ` · agents: ${['claude', 'codex', 'ollama', 'rig', 'rea'].filter((k) => n.tools[k]).join(', ') || 'none'}` : ''}${n.capabilities && Object.keys(n.capabilities).length ? ` · tools: ${Object.keys(n.capabilities).join(', ')}` : ''}`).join('\n');
+  }
+
+  /** The mesh's live state for the turn's [now: …] block (chat.liveContext), one line: "name (platform, online, cpu 12% mem 40%, RTX 4090, ComfyUI), …". */
+  function meshLive() {
+    const gpuName = (g) => (typeof g === 'string' ? g : g?.name || g?.model || '');
+    return discovery.list().map((n) => {
+      const facts = [n.platform || '?', n.online ? 'online' : 'offline', n.self ? 'this machine' : '', n.rigs ? '' : 'no RIGS agent',
+        n.stats ? `cpu ${n.stats.cpu}% mem ${Math.round((n.stats.memUsed / n.stats.memTotal) * 100)}%` : '',
+        ...(Array.isArray(n.gpus) ? n.gpus.map(gpuName) : []), ...(n.capabilities ? Object.keys(n.capabilities) : [])].filter(Boolean);
+      return `${n.name} (${facts.join(', ')})`;
+    }).join(', ');
   }
 
   async function snapshotFor(node) {
@@ -599,6 +631,14 @@ export async function startServer() {
   };
 
   async function broadcastNotify(b) {
+    // `open` (mesh_notify, the same arguments as ui_open): what the notice's Open button opens — the result file, app,
+    // model or page. It is checked and resolved here (a bad or missing target is refused, like ui_open would), and
+    // travels as action { type: 'open', open: <ui-open push> } so the UI's Open button runs its onUiOpen with it.
+    if (b && typeof b === 'object' && b.open !== undefined && b.open !== null) {
+      const { open, ...rest } = b;
+      const event = await resolveUiOpen(open, null);
+      b = { ...rest, action: { type: 'open', label: String(rest.action?.label || open.label || 'Open').slice(0, 40), open: event } };
+    }
     // One notification, one voice (tts-plan.js notifyVoice): when the speakers on this machine are asked for (aloud), the
     // open UIs must not speak it as well, or Sir hears it twice. Otherwise the UIs speak it, and the speakers only when no UI saw it.
     const voiced = notifyVoice(b);
@@ -615,14 +655,37 @@ export async function startServer() {
   }
 
   /**
-   * ui_open: open a view (the file browser) in JARVIS at a machine + path. The path is looked up on that machine (a
-   * file opens its folder with it selected; a missing one its nearest parent), then pushed to the UI that sent the
-   * request (sockets that claimed its trace, on any machine), else to every open UI on the mesh.
+   * ui_open's arguments → the `ui-open` push the UI receives (src/ui-open.js), nothing sent yet. files / model / tool:
+   * the path is looked up on its machine (ui/locate: a file opens its folder with it selected, a missing one its
+   * nearest parent; model and tool need the file itself). app: the App Cloud app by id (the node hosting it unless one
+   * is named). url, project, trace pass through as validated (project / node resolved when a machine is named).
+   * Also used by mesh_notify's `open` (the Open button on a notice). Throws 400 / 404 / 503 like the HTTP route.
    */
-  async function openUiView(b, tctx) {
+  async function resolveUiOpen(b, tctx) {
     const args = uiOpen.validateOpen(b);
     if (!discovery.list().some((n) => n.self)) await discovery.tick(); // the first scan has not finished yet
     const nodes = discovery.list();
+    const traceId = tctx?.traceId || '';
+    const machineOf = (ref) => {
+      const m = uiOpen.resolveMachine(ref, nodes);
+      if (ref && !m) throw new HttpError(404, `no machine "${ref}" in the mesh`);
+      return m;
+    };
+    const extra = { ...(args.title ? { title: args.title } : {}) };
+    if (args.view === 'url') return uiOpen.uiOpenPush({ view: 'url', url: args.url, ...extra, trace: traceId });
+    if (args.view === 'trace') return uiOpen.uiOpenPush({ view: 'trace', traceId: args.trace, ...extra, trace: traceId }); // traceId = the one to open; trace = the request's, for delivery
+    if (args.view === 'project') {
+      const m = args.node ? machineOf(args.node) : null;
+      return uiOpen.uiOpenPush({ view: 'project', project: args.project, nodeName: m?.name, nodeId: m?.id, ...extra, trace: traceId });
+    }
+    if (args.view === 'app') {
+      await meshApps().catch(() => {}); // the catalog of every online node (appsReg.meshCatalogApps)
+      const m = args.node ? machineOf(args.node) : null;
+      const apps = appsReg.meshCatalogApps().filter((a) => a.id === args.app && (!m || a.node === m.name || String(a.nodeId) === String(m.id)));
+      const a = apps.find((x) => x.health?.status === 'up') || apps[0];
+      if (!a) throw new HttpError(404, `no app "${args.app}"${m ? ` on ${m.name}` : ''} in the App Cloud (see mesh_apps)`);
+      return uiOpen.uiOpenPush({ view: 'app', app: a.id, nodeName: a.node, nodeId: a.nodeId, name: a.name, path: args.path, ...extra, trace: traceId });
+    }
     const findWorkspace = async (name, machine) => {
       const r = workspaces.resolve({ workspace: name, machine }, await meshWorkspaces());
       return r.workspace ? { node: r.node, path: r.workspace.path, name: r.workspace.name } : null;
@@ -631,8 +694,22 @@ export async function startServer() {
     if (!t.node) throw new HttpError(404, 'no machine to open it on');
     if (!t.node.self && !(t.node.online && t.node.rigs)) throw new HttpError(503, `${t.node.name} is offline`);
     const located = t.path === uiOpen.APPS_PLACE ? { folder: uiOpen.APPS_PLACE, select: '', missing: false } : await callNode(t.node.id, `ui/locate?path=${encodeURIComponent(t.path)}`, { timeout: 15000 });
+    if (args.view === 'model' || args.view === 'tool') {
+      if (!located.select || located.missing) throw new HttpError(404, `no file at ${t.path} on ${t.node.name}`);
+      return uiOpen.uiOpenPush({ view: args.view, nodeName: t.node.name, nodeId: t.node.id, path: located.select, folder: located.folder, tool: args.tool, requested: args.path, ...extra, trace: traceId });
+    }
+    const ev = uiOpen.uiOpenEvent({ view: args.view, node: t.node, located, requested: args.path || t.path, trace: traceId, workspace: t.workspace });
+    return { ...ev, ...extra, _via: t.via, ...(t.moved ? { _note: `${t.workspace} lives on ${t.node.name}, not ${t.moved}` } : {}) };
+  }
+
+  /**
+   * ui_open: open a view in JARVIS (resolveUiOpen above), pushed to the UI that sent the request (sockets that claimed
+   * its trace, on any machine), else to every open UI on the mesh. Returns what opened where and how many UIs got it.
+   */
+  async function openUiView(b, tctx) {
+    const { _via: via, _note: note, ...event } = await resolveUiOpen(b, tctx);
+    const nodes = discovery.list();
     const traceId = tctx?.traceId || '';
-    const event = uiOpen.uiOpenEvent({ view: args.view, node: t.node, located, requested: args.path || t.path, trace: traceId, workspace: t.workspace });
     const live = nodes.filter((n) => n.self || (n.online && n.rigs));
     const push = (only) => Promise.all(live.map((n) => callNode(n.id, 'ui/push', { method: 'POST', body: { event, only }, timeout: 8000 })
       .then((r) => ({ node: n.name, delivered: r.delivered || 0 })).catch((e) => ({ node: n.name, delivered: 0, error: e.message }))));
@@ -640,9 +717,10 @@ export async function startServer() {
     const target = uiOpen.deliveredCount(rounds) ? 'requester' : 'all';
     if (target === 'all') rounds = await push('');
     const delivered = uiOpen.deliveredCount(rounds);
+    const { type, id, trace, ...shown } = event;
     return {
-      ok: delivered > 0, view: args.view, node: t.node.name, path: event.path, select: event.select || undefined, missing: event.missing,
-      requested: event.requested, via: t.via, ...(t.workspace ? { workspace: t.workspace } : {}), ...(t.moved ? { note: `${t.workspace} lives on ${t.node.name}, not ${t.moved}` } : {}),
+      ok: delivered > 0, ...shown, ...(event.nodeName ? { node: event.nodeName } : {}), ...(event.view === 'files' ? { select: event.select || undefined } : {}),
+      ...(via ? { via } : {}), ...(event.workspace ? { workspace: event.workspace } : {}), ...(note ? { note } : {}),
       shownOn: target, delivered, ...(delivered ? {} : { message: 'No JARVIS window is open anywhere on the mesh, so nothing could be shown.' }),
     };
   }
@@ -800,7 +878,7 @@ export async function startServer() {
 
     // chats / brains
     if (sub === 'brains') return chat.availableBrains();
-    if (sub === 'ollama') return ollamaModels();
+    if (sub === 'ollama') return ollamaModels({ force: true }); // the Settings list: asked for explicitly, so not the 30 s cache
     if (sub === 'chats' && method === 'GET') return chat.listChats();
     if (sub === 'chats' && method === 'POST') return chat.createChat(await body());
     if (sub === 'chats/main/clear' && method === 'POST') return chat.clearMainChat();
@@ -824,7 +902,7 @@ export async function startServer() {
       if (relay) res.write(JSON.stringify({ type: 'status', text: `The main brain on ${relay} is unreachable — answering on ${config().name}.` }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -840,7 +918,7 @@ export async function startServer() {
       const tctx = parent || intake?.ctx || null;
       if (!res || q.get('wait') === '1') {
         let final = null;
-        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary(), projects: await projectsSummary(), trace: tctx });
+        await chat.sendMessage(mm[1], b, (e) => { if (e.type === 'done' || e.type === 'error') final = { ...(final || {}), ...e }; }, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary(), trace: tctx });
         return final;
       }
       res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
@@ -850,7 +928,7 @@ export async function startServer() {
       if (intake) res.write(JSON.stringify({ type: 'trace', traceId: intake.traceId }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.sendMessage(mm[1], b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), projects: await projectsSummary(), signal: ac.signal, trace: tctx });
+        await chat.sendMessage(mm[1], b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary(), signal: ac.signal, trace: tctx });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');
@@ -993,8 +1071,13 @@ export async function startServer() {
 
     if (sub === 'apps' && method === 'GET') return appsReg.localApps();
     if ((mm = m(/^app-start\/([^/]+)$/)) && method === 'POST') {
-      // Spin an app up on this machine (its launch recipe) and wait until it answers its health check.
-      try { return { ...(await appsReg.startApp(decodeURIComponent(mm[1]))), apps: appsReg.localApps().apps }; } catch (e) { throw new HttpError(e.status || 500, e.message); }
+      // Spin an app up on this machine (its launch recipe). An app that answers its health check within APP_START_WAIT_MS
+      // is reported up; a slower one is reported { starting: true } at once while the probe loop goes on in the background
+      // (for the app's startupGraceMs) and the `apps` event tells the UIs when it is up.
+      try {
+        const r = await appsReg.startApp(decodeURIComponent(mm[1]), { pendingAfterMs: APP_START_WAIT_MS });
+        return { ...r, ...(r.pending ? { starting: true } : {}), apps: appsReg.localApps().apps };
+      } catch (e) { throw new HttpError(e.status || 500, e.message); }
     }
     if (sub === 'apps' && method === 'POST') {
       // Register / update / remove one app in this node's config ({ ...app } or { id, remove: true }).
@@ -1347,10 +1430,14 @@ export async function startServer() {
     }
     if (sub === 'tts/say' && method === 'POST') { const b = await body(); return tts.speakAloud(b.text, b.voice); }
 
-    // notifications to the JARVIS UI on this node
+    // notifications to the JARVIS UI on this node; the last NOTIFY_HISTORY of them are kept (GET notify/history), so a
+    // UI opened or reloaded after a toast went by still finds it, with its Open / Run button, in Tools › Notifications
+    if (sub === 'notify/history' && method === 'GET') return notifyLog;
     if (sub === 'notify' && method === 'POST') {
       const b = await body();
-      broadcast({ type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null, session: b.session?.id ? { nodeId: b.session.nodeId, nodeName: b.session.nodeName, kind: b.session.kind, id: b.session.id, title: b.session.title } : null });
+      const ev = { type: 'notify', text: String(b.text || '').slice(0, 2000), speak: b.speak !== false, from: b.from || config().name, level: b.level || 'info', action: b.action || null, session: b.session?.id ? { nodeId: b.session.nodeId, nodeName: b.session.nodeName, kind: b.session.kind, id: b.session.id, title: b.session.title } : null };
+      if (!ev.session) { notifyLog.push({ ...ev, at: Date.now() }); if (notifyLog.length > NOTIFY_HISTORY) notifyLog.splice(0, notifyLog.length - NOTIFY_HISTORY); }
+      broadcast(ev);
       return { ok: true, delivered: uiSockets.size };
     }
 
@@ -1411,7 +1498,7 @@ export async function startServer() {
     if (p === '/api/exhibits') return meshExhibits();
     if ((mm = p.match(/^\/api\/traces\/([\w-]+)$/))) return meshTrace(mm[1], url.searchParams);
     if (p === '/api/mesh/snapshot') return meshSnapshot();
-    if (p === '/api/mesh/summary') return { text: meshSummary() };
+    if (p === '/api/mesh/summary') return { text: meshSummary(), live: meshLive() };
     if (p === '/api/mesh/update' && req.method === 'POST') return rolloutAll();
     if (p === '/api/mesh/merge') {
       const st = merge.electSteward(discovery.list());
@@ -1420,7 +1507,11 @@ export async function startServer() {
       return { steward: st.name, queue };
     }
     if (p === '/api/mesh/notify' && req.method === 'POST') return broadcastNotify(await readBody(req));
-    if (p === '/api/mesh/ui/open' && req.method === 'POST') { const b = await readBody(req); return openUiView(b, traceOf(req, b)); }
+    if (p === '/api/mesh/ui/open' && req.method === 'POST') {
+      const b = await readBody(req);
+      // view 'trace': b.trace is the trace to open, so only the header (the caller's own trace) says which UI asked
+      return openUiView(b, b?.view === 'trace' ? trace.parseContext(req.headers['x-rigs-trace']) : traceOf(req, b));
+    }
     if (p === '/api/mesh/control/kill' && req.method === 'POST') {
       // "Hands off everywhere": switch screen control off on every online machine.
       const b = await readBody(req);
@@ -1618,17 +1709,30 @@ export async function startServer() {
 
   // Listen on loopback + Tailscale addresses (never 0.0.0.0 unless configured explicitly).
   const servers = new Map();
+  // Addresses Tailscale lists that this host can't bind (EADDRNOTAVAIL: an IP not yet on an interface) are skipped — and
+  // logged once — until ts.selfIps() returns a different set of addresses; other errors are retried every pass as before.
+  const unbindable = new Set();
+  let ipsKey = null;
   async function bindAll() {
-    const want = cfg.bind === 'auto' ? ['127.0.0.1', '::1', ...(await ts.selfIps())] : cfg.bind;
+    const ips = cfg.bind === 'auto' ? await ts.selfIps() : [];
+    const key = [...ips].sort().join(',');
+    if (key !== ipsKey) { ipsKey = key; unbindable.clear(); }
+    const want = cfg.bind === 'auto' ? ['127.0.0.1', '::1', ...ips] : cfg.bind;
     for (const host of want) {
-      if (servers.has(host)) continue;
+      if (servers.has(host) || unbindable.has(host)) continue;
       const srv = http.createServer(handler);
       srv.on('upgrade', (req, socket, head) => onUpgrade(req, socket, head).catch(() => socket.destroy()));
       srv.requestTimeout = 0;
       srv.keepAliveTimeout = 65000;
       servers.set(host, srv);
       await new Promise((resolve) => {
-        srv.once('error', (e) => { servers.delete(host); if (host !== '::1') log(`cannot listen on ${host}:${cfg.port} — ${e.code}`); resolve(); });
+        srv.once('error', (e) => {
+          servers.delete(host);
+          const skip = e.code === 'EADDRNOTAVAIL';
+          if (skip) unbindable.add(host);
+          if (host !== '::1') log(`cannot listen on ${host}:${cfg.port} — ${e.code}${skip ? ' (skipped until the Tailscale addresses change)' : ''}`);
+          resolve();
+        });
         srv.listen(cfg.port, host, () => { log(`listening on http://${host.includes(':') ? `[${host}]` : host}:${cfg.port}`); resolve(); });
       });
     }
@@ -1770,7 +1874,7 @@ export async function startServer() {
   trace.events.on('span', (span) => broadcast({ type: 'trace-span', span }));
   yolo.events.on('event', (e) => broadcast(e)); // yolo-start · -update · -done · -message · -icon · -kept (src/yolo.js)
   // YOLOv2 follow-up turns (POST yolo/<runId>/message): resume the run's session with the persona's mesh context
-  yolo.setTurnRunner(async (begun) => chat.yoloFollowUp(begun, { meshSummary: meshSummary(), projects: await projectsSummary().catch(() => '') }));
+  yolo.setTurnRunner(async (begun) => chat.yoloFollowUp(begun, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary().catch(() => '') }));
   // Exhibits: fed from the same span stream and the planner's saves; each new entry is pushed live ('exhibit').
   trace.events.on('span', (span) => exhibitSvc.handleSpan(span));
   planner.onProjectSaved((p) => exhibitSvc.handleProject(p));

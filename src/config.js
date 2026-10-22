@@ -7,7 +7,7 @@ import { applyGlobal, globalSettings, isNewer, nextRev, revOf, touchesGlobal } f
 export const RIGS_HOME = process.env.RIGS_HOME ? path.resolve(process.env.RIGS_HOME) : path.join(HOME, '.rigs');
 export const CONFIG_FILE = path.join(RIGS_HOME, 'config.json');
 export const DEFAULT_PORT = 4719;
-const RULES_VERSION = 4;
+const RULES_VERSION = 5;
 
 /** The default config. Every key must be in the settings schema (ui/src/settings-model.js) or its HIDDEN list. */
 export function defaults() {
@@ -63,7 +63,9 @@ export function defaults() {
     // override it with its own `autonomy`); questions agents ask are answered with the safe default after
     // answerAfterSec, at most maxSelfAnswers times per attempt; Sir gets one report when the loop ends.
     // ladder: [] = the built-in Sonnet medium → Opus high → Opus xhigh. Providers in routing.avoid are skipped.
-    autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60 },
+    // reviewSmall (optional, default false): a one-task plan of size S or M verifies itself against its acceptance
+    // criteria instead of getting a separate review task; true restores the review for every plan.
+    autonomy: { enabled: true, maxAttempts: 3, ladder: [], stallMinutes: 60, answerAfterSec: 90, maxSelfAnswers: 3, retryDelaySec: 60, reviewSmall: false },
     // voice: server TTS voice (macOS/Windows voice name, or a piper .onnx path on Linux).
     // speakAloud: 'auto' = speak notifications on this machine's speakers when no UI is open; 'never'.
     // thinkingPhrases: the UI says a short pre-rendered line ("One moment, sir.") the moment a request is sent
@@ -75,9 +77,10 @@ export function defaults() {
     // POST /v1/systemone, about half a second) | 'claude' = claudeModel through `claude -p` | 'rules' = keywords only. When
     // the engine can't answer (down, timed out, below jev.minProb), `fallback` decides ('claude' | 'rules'). jev.url '' =
     // the App Cloud app jev.appId registered on this machine. baselineMs: the time-saved baseline per route class while no
-    // request has run with pre-routing off yet (0 = estimated from history, see src/preroute-stats.js).
+    // request has run with pre-routing off yet (0 = estimated from history, see src/preroute-stats.js). rulesFirst: a
+    // clear browse request, plain question or lookup is decided by the keyword rules at once (no engine call).
     router: {
-      preroute: true, engine: 'jev', fallback: 'claude', claudeModel: 'claude-haiku-5-5',
+      preroute: true, engine: 'jev', fallback: 'claude', claudeModel: 'claude-haiku-5-5', rulesFirst: true,
       jev: { url: '', appId: 'localjev', model: 'jev-latest', apiKey: '', timeoutMs: 8000, minProb: 0.55 },
       baselineMs: { answer: 0, work: 0 },
     },
@@ -85,11 +88,12 @@ export function defaults() {
     // a short report) runs as one bounded turn on a cheaper model instead of the full brain — simple asks on `simple`,
     // web research / multi-step tool use / reports on `standard` — with at most maxTurns tool turns, handed to the full
     // brain when it asks for it, fails or runs past timeoutMs. enabled: false (or jarvis/send quick: false) = as before.
+    // stallMs: the watchdog — a fast turn with no progress (no text, no tool call) for this long is handed over at once.
     quick: {
       enabled: true,
       simple: { provider: 'claude', model: 'claude-haiku-5-5', effort: 'low' },
       standard: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
-      maxTurns: 8, timeoutMs: 90000,
+      maxTurns: 8, timeoutMs: 90000, stallMs: 20000,
     },
     // YOLO mode (src/yolo.js): "yolo a p5 sketch…", "… yolo it", "in yolo mode" (or jarvis/send yolo: true) runs one
     // bounded turn on this model that builds a page in RIGS_HOME/yolo/<runId>/ while a JARVIS window shows it live — no
@@ -133,6 +137,8 @@ export function defaults() {
         { kind: 'merge', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'reverse-engineer', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'research', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+        // A 3D object or scene built headless in Blender (the blender-glb seed tool) on a machine that has it.
+        { kind: '3d', tool: 'blender', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
         { kind: 'media', tool: 'comfyui', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
         // Large docs (a wiki, a guide written from code) need code reading and long prose: Sonnet. Small docs stay on Haiku.
         { kind: 'docs', size: 'L', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },

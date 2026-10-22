@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
-import { PROVIDERS, coreBrain } from './models.js';
+import { dashboardsFor, knownApps, openDashboards } from './dashboards.js';
+import { PROVIDERS, claudeFlags, coreBrain } from './models.js';
 import { briefSection, matchTools, planNote, projectAdhocNote, ADHOC_RULE } from './toolbox.js';
+import { bin } from './tools.js';
 import * as trace from './trace.js';
 import * as usage from './usage.js';
 import { parseContext } from './trace.js';
-import { log, readJson, truncate, writeJsonAtomic } from './util.js';
+import { HOME, augmentedPath, log, readJson, run, truncate, writeJsonAtomic } from './util.js';
 import { slug } from './work.js';
 
 /**
@@ -20,7 +22,7 @@ import { slug } from './work.js';
  */
 
 const DIR = path.join(RIGS_HOME, 'projects');
-export const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'merge', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
+export const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'merge', 'research', 'docs', 'text', 'reverse-engineer', 'media', '3d', 'private'];
 // Fallback order when the policy's provider isn't available. Ollama is opt-in only (kind "private" or a rule/hand pick).
 const PROVIDER_ORDER = ['claude', 'codex'];
 
@@ -168,7 +170,9 @@ ${planNote(matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 }))}
 - kind is one of: ${KINDS.join(', ')}. Use "review" for an independent check of another task's output (list it in deps).
   Use "reverse-engineer" when existing software/binaries must be understood (agents have REA for that).
   Use "text" for simple writing/transformation, "docs" for documentation, "media" for image/video/audio generation
-  (set needs.tool to the tool that does it, e.g. "comfyui"), and "private" ONLY when the user asked for local-only models.
+  (set needs.tool to the tool that does it, e.g. "comfyui"), "3d" for a 3D object or scene built headless in Blender
+  (needs.tool "blender"; the agent runs the \`blender-glb\` tool and saves a .glb under the shared folder's files/3d),
+  and "private" ONLY when the user asked for local-only models.
 - Size drives the model tier: S/M code = simpler algorithms, L = elaborate work.
 - size is S, M or L. deps lists ids of tasks that must finish first (keep parallelism where possible).
 - needs.platform is mac, linux, windows or any. needs.gpu is true only when the task truly needs a GPU.
@@ -206,15 +210,27 @@ function normalizeTasks(raw) {
   return tasks;
 }
 
+/** What a small, single task is told instead of getting its own review task (D3). */
+export const SELF_VERIFY = 'Verify every acceptance criterion yourself before reporting done; put the evidence in the summary.';
+
 /**
  * Every plan ends in an independent review of the whole result. If the planner left it out (or its last review
  * doesn't wait for everything), add one that depends on every task nothing else depends on.
+ * Exception: a plan of exactly one S or M task verifies itself (the brief says so) — a separate review would double
+ * a small job. `reviewSmall` (config autonomy.reviewSmall, a per-project `autonomy` override) restores the review.
  */
-export function ensureFinalReview(tasks, goal = '') {
+export function ensureFinalReview(tasks, goal = '', { reviewSmall = autonomy.settings().reviewSmall } = {}) {
   if (!tasks.length) return tasks;
   const dependedOn = new Set(tasks.flatMap((t) => t.deps));
   const leaves = tasks.filter((t) => !dependedOn.has(t.id));
   if (leaves.length === 1 && leaves[0].kind === 'review') return tasks;
+  if (tasks.length === 1 && ['S', 'M'].includes(tasks[0].size) && tasks[0].kind !== 'review' && !reviewSmall) {
+    const t = tasks[0];
+    if (!String(t.description || '').includes(SELF_VERIFY)) t.description = `${String(t.description || '').replace(/\s+$/, '')}\n\n${SELF_VERIFY}`;
+    if (!(t.acceptance || []).includes(SELF_VERIFY)) t.acceptance = [...(t.acceptance || []), SELF_VERIFY];
+    t.selfVerify = true;
+    return tasks;
+  }
   let n = tasks.length + 1;
   while (tasks.some((t) => t.id === `t${n}`)) n++;
   const [review] = normalizeTasks({ tasks: [{
@@ -256,12 +272,13 @@ export async function findPlaybook(goal, dir = PLAYBOOK_DIR) {
 }
 
 export function playbookTasks(p, pb) {
+  // A playbook is a saved method whose final review is part of the method: it keeps its review whatever the size.
   return ensureFinalReview(normalizeTasks({ tasks: [{
     id: 't1', title: truncate(`${pb.title}: ${p.goal}`, 120), kind: 'code', size: pb.size,
     description: `Sir asked: "${p.request || p.goal}". Do it end to end in one go by following the saved playbook (docs/playbooks/${pb.file}) below: implement, build, test, screenshot, commit. If the playbook is wrong or out of date, fix it in the same commit.\n\n${pb.body}`,
     acceptance: ['the request is implemented as the playbook describes', '`npm run build` and `npm test` pass', 'a screenshot or run output proves it for anything visible'],
     verify: 'npm run build && npm test, plus the playbook\'s own checks',
-  }] }), p.goal);
+  }] }), p.goal, { reviewSmall: true });
 }
 
 /** The project's AGENTS.md / CLAUDE.md (first ~9k chars), read from the machine the folder is on. */
@@ -275,13 +292,48 @@ async function readGuide(p, ctx) {
   } catch { return ''; }
 }
 
-/** Ask the planner brain for tasks. Runs on the owner node; the brain may be on any machine. */
+// The bounded planning call (D2): one `claude -p` with the planning prompt only — no persona, no tool schemas, no MCP
+// servers, one turn — on the `plan` routing rule's model. Five minutes is generous for a JSON plan.
+export const PLAN_CALL_MS = 5 * 60 * 1000;
+
+/** The model/effort the planning call runs with: the `plan` routing rule, else the planner brain's own. */
+export function planBrain(b = coreBrain()) {
+  const rule = (config().routing?.rules || []).find((r) => r.kind === 'plan' && (!r.provider || r.provider === 'claude'));
+  return { provider: 'claude', model: rule?.model || b.model || '', effort: rule?.effort || b.effort || '' };
+}
+
+/**
+ * Spawn the bounded planning call. Resolves to { text, usage } or { error, usage }; never throws for a model answer,
+ * throws when claude itself is missing or the process fails so the caller can fall back to the agentic turn.
+ */
+export async function boundedPlanCall(prompt, { model, effort } = {}) {
+  const claude = bin('claude');
+  if (!claude) throw new Error('claude is not installed on this machine');
+  const env = { ...process.env, PATH: augmentedPath() };
+  for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
+  const args = ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--max-turns', '1', ...claudeFlags({ model, effort })];
+  const r = await run(claude, args, { input: prompt, cwd: HOME, env, timeout: PLAN_CALL_MS });
+  let e = null;
+  try { e = JSON.parse(r.stdout.trim().split('\n').filter(Boolean).at(-1)); } catch {}
+  if (e?.type !== 'result') throw new Error(truncate(r.stderr.trim() || r.stdout.trim(), 300) || `claude exited with ${r.code}`);
+  let u = null;
+  try { u = usage.claudeResultUsage(e); delete u.cumulative; } catch {}
+  if (e.is_error) return { error: truncate(e.result || (Array.isArray(e.errors) && e.errors.join('; ')) || 'Claude Code returned an error', 300), usage: u };
+  return { text: String(e.result || '').trim(), usage: u };
+}
+
+/**
+ * Ask the planner brain for tasks. Runs on the owner node. A Claude planner gets the bounded call (ctx.planCall, or
+ * boundedPlanCall) and falls back to the agentic ctx.ask turn when that fails or returns no plan; Codex/Ollama
+ * planners keep the agentic turn. The three lookups before the call (mesh snapshot, the folder's guide, the tool
+ * catalog) run in parallel.
+ */
 export async function planProject(id, ctx, { brain } = {}) {
   const p = await getProject(id);
   if (!p) throw new Error('project not found');
   const b = brain?.provider ? brain : p.planner || coreBrain();
   p.planner = b;
-  const snapshot = await ctx.snapshot();
+  const [snapshot, guide, tools] = await Promise.all([ctx.snapshot(), readGuide(p, ctx), ctx.tools ? ctx.tools().catch(() => []) : []]);
   const pb = p.selfDev && !brain?.provider ? await findPlaybook(`${p.goal} ${p.request || ''}`) : null;
   if (pb) {
     p.tasks = playbookTasks(p, pb);
@@ -292,30 +344,53 @@ export async function planProject(id, ctx, { brain } = {}) {
     tracePlan(p, 'playbook', { goal: p.goal, playbook: pb.file });
     return saveProject(p);
   }
-  const guide = await readGuide(p, ctx);
-  const tools = ctx.tools ? await ctx.tools().catch(() => []) : [];
   const prompt = planningPrompt(p, snapshot, guide, tools);
   const planHints = matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 });
   if (planHints.length) usage.recordToolEvent({ event: 'hint', toolIds: planHints.map((x) => x.id), query: p.goal, trace: parseContext(p.trace)?.traceId });
+  // The bounded call applies to a Claude planner (coreBrain's provider 'auto' resolves to Claude for this call). It is
+  // injectable (ctx.planCall; null = never); a scratch node (RIGS_NO_OPENRIG=1: tests, a second instance) or the node
+  // test runner (NODE_TEST_CONTEXT) never spawns the real brain on its own and keeps the agentic ctx.ask path.
+  const scratch = process.env.RIGS_NO_OPENRIG === '1' || !!process.env.NODE_TEST_CONTEXT;
+  const planCall = ctx.planCall !== undefined ? ctx.planCall : scratch ? null : boundedPlanCall;
+  const bounded = ['claude', 'auto', ''].includes(b.provider || '') && typeof planCall === 'function';
+  const pbrain = bounded ? planBrain(b) : null;
   p.status = 'planning';
-  event(p, `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
+  event(p, bounded ? `planning with claude ${pbrain.model} ${pbrain.effort ? '(' + pbrain.effort + ')' : ''} on ${p.owner} (bounded call)`.replace(/\s+/g, ' ')
+    : `planning with ${b.provider} ${b.model || ''} ${b.effort ? '(' + b.effort + ')' : ''} on ${b.node || p.owner}`.replace(/\s+/g, ' '));
   await saveProject(p);
   // The planning call is a span of Sir's request; the brain turn it makes (on any machine) is its child.
   const tc = parseContext(p.trace);
-  const ps = tc ? trace.startSpan({ ...tc, kind: 'plan', name: `plan ${p.name}`, input: { goal: p.goal, prompt }, meta: { provider: b.provider, model: b.model || '', effort: b.effort || '', node: b.node || p.owner, via: 'brain' } }) : null;
-  let out;
-  try {
-    out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}`, usage: { kind: 'plan', projectId: p.id, projectName: p.name }, ...(ps ? { trace: ps.ctx } : {}) });
-  } catch (e) { ps?.end({ status: 'error', output: e.message }); throw e; }
+  const ps = tc ? trace.startSpan({ ...tc, kind: 'plan', name: `plan ${p.name}`, input: { goal: p.goal, prompt }, meta: { provider: bounded ? 'claude' : b.provider, model: (pbrain || b).model || '', effort: (pbrain || b).effort || '', node: bounded ? p.owner : b.node || p.owner, via: bounded ? 'bounded' : 'brain' } }) : null;
+  let out = null;
+  let via = 'brain';
+  if (bounded) {
+    const startedAt = Date.now();
+    try {
+      out = await planCall(prompt, pbrain);
+      // The ledger record ctx.ask made through the chat turn (kind 'plan'); the bounded call files it here.
+      usage.recordChatTurn({ chat: null, tag: { kind: 'plan', projectId: p.id, projectName: p.name }, brain: 'claude', model: pbrain.model, effort: pbrain.effort, startedAt, out, aborted: false, lane: 'plan' });
+      if (out.error && !out.text) throw new Error(out.error);
+      try { extractJson(out.text); via = 'bounded'; } catch (e) { throw new Error(`no plan in the answer (${e.message})`); }
+    } catch (e) {
+      event(p, `bounded planning call failed (${truncate(e.message, 160)}) — fell back to agentic turn`);
+      log(`project ${p.id}: bounded planning call failed: ${e.message}`);
+      out = null;
+    }
+  }
+  if (!out) {
+    try {
+      out = await ctx.ask(b.node || 'self', prompt, { brain: b.provider, model: b.model, effort: b.effort, title: `Plan · ${p.name}`, usage: { kind: 'plan', projectId: p.id, projectName: p.name }, ...(ps ? { trace: ps.ctx } : {}) });
+    } catch (e) { ps?.end({ status: 'error', output: e.message }); throw e; }
+  }
   if (out.error && !out.text) { ps?.end({ status: 'error', output: out.error }); p.status = 'draft'; event(p, 'planning failed: ' + out.error); await saveProject(p); throw new Error(out.error); }
   let parsed;
   try { parsed = extractJson(out.text); } catch (e) { ps?.end({ status: 'error', output: out.text, meta: { error: e.message } }); p.status = 'draft'; event(p, 'planning failed: ' + e.message); await saveProject(p); throw new Error(`${e.message}: ${truncate(out.text, 300)}`); }
-  p.tasks = ensureFinalReview(normalizeTasks(parsed), p.goal);
+  p.tasks = ensureFinalReview(normalizeTasks(parsed), p.goal, { reviewSmall: autonomy.settings(p).reviewSmall });
   p.summary = parsed.summary || '';
   routeProject(p, snapshot);
   p.status = 'planned';
-  event(p, `planned ${p.tasks.length} tasks`);
-  ps?.end({ output: parsed, meta: { tasks: p.tasks.length, routing: routingOf(p) } });
+  event(p, `planned ${p.tasks.length} tasks (${via === 'bounded' ? 'planned with bounded call' : bounded ? 'fell back to agentic turn' : 'agentic turn'})`);
+  ps?.end({ output: parsed, meta: { tasks: p.tasks.length, via, routing: routingOf(p) } });
   return saveProject(p);
 }
 
@@ -332,7 +407,7 @@ export async function planFlow(id, ctx) {
     description: `Sir asked: "${p.request || p.goal}". Carry out the workspace's "${f.name}" flow (below) now, exactly as its scheduled run would, following the workspace's agent guide (its worktree/branch conventions, builds, tests, notes).`,
     acceptance: ['the flow ran to its end and its deliverables exist (changes listed for Sir, build or release, notes as the flow prescribes)', 'its build and tests pass on the result'],
     verify: 'the checks the flow and the workspace guide prescribe; list commands and results',
-  }] }), p.goal);
+  }] }), p.goal, { reviewSmall: autonomy.settings(p).reviewSmall });
   routeProject(p, await ctx.snapshot());
   p.status = 'planned';
   event(p, `runs the ${f.name} flow: ${p.tasks.length} tasks`);
@@ -376,7 +451,7 @@ export function routeProject(p, snapshot, { onlyUnassigned = false } = {}) {
   for (const t of p.tasks) if (t.assign && (onlyUnassigned || t.status !== 'todo')) load.set(t.assign.node, (load.get(t.assign.node) || 0) + 1);
   const max = config().routing.maxTasksPerMachine || 4;
   // A folder that exists only on one machine (no git URL to clone): everything that works on it runs there.
-  const codeLocal = (t) => !['media', 'private'].includes(t.kind) && p.repo.path && !p.gitUrl;
+  const codeLocal = (t) => !['media', '3d', 'private'].includes(t.kind) && p.repo.path && !p.gitUrl;
 
   for (const t of p.tasks) {
     if (t.status !== 'todo') continue;
@@ -491,8 +566,8 @@ export function traceLine(c) {
   return ctx ? `- Request trace: \`${ctx.traceId}\`${ctx.parentId ? ` (parent span \`${ctx.parentId}\`)` : ''} — what is done for this task is recorded under Sir's original request; pass it on as \`trace\` when you file follow-up work.\n` : '';
 }
 
-/** The tool registry entries a task's brief should name: matched on its title and description. */
-export function toolHints(tools, t) { return matchTools(tools, `${t.title} ${t.description || ''}`); }
+/** The tool registry entries a task's brief should name: matched on its title and description (a 3d task also on Blender/glb). */
+export function toolHints(tools, t) { return matchTools(tools, `${t.title} ${t.description || ''}${t.kind === '3d' || t.needs?.tool === 'blender' ? ' blender glb mesh model' : ''}`); }
 
 export function taskPrompt(p, t, tools = []) {
   const done = t.deps.map((d) => p.tasks.find((x) => x.id === d)).filter(Boolean);
@@ -598,10 +673,12 @@ export function placeUnassigned(p, snapshot, now = Date.now()) {
 }
 
 /**
- * Start every task whose dependencies are done. Tasks are claimed ("starting") under the lock, started outside it
- * (a start can take minutes), and each result is written back onto the then-current project.
+ * Claim every task whose dependencies are done (`starting`, under the lock) — the earliest point a task is placed.
+ * Dashboards that watch this kind of work (src/dashboards.js) are matched here, kept on the task for its brief, and
+ * opened in Sir's UI. Returns { p, ts } with copies of the claimed tasks.
  */
-export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
+export async function claimReady(id, ctx, { only, now = Date.now() } = {}) {
+  const apps = await knownApps(ctx);
   const claim = await withProject(id, async () => {
     const p = await getProject(id);
     if (!p) throw new Error('project not found');
@@ -610,10 +687,37 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
     // Tasks that lost their machine (dispatch failed, machine offline) are placed again before starting.
     if (p.tasks.some((t) => t.status === 'todo' && !t.assign) && ctx.snapshot) placeUnassigned(p, await ctx.snapshot());
     const ts = p.tasks.filter((x) => ready(p, x, now) && (!only || x.id === only));
-    for (const t of ts) { t.status = 'starting'; t.startingAt = Date.now(); delete t.usageFrom; }
+    for (const t of ts) {
+      t.status = 'starting'; t.startingAt = Date.now(); delete t.usageFrom;
+      const d = dashboardsFor(p, t, apps);
+      if (d.length) t.dashboards = d; else delete t.dashboards;
+    }
     await saveProject(p);
     return { p, ts: ts.map((t) => ({ ...t })) };
   });
+  // Not awaited: the UI push must never hold up a start. What opened (or failed) is logged on the project afterwards.
+  for (const t of claim.ts.filter((x) => x.dashboards?.length)) {
+    openDashboards(claim.p, t, ctx, { trace: traceOf(claim.p, t)?.traceId }).then((rs) => withProject(id, async () => {
+      const p = await getProject(id);
+      if (!p) return;
+      for (const r of rs) event(p, r.ok ? `opened dashboard ${r.app} for ${t.id}` : `could not open dashboard ${r.app} for ${t.id}${r.error ? `: ${r.error}` : r.skipped ? ` (${r.skipped})` : ''}`);
+      await saveProject(p);
+    })).catch((e) => log(`project ${id} ${t.id}: dashboards: ${e.message}`));
+  }
+  return claim;
+}
+
+/**
+ * Start every task whose dependencies are done. Tasks are claimed ("starting") under the lock, started outside it
+ * (a start can take minutes), and each result is written back onto the then-current project.
+ */
+export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
+  const claim = await claimReady(id, ctx, { only, now });
+  return startClaimed(id, ctx, claim, { only, now });
+}
+
+/** The second half of dispatchReady: start the claimed tasks on their machines and record each result. */
+export async function startClaimed(id, ctx, claim, { only, now = Date.now() } = {}) {
   // The registry's tools that fit each task go into its brief (cached catalog, empty when the mesh is slow).
   const catalog = ctx.tools ? await ctx.tools().catch(() => []) : [];
   const started = [];
@@ -1095,12 +1199,14 @@ async function tickProject(id, ctx, now) {
   const p = await getProject(id);
   if (!p || !['running', 'planning', 'merging', 'blocked'].includes(p.status)) return null;
   let changed = false;
-  for (const t of p.tasks.filter((x) => x.stalled && x.status === 'blocked' && x.run)) {
+  // D4: the per-task status checks run in parallel (one slow machine no longer holds the others' verdicts back).
+  const checks = await Promise.all(p.tasks.filter((x) => x.stalled && x.status === 'blocked' && x.run).map(async (t) => {
     try {
       const st = await ctx.call(t.assign.node, 'work/status', { method: 'POST', body: t.run, timeout: 20000 });
-      if (st.state === 'done' ? await watchTask(p, t, st, ctx, now) : recoverStalled(p, t, st, now)) changed = true;
-    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
-  }
+      return st.state === 'done' ? await watchTask(p, t, st, ctx, now) : recoverStalled(p, t, st, now);
+    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); return false; }
+  }));
+  if (checks.some(Boolean)) changed = true;
   if (p.status === 'blocked') { if (changed) await saveProject(p); return null; }
   if (p.status === 'planning' && (now - p.updatedAt > PLANNING_MS || p.updatedAt < BOOT)) {
     // The planner's brain call died with the daemon (restart, update): plan again (up to 3 times) if Sir asked for it to run.
@@ -1124,23 +1230,46 @@ async function tickProject(id, ctx, now) {
     else { t.status = 'todo'; event(p, `${t.id} never started — trying again`); }
     changed = true;
   }
-  for (const t of p.tasks.filter((x) => x.status === 'running' && x.run)) {
+  const watched = await Promise.all(p.tasks.filter((x) => x.status === 'running' && x.run).map(async (t) => {
     try {
       const st = await ctx.call(t.assign.node, 'work/status', { method: 'POST', body: t.run, timeout: 20000 });
-      if (await watchTask(p, t, st, ctx, now)) changed = true;
-    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); }
-  }
+      return watchTask(p, t, st, ctx, now);
+    } catch (e) { log(`project ${p.id} ${t.id}: status check failed: ${e.message}`); return false; }
+  }));
+  if (watched.some(Boolean)) changed = true;
   if (changed) await saveProject(p);
   if (changed || p.tasks.some((x) => ready(p, x, now) || (x.status === 'todo' && !x.assign))) return 'dispatch';
   await settle(p, ctx, now); // a blocked task to re-queue, a propose to retry, or nothing can move → end the loop once
   return null;
 }
 
+// D4: an unreachable merge steward is logged once per project, then left alone for STEWARD_BACKOFF_MS before the next
+// check (1182 "merge status: … is offline" lines per absent steward before). In memory only: a restart checks again.
+export const STEWARD_BACKOFF_MS = 5 * 60 * 1000;
+const stewardDown = new Map(); // project id → { at: when it was last found unreachable, error }
+
+/**
+ * The backoff decision for one project's steward check, pure: `state` is { at, error } from the last failure (or
+ * undefined). → { check: whether to call the steward now, log: whether a failure now should be logged }.
+ */
+export function stewardBackoff(state, now = Date.now(), backoffMs = STEWARD_BACKOFF_MS) {
+  if (!state) return { check: true, log: true };
+  if (now - state.at < backoffMs) return { check: false, log: false };
+  return { check: true, log: true };
+}
+
 /** A finished RIGS change waits for the merge steward: merged → report; checks failed → a fix task, then propose again. */
 async function followMerge(p, ctx, now) {
   const sd = p.selfDev || {};
+  const back = stewardBackoff(stewardDown.get(p.id), now);
+  if (!back.check) return;
   let req;
-  try { req = (await ctx.call(sd.steward, 'merge', { timeout: 20000 })).queue?.find((r) => r.id === sd.request); } catch (e) { log(`project ${p.id}: merge status: ${e.message}`); return; }
+  try { req = (await ctx.call(sd.steward, 'merge', { timeout: 20000 })).queue?.find((r) => r.id === sd.request); stewardDown.delete(p.id); }
+  catch (e) {
+    stewardDown.set(p.id, { at: now, error: e.message });
+    if (back.log) log(`project ${p.id}: merge status: ${e.message} — checking again in ${Math.round(STEWARD_BACKOFF_MS / 60000)} min`);
+    return;
+  }
   if (!req) return;
   const A = autonomy.settings(p);
   if (req.status === 'merged') {
@@ -1321,9 +1450,18 @@ export async function intake(body, ctx) {
   const cur = await getProject(p.id);
   if (cur.status === 'paused') return { project: brief(cur), task, started: false, why: 'the project is paused — resume it to start this' };
   if (cur.main || cur.status === 'running' || cur.status === 'done') await saveProject(Object.assign(cur, { status: 'running' }));
-  const after = await dispatchReady(p.id, ctx, { only: task.id });
-  const t = after.tasks.find((x) => x.id === task.id);
-  return { project: brief(after), task: { id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign, reason: t.reason, run: t.run, summary: t.summary }, started: t.status === 'running' };
+  // D1: the task is claimed and placed ("starting") now; the seat is cast in the background, so the brain's reply
+  // reaches Sir in seconds. A start that fails is handled where it always was (retryOrFail on the dispatch, the tick).
+  const claim = await claimReady(p.id, ctx, { only: task.id });
+  const t = claim.p.tasks.find((x) => x.id === task.id);
+  const pending = t.status === 'starting';
+  if (pending) startClaimed(p.id, ctx, claim, { only: task.id }).catch((e) => log(`project ${p.id} ${t.id}: background start failed: ${e.message}`));
+  return {
+    project: brief(claim.p),
+    task: { id: t.id, title: t.title, kind: t.kind, status: t.status, assign: t.assign, reason: t.reason, run: t.run, summary: t.summary, ...(t.dashboards?.length ? { dashboards: t.dashboards } : {}) },
+    // started = claimed and placed on its machine/model; pending = the agent seat is still being cast.
+    started: pending || t.status === 'running', pending, ...(pending ? {} : { why: t.reason }),
+  };
 }
 
 function brief(p) { return { id: p.id, name: p.name, owner: p.owner, main: !!p.main }; }

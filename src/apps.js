@@ -14,6 +14,10 @@ import { CONFIG_FILE, config } from './config.js';
  *     "launch": { "systemd": "szuf.service" }  // or { "command": "…" }; used to start the app (see LAUNCH below)
  *     "description": "what it does, for whom",  // optional, ≤ 500 chars; tool_list / GET /api/tools search it
  *     "tags": ["cars", "dashboard"],      // optional short words (a-z, 0-9, . + - _), searched and filterable (tool_list tag)
+ *     "startupGraceMs": 300000,           // optional, 5 000–900 000: how long startApp waits for /healthz after launching (default 180 000)
+ *     "opensFor": { "workspace": "body_matching_implementation", "keywords": ["train", "epoch"], "path": "/training" },
+ *                                         // optional: the planner opens this app (at path) in Sir's UI when a task starts whose
+ *                                         // project repo matches workspace and whose title/description matches a keyword
  *     "rewrite": { "rootRelative": true, "basePath": "/ui", "cookies": true, "websocket": true } }  // proxy hints
  * The node name is never declared; it always comes from config().name.
  *
@@ -33,6 +37,42 @@ import { CONFIG_FILE, config } from './config.js';
 export const APP_STATUS = Object.freeze({ UP: 'up', DOWN: 'down', UNKNOWN: 'unknown' });
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const REWRITE_KEYS = { rootRelative: 'boolean', basePath: 'string', cookies: 'boolean', websocket: 'boolean' };
+/** How long startApp waits for an app to answer its health check after launching it, unless the app says otherwise. */
+export const DEFAULT_STARTUP_GRACE_MS = 180000;
+export const STARTUP_GRACE_RANGE = Object.freeze({ min: 5000, max: 900000 });
+const OPENS_FOR_LIMITS = Object.freeze({ keywords: 12, keyword: 40, workspace: 120, path: 200 });
+
+/**
+ * `opensFor` — { workspace: string, keywords: string[], path?: string }: strings trimmed, workspace required (≤ 120),
+ * keywords 1–12 of ≤ 40 chars each (empty ones dropped, duplicates folded, lower-cased), path optional, must start
+ * with '/'. Pushes errors and returns the normalized object or null.
+ */
+export function validateOpensFor(o, errors = []) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) { errors.push('opensFor must be an object { workspace, keywords, path? }'); return null; }
+  const before = errors.length;
+  const workspace = typeof o.workspace === 'string' ? o.workspace.trim() : '';
+  if (!workspace) errors.push('opensFor.workspace must be text (the project repo or workspace name)');
+  else if (workspace.length > OPENS_FOR_LIMITS.workspace) errors.push(`opensFor.workspace must be at most ${OPENS_FOR_LIMITS.workspace} characters`);
+  let keywords = [];
+  if (!Array.isArray(o.keywords) || !o.keywords.every((k) => typeof k === 'string')) errors.push('opensFor.keywords must be an array of words');
+  else {
+    keywords = [...new Set(o.keywords.map((k) => k.trim().toLowerCase()).filter(Boolean))];
+    if (!keywords.length) errors.push('opensFor.keywords needs at least one word');
+    else if (keywords.length > OPENS_FOR_LIMITS.keywords) errors.push(`opensFor.keywords must be at most ${OPENS_FOR_LIMITS.keywords} words`);
+    else if (keywords.some((k) => k.length > OPENS_FOR_LIMITS.keyword)) errors.push(`opensFor.keywords must each be at most ${OPENS_FOR_LIMITS.keyword} characters`);
+  }
+  let path = '';
+  if (o.path !== undefined && o.path !== null && o.path !== '') {
+    if (typeof o.path !== 'string') errors.push('opensFor.path must be text');
+    else {
+      path = o.path.trim();
+      if (!path.startsWith('/')) errors.push('opensFor.path must start with /');
+      else if (path.length > OPENS_FOR_LIMITS.path) errors.push(`opensFor.path must be at most ${OPENS_FOR_LIMITS.path} characters`);
+    }
+  }
+  if (errors.length > before) return null;
+  return { workspace, keywords, ...(path ? { path } : {}) };
+}
 
 /**
  * Validate one declared app. Returns { app, errors }; app is null when errors is non-empty.
@@ -78,6 +118,15 @@ export function validateApp(raw, node = config().name) {
     else tags = [...new Set(raw.tags.map((t) => t.trim().toLowerCase()))].slice(0, 20);
   }
 
+  let startupGraceMs = 0;
+  if (raw.startupGraceMs !== undefined && raw.startupGraceMs !== null && raw.startupGraceMs !== '') {
+    const n = Number(raw.startupGraceMs);
+    if (!Number.isFinite(n) || n < STARTUP_GRACE_RANGE.min || n > STARTUP_GRACE_RANGE.max) errors.push(`startupGraceMs must be a number of milliseconds between ${STARTUP_GRACE_RANGE.min} and ${STARTUP_GRACE_RANGE.max}`);
+    else startupGraceMs = Math.round(n);
+  }
+  let opensFor = null;
+  if (raw.opensFor !== undefined && raw.opensFor !== null) opensFor = validateOpensFor(raw.opensFor, errors);
+
   let rewrite = {};
   if (raw.rewrite !== undefined && raw.rewrite !== null) {
     if (typeof raw.rewrite !== 'object' || Array.isArray(raw.rewrite)) errors.push('rewrite must be an object');
@@ -92,7 +141,10 @@ export function validateApp(raw, node = config().name) {
   }
   if (errors.length) return { app: null, errors: errors.map((e) => `${id || '?'}: ${e}`) };
   return {
-    app: { id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite, ...(description ? { description } : {}), ...(tags.length ? { tags } : {}) },
+    app: {
+      id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite,
+      ...(description ? { description } : {}), ...(tags.length ? { tags } : {}), ...(startupGraceMs ? { startupGraceMs } : {}), ...(opensFor ? { opensFor } : {}),
+    },
     errors: [],
   };
 }
@@ -318,31 +370,75 @@ let timer = null;
 /** This node's apps with their health. Served as GET /api/local/apps. */
 export function localApps() {
   const { apps, errors } = loadApps();
-  return { apps: apps.map((a) => ({ ...a, health: health.get(a.id) || UNKNOWN_HEALTH })), errors };
+  // starting: a launch is in flight (startApp) and the app has not answered yet — the UI shows "starting", not "down"
+  return { apps: apps.map((a) => ({ ...a, health: health.get(a.id) || UNKNOWN_HEALTH, ...(starting.has(a.id) ? { starting: true } : {}) })), errors };
 }
 
-/** Probe every declared app once and record the result. */
-export async function checkAll(opts = {}) {
-  const { apps } = loadApps();
+// ---------------------------------------------------------------- periodic health checks (with backoff)
+
+/**
+ * Probe schedule per app: { gapMs, dueAt }. An app that answers is probed every base interval; one that stays down
+ * is probed at base, 2×, 4×, 8× … up to maxMs (5 s → 10 → 20 → 40 → 60 s with the daemon's 5 s base), so a dead app
+ * does not cost a request every 5 s forever. The gap resets to the base as soon as it answers, or when startApp is
+ * called for it (the start is what we want to see).
+ */
+const schedule = new Map(); // app id → { gapMs, dueAt }
+export const HEALTH_BACKOFF_MAX_MS = 60000;
+
+/** The current probe gap for an app (ms), or 0 when it was never scheduled. Tests and the status page read it. */
+export function backoffFor(id) { return schedule.get(String(id || '').toLowerCase())?.gapMs || 0; }
+
+/** Probe `app` once, record its health and plan its next probe. */
+async function probeAndRecord(app, { now = () => Date.now(), baseMs = 5000, maxMs = HEALTH_BACKOFF_MAX_MS, ...opts } = {}) {
+  const res = await probeApp(app, opts);
+  health.set(app.id, nextHealth(health.get(app.id), res, now()));
+  const prev = schedule.get(app.id)?.gapMs || 0;
+  const gapMs = res.ok ? baseMs : Math.min(maxMs, prev ? prev * 2 : baseMs);
+  schedule.set(app.id, { gapMs, dueAt: now() + gapMs });
+  return res;
+}
+
+/** Forget an app's backoff: its next scheduled probe is at once (a start was just asked for). */
+export function resetBackoff(id) { schedule.delete(String(id || '').toLowerCase()); }
+
+function dropGone(apps) {
   const live = new Set(apps.map((a) => a.id));
   for (const id of health.keys()) if (!live.has(id)) health.delete(id);
-  await Promise.all(apps.map(async (a) => {
-    const res = await probeApp(a, opts);
-    health.set(a.id, nextHealth(health.get(a.id), res));
-  }));
+  for (const id of schedule.keys()) if (!live.has(id)) schedule.delete(id);
+}
+
+/** Probe every declared app once and record the result (ignores the backoff schedule; resets it from the results). */
+export async function checkAll(opts = {}) {
+  const { apps } = loadApps();
+  dropGone(apps);
+  await Promise.all(apps.map((a) => probeAndRecord(a, opts)));
   emitIfChanged();
 }
 
-export function startHealthChecks({ intervalMs = 15000, ...opts } = {}) {
+/**
+ * One tick of the periodic checks: probe the apps whose next probe is due (never probed, or dueAt ≤ now). Returns the
+ * ids probed. `now` (a function) and the probe options are injectable; baseMs is the tick interval.
+ */
+export async function checkDue({ now = () => Date.now(), ...opts } = {}) {
+  const { apps } = loadApps();
+  dropGone(apps);
+  const due = apps.filter((a) => !schedule.has(a.id) || schedule.get(a.id).dueAt <= now());
+  await Promise.all(due.map((a) => probeAndRecord(a, { now, ...opts })));
+  if (due.length) emitIfChanged();
+  return due.map((a) => a.id);
+}
+
+export function startHealthChecks({ intervalMs = 15000, maxMs = HEALTH_BACKOFF_MAX_MS, ...opts } = {}) {
   stopHealthChecks();
-  checkAll(opts).catch(() => {});
-  timer = setInterval(() => checkAll(opts).catch(() => {}), intervalMs);
+  const tick = { baseMs: intervalMs, maxMs, ...opts };
+  checkDue(tick).catch(() => {});
+  timer = setInterval(() => checkDue(tick).catch(() => {}), intervalMs);
   timer.unref?.();
 }
 
 export function stopHealthChecks() { clearInterval(timer); timer = null; }
 
-export function resetAppsState() { health.clear(); meshCatalog = []; lastSignature = ''; diskMtime = 0; }
+export function resetAppsState() { health.clear(); schedule.clear(); meshCatalog = []; lastSignature = ''; diskMtime = 0; }
 
 /**
  * Merge per-node results into the mesh catalog. `results` = [{ node: {id,name}, apps?: [...], error? }].
@@ -399,7 +495,11 @@ export function resolveApp(node, id) {
   return a ? { local: a.node === cfg.name, node: a.node, nodeId: a.nodeId, app: a } : null;
 }
 
-const starting = new Map(); // app id → in-flight start promise (one start per app at a time)
+const starting = new Map(); // app id → { launched, done } of the start in flight (one start per app at a time)
+const PENDING = Symbol('pending');
+
+/** How the HTTP route starts an app: 'await' (answer when the app is up, or pending after pendingAfterMs) or 'async' (answer as soon as it was launched). */
+export const START_MODES = Object.freeze(['await', 'async']);
 
 /**
  * Spin an app up on this machine and wait until it answers its health check.
@@ -407,26 +507,88 @@ const starting = new Map(); // app id → in-flight start promise (one start per
  *  - the recipe for this OS (launchFor): systemd → `systemctl --user start <unit>` (Linux user units, the default
  *    for RIGS apps); command → run detached (commandPlan: the shell on macOS/Linux, util.spawnCmd with PATH and
  *    .cmd/.bat/.ps1 shims on Windows), output in ~/.rigs/logs/app-<id>.log
- * Throws when the app is unknown, has no launch recipe for this OS, or is not up within waitMs.
- * `deps` ({ run, spawn, spawnCmd, which, probe, sleep, platform }) is injectable for tests.
+ *  - up within pendingAfterMs → { started: true, health }; still coming up after that → { started: true, pending: true,
+ *    health } while the probe loop goes on in the background for the app's startupGraceMs (default
+ *    DEFAULT_STARTUP_GRACE_MS, or waitMs when given), recording each probe so the `apps` event (onAppsChange) fires
+ *    when it is up and the UI reloads its window. A Python API that imports torch for minutes no longer ends in a
+ *    504 after 60 s.
+ * Throws when the app is unknown, has no launch recipe for this OS, or could not be launched; a start that never
+ * answers within its grace is recorded as down (health.error) — it rejects only when awaited past pendingAfterMs
+ * (pendingAfterMs: Infinity, the old behaviour).
+ * `mode: 'async'` is startAppAsync. `deps` ({ run, spawn, spawnCmd, which, probe, sleep, platform }) is injectable for tests.
  */
-export function startApp(id, { waitMs = 60000, pollMs = 1000, deps = {} } = {}) {
+export async function startApp(id, { mode = 'await', waitMs, pollMs = 1000, pendingAfterMs = 15000, deps = {} } = {}) {
+  if (mode === 'async') return startAppAsync(id, { waitMs, pollMs, deps });
   const key = String(id || '').toLowerCase();
-  if (starting.has(key)) return starting.get(key);
-  const p = doStart(key, { waitMs, pollMs, deps }).finally(() => starting.delete(key));
-  starting.set(key, p);
-  return p;
+  const c = begin(key, { waitMs, pollMs, deps });
+  const early = await c.launched; // throws for an unknown app, a missing recipe or a failed launch
+  if (early) return early;
+  if (!Number.isFinite(pendingAfterMs)) return c.done;
+  let t;
+  const r = await Promise.race([c.done, new Promise((ok) => { t = setTimeout(() => ok(PENDING), pendingAfterMs); t.unref?.(); })]).finally(() => clearTimeout(t));
+  if (r !== PENDING) return r;
+  return { started: true, pending: true, health: health.get(key) || UNKNOWN_HEALTH };
 }
 
-async function doStart(id, { waitMs, pollMs, deps }) {
+/**
+ * Launch an app and answer as soon as the launch command was issued: { started: true, pending: true, health } (or
+ * { started: false, health } when it was already up). The probe loop keeps going in the background until the app is
+ * up or its grace is exhausted; every probe is recorded, so the `apps` event tells the UI when it is up. Throws for
+ * an unknown app, a missing recipe or a failed launch, like startApp.
+ */
+export async function startAppAsync(id, { waitMs, pollMs = 1000, deps = {} } = {}) {
+  const key = String(id || '').toLowerCase();
+  const c = begin(key, { waitMs, pollMs, deps });
+  const early = await c.launched;
+  if (early) return early;
+  return { started: true, pending: true, health: health.get(key) || UNKNOWN_HEALTH };
+}
+
+/** Is a start of this app in flight (launched, not yet up)? */
+export function isStarting(id) { return starting.has(String(id || '').toLowerCase()); }
+
+function begin(key, opts) {
+  if (starting.has(key)) return starting.get(key);
+  const c = {};
+  c.launched = new Promise((ok, fail) => { c.ok = ok; c.fail = fail; });
+  c.done = doStart(key, opts, c).finally(() => starting.delete(key));
+  c.done.catch(() => {}); // the background loop's 504 is recorded in the app's health; nobody has to await it
+  starting.set(key, c);
+  return c;
+}
+
+async function doStart(id, { waitMs, pollMs, deps }, c) {
   const probe = deps.probe || probeApp;
   const sleep = deps.sleep || ((ms) => new Promise((ok) => setTimeout(ok, ms)));
+  const now = deps.now || Date.now;
   const platform = deps.platform || process.platform;
   const app = loadApps().apps.find((a) => a.id === id);
-  if (!app) throw Object.assign(new Error(`unknown app ${id}`), { status: 404 });
+  if (!app) { const e = Object.assign(new Error(`unknown app ${id}`), { status: 404 }); c.fail(e); throw e; }
   const record = (res) => { health.set(app.id, nextHealth(health.get(app.id), res)); emitIfChanged(); return health.get(app.id); };
-  const first = await probe(app);
-  if (first.ok) return { started: false, health: record(first) };
+  resetBackoff(app.id); // the periodic checks look again at once
+  const grace = Number(waitMs) > 0 ? Number(waitMs) : app.startupGraceMs || DEFAULT_STARTUP_GRACE_MS;
+  try {
+    const first = await probe(app);
+    if (first.ok) { const r = { started: false, health: record(first) }; c.ok(r); return r; }
+    await launch(app, { platform, deps });
+  } catch (e) { c.fail(e); throw e; }
+  c.ok(null); // launched: the caller may answer now; the loop below goes on
+  const deadline = now() + grace;
+  let last = { ok: false, error: 'not answering yet' };
+  while (now() < deadline) {
+    await sleep(pollMs);
+    if (!loadApps().apps.some((a) => a.id === app.id)) break; // removed while starting
+    last = await probe(app);
+    if (last.ok) return { started: true, health: record(last) };
+    record(last);
+  }
+  const msg = `${app.name} was started but did not answer ${app.healthPath} within ${Math.round(grace / 1000)}s (last try: ${last.error || 'no answer'})`;
+  record({ ok: false, error: msg });
+  throw Object.assign(new Error(msg), { status: 504 });
+}
+
+/** Issue the app's launch recipe for this OS (systemd unit or a detached command). Throws { status } when it cannot. */
+async function launch(app, { platform, deps }) {
   if (!app.launch) throw Object.assign(new Error(`${app.name} is down and has no launch recipe (add "launch": { "systemd": … } or { "command": … })`), { status: 409 });
   const recipe = launchFor(app.launch, platform);
   const osKey = launchOs(platform);
@@ -454,14 +616,4 @@ async function doStart(id, { waitMs, pollMs, deps }) {
     child.on?.('error', () => {});
     child.unref?.();
   }
-
-  const deadline = Date.now() + waitMs;
-  let last = first;
-  while (Date.now() < deadline) {
-    await sleep(pollMs);
-    last = await probe(app);
-    if (last.ok) return { started: true, health: record(last) };
-  }
-  record(last);
-  throw Object.assign(new Error(`${app.name} was started but did not answer ${app.healthPath} within ${Math.round(waitMs / 1000)}s (last try: ${last.error || 'no answer'})`), { status: 504 });
 }

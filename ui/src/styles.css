@@ -1903,6 +1903,24 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 }
 :root[data-theme="atari"] .ft-text { background: #000; }
 :root[data-theme="atari"] .jt-string, :root[data-theme="atari"] .jt-number, :root[data-theme="atari"] .jt-boolean, :root[data-theme="atari"] .jt-null { color: var(--accent-2); }
+.ft-status.bad { color: #f87171; }
+/* 3D viewer (model-viewer.js): the canvas fills the stage; the Finder pane and Quick Look get a compact one (pv-model). */
+.mv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #16202c 0%, #090d13 75%); outline: none; }
+.mv-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.mv-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.mv-fail { text-align: center; }
+.pv-model { position: relative; height: 220px; margin: 0 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #16202c 0%, #090d13 75%); }
+.pv-model.big { height: 100%; width: 100%; margin: 0; border: 0; border-radius: 0; }
+/* Content window (content-window.js): a page in a sandboxed frame, the App Cloud window look. */
+.content-stage { background: #fff; }
+.content-frame { background: #fff; }
+/* Notifications window (main.js openNotifications, Tools › Notifications): the last notices with their Open / Run buttons. */
+.notify-win .toolbar { gap: 8px; }
+.notify-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.notify-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; }
+.notify-row .notify-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notify-row.error { border-left: 3px solid rgba(248, 113, 113, .6); }
+.notify-row.attention { border-left: 3px solid rgba(var(--accent-rgb), .7); }
 /* === END FILE TOOLS === */
 
 /* === DESKTOP MODE (ui/src/desktop.js) === the shared folder as desktop icons, only while the cloud is hidden.

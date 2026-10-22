@@ -6,7 +6,7 @@ import { config, RIGS_HOME } from './config.js';
 import { CODEX_AUTO_PROFILE, codexAutoProfileReady, wrapperTarget } from './agentmodes.js';
 import * as openrig from './openrig.js';
 import { bin } from './tools.js';
-import { HOME, expandHome, isWin, sleep } from './util.js';
+import { HOME, expandHome, isWin, log, sleep } from './util.js';
 
 /**
  * Persistent OpenRig rigs: one per pinned project (on the project's own machine, cwd = the project folder) and one
@@ -146,10 +146,14 @@ export async function available() {
   return !!(st.installed && st.healthy !== false && st.daemon === 'running');
 }
 
+let waitStepMs = 2000;
+/** Tests shorten the poll step of waitFor (a fake `rig` answers at once). */
+export function _setWaitStep(ms) { waitStepMs = Math.max(1, Number(ms) || 2000); }
+
 async function waitFor(session, tries = 30) {
   for (let i = 0; i < tries; i++) {
     if ((await seatsOf(session.split('@')[1])).some((n) => n.session === session && !GONE.test(n.status || ''))) return true;
-    await sleep(2000);
+    await sleep(waitStepMs);
   }
   return false;
 }
@@ -161,19 +165,46 @@ async function relaunch(session) {
   return waitFor(session, 90);
 }
 
+/** `rig up` answers that mean "this rig exists and runs" (its seats were missing from the status read, not from OpenRig). */
+export const RIG_RUNNING_ALREADY = /rig_name_running|already RUNNING/i;
+/** `rig` answers that mean the daemon itself did not answer: nothing to fix here, try again on a later pass. */
+export const DAEMON_UNRESPONSIVE = /daemon did not respond|daemon (is )?not (running|responding)|ECONNREFUSED/i;
+export const SKIP_DAEMON = 'openrig daemon not responsive';
+export const SKIP_STATUS = 'openrig status unavailable (rig ps --nodes failed)';
+
+/**
+ * Is OpenRig in a state where `rig up` / `rig add` can be tried? { st, ok, reason }: the daemon must be running and
+ * healthy (else SKIP_DAEMON), and the seat list must have been read (else SKIP_STATUS — an empty list from a failed
+ * `rig ps --nodes` is not "no such rig", and acting on it created duplicate rigs: `rig_name_running`).
+ */
+async function daemonReady(force = true) {
+  const st = await openrig.status(force);
+  if (!st.installed || st.healthy === false || st.daemon !== 'running') return { st, ok: false, reason: SKIP_DAEMON };
+  if (st.nodesOk === false) return { st, ok: false, reason: SKIP_STATUS };
+  return { st, ok: true };
+}
+
 /**
  * Make sure a persistent rig is up with its lead seat live. Existing → as is; stopped (reboot, `rig down`) →
  * restored with `rig up --existing`, which resumes every conversation; missing → created from a one-seat spec.
- * Returns { rig, lead, created, restored, newSeats }.
+ * Returns { rig, lead, created, restored, newSeats } — or { rig, lead, skipped } when OpenRig could not be asked
+ * (daemon down or not answering, seat list unreadable): nothing was tried, a later pass will.
+ * A `rig up` refused with `rig_name_running` means the rig exists: its seats are read again and checked, no error.
  */
 export async function ensureRig({ rig, cwd, summary, leadId = LEAD, lead, kind = 'lead', policy = config().agents?.rigPolicy || 'builtin:auto', orientation }) {
   const leadSession = sessionOf(leadId, rig);
-  let seats = await seatsOf(rig);
   const out = { rig, lead: leadSession, created: false, restored: false, newSeats: [] };
-  if (seats.length && seats.every((n) => GONE.test(n.status || ''))) {
+  const ready = await daemonReady(true);
+  if (!ready.ok) return { rig, lead: leadSession, skipped: ready.reason };
+  let seats = (ready.st.nodes || []).filter((n) => n.rig === rig);
+  const listed = (ready.st.rigs || []).some((g) => g.name === rig);
+  const unresponsive = () => { openrig.invalidate(); return { rig, lead: leadSession, skipped: SKIP_DAEMON }; };
+  if ((seats.length && seats.every((n) => GONE.test(n.status || ''))) || (!seats.length && listed)) {
     const r = await openrig.rigRun(['up', rig, '--existing', '--yes', '--json'], { timeout: 300000 });
     if (await waitFor(leadSession, 45)) { out.restored = true; return out; }
-    if (r.code !== 0) throw new Error('rig up --existing failed: ' + (r.stdout + r.stderr).trim().slice(-300));
+    const text = (r.stdout + r.stderr).trim();
+    if (r.code !== 0 && DAEMON_UNRESPONSIVE.test(text)) return unresponsive();
+    if (r.code !== 0 && !RIG_RUNNING_ALREADY.test(text)) throw new Error('rig up --existing failed: ' + text.slice(-300));
     seats = await seatsOf(rig);
   }
   if (!seats.length) {
@@ -184,12 +215,22 @@ export async function ensureRig({ rig, cwd, summary, leadId = LEAD, lead, kind =
     const v = await openrig.rigRun(['spec', 'validate', spec], { timeout: 30000 });
     if (v.code !== 0) throw new Error('rig spec invalid: ' + (v.stdout + v.stderr).trim().slice(-400));
     const up = await openrig.rigRun(['up', spec, '--yes', '--json'], { timeout: 300000 });
-    const node = parseJson(up.stdout)?.stages?.flatMap((s) => s.detail?.nodes || [])[0];
-    if ((up.code !== 0 || !node?.sessionName) && !(await waitFor(leadSession, 10))) throw new Error('rig up failed: ' + (up.stdout + up.stderr).trim().slice(-400));
-    out.created = true;
-    out.newSeats.push(leadSession);
-    if (orientation) await queue({ seat: leadSession, summary: 'Orientation', body: orientation, source: `rigs@${config().name}`, tier: 'routine' }).catch(() => {});
-    return out;
+    const text = (up.stdout + up.stderr).trim();
+    if (up.code !== 0 && RIG_RUNNING_ALREADY.test(text)) {
+      // The rig is already running: the status read had missed its seats. Treat it as existing — never a second rig.
+      seats = await seatsOf(rig, true);
+      if (!seats.length) return { rig, lead: leadSession, skipped: `rig ${rig} is running but its seats could not be read` };
+    } else {
+      const node = parseJson(up.stdout)?.stages?.flatMap((s) => s.detail?.nodes || [])[0];
+      if ((up.code !== 0 || !node?.sessionName) && !(await waitFor(leadSession, 10))) {
+        if (DAEMON_UNRESPONSIVE.test(text)) return unresponsive();
+        throw new Error('rig up failed: ' + text.slice(-400));
+      }
+      out.created = true;
+      out.newSeats.push(leadSession);
+      if (orientation) await queue({ seat: leadSession, summary: 'Orientation', body: orientation, source: `rigs@${config().name}`, tier: 'routine' }).catch(() => {});
+      return out;
+    }
   }
   const l = seats.find((n) => n.session === leadSession);
   if (!l || GONE.test(l.status || '')) {
@@ -278,6 +319,7 @@ export function ensureHub(pin, { policy } = {}) {
  */
 export async function dispatchTask({ pin, project, task, dir, brief, pointer, policy, source }) {
   const hub = await ensureHub(pin, { policy });
+  if (hub.skipped) throw new Error(`OpenRig did not answer (${hub.skipped}): the task was not dispatched`);
   const newSeats = [...hub.newSeats];
   const follow = task.followUp || task.lastSeat;
   if (follow && follow.endsWith('@' + hub.rig)) {
@@ -382,7 +424,9 @@ export function findPin(p) {
 /** "Bring rig up" from the project window. */
 export async function up(p) {
   if (!(await available())) throw new Error((await openrig.status()).health || 'OpenRig is not available on this machine');
-  return ensureHub(findPin(p));
+  const hub = await ensureHub(findPin(p));
+  if (hub.skipped) throw new Error(`OpenRig did not answer (${hub.skipped}): try again in a moment`);
+  return hub;
 }
 
 /** "Bring rig down": every seat stops; the rig record and a snapshot stay, so "up" resumes the conversations. */
@@ -433,14 +477,31 @@ export function overseerIntake({ instruction, project, task, run }) {
 
 /** Background upkeep on every node: the jarvis rig on the core node; idle workers stopped everywhere. */
 let keeping = null;
-export function keep() {
+export const SKIP_LOG_MS = 10 * 60000;
+let lastSkipLog = 0; // when keep() last noted that OpenRig was not answering (one line per 10 minutes, not per pass)
+export function _resetSkipLog() { lastSkipLog = 0; }
+/**
+ * `log` and `now` are injectable for tests. A pass that cannot ask OpenRig (daemon down or busy, seats unreadable)
+ * returns { skipped } and is noted in the log at most once per SKIP_LOG_MS — the earlier behaviour tried `rig up`
+ * every pass and logged a failure each time.
+ */
+export function keep({ log: logFn = log, now = Date.now } = {}) {
   // One pass at a time: bringing a rig up can take minutes, longer than the interval.
   if (keeping) return Promise.resolve({ busy: true });
+  const note = (reason) => {
+    if (now() - lastSkipLog < SKIP_LOG_MS) return;
+    lastSkipLog = now();
+    logFn(`hubs: OpenRig not asked this pass (${reason}); noted at most once per ${SKIP_LOG_MS / 60000} min`);
+  };
   keeping = (async () => {
     const s = hubSettings();
-    if (!s.enabled || !(await available())) return { skipped: true };
+    if (!s.enabled) return { skipped: true };
+    if (!(await available())) { note(SKIP_DAEMON); return { skipped: SKIP_DAEMON }; }
     const out = {};
-    if (s.jarvis && isCoreNode()) out.jarvis = await ensureJarvis().catch((e) => ({ error: e.message }));
+    if (s.jarvis && isCoreNode()) {
+      out.jarvis = await ensureJarvis().catch((e) => ({ error: e.message }));
+      if (out.jarvis.skipped) note(out.jarvis.skipped);
+    }
     out.reaped = await reapIdle().catch((e) => ({ error: e.message }));
     return out;
   })().finally(() => { keeping = null; });

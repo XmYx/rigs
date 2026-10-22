@@ -47,8 +47,8 @@ const answerRouter = async () => ({ route: 'answer', via: 'jev', reason: 'a ques
 const implementRouter = async () => ({ route: 'implement', via: 'jev', reason: 'work', title: 'Dark mode for szuf' });
 const prompts = () => (fs.existsSync(FAKE_LOG) ? fs.readFileSync(FAKE_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const lastPrompt = () => prompts().at(-1);
-// the last prompt's text, without the router's one-line hint
-const asked = () => lastPrompt()[1].replace(/\[routed: [^\]]*\]\n/g, '');
+// the last prompt's text, without the turn's [now: …] block (chat.liveContext) and the router's one-line hint
+const asked = () => lastPrompt()[1].replace(/^\[now: [^\n]*\]\n/, '').replace(/\[routed: [^\]]*\]\n/g, '');
 const count = (s, sub) => s.split(sub).length - 1;
 const msg = (role, text, extra = {}) => ({ role, text, ts: 0, ...extra });
 

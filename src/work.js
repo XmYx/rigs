@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { guardBrief, gitDenyRules } from './autonomy.js';
 import { config, RIGS_HOME } from './config.js';
+import { dashboardSection } from './dashboards.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
 import * as hubs from './hubs.js';
 import { AGENT_REF, GONE, agentsDir as openrigAgentsDir, memberFor, memberYaml, modelTag, slug, specYaml } from './hubs.js';
@@ -29,6 +30,28 @@ function q(s) {
 }
 
 export { slug, modelTag };
+
+// The blender-glb seed tool's line for a brief that needs it but whose tool hints missed it (its tags: 3d, blender, glb, mesh, model).
+const BLENDER_HINT = '- `blender-glb` (tool): Build a 3D object headless in Blender from a bpy script or a preset (cube, sphere, chair, table, mug) and export a .glb plus a turntable PNG into the shared folder\'s files/3d.';
+
+/**
+ * The brief as the agent reads it: the planner's prompt plus (D5) the dashboard Sir is watching this task on, and (D6)
+ * the blender-glb tool hint when the task is 3D work (kind "3d", or the brief talks about Blender / 3D / .glb) and
+ * the "Reusable tools" matches did not already name it. Pure.
+ */
+export function enrichBrief(prompt, task = {}) {
+  let out = String(prompt || '');
+  const dash = dashboardSection(task.dashboards);
+  if (dash) out = out.includes('## How to work') ? out.replace('## How to work', `${dash}## How to work`) : `${out.replace(/\s+$/, '')}\n\n${dash}`;
+  const threeD = task.kind === '3d' || task.needs?.tool === 'blender' || /\bblender\b|\b3d\b|\.glb\b|\bglb\b/i.test(out);
+  if (threeD && !/`blender-glb`/.test(out)) {
+    const m = out.match(/^Likely matches for this task \(read with `tool_get` first\):\n((?:- .*\n)*)/m);
+    if (m) out = out.replace(m[0], `${m[0]}${BLENDER_HINT}\n`);
+    else if (out.includes('## Reusable tools\n')) out = out.replace(/(## Reusable tools\n[^\n]*\n)/, `$1Likely matches for this task (read with \`tool_get\` first):\n${BLENDER_HINT}\n`);
+    else out = `${out.replace(/\s+$/, '')}\n\n## Reusable tools\nLikely matches for this task (read with \`tool_get\` first):\n${BLENDER_HINT}\n`;
+  }
+  return out;
+}
 
 async function prepareWorkdir(workdir, gitUrl) {
   const dir = path.resolve(expandHome(workdir || '~'));
@@ -60,7 +83,7 @@ async function launchTask({ project, task, prompt, workdir, mode = 'auto', polic
   // Git guard: commits only inside a RIGS dev worktree, pushes and branch switches never (see autonomy.js).
   const devWorktree = isDevWorktree(dir);
   if (project.selfDev && !devWorktree) throw new Error(`refusing to run a RIGS change outside a dev worktree (${dir} is not under ${devRoot()}) — start one with rigs_dev_start`);
-  const guarded = guardBrief(prompt, { devWorktree, branch: project.selfDev?.branch || '' });
+  const guarded = guardBrief(enrichBrief(prompt, task), { devWorktree, branch: project.selfDev?.branch || '' });
   prompt = guarded.prompt;
   const guard = { devWorktree, branch: project.selfDev?.branch || '', stripped: guarded.stripped };
   // The full brief lives on disk — under ~/.rigs, never inside the user's project folder; agents get a short

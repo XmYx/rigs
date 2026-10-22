@@ -16,10 +16,18 @@ export const ROUTES = ['answer', 'implement', 'plan', 'continue', 'yolo'];
 export const ENGINES = ['jev', 'claude', 'rules'];
 const DEFAULT_ROUTER = {
   preroute: true, engine: 'jev', fallback: 'claude', claudeModel: 'claude-haiku-5-5',
+  // rulesFirst: a clear browse request, a plain question or lookup with no ongoing-thread overlap is decided by the keyword
+  // rules at once (via 'rules', routerMs ≈ 0); only ambiguous requests reach an engine. confidentRules never files work.
+  rulesFirst: true,
   jev: { url: '', appId: 'localjev', model: 'jev-latest', apiKey: '', timeoutMs: 8000, minProb: 0.55 },
   baselineMs: { answer: 0, work: 0 },
 };
-const bool = (v, d) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1' ? true : v === false || v === 'false' || v === 'off' || v === 0 || v === '0' ? false : d);
+/**
+ * The router model's `claude -p` runs without MCP servers, tools or a saved session: a trivial Haiku call takes ~2.5 s
+ * instead of ~5.3 s with the user's MCP set (rea via npx, rigs) booted. The JSON string is one argv element.
+ */
+export const ROUTER_LEAN_FLAGS = ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--tools', '', '--no-session-persistence'];
+const bool =(v, d) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1' ? true : v === false || v === 'false' || v === 'off' || v === 0 || v === '0' ? false : d);
 const clampNum = (v, d, lo, hi) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, Number(v))) : d);
 
 /** config.router, validated: unknown engines, bad numbers and missing keys fall back to the defaults. Pure. */
@@ -31,6 +39,7 @@ export function routerSettings(r = {}) {
     engine: ENGINES.includes(r?.engine) ? r.engine : d.engine,
     fallback: ['claude', 'rules'].includes(r?.fallback) ? r.fallback : d.fallback,
     claudeModel: String(r?.claudeModel || d.claudeModel),
+    rulesFirst: bool(r?.rulesFirst, d.rulesFirst),
     jev: {
       url: String(j.url || '').replace(/\/+$/, ''), appId: String(j.appId || ''), model: String(j.model || d.jev.model), apiKey: String(j.apiKey || ''),
       timeoutMs: clampNum(j.timeoutMs, d.jev.timeoutMs, 500, 60000), minProb: clampNum(j.minProb, d.jev.minProb, 0, 1),
@@ -51,6 +60,7 @@ export function prerouteOn(override, r = config().router) {
 export function applyRouterPatch(current = {}, b = {}) {
   const cur = routerSettings(current);
   if (b.preroute !== undefined && bool(b.preroute, null) === null) throw new Error('preroute must be true or false');
+  if (b.rulesFirst !== undefined && bool(b.rulesFirst, null) === null) throw new Error('rulesFirst must be true or false');
   if (b.engine !== undefined && !ENGINES.includes(b.engine)) throw new Error(`engine must be one of ${ENGINES.join(', ')}`);
   if (b.fallback !== undefined && !['claude', 'rules'].includes(b.fallback)) throw new Error('fallback must be claude or rules');
   for (const k of ['timeoutMs', 'minProb']) if (b.jev?.[k] !== undefined && !Number.isFinite(Number(b.jev[k]))) throw new Error(`jev.${k} must be a number`);
@@ -114,6 +124,32 @@ export function isBrowseRequest(text) {
   if (!t || t.length > 200 || isImperative(t)) return false;
   const rest = t.replace(OPENERS, '');
   return BROWSE.test(rest) && BROWSE_TARGET.test(rest) && !NOT_BROWSE.test(rest);
+}
+
+// "show the last 10 uefa winners", "list the top processes", "tell me the latest about …": a lookup the brain answers.
+const LOOKUP = /^(?:show|list|tell)\s+(?:me\s+)?(?:the\s+)?(?:last|latest|top|first|current|all)\b/i;
+// A path or drive in the request: a lookup naming one is left to the model (it may be a browse or a file task).
+const PATHISH = /(?:^|[\s"'(])(?:~|\/|[a-z]:\\)/i;
+const CONFIDENT_MAX_CHARS = 300;
+// "show the last build and fix it": a lookup or question that goes on to ask for work is left to the engines.
+const COMPOUND = new RegExp(`\\b(?:and|then|,)\\s+(?:${IMPERATIVE_VERBS})\\b`, 'i');
+
+/**
+ * Rules first (config.router.rulesFirst): the decisions the keyword rules make with confidence, so no engine is asked —
+ * a browse request (open / show a folder or file), a plain question or a lookup under 300 chars that shares no subject
+ * with an ongoing thread. Never implement or plan: a miss here only means the brain answers (the quick lane's
+ * [[ESCALATE]] and guardRoute catch the rest). Null when the engines should decide. Pure.
+ */
+export function confidentRules(text, threads = []) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  if (isBrowseRequest(t)) return { route: 'answer', reason: 'opens a folder or file in the file browser (rules)' };
+  if (t.length >= CONFIDENT_MAX_CHARS || isImperative(t) || COMPOUND.test(t)) return null;
+  const question = isClearQuestion(t);
+  const lookup = !question && LOOKUP.test(t.replace(OPENERS, '')) && !PATHISH.test(t);
+  if (!question && !lookup) return null;
+  if (heuristicRoute(t, threads).route === 'continue') return null; // shares its subject with an ongoing thread
+  return { route: 'answer', reason: question ? 'a plain question (rules)' : 'a lookup (rules)' };
 }
 
 /** Does the request spell out several parts (a list, several sentences, a very long ask)? Then it is a plan. */
@@ -287,7 +323,7 @@ export async function modelRoute(text, ctx, { timeoutMs = 25000, model = DEFAULT
   const prompt = routerPrompt(text, ctx);
   // ctx.capture (optional) receives what the model was asked and said, for the request trace (src/trace.js).
   if (ctx.capture) Object.assign(ctx.capture, { engine: 'claude', model, prompt, reply: undefined, error: undefined });
-  const r = await run(claude, ['-p', prompt, '--output-format', 'text', ...claudeFlags({ model, effort: 'low', permissionMode: 'plan' })],
+  const r = await run(claude, ['-p', prompt, '--output-format', 'text', ...claudeFlags({ model, effort: 'low', permissionMode: 'plan' }), ...ROUTER_LEAN_FLAGS],
     { cwd: HOME, env, timeout: timeoutMs });
   if (ctx.capture) Object.assign(ctx.capture, { reply: r.stdout, code: r.code, ...(r.code !== 0 ? { error: String(r.stderr || '').trim().slice(-500) } : {}) });
   if (r.code !== 0) return null;
@@ -385,7 +421,8 @@ export function parseProjects(text = '') {
 }
 
 /**
- * The full decision: the configured engine (config.router.engine), then its fallback, then keyword rules. `via` says
+ * The full decision: the YOLO marker, then (rulesFirst) the confident keyword rules, then the configured engine
+ * (config.router.engine), then its fallback, then keyword rules. `via` says
  * who decided: jev | model (Claude) | rules; ctx.capture.tried lists engines that could not answer. A plain question
  * Jev answered unsure (capture.unsure) goes to the keyword rules at once rather than the slower fallback. Engines are injectable for tests.
  */
@@ -393,6 +430,14 @@ export async function route(text, ctx, { settings = routerSettings(config().rout
   // A YOLO request is decided by its marker before any engine is asked (ctx.yolo = the request's own yes/no wins).
   const y = yoloDecision(text, ctx);
   if (y) return y;
+  // Rules first: a browse request, a plain question or a lookup with no thread overlap needs no engine (routerMs ≈ 0).
+  if (settings.rulesFirst) {
+    const d = confidentRules(text, ctx.threads);
+    if (d) {
+      if (ctx.capture) Object.assign(ctx.capture, { engine: 'rules', model: '', prompt: undefined, reply: undefined, error: undefined });
+      return withWork({ ...d, title: '', via: 'rules' }, text, ctx);
+    }
+  }
   const call = { jev: engines.jev || ((t, c) => jevRoute(t, c, settings)), claude: engines.claude || ((t, c) => modelRoute(t, c, { model: settings.claudeModel })) };
   const tried = [];
   for (const e of [...new Set([settings.engine, settings.fallback])]) {

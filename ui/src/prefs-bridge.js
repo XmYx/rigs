@@ -7,7 +7,7 @@
 //   ask: { get, set }, cloud: { get, set }, display: { get(k), set(k, on) } (labels | particles | rotate),
 //   forces: { get(k), set(k, n) } (repel | linkLength), exhibitAnim: { get, set }, docking: { get, set },
 //   scaling: { get, set }, dock: { get(field), set(field, v) } (the app dock's settings), notify: { get(k), set(k, on) },
-//   autoOpen: { get, set }, voice: { muted, setMuted, voiceId, setVoice } }
+//   autoOpen: { get, set }, openFiledWork: { get, set }, voice: { muted, setMuted, voiceId, setVoice } }
 import { decodePref, encodePref, itemById } from './settings-model.js';
 
 const pair = (dep) => dep && { get: () => dep.get(), set: (v) => dep.set(v) };
@@ -39,6 +39,7 @@ export const BRIDGED = {
   'ui.notifications': (d) => keyed(d.notify, 'notifications'),
   'ui.attnBanner': (d) => keyed(d.notify, 'attnBanner'),
   'ui.autoOpenSessions': (d) => pair(d.autoOpen),
+  'ui.openFiledWork': (d) => pair(d.openFiledWork),
   'ui.speak': (d) => d.voice && { get: () => !d.voice.muted, set: (v) => d.voice.setMuted(!v) },
   'ui.voice': (d) => d.voice && { get: () => d.voice.voiceId, set: (v) => d.voice.setVoice(v) },
 };

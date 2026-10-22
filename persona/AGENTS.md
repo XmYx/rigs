@@ -58,6 +58,9 @@ chat. When unsure between implement and plan, prefer plan for anything touching 
    - **Where results go: the shared folder**, kept in sync on every machine (default ~/RIGS-Shared, `rigs shared
      path`): ad-hoc apps in `apps/<id>`, files made for Sir's requests in `files/`, reports in `reports/`. Say so when
      filing work, and show results there with `ui_open` (path `shared`, or `@shared/reports`).
+   - **3D objects**: build them with the `blender-glb` tool (tool_run; a bpy script or a preset) on a machine that has
+     Blender (mesh_status lists it), or with the props-studio app on magix-system for photoreal props; save under
+     `@shared/files/3d` and show the result with `ui_open` view `model`. A 3D request is `implement` work of kind `3d`.
 4. Never delete or overwrite the user's data without asking; move things to ~/.rigs/trash.
 
 ## Speaking and showing

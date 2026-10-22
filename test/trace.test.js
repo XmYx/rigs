@@ -130,6 +130,56 @@ test('store: a span is written running then finished (last line wins), list filt
   assert.equal(await T.get('not-a-trace'), null);
 });
 
+test('read cache: a trace\'s day files are read once; spans written afterwards reach polls, finishSpan and run ends without re-reading', async () => {
+  const fsp = await import('node:fs/promises');
+  T._resetTraceCache();
+  const reads = [];
+  T._setReadFile((f) => { reads.push(path.basename(f)); return fsp.readFile(f, 'utf8'); });
+  try {
+    const root = T.startSpan({ kind: 'intake', name: 'jarvis/send', input: 'cached?' });
+    await T.flush();
+    T._resetTraceCache(); // the span is on disk only: the first read has to load it
+    const first = await T.get(root.traceId);
+    assert.equal(first.spans.length, 1);
+    const n = reads.length;
+    assert.ok(n >= 1, 'the first read loads the day file(s)');
+    await T.get(root.traceId);
+    await T.get(root.traceId, { after: Date.now() - 1000 });
+    assert.equal(reads.length, n, 'polls do not read the files again');
+    // Spans written by this process land in the cache as they are written: a poll right after sees them.
+    const tool = root.child({ kind: 'tool-call', name: 'Read', input: { path: 'x' } });
+    const live = await T.get(root.traceId);
+    assert.equal(live.spans.find((s) => s.spanId === tool.spanId)?.status, 'running', 'visible before the append is even flushed');
+    await tool.end({ output: 'ok' });
+    const ended = await T.get(root.traceId);
+    assert.deepEqual([ended.spans.length, ended.spans.find((s) => s.spanId === tool.spanId).status], [2, 'ok']);
+    // finishSpan amends from the cache, and recordRunEnd (the same read) too.
+    const fin = await T.finishSpan(root.traceId, tool.spanId, { meta: { extra: 1 } });
+    assert.equal(fin.meta.extra, 1);
+    const run = await T.recordRunEnd({ trace: { traceId: root.traceId, parentId: root.spanId }, status: 'done', summary: 'did it', since: Date.now() - 50 });
+    assert.equal(run.status, 'ok');
+    assert.equal((await T.get(root.traceId)).spans.length, 3);
+    assert.equal(reads.length, n, 'none of that re-read the day files');
+    await root.end({ output: { text: 'yes' } });
+    assert.equal((await T.get(root.traceId)).summary.status, 'ok');
+    // What the cache serves is what a cold read of the files gives (the on-disk format is unchanged).
+    const cached = (await T.get(root.traceId)).spans;
+    T._resetTraceCache();
+    const cold = (await T.get(root.traceId)).spans;
+    assert.deepEqual(cold, cached);
+    // LRU: past TRACE_CACHE_SIZE traces the oldest is evicted and read from disk again when asked for.
+    const before = reads.length;
+    for (let i = 0; i < T.TRACE_CACHE_SIZE; i++) { const s = T.startSpan({ kind: 'intake', name: `t${i}` }); await s.end(); await T.get(s.traceId); }
+    assert.ok(reads.length > before);
+    const mid = reads.length;
+    await T.get(root.traceId);
+    assert.ok(reads.length > mid, 'evicted: loaded from disk again');
+    const again = reads.length;
+    await T.get(root.traceId);
+    assert.equal(reads.length, again, 'and cached once more');
+  } finally { T._setReadFile(null); }
+});
+
 test('settings: enabled=false records nothing; retention prunes day files older than days', async () => {
   config().traces = { ...config().traces, enabled: false };
   try { assert.equal(await T.writeSpan({ kind: 'intake' }), null); } finally { config().traces = { ...config().traces, enabled: true }; }
@@ -232,7 +282,7 @@ test('API: one JARVIS request → one trace (intake → router, brain turn → t
     let up = false;
     for (let i = 0; i < 100 && !up; i++) { try { up = (await fetch(BASE + '/api/self')).ok; } catch {} if (!up) await new Promise((r) => setTimeout(r, 200)); }
     assert.ok(up, 'server did not start:\n' + log);
-    const res = await fetch(BASE + '/api/local/jarvis/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'what is the weather like?', brain: 'claude', model: 'claude-haiku-5-5' }) });
+    const res = await fetch(BASE + '/api/local/jarvis/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'the weather forecast for Budapest tomorrow', brain: 'claude', model: 'claude-haiku-5-5' }) });
     const events = (await res.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l));
     const traceId = events.find((e) => e.type === 'trace')?.traceId;
     assert.ok(traceId, 'the stream names the trace first: ' + JSON.stringify(events));
@@ -242,7 +292,7 @@ test('API: one JARVIS request → one trace (intake → router, brain turn → t
     assert.equal(list.node, 'test-node');
     const sum = list.traces.find((t) => t.traceId === traceId);
     assert.ok(sum, JSON.stringify(list));
-    assert.deepEqual([sum.status, sum.route, sum.brainTurns, sum.toolCalls, sum.handoffs, sum.request], ['ok', 'answer', 1, 2, 1, 'what is the weather like?']);
+    assert.deepEqual([sum.status, sum.route, sum.brainTurns, sum.toolCalls, sum.handoffs, sum.request], ['ok', 'answer', 1, 2, 1, 'the weather forecast for Budapest tomorrow']);
     assert.equal(sum.projectIds.length, 1);
 
     const t = await (await fetch(`${BASE}/api/local/traces/${traceId}`)).json();
@@ -265,7 +315,7 @@ test('API: one JARVIS request → one trace (intake → router, brain turn → t
     assert.match(router.output.reply, /"route":"answer"/);
     assert.deepEqual([turn.meta.provider, turn.meta.model, turn.meta.inputTokens, turn.meta.outputTokens, turn.meta.cacheReadTokens, turn.meta.costUsd, turn.meta.sessionId], ['claude', 'claude-haiku-5-5', 11, 22, 333, 0.0123, 'fake-session']);
     assert.equal(turn.output, 'Checking, sir. Sunny, sir.');
-    assert.match(turn.input, /what is the weather like\?/);
+    assert.match(turn.input, /the weather forecast for Budapest tomorrow/);
     for (const s of t.spans) { assert.equal(s.status, 'ok', `${s.kind} ${s.name}`); assert.ok(s.end >= s.start, `${s.kind} has timings`); assert.equal(s.node, 'test-node'); }
     assert.ok(!JSON.stringify(t).includes('SECRETSECRETSECRET'), 'the bearer token in the Bash call is redacted');
     assert.deepEqual(tools[0].meta.truncated, ['output'], 'the 20k tool result is cut to the cap');

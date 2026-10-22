@@ -141,6 +141,61 @@ test('failed tasks of active projects need the user; finished projects never bli
   assert.deepEqual(keys(items), ['task:pa:t1']);
 });
 
+test('pane captures run in parallel (bounded), with the same items in the same order as one by one', async () => {
+  const openrig = await import('../src/openrig.js');
+  const seats = ['team-a@hub', 'team-b@hub', 'team-c@hub', 'team-d@hub'];
+  const node = (s) => ({ rigName: 'hub', logicalId: s.split('@')[0], canonicalSessionName: s, sessionStatus: 'running', runtime: 'claude-code', agentActivity: { state: 'needs_input', reason: 'selection_prompt' }, startupStatus: 'ready' });
+  openrig._setRunner(async (cmd, args) => {
+    if (args[0] === '--version') return { code: 0, stdout: '0.6.10\n', stderr: '' };
+    if (args[0] === 'daemon') return { code: 0, stdout: 'Daemon running on port 7433', stderr: '' };
+    if (args[0] === 'ps') return { code: 0, stdout: JSON.stringify(args.includes('--nodes') ? seats.map(node) : []), stderr: '' };
+    return { code: 0, stdout: '[]', stderr: '' };
+  });
+  openrig.invalidate();
+  const CAP_MS = 40;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const captured = [];
+  const prompt = { 'team-a@hub': 'Do you want to proceed?', 'team-c@hub': 'Allow this command?', '%1': 'Would you like to run the following command?', '%3': 'Trust this folder?' };
+  const fakeTmux = async (_cmd, args) => {
+    if (args[0] === 'list-panes') return { code: 0, stdout: 'codex-a|~|codex|~|%1\ncodex-b|~|codex|~|%2\nnode-c|~|node|~|%3\nshell|~|zsh|~|%4\n', stderr: '' };
+    const target = args[args.indexOf('-t') + 1];
+    captured.push(target);
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((ok) => setTimeout(ok, CAP_MS));
+    inFlight--;
+    return { code: 0, stdout: `$ working\n${prompt[target] || 'all quiet'}\n`, stderr: '' };
+  };
+  attention._setRunner(fakeTmux, '/fake/tmux');
+  try {
+    const t0 = Date.now();
+    const items = await attention.refresh({ projects: [] });
+    const took = Date.now() - t0;
+    // 4 seats + 3 agent panes = 7 captures of 40 ms: serial would be ≥ 280 ms.
+    assert.ok(maxInFlight >= 2, `captures overlapped (max in flight ${maxInFlight})`);
+    assert.ok(maxInFlight <= attention.CAPTURE_CONCURRENCY);
+    assert.ok(took < 7 * CAP_MS, `took ${took} ms, less than the serial sum`);
+    assert.deepEqual(captured.slice(0, 4), seats, 'seat screens are read in seat order');
+    assert.deepEqual(captured.slice(4), ['%1', '%2', '%3'], 'agent panes in list order, the shell pane skipped');
+    // Same output as the serial version: only seats showing a real prompt (with its line), only panes with approval chrome, in order.
+    const rig = items.filter((x) => x.key.startsWith('rig:'));
+    assert.deepEqual(rig.map((x) => [x.key, x.reason]), [['rig:team-a@hub', 'prompt on screen: Do you want to proceed?'], ['rig:team-c@hub', 'prompt on screen: Allow this command?']]);
+    const panes = items.filter((x) => x.key.startsWith('pane:'));
+    assert.deepEqual(panes.map((x) => [x.key, x.agent, x.reason]), [['pane:codex-a', 'codex', 'prompt on screen: Would you like to run the following command?'], ['pane:node-c', 'node', 'prompt on screen: Trust this folder?']]);
+    // pmap itself: bounded, ordered, and the limit holds.
+    let busy = 0; let peak = 0;
+    const out = await attention.pmap([5, 1, 3, 2, 4, 6], async (ms) => { busy++; peak = Math.max(peak, busy); await new Promise((ok) => setTimeout(ok, ms)); busy--; return ms * 10; }, 2);
+    assert.deepEqual(out, [50, 10, 30, 20, 40, 60]);
+    assert.equal(peak, 2);
+    assert.deepEqual(await attention.pmap([], async () => 1), []);
+  } finally {
+    attention._setRunner(null);
+    openrig._setRunner(null);
+    openrig.invalidate();
+  }
+});
+
 test('an OpenRig seat\'s Claude (no TMUX in its report) is the seat itself — one entry, attachable', async () => {
   fs.writeFileSync(claudeFile, JSON.stringify({ pid: process.pid, sessionId: 'seat-1', cwd: '/w', name: 'team-test-sonnet@game-86d3', status: 'waiting' }));
   const items = await attention.refresh({ projects: [] });

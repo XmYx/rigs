@@ -4,7 +4,7 @@ import { compactedLabel, transcriptRows } from './compact-model.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
-import { appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
+import { appById, appPath, closeApp, findApp, isAppOpen, onAppsEvent, openApp, openApps, refreshApps, reloadApp, rerenderApps } from './apps.js';
 import { appKey, canDock, dockPanel, floatPanel, initLayout, isAppRemoved, isDocked, listRemoved, openPanel, panelWindowAction, panelWindowState, resetLayout, resetPanel } from './layout-actions.js';
 import { onRemoteKey, prepareKey, receiveLayout, syncedStorage } from './synced-storage.js';
 import { createAppDock, registerAppDockProviders } from './app-dock.js';
@@ -35,6 +35,10 @@ import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starne
 import { openFiles } from './files.js';
 import { configureMediaPlayer, openMediaPlayer } from './media-player.js';
 import { addClaim, filesTarget, isBrowseAsk, uiOpenAction } from './ui-open-model.js';
+import { openContentWindow } from './content-window.js';
+import { openModelViewer } from './model-viewer-lazy.js';
+import { openFileTool } from './file-tools.js';
+import { mergeNotices, noticeOf, pushNotice, shortText } from './notify-history.js';
 import { openMissionControl, toggleMissionControl } from './mission-control.js';
 import { isMissionControlAsk } from './mission-control-model.js';
 import { TYPES, buildGraph, createGraph } from './graph.js';
@@ -388,6 +392,7 @@ function connectEvents() {
     if (m.type === 'trace-span') { onTraceSpan(m.span); onExhibitSpan(m.span); } // the Exhibit window's activity follows the same stream
     if (m.type?.startsWith('exhibit')) onExhibitEvent(m); // experimental Exhibit window (exhibits.js)
     if (m.type === 'starnet-config') onStarnetConfig(m); // experimental space-station view switched (starnet/index.js)
+    if (m.type === 'notify') { pushNotice(notifyHistory, noticeOf(m)); renderNotifications(); } // kept (last 50) for Tools › Notifications, even while toasts are off
     // Notifications switched off: no toast, banner, subtitle or speech — only the passive signals stay current.
     if (m.type === 'notify' && !prefs().notifications) { if (m.level === 'attention') refreshAttention(); }
     else if (m.type === 'notify' && m.level === 'attention') {
@@ -395,7 +400,7 @@ function connectEvents() {
       showSubtitle(m.text, 'jarvis');
       if (m.speak) voice.say(spokenText(m.text, true));
     } else if (m.type === 'notify') {
-      const act = m.action?.type === 'run' ? { label: m.action.label || 'Run', run: () => runOn(m.action.node, m.action.command, m.action.title) } : null;
+      const act = noticeButton(m.action);
       // A message Sir already closed stays gone: no toast, and no subtitle or speech either.
       if (!toast(`${m.from}: ${m.text}`, m.level === 'error' ? 'error' : 'ok', undefined, act)) return;
       showSubtitle(m.text, 'jarvis');
@@ -406,6 +411,7 @@ function connectEvents() {
     if (orb.state === 'offline') setOrb('online');
     syncedStorage.refresh(); // catch up on layout changes missed while the socket was down
     for (const traceId of tracesClaimed) ws.send(JSON.stringify({ type: 'claim-trace', traceId }));
+    loadNotifyHistory();
   };
   ws.onclose = () => { setOrb('offline'); setTimeout(connectEvents, 3000); };
 }
@@ -717,19 +723,88 @@ function showInFiles(path, select = '') {
   if (w) { w.navigate(path, { select }); w.raise(); } else filesOn(self, path, { select });
 }
 
-/** A ui-open push (MCP ui_open, src/ui-open.js): open the view it names — the file browser at a folder, the media player for an audio or video file. */
+/**
+ * A ui-open push (MCP ui_open, src/ui-open.js; also the Open button of a notice): open the view it names — files: the
+ * file browser at a folder (an audio or video file plays in the media player; a .glb/.gltf/.obj, .pdf, .csv or .json
+ * opens in its tool as well); app: an App Cloud app window, at a route inside it; url: a page in the content window;
+ * project: the Projects window on that project; trace: the trace explorer; model: the 3D viewer; tool: one file tool.
+ */
 const uiOpenSeen = new Set();
-function onUiOpen(m) {
+async function onUiOpen(m) {
   const a = uiOpenAction(m, { machines: snap.map((e) => e.node) });
   if (!a || (a.id && uiOpenSeen.has(a.id))) return;
   if (a.id) { uiOpenSeen.add(a.id); if (uiOpenSeen.size > 50) uiOpenSeen.delete(uiOpenSeen.values().next().value); }
-  if (a.view === 'files' && a.play) openMediaPlayer({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.play }); // an audio or video file: play it
-  else if (a.view === 'files') {
-    const w = filesTarget(filesWins, a.nodeId);
-    if (w) { w.navigate(a.path, { select: a.select, showHidden: a.showHidden }); w.raise(); }
-    else filesOn({ id: a.nodeId, name: a.nodeName }, a.path, { select: a.select, showHidden: a.showHidden });
-  }
+  try {
+    if (a.view === 'files' && a.play) openMediaPlayer({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.play }); // an audio or video file: play it
+    else if (a.view === 'files') {
+      const w = filesTarget(filesWins, a.nodeId);
+      if (w) { w.navigate(a.path, { select: a.select, showHidden: a.showHidden }); w.raise(); }
+      else filesOn({ id: a.nodeId, name: a.nodeName }, a.path, { select: a.select, showHidden: a.showHidden });
+      if (a.tool) openFileTool({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.select, tool: a.tool }); // the result itself, on top of the folder
+    } else if (a.view === 'app') {
+      const app = appById(a.app, a.nodeId) || appById(a.app, a.nodeName) || appById(a.app) || (await refreshApps(), appById(a.app, a.nodeId) || appById(a.app));
+      if (!app) { toast(`${a.name || a.app} is not on the mesh right now.`, 'info'); return; }
+      openApp(app, { route: a.path });
+    } else if (a.view === 'url') {
+      openContentWindow({ url: a.url, title: a.title, icon: '🌐', focus: true });
+    } else if (a.view === 'project') {
+      const owner = a.nodeId || (await api('/api/mesh/projects').catch(() => [])).find((p) => p.id === a.project)?.ownerId;
+      if (!owner) { toast(`No project ${a.project} on the mesh.`, 'info'); return; }
+      projectsWindow({ owner, id: a.project });
+    } else if (a.view === 'trace') {
+      openTrace(a.trace);
+    } else if (a.view === 'model') {
+      openModelViewer({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.path, title: a.title });
+    } else if (a.view === 'tool') {
+      openFileTool({ nodeId: a.nodeId, nodeName: a.nodeName, path: a.path, name: a.name, tool: a.tool });
+    }
+  } catch (e) { toast(e.message, 'error'); }
   if (a.toast) toast(a.toast, 'info', 7000);
+}
+
+// ------------------------------------------------------------------ notifications: the Open / Run button and the history window
+const notifyHistory = []; // the last 50 notices (notify-history.js), newest last
+let notifyWin = null;
+
+/** The notices this machine's RIGS showed before this page connected (GET notify/history): merged in, oldest first. */
+async function loadNotifyHistory() {
+  const rows = await api('/api/local/notify/history').catch(() => []);
+  if (!Array.isArray(rows) || !rows.length) return;
+  const merged = mergeNotices(notifyHistory, rows.map((m) => noticeOf(m, Number(m.at) || Date.now())));
+  notifyHistory.splice(0, notifyHistory.length, ...merged);
+  renderNotifications();
+}
+
+/** The toast button of a notice: Open (a ui-open push, through onUiOpen) or Run (a command on a machine); null without one. */
+function noticeButton(action) {
+  if (action?.type === 'open' && action.open) return { label: action.label || 'Open', run: () => onUiOpen({ ...action.open, id: '' }) };
+  if (action?.type === 'run' && action.command) return { label: action.label || 'Run', run: () => runOn(action.node, action.command, action.title) };
+  return null;
+}
+
+/** Tools › Notifications: the notices this page received, newest first, each with its Open / Run button. */
+function openNotifications() {
+  if (notifyWin && !notifyWin.closed) { notifyWin.raise(); return notifyWin; }
+  notifyWin = openWindow({ title: 'Notifications', icon: '🔔', width: 520, height: 480, className: 'notify-win', key: 'notifications' });
+  notifyWin.list = h('div', { class: 'notify-list' });
+  notifyWin.body.append(
+    h('div', { class: 'toolbar' }, h('span', { class: 'muted small' }, 'The last 50 notices JARVIS showed here.'), h('span', { class: 'ft-grow' }),
+      h('button', { class: 'tb', onclick: () => { notifyHistory.length = 0; renderNotifications(); } }, 'Clear')),
+    notifyWin.list);
+  notifyWin.onCleanup(() => { notifyWin.closed = true; });
+  renderNotifications();
+  return notifyWin;
+}
+
+function renderNotifications() {
+  if (!notifyWin || notifyWin.closed) return;
+  const rows = [...notifyHistory].reverse().map((n) => {
+    const btn = noticeButton(n.action ? { type: n.action.kind, ...n.action } : null);
+    return h('div', { class: `notify-row ${n.level}` },
+      h('div', { class: 'notify-text' }, h('div', {}, shortText(n.text)), h('div', { class: 'muted small' }, `${n.from ? n.from + ' · ' : ''}${ago(n.at)}`)),
+      btn ? h('button', { class: 'btn primary', onclick: () => { btn.run(); } }, btn.label) : null);
+  });
+  notifyWin.list.replaceChildren(...(rows.length ? rows : [h('div', { class: 'muted pad' }, 'No notifications yet.')]));
 }
 
 // Active agents panel (agents.js): live agent sessions, one click to attach
@@ -859,10 +934,28 @@ function desktopTo(m, { viewer } = {}) {
   if (hostReady && viewers.some((x) => x.id === (viewer || self?.id))) go();
 }
 
-function projectsWindow(openId) {
-  const pw = openProjects({ snapshot: () => snap, voice, coreBrain: currentBrain, onAttached: popups.mark, onFocus: (p) => select(`pj:${p.id}`) });
+let projWin = null; // the open Projects window: another open goes to it instead of stacking a second one
+function projectsWindow(openId, { focus = true } = {}) {
+  if (projWin && !projWin.closed) { projWin.window.raise(); if (openId) projWin.open(openId.owner, openId.id); return projWin; }
+  const pw = openProjects({ snapshot: () => snap, voice, coreBrain: currentBrain, onAttached: popups.mark, onFocus: (p) => select(`pj:${p.id}`), focus });
+  projWin = pw;
+  pw.window.onCleanup(() => { pw.closed = true; if (projWin === pw) projWin = null; });
   if (openId) pw.open(openId.owner, openId.id);
   return pw;
+}
+
+/** A request was filed as a project (the `route` event's work[]): open the Projects window on it, once per request, without taking focus (prefs.openFiledWork). */
+function openFiledWork(e, opened) {
+  if (opened.done || !store.get('openFiledWork', true) || !['plan', 'implement'].includes(e.route)) return;
+  const f = (e.work || [])[0];
+  const projectId = f?.id || e.projectId;
+  if (!projectId) return;
+  const ownerName = f?.owner || f?.node || '';
+  const owner = (ownerName && snap.find((x) => x.node.name === ownerName)?.node.id)
+    || snap.find((x) => (x.projects || []).some((p) => p.id === projectId))?.node.id;
+  if (!owner) return;
+  opened.done = true;
+  projectsWindow({ owner, id: projectId }, { focus: false });
 }
 
 function meshWindow(tab) {
@@ -1145,7 +1238,9 @@ async function ask(text, { spoken = false } = {}) {
   let fed = 0; // characters of the spoken part already handed to the voice
   let felt = false;
   const tools = [];
-  const chips = []; // activity chips for this reply's tool calls
+  const chips = new Set(); // activity chips for this reply's tool calls still running
+  const chipsById = new Map(); // tool event id → chip, resolved by the matching tool-done event
+  const filedOpen = { done: false }; // the Projects window opened for this request's filed work (once)
   let startNode = ''; // the machine that hosts the local responder, from the turn's start event
   const tierTag = $('#dock-tier'); // "local · qwen3:8b" next to ◆ JARVIS while a locally answered reply is shown
   tierTag.classList.add('hidden');
@@ -1159,6 +1254,7 @@ async function ask(text, { spoken = false } = {}) {
         store.set('chat', chatRef);
         const rc = routeChip(e); // "route answer · pre-routed …" or "route direct · pre-routing off …"
         activity(rc.name, rc.detail).done(true);
+        openFiledWork(e, filedOpen); // the work it filed shows up as it is planned
       } else if (e.type === 'start') {
         startNode = e.node || '';
       } else if (e.type === 'done') {
@@ -1180,8 +1276,14 @@ async function ask(text, { spoken = false } = {}) {
         if ((spoken || !voice.muted) && say.length > fed) { voice.feed(say.slice(fed)); fed = say.length; }
       } else if (e.type === 'tool') {
         tools.push(e.name);
-        chips.push(activity(e.name, e.input));
+        const chip = activity(e.name, e.input);
+        chips.add(chip);
+        if (e.id) chipsById.set(String(e.id), chip);
         showSubtitle(`${reply}\n⚙ ${tools.slice(-3).join(' · ')}`, 'jarvis');
+      } else if (e.type === 'tool-done') {
+        // The tool's result arrived: its chip turns green or red now; without an id (older server) chips resolve when the reply ends.
+        const chip = e.id ? chipsById.get(String(e.id)) : null;
+        if (chip) { chip.done(e.ok !== false); chips.delete(chip); chipsById.delete(String(e.id)); }
       } else if (e.type === 'status') {
         if (e.reset) { reply = ''; fed = 0; felt = false; voice.reset(); } // the fast path handed over: the full brain's reply starts afresh, its queued speech is dropped
         showSubtitle(`${reply}\n… ${e.text}`, 'jarvis');
@@ -1664,6 +1766,7 @@ function wireMenus() {
       set: (k, on) => { prefs()[k] = on; if (!on && k === 'notifications') $('#toasts')?.querySelectorAll('.toast').forEach((t) => t.remove()); syncNotifyChecks(); renderAttention(); },
     },
     autoOpen: { get: () => store.get('autoOpenSessions', true), set: (on) => { store.set('autoOpenSessions', on); setBox('#d-autosess', 'checked', on); } },
+    openFiledWork: { get: () => store.get('openFiledWork', true), set: (on) => store.set('openFiledWork', on) },
     voice: { get muted() { return voice.muted; }, setMuted, get voiceId() { return voice.voiceId; }, setVoice: (id) => voice.setVoice(id) },
   });
   // The existing UI behind a setting's Open… action (settings-model.js UI_SURFACES).
@@ -1688,6 +1791,7 @@ function wireMenus() {
     projects: () => projectsWindow(),
     openApps: () => openApps(),
     openAppStore: () => openAppStore(),
+    notifications: () => openNotifications(),
     files: (m) => filesOn(m),
     player: () => openMediaPlayer(),
     sessions: () => sessionsWindow(),

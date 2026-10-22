@@ -127,6 +127,7 @@ export function writeSpan(x) {
   if (!settings().enabled) return Promise.resolve(null);
   let span;
   try { span = makeSpan(x); } catch (e) { log('traces: bad span: ' + e.message); return Promise.resolve(null); }
+  cacheSpan(span); // readers of this trace see it now, before the append lands
   const done = appending.then(async () => {
     await fsp.mkdir(dir(), { recursive: true });
     await fsp.appendFile(path.join(dir(), dayOf(span.start) + '.jsonl'), JSON.stringify(span) + '\n');
@@ -431,25 +432,85 @@ export async function recordRunEnd(b = {}, { transcripts = async () => [] } = {}
 // ---------------------------------------------------------------- reading
 
 const traceDay = (id) => `${id.slice(3, 7)}-${id.slice(7, 9)}-${id.slice(9, 11)}`;
+const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 
-/** Spans from the day files in [since, until] (ms) — or of one trace — last line per spanId, oldest first. */
+/**
+ * Per-trace span cache — an LRU of TRACE_CACHE_SIZE traces. A trace's day files are read once (the first get /
+ * finishSpan / recordRunEnd for it); from then on every span this process writes lands in the cache as it is written
+ * (cacheSpan, before the append), so a poll never re-reads the day files (13 MB on a busy day) and never misses a span
+ * written a moment ago. Only this daemon appends to this machine's day files, so nothing adds to a trace behind the
+ * cache's back. The on-disk format is unchanged; the cache is a read-side detail.
+ */
+export const TRACE_CACHE_SIZE = 64;
+const traceCache = new Map(); // traceId → { byId: Map<spanId, span>, ready: Promise | null } in LRU order (oldest first)
+const defaultReadFile = (f) => fsp.readFile(f, 'utf8');
+let readFileImpl = defaultReadFile;
+/** Tests swap the file reader (to count reads); null restores fs. */
+export function _setReadFile(fn) { readFileImpl = fn || defaultReadFile; }
+export function _resetTraceCache() { traceCache.clear(); }
+
+/** Mark a cache entry as most recently used (and insert it when given); evicts the oldest past the size. */
+function cacheTouch(traceId, entry = traceCache.get(traceId)) {
+  if (!entry) return null;
+  traceCache.delete(traceId);
+  traceCache.set(traceId, entry);
+  while (traceCache.size > TRACE_CACHE_SIZE) traceCache.delete(traceCache.keys().next().value);
+  return entry;
+}
+
+/** A span this process is writing: into its trace's cache when that trace is cached (otherwise the load reads it from disk). */
+function cacheSpan(span) {
+  const e = traceCache.get(span.traceId);
+  if (e) e.byId.set(span.spanId, span);
+}
+
+/** Read one trace's spans from its day files into the entry — without overriding spans written while the read ran (they are newer). */
+async function loadTrace(traceId, e) {
+  await flush();
+  const from = traceDay(traceId); // a trace's spans start on or after the day in its id (a long project keeps adding spans for days)
+  const files = (await fsp.readdir(dir()).catch(() => [])).filter((f) => DAY_FILE.test(f) && f.slice(0, 10) >= from).sort();
+  const disk = new Map();
+  for (const f of files) {
+    const text = await readFileImpl(path.join(dir(), f)).catch(() => '');
+    for (const line of text.split('\n')) {
+      if (!line || !line.includes(traceId)) continue;
+      let s;
+      try { s = JSON.parse(line); } catch { continue; }
+      if (s.traceId === traceId) disk.set(s.spanId, s);
+    }
+  }
+  for (const [id, s] of disk) if (!e.byId.has(id)) e.byId.set(id, s);
+}
+
+/** One trace's spans, from the cache (loaded from disk once), oldest first. */
+async function cachedTrace(traceId) {
+  let e = cacheTouch(traceId);
+  if (!e) {
+    e = { byId: new Map(), ready: null };
+    cacheTouch(traceId, e);
+    e.ready = loadTrace(traceId, e).then(() => { e.ready = null; }, (err) => { traceCache.delete(traceId); throw err; });
+  }
+  if (e.ready) await e.ready;
+  return [...e.byId.values()].sort((a, b) => a.start - b.start);
+}
+
+/** Spans from the day files in [since, until] (ms) — or of one trace (cached, see above) — last line per spanId, oldest first. */
 export async function readSpans({ since = 0, until = Infinity, traceId = '' } = {}) {
+  if (traceId) return cachedTrace(traceId);
   // Spans this process has queued (an intake ended just before its response closed) are on disk before we read.
   await flush();
-  const files = (await fsp.readdir(dir()).catch(() => [])).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort();
-  // A trace's spans start on or after the day in its id (a long project keeps adding spans for days).
-  const from = traceId ? traceDay(traceId) : since ? dayOf(since) : '';
-  const to = !traceId && Number.isFinite(until) ? dayOf(until) : '9999-99-99';
+  const files = (await fsp.readdir(dir()).catch(() => [])).filter((f) => DAY_FILE.test(f)).sort();
+  const from = since ? dayOf(since) : '';
+  const to = Number.isFinite(until) ? dayOf(until) : '9999-99-99';
   const byId = new Map();
   for (const f of files) {
     const d = f.slice(0, 10);
     if (d < from || d > to) continue;
-    const text = await fsp.readFile(path.join(dir(), f), 'utf8').catch(() => '');
+    const text = await readFileImpl(path.join(dir(), f)).catch(() => '');
     for (const line of text.split('\n')) {
-      if (!line || (traceId && !line.includes(traceId))) continue;
+      if (!line) continue;
       let s;
       try { s = JSON.parse(line); } catch { continue; }
-      if (traceId && s.traceId !== traceId) continue;
       byId.set(s.spanId, s);
     }
   }
