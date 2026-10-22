@@ -35,6 +35,10 @@ test('config.router: on by default with the LocalJev engine; bad values fall bac
   assert.equal(s.fallback, 'claude');
   assert.equal(s.jev.timeoutMs, 8000);
   assert.equal(s.jev.minProb, 1);
+  assert.equal(s.rulesFirst, true, 'rules first by default');
+  assert.equal(R.routerSettings({ rulesFirst: 'off' }).rulesFirst, false);
+  assert.throws(() => R.applyRouterPatch({}, { rulesFirst: 'maybe' }), /rulesFirst must be/);
+  assert.equal(R.routerView(R.applyRouterPatch({}, { rulesFirst: false })).rulesFirst, false);
   assert.equal(R.prerouteOn(undefined, { preroute: false }), false);
   assert.equal(R.prerouteOn('on', { preroute: false }), true, 'the per-request value wins');
   assert.equal(R.prerouteOn(false, { preroute: true }), false);
@@ -109,7 +113,8 @@ test('route: engine first, then its fallback, then keyword rules', async () => {
   const jevNo = async () => { calls.push('jev'); return null; };
   const claudeOk = async () => { calls.push('claude'); return { route: 'answer', reason: 'claude' }; };
   const claudeNo = async () => { calls.push('claude'); return null; };
-  const settings = R.routerSettings({ engine: 'jev', fallback: 'claude' });
+  // rulesFirst off: this test is about the engine order (with it on, a plain question never reaches an engine — test/fast-lane.test.js)
+  const settings = R.routerSettings({ engine: 'jev', fallback: 'claude', rulesFirst: false });
   assert.equal((await R.route('tell me a joke', ctx(), { settings, engines: { jev: jevOk, claude: claudeOk } })).via, 'jev');
   assert.deepEqual(calls.splice(0), ['jev']);
   const c = ctx();
@@ -117,7 +122,7 @@ test('route: engine first, then its fallback, then keyword rules', async () => {
   assert.deepEqual(calls.splice(0), ['jev', 'claude']);
   assert.equal(c.capture.tried[0].engine, 'jev');
   assert.equal((await R.route('tell me a joke', ctx(), { settings, engines: { jev: jevNo, claude: claudeNo } })).via, 'rules');
-  assert.equal((await R.route('tell me a joke', ctx(), { settings: R.routerSettings({ engine: 'rules', fallback: 'rules' }), engines: { jev: jevOk, claude: claudeOk } })).via, 'rules');
+  assert.equal((await R.route('tell me a joke', ctx(), { settings: R.routerSettings({ engine: 'rules', fallback: 'rules', rulesFirst: false }), engines: { jev: jevOk, claude: claudeOk } })).via, 'rules');
   assert.deepEqual(calls.splice(0), ['jev', 'claude'], 'rules calls no engine');
   // A plain question Jev answered unsure about skips the slow fallback; Jev being down does not.
   const jevUnsure = async (t, c) => { calls.push('jev'); c.capture.unsure = true; return null; };

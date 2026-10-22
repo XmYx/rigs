@@ -326,3 +326,156 @@ test('startApp on win32: the windows command goes through spawnCmd — no system
   deps.platform = 'darwin';
   await assert.rejects(A.startApp('dual', { deps }), /no launch recipe for darwin \(add "launch": \{ "darwin"/);
 });
+
+// ---------------------------------------------------------------- reliability: slow starts, backoff, opensFor
+
+test('validateApp: startupGraceMs (5 s – 15 min) and opensFor { workspace, keywords, path? } are validated and kept', () => {
+  const ok = A.validateApp({ id: 'bm', port: 8600, startupGraceMs: 300000, opensFor: { workspace: ' body_matching_implementation ', keywords: [' Train', 'epoch', 'train', ''], path: '/training' } });
+  assert.deepEqual(ok.errors, []);
+  assert.equal(ok.app.startupGraceMs, 300000);
+  assert.deepEqual(ok.app.opensFor, { workspace: 'body_matching_implementation', keywords: ['train', 'epoch'], path: '/training' });
+  const noPath = A.validateApp({ id: 'bm', port: 8600, opensFor: { workspace: 'w', keywords: ['x'] } });
+  assert.deepEqual(noPath.app.opensFor, { workspace: 'w', keywords: ['x'] });
+  assert.equal('startupGraceMs' in A.validateApp({ id: 'bm', port: 8600 }).app, false, 'absent when not declared (the default applies)');
+  const bad = (patch) => A.validateApp({ id: 'bm', port: 8600, ...patch }).errors.join('; ');
+  assert.match(bad({ startupGraceMs: 1000 }), /startupGraceMs must be a number of milliseconds between 5000 and 900000/);
+  assert.match(bad({ startupGraceMs: 'soon' }), /startupGraceMs must be/);
+  assert.match(bad({ startupGraceMs: 900001 }), /startupGraceMs must be/);
+  assert.match(bad({ opensFor: 'training' }), /opensFor must be an object/);
+  assert.match(bad({ opensFor: { keywords: ['x'] } }), /opensFor\.workspace must be text/);
+  assert.match(bad({ opensFor: { workspace: 'w', keywords: 'train' } }), /opensFor\.keywords must be an array/);
+  assert.match(bad({ opensFor: { workspace: 'w', keywords: [' '] } }), /at least one word/);
+  assert.match(bad({ opensFor: { workspace: 'w', keywords: Array.from({ length: 13 }, (_, i) => `k${i}`) } }), /at most 12 words/);
+  assert.match(bad({ opensFor: { workspace: 'w', keywords: ['x'.repeat(41)] } }), /at most 40 characters/);
+  assert.match(bad({ opensFor: { workspace: 'w', keywords: ['x'], path: 'training' } }), /opensFor\.path must start with \//);
+  // The field survives registration and shows in the catalog (the planner reads it from there).
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'bm', port: 8600, startupGraceMs: 300000, opensFor: { workspace: 'body_matching_implementation', keywords: ['train'], path: '/training' } }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  const listed = A.localApps().apps.find((a) => a.id === 'bm');
+  assert.deepEqual(listed.opensFor, { workspace: 'body_matching_implementation', keywords: ['train'], path: '/training' });
+  assert.equal(listed.startupGraceMs, 300000);
+});
+
+test('startApp: a slow app answers pending after pendingAfterMs; the probe loop goes on until its startupGraceMs and the apps event says when it is up', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'slow', name: 'Body Matching', port: 9, healthPath: '/healthz', launch: { command: 'python api.py' }, startupGraceMs: 300000 }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  let probes = 0;
+  let upAfter = 8; // the app answers on the 8th probe after the launch
+  let t = 0; // injected clock: every poll is "a second" later
+  const spawned = [];
+  const deps = {
+    probe: async () => (++probes > upAfter ? { ok: true, latencyMs: 2 } : { ok: false, error: 'ECONNREFUSED' }),
+    spawn: (command) => { spawned.push(command); return { unref() {}, on() {} }; },
+    sleep: () => { t += 1000; return new Promise((ok) => setTimeout(ok, 4)); },
+    now: () => t,
+    platform: 'linux',
+  };
+  const seen = [];
+  const off = A.onAppsChange((r) => seen.push(r.apps.find((a) => a.id === 'slow').health.status));
+  const r = await A.startApp('slow', { deps, pollMs: 1, pendingAfterMs: 10 });
+  assert.deepEqual([r.started, r.pending, r.health.status], [true, true, 'down'], JSON.stringify(r));
+  assert.deepEqual(spawned, ['python api.py']);
+  assert.ok(A.isStarting('slow'), 'the background loop is still probing');
+  // A second start while one is in flight joins it instead of launching again.
+  const again = await A.startApp('slow', { deps, pollMs: 1, pendingAfterMs: 10 });
+  assert.equal(again.pending, true);
+  assert.equal(spawned.length, 1);
+  for (let i = 0; i < 200 && A.isStarting('slow'); i++) await new Promise((ok) => setTimeout(ok, 5));
+  assert.equal(A.isStarting('slow'), false);
+  assert.equal(A.localApps().apps[0].health.status, 'up');
+  assert.deepEqual(seen, ['down', 'up'], 'the apps event fired when it came up (the UI reloads the window on it)');
+  assert.ok(t <= 10000, `came up after ${t / 1000} s of polling, within its grace`);
+  off();
+  // Never answering: the loop ends at the app's startupGraceMs (300 s here, not the old fixed 60 s) and records why.
+  A.resetAppsState();
+  probes = 0; upAfter = Infinity; t = 0; spawned.length = 0;
+  const r2 = await A.startApp('slow', { deps, pollMs: 1, pendingAfterMs: 10 });
+  assert.equal(r2.pending, true);
+  for (let i = 0; i < 2000 && A.isStarting('slow'); i++) await new Promise((ok) => setTimeout(ok, 5));
+  assert.equal(A.isStarting('slow'), false);
+  const h = A.localApps().apps[0].health;
+  assert.equal(h.status, 'down');
+  assert.match(h.error, /Body Matching was started but did not answer \/healthz within 300s/);
+  assert.ok(t >= 300000, `polled for the whole grace (${t / 1000} s)`);
+  // Awaited without a pending cut-off (the old behaviour): the 504 is the rejection.
+  A.resetAppsState();
+  probes = 0; t = 0;
+  await assert.rejects(A.startApp('slow', { deps, pollMs: 1, pendingAfterMs: Infinity, waitMs: 5000 }), /did not answer \/healthz within 5s/);
+});
+
+test('startAppAsync: answers as soon as the launch was issued; already up is a no-op; launch errors still throw', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'svc2', port: 9, launch: { systemd: 'svc2.service' } }, { id: 'bare2', port: 9 }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  let up = false;
+  const calls = [];
+  const deps = {
+    probe: async () => (up ? { ok: true, latencyMs: 1 } : { ok: false, error: 'ECONNREFUSED' }),
+    run: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); setTimeout(() => { up = true; }, 20); return { code: 0, stdout: '', stderr: '' }; },
+    sleep: () => new Promise((ok) => setTimeout(ok, 5)),
+    platform: 'linux',
+  };
+  const seen = [];
+  const off = A.onAppsChange((r) => seen.push(r.apps.find((a) => a.id === 'svc2').health.status));
+  const r = await A.startAppAsync('svc2', { deps, pollMs: 1 });
+  assert.deepEqual([r.started, r.pending], [true, true]);
+  assert.deepEqual(calls, ['systemctl --user start svc2.service']);
+  assert.equal(up, false, 'answered before the app was up');
+  for (let i = 0; i < 200 && A.isStarting('svc2'); i++) await new Promise((ok) => setTimeout(ok, 5));
+  assert.equal(A.localApps().apps.find((a) => a.id === 'svc2').health.status, 'up');
+  assert.ok(seen.includes('up'));
+  off();
+  const noop = await A.startAppAsync('svc2', { deps });
+  assert.equal(noop.started, false);
+  assert.equal(calls.length, 1);
+  // startApp({ mode: 'async' }) is the same entry point (server.js switches the route with it).
+  up = false;
+  const viaMode = await A.startApp('svc2', { mode: 'async', deps, pollMs: 1 });
+  assert.equal(viaMode.pending, true);
+  for (let i = 0; i < 200 && A.isStarting('svc2'); i++) await new Promise((ok) => setTimeout(ok, 5));
+  up = false;
+  await assert.rejects(A.startAppAsync('bare2', { deps }), /no launch recipe/);
+  await assert.rejects(A.startAppAsync('nope', { deps }), /unknown app/);
+});
+
+test('health checks back off per app: a dead app is probed at 5, 10, 20, 40, 60 s (cap); answering or startApp resets it', async () => {
+  const cfg = loadConfig();
+  cfg.apps = [{ id: 'dead', port: 9 }, { id: 'fine', port: 9 }];
+  saveConfig(cfg);
+  A.resetAppsState();
+  let t = 0;
+  const now = () => t;
+  const opts = { now, baseMs: 5000, maxMs: 60000, fetchImpl: async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); } };
+  assert.deepEqual((await A.checkDue(opts)).sort(), ['dead', 'fine'], 'never probed: both due');
+  assert.deepEqual([A.backoffFor('dead'), A.backoffFor('fine')], [5000, 5000]);
+  t = 4999;
+  assert.deepEqual(await A.checkDue(opts), [], 'nothing due yet');
+  const gaps = [];
+  for (const at of [5000, 15000, 35000, 75000, 135000, 195000]) { t = at; await A.checkDue(opts); gaps.push(A.backoffFor('dead')); }
+  assert.deepEqual(gaps, [10000, 20000, 40000, 60000, 60000, 60000], 'doubles to the 60 s cap and stays there');
+  // Between those, a tick finds nothing due: a dead app no longer costs a request every 5 s.
+  t = 140000;
+  assert.deepEqual(await A.checkDue(opts), []);
+  // It answers → back to the base interval.
+  t = 255000;
+  assert.deepEqual(await A.checkDue({ ...opts, fetchImpl: async () => ({ status: 200 }) }), ['dead', 'fine']);
+  assert.equal(A.backoffFor('dead'), 5000);
+  assert.equal(A.localApps().apps.find((a) => a.id === 'dead').health.status, 'up');
+  // Down again twice → 10 s gap; a start request resets it so the next tick looks at once.
+  t = 260000; await A.checkDue(opts);
+  t = 265000; await A.checkDue(opts);
+  assert.equal(A.backoffFor('dead'), 10000);
+  A.resetBackoff('dead');
+  assert.equal(A.backoffFor('dead'), 0);
+  t = 265001;
+  assert.deepEqual(await A.checkDue(opts), ['dead'], 'probed at once after the reset, the other app waits its turn');
+  // checkAll (a manual sweep) probes everything and re-plans from the results.
+  t = 270000;
+  await A.checkAll({ ...opts, fetchImpl: async () => ({ status: 200 }) });
+  assert.deepEqual([A.backoffFor('dead'), A.backoffFor('fine')], [5000, 5000]);
+});

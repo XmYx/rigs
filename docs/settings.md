@@ -262,6 +262,7 @@ Toasts, the attention banner and agent sessions that pop up.
 | **Notifications** `ui.notifications` | switch | browser | localStorage `rigs.notifications` (`#d-notify`) | default `true` |
 | **"Agent needs you" banner** `ui.attnBanner` | switch | browser | localStorage `rigs.attnBanner` (`#d-attnbanner`) | default `true` |
 | **Auto-open new agent sessions** `ui.autoOpenSessions` | switch | browser | localStorage `rigs.autoOpenSessions` (`#d-autosess`) | default `true` |
+| **Open filed work** `ui.openFiledWork` | switch | browser | localStorage `rigs.openFiledWork` | default `true` |
 | **Speak on this machine's speakers** `persona.speakAloud` | select: auto · never | machine | `persona.speakAloud` → `POST /api/local/config` | default `"auto"` |
 
 ### 🎙 JARVIS Voice & Hearing
@@ -313,6 +314,7 @@ How a request is classified and how quick answers run.
 | Setting | Control | Scope | Lives in | Notes |
 | --- | --- | --- | --- | --- |
 | Pre-routing › **Pre-routing** `router.preroute` | switch | global | `router.preroute` → `POST /api/local/router` | default `true` · `rigs preroute on\|off` |
+| Pre-routing › **Rules first** `router.rulesFirst` | switch | global | `router.rulesFirst` → `POST /api/local/router` | default `true` |
 | Pre-routing › **Engine** `router.engine` | select: LocalJev · Claude (Haiku) · Keyword rules | global | `router.engine` → `POST /api/local/router` | default `"jev"` · `rigs preroute engine jev\|claude\|rules` |
 | Pre-routing › **Fallback** `router.fallback` | select: Claude · Keyword rules | global | `router.fallback` → `POST /api/local/router` | default `"claude"` |
 | Pre-routing › **Claude router model** `router.claudeModel` | text: ‹models:claude› | global | `router.claudeModel` → `POST /api/local/router` | default `"claude-haiku-5-5"` |
@@ -333,6 +335,7 @@ How a request is classified and how quick answers run.
 | Quick fast path › **Research and reports: effort** `quick.standard.effort` | select: ‹efforts:claude› | global | `quick.standard.effort` → `POST /api/local/quick` | default `"medium"` |
 | Quick fast path › **Max tool turns** `quick.maxTurns` | number 1–50 | global | `quick.maxTurns` → `POST /api/local/quick` | default `8` |
 | Quick fast path › **Timeout** `quick.timeoutMs` | number 5000–600000 ms | global | `quick.timeoutMs` → `POST /api/local/quick` | default `90000` |
+| Quick fast path › **Stall watchdog** `quick.stallMs` | number 0–600000 ms | global | `quick.stallMs` → `POST /api/local/quick` | default `20000` |
 
 ### 🗣 Local Responder
 
@@ -407,6 +410,7 @@ How unattended work retries, and the permissions agents run with.
 | Completion loop › **Answer agent questions after** `autonomy.answerAfterSec` | number 0–3600 s | machine | `autonomy.answerAfterSec` → `POST /api/local/config` | default `90` |
 | Completion loop › **Self-answers per attempt** `autonomy.maxSelfAnswers` | number 0–20 | machine | `autonomy.maxSelfAnswers` → `POST /api/local/config` | default `3` |
 | Completion loop › **Retry delay** `autonomy.retryDelaySec` | number 0–3600 s | machine | `autonomy.retryDelaySec` → `POST /api/local/config` | default `60` |
+| Completion loop › **Review small plans** `autonomy.reviewSmall` | switch | machine | `autonomy.reviewSmall` → `POST /api/local/config` | default `false` |
 | Agents RIGS starts on this machine › **Claude permission mode** `agents.claudePermissionMode` | select: auto · acceptEdits · manual · dontAsk · bypassPermissions · plan | machine | `agents.claudePermissionMode` → `POST /api/local/config` | default `"auto"` |
 | Agents RIGS starts on this machine › **Codex sandbox** `agents.codexSandbox` | select: read-only · workspace-write (home) · danger-full-access | machine | `agents.codexSandbox` → `POST /api/local/config` | default `"workspace-write"` |
 | Agents RIGS starts on this machine › **Codex approvals** `agents.codexApproval` | select: untrusted · on-failure · on-request · never | machine | `agents.codexApproval` → `POST /api/local/config` | default `"on-request"` |

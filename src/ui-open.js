@@ -1,10 +1,16 @@
 // Opening a view in the JARVIS UI from a brain or an agent: MCP `ui_open` → POST /api/mesh/ui/open → a `ui-open`
-// WebSocket push to the UI that made the request (else every open UI on the mesh). Today the one view is the file
-// browser ("files"); a new view = a name in UI_VIEWS, its argument rules in validateOpen, and a case in the UI's
+// WebSocket push to the UI that made the request (else every open UI on the mesh). Views (UI_VIEWS): the file browser
+// ("files", the default), an App Cloud app window ("app"), a page in a sandboxed window ("url"), the Projects window on
+// a project ("project"), the trace explorer ("trace"), the 3D viewer for a .glb/.gltf/.obj ("model") and a file in one
+// built-in tool ("tool"). A new view = a name in UI_VIEWS, its argument rules in validateOpen, and a case in the UI's
 // ui-open-model.js. The parts here are pure (tested in test/ui-open.test.js); server.js wires them to the mesh.
 import { matchMachine } from './workspaces.js';
 
-export const UI_VIEWS = ['files'];
+export const UI_VIEWS = ['files', 'app', 'url', 'project', 'trace', 'model', 'tool'];
+/** The built-in file tools `view: 'tool'` can name (ui/src/file-tools.js): csv grid, json tree, pdf, image, text, rendered html, 3D model. */
+export const FILE_TOOLS = ['text', 'image', 'pdf', 'csv', 'json', 'html', 'model'];
+/** What `view: 'url'` may show: an http(s) page, or a same-origin API path (an app's route, a raw file, a report). */
+export const isAllowedUrl = (u) => /^https?:\/\/[^\s/?#]+[^\s]*$/i.test(String(u || '')) || /^\/api\/[^\s]*$/.test(String(u || ''));
 
 // Folders people name instead of a path: "downloads", "my home", "the desktop folder".
 export const NAMED_PLACES = {
@@ -34,12 +40,17 @@ export const isPathLike = (p) => /^(?:~|\/|\\|\.{1,2}(?:[\\/]|$)|[a-z]:[\\/])/i.
 
 function bad(msg) { const e = new Error(msg); e.status = 400; e.code = 'bad-request'; return e; }
 
-/** The tool's arguments, checked: { view, node, path }. Throws a 400 for an unknown view or a malformed value. */
+/**
+ * The tool's arguments, checked. Every view gets { view, node, path } (node = `node` or `machine`, mesh_workspaces'
+ * word for it) plus its own fields: app → { app, path? (a route inside it) }, url → { url }, project → { project },
+ * trace → { trace }, tool → { tool }; `title` rides along when given. Throws a 400 for an unknown view, a missing
+ * required field or a malformed value. `files` is exactly as before: { view, node, path }.
+ */
 export function validateOpen(a = {}) {
   if (a === null || typeof a !== 'object' || Array.isArray(a)) throw bad('ui_open needs an object of arguments');
   const view = a.view === undefined || a.view === '' ? 'files' : a.view;
   if (typeof view !== 'string' || !UI_VIEWS.includes(view)) throw bad(`unknown view "${view}" (one of: ${UI_VIEWS.join(', ')})`);
-  for (const k of ['node', 'machine', 'path']) {
+  for (const k of ['node', 'machine', 'path', 'app', 'url', 'project', 'trace', 'tool', 'title']) {
     if (a[k] !== undefined && a[k] !== null && typeof a[k] !== 'string') throw bad(`${k} must be a string`);
   }
   // `machine` is what mesh_workspaces calls it, and brains carry it over: the same thing as node.
@@ -48,7 +59,51 @@ export function validateOpen(a = {}) {
   if (node.length > 120) throw bad('node is too long');
   if (path.length > 4096) throw bad('path is too long');
   if (/\0/.test(path)) throw bad('path has a NUL byte');
-  return { view, node, path };
+  const out = { view, node, path };
+  const title = String(a.title ?? '').trim();
+  if (title.length > 200) throw bad('title is too long');
+  if (title) out.title = title;
+  switch (view) {
+    case 'files': return out;
+    case 'app': {
+      const app = String(a.app ?? '').trim();
+      if (!app) throw bad('view "app" needs app: the App Cloud app id (see mesh_apps)');
+      if (!/^[a-z0-9-]{1,80}$/.test(app)) throw bad('app must be an App Cloud id: lowercase letters, digits and dashes');
+      if (path && !path.startsWith('/')) throw bad('path for an app is a route inside it and starts with /');
+      return { ...out, app };
+    }
+    case 'url': {
+      const url = String(a.url ?? '').trim();
+      if (!url) throw bad('view "url" needs url: an http(s) page or a /api/... path');
+      if (url.length > 4096) throw bad('url is too long');
+      if (!isAllowedUrl(url)) throw bad('url must be http(s) or a same-origin /api/... path');
+      return { ...out, url };
+    }
+    case 'project': {
+      const project = String(a.project ?? '').trim();
+      if (!project) throw bad('view "project" needs project: the project id');
+      if (!/^[\w.-]{1,120}$/.test(project)) throw bad('project must be an id (letters, digits, - _ .)');
+      return { ...out, project };
+    }
+    case 'trace': {
+      const trace = String(a.trace ?? '').trim();
+      if (!trace) throw bad('view "trace" needs trace: the request trace id (tr-…)');
+      if (!/^tr-\d{8}-[0-9a-f]{12}$/.test(trace)) throw bad('trace must be a trace id like tr-20261022-0123456789ab');
+      return { ...out, trace };
+    }
+    case 'model': {
+      if (!path) throw bad('view "model" needs path: the .glb, .gltf or .obj file');
+      return out;
+    }
+    case 'tool': {
+      const tool = String(a.tool ?? '').trim().toLowerCase();
+      if (!path) throw bad('view "tool" needs path: the file to open');
+      if (!tool) throw bad(`view "tool" needs tool: one of ${FILE_TOOLS.join(', ')}`);
+      if (!FILE_TOOLS.includes(tool)) throw bad(`unknown tool "${tool}" (one of: ${FILE_TOOLS.join(', ')})`);
+      return { ...out, tool };
+    }
+    default: return out;
+  }
 }
 
 /**
@@ -112,13 +167,26 @@ export function nearestExisting(full, kind, parent) {
 }
 
 let seq = 0;
+const pushId = () => `uo-${Date.now().toString(36)}-${(++seq).toString(36)}`;
 /** The push the UI receives. `requested` is what was asked for; `path` what opens; `missing` means it fell back. */
 export function uiOpenEvent({ view = 'files', node, located, requested = '', trace = '', workspace = '' }) {
   return {
-    type: 'ui-open', id: `uo-${Date.now().toString(36)}-${(++seq).toString(36)}`, view,
+    type: 'ui-open', id: pushId(), view,
     nodeId: node.id, nodeName: node.name, path: located.folder, select: located.select || '', missing: !!located.missing,
     requested: String(requested || ''), ...(workspace ? { workspace } : {}), ...(trace ? { trace } : {}),
   };
+}
+
+/**
+ * The push for the other views: { type: 'ui-open', id, view, ...fields, trace? }. app → { app, node, nodeId, path };
+ * url → { url, title? }; project → { project, node?, nodeId? }; trace → { trace }; model / tool → { node, nodeId, path
+ * (the file), folder, tool? }. Empty fields are left out.
+ */
+export function uiOpenPush({ view, trace = '', ...fields }) {
+  const out = { type: 'ui-open', id: pushId(), view };
+  for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== null && v !== '') out[k] = v;
+  if (trace) out.trace = trace;
+  return out;
 }
 
 /** How many UIs a delivery round reached: [{ node, delivered }] → n. */

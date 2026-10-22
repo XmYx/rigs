@@ -1,11 +1,12 @@
-// The file browser's preview pane and Quick Look (Space): image, code, Markdown, PDF, audio and video viewers with a
-// JARVIS-styled transport. Which viewer a file gets and the maths live in preview-model.js. Media streams straight from
+// The file browser's preview pane and Quick Look (Space): image, code, Markdown, PDF, 3D model (model-viewer.js, compact
+// and turning), audio and video viewers with a JARVIS-styled transport. Which viewer a file gets and the maths live in preview-model.js. Media streams straight from
 // files/raw (local or /api/nodes/<id>/files/raw), which answers HTTP Range requests, so a seek fetches only the part
 // that is wanted. Playback stops when the selection changes, Quick Look closes or the window closes (the cleanups).
 import { api, fmtBytes, h, node } from './api.js';
 import { iconOf, kindOf } from './finder-model.js';
 import { claimPlayback, openMediaPlayer, releasePlayback } from './media-player.js';
 import { nativeCtx } from './ctx-tag.js';
+import { mountModelViewer } from './model-viewer-lazy.js';
 import {
   TEXT_SHOWN, fmtTime, highlight, langOf, parseInline, parseMarkdown, progressOf, quickLookSet, quickLookStep, seekTime, skipTime, viewerFor,
 } from './preview-model.js';
@@ -169,6 +170,17 @@ function drawViewer(el, e, ctx, { big = false } = {}) {
     el.append(wrap, h('div', { class: 'actions pv-media-actions' }, toPlayer), note);
   } else if (kind === 'pdf') {
     el.append(h('iframe', { class: `pv-frame${cls}`, src: url, title: e.name }));
+  } else if (kind === 'model') {
+    // A compact 3D view, turning slowly; the status line says triangles, meshes and size (or why it did not load).
+    const stage = h('div', { class: `pv-model${cls}`, 'aria-label': `3D view of ${e.name}` });
+    const cap = h('div', { class: 'pv-cap muted' }, 'Loading…');
+    let viewer = null;
+    mountModelViewer(stage, url, { autoRotate: true, name: e.name, onStatus: (text) => { cap.textContent = text; } })
+      .then((v) => { if (!alive) v.dispose(); else viewer = v; })
+      .catch((err) => { cap.textContent = `Could not load: ${err.message}`; });
+    el.append(stage, cap);
+    const stopModel = () => viewer?.dispose();
+    el._stopModel = stopModel;
   } else if (kind === 'text' || kind === 'markdown') {
     const holder = h('div', { class: 'pv-doc' }, h('div', { class: 'pv-cap muted' }, 'Loading…'));
     el.append(holder);
@@ -185,7 +197,7 @@ function drawViewer(el, e, ctx, { big = false } = {}) {
     el.append(h('div', { class: `pv-info${cls}` }, h('div', { class: 'fd-pv-big', 'aria-hidden': 'true' }, iconOf(e)), h('div', { class: 'pv-title' }, e.name),
       big ? info(e, { rigName: ctx.nodeName, sep: ctx.sep }) : null));
   }
-  return () => { alive = false; for (const m of el.querySelectorAll('video,audio')) releasePlayback(m); stopMedia(el); };
+  return () => { alive = false; el._stopModel?.(); delete el._stopModel; for (const m of el.querySelectorAll('video,audio')) releasePlayback(m); stopMedia(el); };
 }
 
 // ------------------------------------------------------------------ pane

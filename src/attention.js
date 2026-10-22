@@ -18,6 +18,23 @@ import { HOME, isWin, run } from './util.js';
 
 export const events = new EventEmitter();
 const codexPending = new Map(); // key -> item from the codex notify hook
+
+let runner = run;
+let tmuxBin = () => bin('tmux');
+/** Tests swap the process runner and the tmux path (no real tmux needed); null restores both. */
+export function _setRunner(fn, tmux) { runner = fn || run; tmuxBin = tmux ? () => tmux : () => bin('tmux'); }
+
+/** Pane captures in flight at once: a tick with many seats takes one capture's time, not the sum of them. */
+export const CAPTURE_CONCURRENCY = 8;
+
+/** `fn` over `items` with at most `limit` in flight; results in input order (like Promise.all, bounded). */
+export async function pmap(items, fn, limit = CAPTURE_CONCURRENCY) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const k = next++; out[k] = await fn(items[k], k); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 let current = [];
 let primed = false; // the first pass after a (re)start only learns what is already waiting — no re-announcing
 
@@ -79,9 +96,9 @@ export const CHROME = [
 
 /** The approval/trust line a tmux session is showing (null: can't look; false: looked, none). */
 async function promptLine(session) {
-  const t = bin('tmux');
+  const t = tmuxBin();
   if (!t || isWin) return null;
-  const cap = await run(t, ['capture-pane', '-p', '-J', '-t', session, '-S', '-25'], { timeout: 3000 });
+  const cap = await runner(t, ['capture-pane', '-p', '-J', '-t', session, '-S', '-25'], { timeout: 3000 });
   if (cap.code !== 0) return null;
   const lines = cap.stdout.split('\n').filter((l) => l.trim()).slice(-14).reverse();
   const hit = lines.find((l) => CHROME.some((re) => re.test(l)));
@@ -89,23 +106,24 @@ async function promptLine(session) {
 }
 
 async function paneChrome(skip) {
-  const t = bin('tmux');
+  const t = tmuxBin();
   if (!t || isWin) return [];
-  const ls = await run(t, ['list-panes', '-a', '-F', '#{session_name}|~|#{pane_current_command}|~|#{pane_id}'], { timeout: 4000 });
+  const ls = await runner(t, ['list-panes', '-a', '-F', '#{session_name}|~|#{pane_current_command}|~|#{pane_id}'], { timeout: 4000 });
   if (ls.code !== 0) return [];
+  const panes = ls.stdout.split('\n').filter(Boolean).map((line) => line.split('|~|'))
+    .filter(([session, cmd]) => !skip.has(session) && /codex|node|ollama|gemini|aider|python/i.test(cmd));
+  // Every agent pane is captured at once (bounded), in list order — the same items as one by one, in the same order.
+  const caps = await pmap(panes, ([, , pane]) => runner(t, ['capture-pane', '-p', '-J', '-t', pane, '-S', '-25'], { timeout: 3000 }));
   const out = [];
-  for (const line of ls.stdout.split('\n').filter(Boolean)) {
-    const [session, cmd, pane] = line.split('|~|');
-    if (skip.has(session) || !/codex|node|ollama|gemini|aider|python/i.test(cmd)) continue;
-    const cap = await run(t, ['capture-pane', '-p', '-J', '-t', pane, '-S', '-25'], { timeout: 3000 });
-    const tail = cap.stdout.split('\n').filter((l) => l.trim()).slice(-12).join('\n');
-    if (!CHROME.some((re) => re.test(tail))) continue;
+  panes.forEach(([session, cmd], k) => {
+    const tail = caps[k].stdout.split('\n').filter((l) => l.trim()).slice(-12).join('\n');
+    if (!CHROME.some((re) => re.test(tail))) return;
     out.push({
       key: `pane:${session}`, agent: /codex/i.test(cmd) ? 'codex' : cmd, kind: 'waiting', title: session,
       reason: 'prompt on screen: ' + (tail.split('\n').reverse().find((l) => CHROME.some((re) => re.test(l))) || '').trim().slice(0, 100),
       since: Date.now(), session: { kind: session.includes('@') ? 'rig' : 'tmux', id: session },
     });
-  }
+  });
   return out;
 }
 
@@ -141,13 +159,15 @@ async function compute({ projects } = {}) {
   const claudeSessions = new Set(claude.map((x) => x.session?.id));
   // An activity string alone is not a question: a seat in auto mode reports needs_input while it keeps working.
   // When its screen can be read, only a real approval prompt counts.
+  const needs = (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id));
+  const lines = await pmap(needs, (x) => promptLine(x.session.id)); // all seats' screens read at once (bounded)
   const rig = [];
-  for (const x of (await openrigNeeds()).filter((x) => !claudeSessions.has(x.session.id))) {
-    const line = await promptLine(x.session.id);
-    if (line === false) continue;
+  needs.forEach((x, k) => {
+    const line = lines[k];
+    if (line === false) return;
     if (line) x.reason = line;
     rig.push(x);
-  }
+  });
   const covered = new Set([...claude, ...rig, ...codexPending.values()].map((x) => x.session?.id).filter(Boolean));
   const panes = await paneChrome(covered);
   const active = (p) => !['done', 'stopped', 'draft'].includes(p.status);

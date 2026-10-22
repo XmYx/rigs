@@ -66,8 +66,11 @@ function rigsRegistrations() {
   };
 }
 
-export async function ollamaModels() {
-  const url = config().brain.ollamaUrl.replace(/\/$/, '');
+/** How long one `/api/tags` answer (models, or "not running") serves every caller: the brain catalog asks on every turn. */
+export const OLLAMA_TAGS_TTL_MS = 30000;
+let tagsCache = { url: '', at: 0, value: null, pending: null };
+
+async function fetchOllamaTags(url) {
   try {
     const r = await fetch(url + '/api/tags', { signal: AbortSignal.timeout(2500) });
     if (!r.ok) return { running: false, models: [] };
@@ -79,6 +82,21 @@ export async function ollamaModels() {
   } catch {
     return { running: false, models: [] };
   }
+}
+
+/**
+ * Ollama's installed models at config.brain.ollamaUrl: { running, models }. Cached for OLLAMA_TAGS_TTL_MS whether Ollama
+ * answered or not (a down Ollama costs one failed connect per 30 s, not one per catalog call); concurrent callers share
+ * one request. `force` (the Settings page's explicit list) asks again now.
+ */
+export async function ollamaModels({ force = false } = {}) {
+  const url = config().brain.ollamaUrl.replace(/\/$/, '');
+  const fresh = tagsCache.url === url && tagsCache.value && Date.now() - tagsCache.at < OLLAMA_TAGS_TTL_MS;
+  if (fresh && !force) return tagsCache.value;
+  if (tagsCache.pending && tagsCache.url === url) return tagsCache.pending;
+  const pending = fetchOllamaTags(url).then((value) => { tagsCache = { url, at: Date.now(), value, pending: null }; return value; });
+  tagsCache = { ...tagsCache, url, pending };
+  return pending;
 }
 
 let cache = { at: 0, value: null };

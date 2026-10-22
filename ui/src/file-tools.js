@@ -3,12 +3,15 @@ import { openWindow } from './wm.js';
 import { nativeCtx } from './ctx-tag.js';
 import { isPhone } from './mobile.js';
 import { openMediaPlayer } from './media-player.js';
+import { openContentWindow } from './content-window.js';
+import { openModelViewer } from './model-viewer-lazy.js';
 import {
   DELIMITERS, TOOLS, checkJSON, editorTitle, fitScale, imageSiblings, isSaveKey, jsonChildren, jsonKind, jsonSummary,
   nextSort, parseCSV, sniffDelimiter, sortRows, stepIndex, toolFor, zoomStep,
 } from './file-tools-model.js';
 
-// Built-in file tools: text editor, image / PDF / CSV / JSON viewers (audio and video go to media-player.js), each a wm.js window (floats, docks, closes
+// Built-in file tools: text editor, image / PDF / CSV / JSON viewers, rendered HTML (content-window.js, sandboxed) and the 3D
+// viewer for .glb/.gltf/.obj (model-viewer.js, a lazy chunk); audio and video go to media-player.js. Each is a wm.js window (floats, docks, closes
 // like any other; full screen on phones). Opened from the file browser (files.js: double-click by type, "Open with",
 // preview buttons) and by anything else that holds a machine + path:
 //   openFileTool({ nodeId, nodeName, path, name?, tool?, entries?, onSaved? })
@@ -36,11 +39,12 @@ export function openFileTool({ nodeId, nodeName = '', path, name, tool, entries,
   tool = tool || toolFor(name);
   if (!TOOLS[tool]) { toast(`No built-in tool opens ${name}`, 'warn'); return null; }
   if (tool === 'media') return openMediaPlayer({ nodeId, nodeName, path, name, entries }); // one player window, it raises itself
+  if (tool === 'model') return openModelViewer({ nodeId, nodeName, path, name }); // one viewer window per file, it raises itself (a promise: lazy chunk)
   const key = `${nodeId}|${tool}|${path}`;
   const prev = open.get(key);
   if (prev && !prev.closed) { prev.raise(); return prev; }
   const ctx = { nodeId, nodeName, path, name, entries, onSaved };
-  const w = { text: textEditor, image: imageViewer, pdf: pdfViewer, csv: csvViewer, json: jsonViewer }[tool](ctx);
+  const w = { text: textEditor, image: imageViewer, pdf: pdfViewer, csv: csvViewer, json: jsonViewer, html: htmlViewer }[tool](ctx);
   open.set(key, w);
   w.onCleanup(() => { w.closed = true; if (open.get(key) === w) open.delete(key); });
   return w;
@@ -233,6 +237,13 @@ function pdfViewer({ nodeId, nodeName, path, name }) {
         h('button', { class: 'btn', onclick: () => download(nodeId, path) }, '⇩ Download'))));
   } else w.body.append(h('iframe', { class: 'ft-pdf', src: url, title: `PDF: ${name}` }));
   return w;
+}
+
+// ------------------------------------------------------------------ rendered HTML
+
+/** A .html file as a page, in the sandboxed content window (scripts run, but never with the UI's origin: content-window-model.js). */
+function htmlViewer({ nodeId, nodeName, path, name }) {
+  return openContentWindow({ title: `${name}${nodeName ? ' — ' + nodeName : ''}`, icon: TOOLS.html.icon, url: rawUrl(nodeId, path), key: `html:${nodeId}|${path}`, focus: true, className: 'ft-win-html' });
 }
 
 // ------------------------------------------------------------------ CSV viewer

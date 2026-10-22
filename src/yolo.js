@@ -568,12 +568,30 @@ function liveRun(root, meta) {
   const r = { root, dir, meta, pending: new Set(), lastFile: '', timer: null, watcher: null, closed: false, abort: null, activity: '',
     errors: [], errSeq: 0, turnErrBase: 0, dropped: 0, sse: new Set(), listeners: new Set() };
   runs.set(meta.runId, r);
-  try {
-    r.watcher = fs.watch(dir, { recursive: true }, (_ev, name) => onChange(r, name));
-    r.watcher.on('error', () => {});
-  } catch { r.watcher = null; }
+  watch(r);
   return r;
 }
+
+/** Watch the run's sandbox (recursive fs.watch) while the agent may write to it. Idempotent. */
+function watch(r) {
+  if (r.watcher || r.closed) return;
+  try {
+    r.watcher = fs.watch(r.dir, { recursive: true }, (_ev, name) => onChange(r, name));
+    r.watcher.on('error', () => {});
+  } catch { r.watcher = null; }
+}
+
+/** Stop watching: a finished, kept or pruned run holds no open fs.watch (a recursive watcher is not free). */
+function unwatch(r) {
+  try { r.watcher?.close(); } catch {}
+  r.watcher = null;
+}
+
+/** Is this daemon watching the run's sandbox right now? (tests) */
+export const _isWatching = (runId) => !!runs.get(runId)?.watcher;
+
+/** A run that is not over: the agent works on it, or (YOLOv2) it idles between turns, waiting for Sir's feedback. */
+const UNFINISHED = new Set(['running', 'idle']);
 
 /**
  * Start a run: create RIGS_HOME/yolo/<runId>/, write the placeholder index.html, start watching, and emit 'yolo-start'
@@ -656,7 +674,7 @@ export async function finishRun(runId, { ok = true, summary = '' } = {}) {
   flush(r);
   refreshIcon(r); // an icon written before the watcher reported it
   r.closed = true;
-  try { r.watcher?.close(); } catch {}
+  unwatch(r);
   Object.assign(r.meta, { status: r.stopRequested ? 'stopped' : ok ? 'done' : 'failed', ok: !!ok && !r.stopRequested, summary: String(summary || '').slice(0, 500), endedAt: Date.now(), errors: r.errSeq });
   r.abort = null;
   await writeMeta(r);
@@ -733,6 +751,7 @@ export async function beginTurn(runId, { text = '', feedback } = {}, { root = yo
   const turn = (r.meta.turn || 1) + 1;
   Object.assign(r.meta, { status: 'running', ok: null, summary: '', turn, turnStartedAt: Date.now(), endedAt: null });
   r.turnErrBase = r.errSeq;
+  watch(r); // a kept run stopped watching; the agent is about to write again
   let shot = '';
   if (fb?.screenshot) {
     shot = `.feedback/turn-${turn}.${fb.screenshot.ext}`;
@@ -773,7 +792,11 @@ export const isLive = (runId) => { const r = runs.get(runId); return !!r && !r.c
  */
 export async function markKept(runId, keptAs, root = yoloRoot()) {
   const r = runs.get(runId);
-  if (r) { r.meta.keptAs = keptAs; await writeMeta(r); } else {
+  if (r) {
+    r.meta.keptAs = keptAs;
+    if (r.meta.status !== 'running') unwatch(r); // kept: nothing writes here until a follow-up turn (beginTurn watches again)
+    await writeMeta(r);
+  } else {
     const m = await getRun(runId, root);
     if (!m) return null;
     await fsp.writeFile(metaFile(root, runId), JSON.stringify({ ...m, keptAs }, null, 2));
@@ -807,18 +830,32 @@ export async function listRuns({ limit = 50, root = yoloRoot() } = {}) {
   return [...out.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, limit);
 }
 
-/** Keep the newest `keep` runs: older finished ones (folder + meta) are removed. */
+/**
+ * Keep the newest `keep` runs: older FINISHED ones (folder + meta) are removed. A run that is not over is never
+ * pruned: one the agent is working on, or a YOLOv2 run idling between turns (its window is open, Sir may still send
+ * feedback; on disk it is revived by the next message) — whether this daemon holds it live or only its meta is left
+ * from before a restart. Exported for tests as _prune.
+ */
 async function prune(root, keep) {
   const ids = (await fsp.readdir(root)).filter(isRunId).sort();
   const old = ids.slice(0, Math.max(0, ids.length - Math.max(0, keep)));
+  const removed = [];
   for (const id of old) {
-    if (runs.get(id)?.meta.status === 'running') continue;
+    const live = runs.get(id);
+    if (live) { if (UNFINISHED.has(live.meta.status)) continue; } else {
+      let meta = null;
+      try { meta = JSON.parse(await fsp.readFile(metaFile(root, id), 'utf8')); } catch {}
+      if (meta?.v2 && UNFINISHED.has(meta.status)) continue;
+    }
     await fsp.rm(path.join(root, id), { recursive: true, force: true });
     await fsp.rm(metaFile(root, id), { force: true });
-    try { runs.get(id)?.watcher?.close(); } catch {}
+    if (live) unwatch(live);
     runs.delete(id);
+    removed.push(id);
   }
+  return removed;
 }
+export const _prune = prune;
 
 const ERROR_TYPES = ['error', 'rejection', 'console', 'resource', 'log'];
 const cut = (v, n) => String(v ?? '').slice(0, n);
@@ -963,4 +1000,4 @@ export async function handle(req, res, runId, rest, { query = new URLSearchParam
 }
 
 /** Tests: forget the live runs (their folders stay). */
-export function _resetRuns() { for (const r of runs.values()) { try { r.watcher?.close(); } catch {} clearTimeout(r.timer); } runs.clear(); }
+export function _resetRuns() { for (const r of runs.values()) { unwatch(r); clearTimeout(r.timer); } runs.clear(); }

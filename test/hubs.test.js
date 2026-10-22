@@ -33,13 +33,16 @@ function fakeRig() {
     st.calls.push(args);
     const [a, b] = args;
     if (a === '--version') return st.version;
-    if (a === 'daemon') return ok('Daemon running on port 7433');
-    if (a === 'ps') return ok(JSON.stringify(args.includes('--nodes') ? st.nodes : []));
+    if (a === 'daemon') return ok(st.daemon === 'stopped' ? 'Daemon is not running' : 'Daemon running on port 7433');
+    // nodesFail: `rig ps --nodes` errors (a busy daemon); hideNodes: it answers, but without the seats (a stale read)
+    if (a === 'ps' && args.includes('--nodes') && st.nodesFail) return { code: 1, stdout: '', stderr: 'Error: Daemon did not respond — it may be busy or stopped' };
+    if (a === 'ps') return ok(JSON.stringify(args.includes('--nodes') ? (st.hideNodes ? [] : st.nodes) : []));
     if (a === 'host') return ok('[]');
     if (a === 'spec') return ok('valid');
     if (a === 'up' && args.includes('--existing')) { for (const n of st.nodes.filter((x) => x.rigName === b)) n.sessionStatus = 'running'; return ok('{}'); }
     if (a === 'up') {
       const name = fs.readFileSync(b, 'utf8').match(/^name: (.+)$/m)[1];
+      if (st.upReply) return st.upReply(name);
       const n = seat(name, idOf(b));
       st.nodes.push(n);
       return ok(JSON.stringify({ stages: [{ detail: { nodes: [{ sessionName: n.canonicalSessionName }] } }] }));
@@ -69,8 +72,9 @@ const brief = path.join(HOME, 'brief.md');
 fs.writeFileSync(brief, 'do it');
 
 let rig;
-function useFake() { rig = fakeRig(); openrig._setRunner(rig.run); hubs._resetIdle(); return rig; }
+function useFake() { rig = fakeRig(); openrig._setRunner(rig.run); hubs._resetIdle(); hubs._resetSkipLog(); return rig; }
 after(() => openrig._setRunner(null));
+hubs._setWaitStep(5); // waitFor polls the fake every 5 ms instead of every 2 s
 
 test('a pinned folder maps to its hub rig; subfolders too; others are not pinned', () => {
   assert.equal(hubs.pinFor(path.join(PROJ, 'src')).path, PROJ);
@@ -200,6 +204,72 @@ test('JARVIS gets a persistent rig whose overseer receives the intake and is the
   assert.equal(st2.pins[0].up, true);
   assert.ok(st2.pins[0].seats.some((s) => s.lead));
   assert.equal(st2.jarvis.rig, 'jarvis');
+});
+
+// ---------------------------------------------------------------- reliability: the live log's `rig up` loop
+
+test('ensureRig: `rig up` refused with rig_name_running means the rig exists — seats re-read, no second rig, no error', async () => {
+  useFake();
+  // The jarvis rig runs, but the status read that ensureRig started from did not list its seats.
+  rig.nodes.push({ rigName: 'jarvis', logicalId: 'team.overseer', canonicalSessionName: 'team-overseer@jarvis', sessionStatus: 'running', agentActivity: { state: 'idle-at-prompt' }, assignedWorkCount: 0, runtime: 'claude-code' });
+  rig.hideNodes = true;
+  rig.upReply = (name) => { rig.hideNodes = false; return { code: 1, stdout: '', stderr: `rig up failed: code rig_name_running — A rig named "${name}" is already RUNNING` }; };
+  const j = await hubs.ensureJarvis();
+  assert.equal(j.skipped, undefined, JSON.stringify(j));
+  assert.equal(j.created, false, 'not a new rig');
+  assert.equal(j.lead, 'team-overseer@jarvis');
+  assert.equal(rig.cmds('up').length, 1, 'one attempt, then the rig is taken as existing');
+  assert.equal(rig.cmds('add').length, 0, 'the live overseer seat is found on the re-read: nothing added');
+  // Seats still unreadable after the refusal: a skipped pass, never `rig add` into a rig we cannot see.
+  rig.hideNodes = true;
+  rig.upReply = () => ({ code: 1, stdout: '', stderr: 'code rig_name_running' });
+  openrig.invalidate();
+  const again = await hubs.ensureJarvis();
+  assert.match(again.skipped, /running but its seats could not be read/);
+  assert.equal(rig.cmds('add').length, 0);
+});
+
+test('ensureRig: no `rig up` while the daemon is down, busy, or its seat list unreadable; keep() notes it once per 10 minutes', async () => {
+  useFake();
+  rig.daemon = 'stopped';
+  openrig.invalidate();
+  const down = await hubs.ensureJarvis();
+  assert.equal(down.skipped, hubs.SKIP_DAEMON);
+  assert.deepEqual(down.lead, 'team-overseer@jarvis');
+  // Daemon says running, `rig ps --nodes` fails: an empty seat list is "status unavailable", not "no such rig".
+  rig.daemon = 'running';
+  rig.nodesFail = true;
+  openrig.invalidate();
+  const noStatus = await hubs.ensureJarvis();
+  assert.equal(noStatus.skipped, hubs.SKIP_STATUS);
+  assert.equal(rig.cmds('up').length, 0, 'never a rig up on a skipped pass');
+  assert.equal(rig.cmds('spec').length, 0, 'no spec written either');
+  // `rig up` itself answering "Daemon did not respond" is the same: skipped, not an error (the old log had 8 of these).
+  rig.nodesFail = false;
+  rig.upReply = () => ({ code: 1, stdout: '', stderr: 'Error: Daemon did not respond — it may be busy or stopped' });
+  openrig.invalidate();
+  const busy = await hubs.ensureJarvis();
+  assert.equal(busy.skipped, hubs.SKIP_DAEMON);
+  assert.equal(rig.cmds('up').length, 1);
+  // keep(): the skip is logged once per SKIP_LOG_MS, not on every 2-minute pass.
+  rig.nodesFail = true;
+  openrig.invalidate();
+  const logs = [];
+  let t = 1_000_000;
+  const now = () => t;
+  const pass = await hubs.keep({ log: (m) => logs.push(m), now });
+  assert.equal(pass.jarvis.skipped, hubs.SKIP_STATUS);
+  assert.equal(logs.length, 1, logs.join('\n'));
+  assert.match(logs[0], /OpenRig not asked this pass/);
+  for (let i = 0; i < 4; i++) { t += 120_000; openrig.invalidate(); await hubs.keep({ log: (m) => logs.push(m), now }); }
+  assert.equal(logs.length, 1, 'four more passes within 10 minutes: no new line');
+  t += hubs.SKIP_LOG_MS;
+  openrig.invalidate();
+  await hubs.keep({ log: (m) => logs.push(m), now });
+  assert.equal(logs.length, 2, 'after 10 minutes: one more line');
+  // Dispatch into a pinned project's hub while OpenRig is unreadable fails clearly instead of adding seats blind.
+  await assert.rejects(hubs.dispatchTask({ pin, project, task: task('t1', 'code', 'claude-opus-5-5'), dir: PROJ, brief, pointer: 'p' }), /OpenRig did not answer/);
+  assert.equal(rig.cmds('add').length, 0);
 });
 
 test('rig runs with the daemon\'s own Node first on PATH; a broken Node is reported as OpenRig health', async () => {

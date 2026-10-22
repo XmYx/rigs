@@ -327,3 +327,64 @@ test('the installed checkout stays clean: no agents run in it, injected guide bl
   assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), '# Claude Code instructions\n\nRead AGENTS.md.\n');
   assert.deepEqual(cleanInjectedGuides(dir), []);
 });
+
+// ---------------------------------------------------------------- request → result (docs/request-to-result-2026-10-22.md) D2 · D3 · D4
+
+test('D2: a Claude planner plans through the bounded call (one JSON answer, no tools); a failed bounded call falls back to the agentic turn', async () => {
+  const plan = { summary: 'bounded', tasks: [{ id: 't1', title: 'Write the thing', kind: 'code', size: 'M', acceptance: ['it exists'], verify: 'npm test' }] };
+  const calls = [];
+  const c = ctx({ planCall: async (prompt, brain) => { calls.push({ prompt, brain }); return { text: JSON.stringify(plan), usage: null }; } });
+  const p = await P.createProject({ name: 'Bounded', goal: 'make the thing', repoNode: 'macbookpro', repoPath: path.join(ROOT, 'wt') });
+  const planned = await P.planProject(p.id, c);
+  assert.equal(calls.length, 1, 'one bounded call');
+  assert.match(calls[0].prompt, /make the thing/);
+  assert.deepEqual(Object.keys(calls[0].brain).sort(), ['effort', 'model', 'provider']);
+  assert.equal(calls[0].brain.provider, 'claude');
+  assert.equal(planned.tasks[0].title, 'Write the thing');
+  assert.ok(planned.log.some((e) => /bounded call/.test(e.text || e.message || JSON.stringify(e))), 'the event says it was the bounded call');
+  // the fallback: the bounded call throws (claude missing, no JSON) → ctx.ask plans instead
+  let asked = 0;
+  const c2 = ctx({ planCall: async () => { throw new Error('claude is not installed'); }, ask: async () => { asked++; return { text: JSON.stringify(plan) }; } });
+  const p2 = await P.createProject({ name: 'Fallback', goal: 'make the other thing', repoNode: 'macbookpro', repoPath: path.join(ROOT, 'wt') });
+  const planned2 = await P.planProject(p2.id, c2);
+  assert.equal(asked, 1);
+  assert.equal(planned2.tasks[0].title, 'Write the thing');
+  assert.ok(planned2.log.some((e) => /fell back to agentic turn/.test(JSON.stringify(e))));
+  // planCall: null = never bounded (the agentic turn only)
+  let asked3 = 0;
+  const c3 = ctx({ planCall: null, ask: async () => { asked3++; return { text: JSON.stringify(plan) }; } });
+  const p3 = await P.createProject({ name: 'Agentic', goal: 'g', repoNode: 'macbookpro', repoPath: path.join(ROOT, 'wt') });
+  await P.planProject(p3.id, c3);
+  assert.equal(asked3, 1);
+});
+
+test('D2: planBrain takes the plan routing rule\'s model and effort; boundedPlanCall spawns claude lean (no tools, no MCP, one turn, JSON)', async () => {
+  const b = P.planBrain({ provider: 'auto', model: 'claude-opus-5-5', effort: 'high' });
+  assert.equal(b.provider, 'claude');
+  assert.ok(b.model, 'a model (the plan rule\'s, else the brain\'s)');
+  assert.equal(typeof P.boundedPlanCall, 'function');
+  assert.equal(P.PLAN_CALL_MS, 5 * 60 * 1000);
+});
+
+test('D3: a one-task plan of size S or M verifies itself (no review task); L, two tasks, or autonomy.reviewSmall keep the review', () => {
+  const one = () => [{ id: 'a', title: 'Small fix', kind: 'code', size: 'S', deps: [], description: 'Fix it.', acceptance: ['fixed'] }];
+  const t = P.ensureFinalReview(one(), 'fix', { reviewSmall: false });
+  assert.equal(t.length, 1, 'no review task added');
+  assert.equal(t[0].selfVerify, true);
+  assert.ok(t[0].description.endsWith(P.SELF_VERIFY));
+  assert.deepEqual(t[0].acceptance, ['fixed', P.SELF_VERIFY]);
+  assert.equal(P.ensureFinalReview(t, 'fix', { reviewSmall: false })[0].acceptance.length, 2, 'idempotent');
+  assert.equal(P.ensureFinalReview(one(), 'fix', { reviewSmall: true }).length, 2, 'reviewSmall: the review stays');
+  assert.equal(P.ensureFinalReview([{ ...one()[0], size: 'L' }], 'fix', { reviewSmall: false }).length, 2, 'an L task is reviewed');
+  assert.equal(P.ensureFinalReview([...one(), { id: 'b', kind: 'code', size: 'S', deps: ['a'] }], 'fix', { reviewSmall: false }).length, 3, 'two tasks are reviewed');
+  assert.equal(P.ensureFinalReview([{ id: 'r', kind: 'review', size: 'S', deps: [] }], 'fix', { reviewSmall: false }).length, 1, 'a lone review stays as it is');
+});
+
+test('D4: stewardBackoff — an unreachable steward is checked (and logged) once, then left alone for 5 minutes', () => {
+  const now = 1_000_000;
+  assert.deepEqual(P.stewardBackoff(undefined, now), { check: true, log: true });
+  assert.deepEqual(P.stewardBackoff({ at: now - 1000, error: 'offline' }, now), { check: false, log: false });
+  assert.deepEqual(P.stewardBackoff({ at: now - P.STEWARD_BACKOFF_MS + 1, error: 'offline' }, now), { check: false, log: false });
+  assert.deepEqual(P.stewardBackoff({ at: now - P.STEWARD_BACKOFF_MS, error: 'offline' }, now), { check: true, log: true });
+  assert.equal(P.STEWARD_BACKOFF_MS, 5 * 60 * 1000);
+});

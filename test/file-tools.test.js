@@ -40,6 +40,8 @@ test('toolFor: double-click opens txt/md in the editor, png/jpg in the image vie
   assert.equal(toolFor('server.js'), 'text');
   assert.equal(toolFor('movie.mp4'), 'media', 'audio and video: the media player');
   assert.equal(toolFor('archive.zip'), null);
+  for (const n of ['chair.glb', 'scene.GLTF', 'mesh.obj']) assert.equal(toolFor(n), 'model', `${n}: the 3D viewer`);
+  assert.equal(toolFor('page.html'), 'text', 'html is text by default; Open with offers the rendered page');
   assert.ok(isZip('x/Archive.ZIP'));
   assert.ok(!isZip('zip.txt'));
 });
@@ -52,7 +54,9 @@ test('toolsFor: "Open with" lists the default tool first, plus the text editor f
   assert.deepEqual(toolsFor('a.pdf'), ['pdf']);
   assert.deepEqual(toolsFor('a.md'), ['text']);
   assert.deepEqual(toolsFor('a.bin'), []);
-  for (const id of ['text', 'image', 'pdf', 'csv', 'json']) assert.ok(TOOLS[id].label && TOOLS[id].icon);
+  assert.deepEqual(toolsFor('a.html'), ['text', 'html']);
+  assert.deepEqual(toolsFor('a.glb'), ['model']);
+  for (const id of ['text', 'image', 'pdf', 'csv', 'json', 'html', 'model']) assert.ok(TOOLS[id].label && TOOLS[id].icon);
 });
 
 // ------------------------------------------------------------------ CSV

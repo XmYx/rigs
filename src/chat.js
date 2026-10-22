@@ -8,7 +8,7 @@ import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeO
 import { bin } from './tools.js';
 import { chatSnapshot, compactionSummary, mergeChat, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
 import { SUMMARY_SYSTEM, applyCompaction, compactSettings, compactStatus, compactionCut, contextTokens, keepCompaction, needsCompaction, summaryPrompt } from './compact.js';
-import { escalationGate, localResponder, parseEscalation, quickBrain, quickNote, resolveQuick } from './quick.js';
+import { QUICK_PROGRESS_EVENTS, escalationGate, localResponder, parseEscalation, quickBrain, quickNote, quickStall, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
 import { parseProjects, prerouteOn, route as routeRequest } from './router.js';
 import * as yolo from './yolo.js';
@@ -24,12 +24,32 @@ import { APP_DIR, HOME, augmentedPath, log, readJson, run, spawnCmd, truncate, w
 
 const DIR = path.join(RIGS_HOME, 'chats');
 
+// listChats is asked several times per request (ongoingThreads, mainChat, the dashboard): an mtime-checked index keeps the
+// summary of every chat file, so only files whose mtime or size changed since the last listing are parsed again.
+const chatIndex = new Map(); // file name → { mtimeMs, size, entry }
+let chatReads = 0;
+/** The chat index's size and how many chat files were parsed since start (tests). */
+export const chatIndexStats = () => ({ entries: chatIndex.size, reads: chatReads });
+const chatEntry = (c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: (c.messages || []).length, project: c.project || '', ongoing: !!c.ongoing, main: !!c.main });
+
 export async function listChats() {
   await fsp.mkdir(DIR, { recursive: true });
   const names = (await fsp.readdir(DIR)).filter((n) => n.endsWith('.json'));
-  const chats = await Promise.all(names.map((n) => readJson(path.join(DIR, n))));
-  return chats.filter(Boolean).map((c) => ({ id: c.id, title: c.title, brain: c.brain, model: c.model, updatedAt: c.updatedAt, count: c.messages.length, project: c.project || '', ongoing: !!c.ongoing, main: !!c.main }))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const present = new Set(names);
+  for (const n of chatIndex.keys()) if (!present.has(n)) chatIndex.delete(n);
+  const chats = await Promise.all(names.map(async (n) => {
+    const file = path.join(DIR, n);
+    const st = await fsp.stat(file).catch(() => null);
+    if (!st) { chatIndex.delete(n); return null; }
+    const hit = chatIndex.get(n);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.entry;
+    chatReads++;
+    const c = await readJson(file);
+    const entry = c ? chatEntry(c) : null;
+    chatIndex.set(n, { mtimeMs: st.mtimeMs, size: st.size, entry });
+    return entry;
+  }));
+  return chats.filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 // chat object → its state when read (chatSnapshot): saving merges in what other writers changed since (see saveChat)
@@ -181,17 +201,22 @@ export function agentsRules() {
   try { return fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->\s*/, '').trim(); } catch { return ''; }
 }
 
-export function personaPrompt(meshSummary, projects = '') {
+/**
+ * The system prompt (`--append-system-prompt`): character, rules, persona, this machine, the mesh's lasting shape
+ * (machine names, platforms, agents and tools) and the capabilities. Nothing in it changes from turn to turn — no
+ * clock, no load numbers, no project list — so a resumed session keeps its prompt cache; those come in the turn's
+ * [now: …] block (liveContext) at the top of the user message. Pure given config and the persona files.
+ */
+export function personaPrompt(meshSummary) {
   const p = config().persona;
   const humor = p.humor ?? 60;
-  const now = new Date();
   const character = p.soul === false ? '' : soul();
   const rules = agentsRules();
   return [
     character ? `${character}\n\n---\n# RIGS specifics` : '',
     rules ? `# Operating rules (AGENTS.md)\n${rules}\n` : '',
     `You are ${p.name}, the voice of RIGS OS — the user's personal control plane for every workstation on their Tailscale network.`,
-    `Local time on this machine: ${now.toLocaleString('en-GB', { weekday: 'long', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'long' })}.`,
+    `Each message from the user opens with a [now: …] block: the local date and time, which machines are online and how loaded they are, and the active projects (id · name · status · on machine) that work is filed under. Trust it over anything earlier in the conversation; it is not part of what the user said.`,
     `This brain is running on the machine "${config().name}" (${os.type()} ${os.release()}, ${process.arch}).`,
     `You work in the user's home (${workRoot()}): you may read, create and edit files there and run commands (git, builds, scripts) to get things done. Other machines' homes are reachable with the mesh_* tools. Be careful with destructive actions: never delete or overwrite the user's data without asking — move things to ~/.rigs/trash instead of deleting.`,
     `Address the user as "${p.address}". Humor setting ${humor}%: ${humor > 70 ? 'dry, cheeky wit welcome' : humor > 30 ? 'a light touch of dry wit' : 'strictly professional'}.`,
@@ -208,9 +233,42 @@ export function personaPrompt(meshSummary, projects = '') {
     '- Projects (project_create / project_list / project_dispatch): plan a goal into tasks and delegate each to the right machine, model and effort (Opus for elaborate work, Sonnet for simpler code, Haiku for simple text, Codex for cross-check reviews). Propose this when the user asks for multi-step work.',
     '- Stopping work: when Sir says stop, pause, hold, drop, "leave it for now" or "consider it done" about a project, call project_stop for it at once (and for each project he names) — do not wait for a running task to finish, do not offer to let it complete, and do not mark tasks done or skipped instead. Confirm in one line that it is paused and that uncommitted edits stay in the tree. A paused project stays paused: never dispatch, revive or file work into it until he says to resume (project_resume).',
     `- The mesh's own source lives in a public GitHub repo checked out on every node; changes pushed there roll out to all machines (mesh_update).`,
-    meshSummary ? `Current mesh state:\n${meshSummary}` : '',
-    projects ? `Projects (id · name · status · owner — file work under these):\n${projects}` : '',
+    meshSummary ? `Machines in the mesh (name: platform · agents · tools; live state comes in the [now: …] block):\n${meshSummary}` : '',
   ].filter(Boolean).join('\n');
+}
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** "Thursday 22 October, 12:41" — built by hand so the block reads the same on every ICU build (no locale "at"). */
+export const clockText = (d = new Date()) => `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+/** How many project rows the [now: …] block carries, and its size cap (one line; the cache-relevant part is the system prompt). */
+export const LIVE_CONTEXT = { projects: 12, maxChars: 1200 };
+
+/**
+ * The per-turn facts that used to live in the system prompt, as one short line prepended to the user message:
+ * `[now: Thursday 22 October, 12:41 · mesh: macbookpro (mac, online), … · active projects: id · name · status; …]`.
+ * `projects` is the "- id · name · status · on node" list (server projectsSummary, most recent first): the first 12 rows
+ * fit, the rest are counted. Under LIVE_CONTEXT.maxChars. Pure given its inputs.
+ */
+export function liveContext({ now = new Date(), mesh = '', projects = '', maxProjects = LIVE_CONTEXT.projects, maxChars = LIVE_CONTEXT.maxChars } = {}) {
+  const parts = [`now: ${clockText(now)}`];
+  const m = String(mesh || '').replace(/\s*\n\s*/g, ', ').trim();
+  if (m) parts.push(`mesh: ${m}`);
+  const rows = String(projects || '').split('\n').map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean);
+  if (rows.length) {
+    const shown = rows.slice(0, maxProjects).map((r) => truncate(r, 90));
+    parts.push(`active projects: ${shown.join('; ')}${rows.length > shown.length ? ` (+${rows.length - shown.length} more: project_list)` : ''}`);
+  }
+  return `[${truncate(parts.join(' · '), maxChars - 2)}]`;
+}
+
+/**
+ * The MCP set of a bounded turn (quick, YOLO): only the rigs server, exactly as ~/.claude.json registers it (node, this
+ * app's bin/rigs.js mcp), so the harness boots no npx-installed servers. The main thread keeps the user's full set. Pure.
+ */
+export function leanMcpConfig({ node = process.execPath, appDir = APP_DIR } = {}) {
+  return { mcpServers: { rigs: { type: 'stdio', command: node, args: [path.join(appDir, 'bin', 'rigs.js'), 'mcp'], env: {} } } };
 }
 
 function cleanEnv() {
@@ -241,7 +299,7 @@ function streamProcess(cmd, args, { cwd, onLine, onStderr, signal, env = {} }) {
   });
 }
 
-async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false, quick = null, yolo: yo = null } = {}) {
+async function runClaude(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, viaOllama = false, quick = null, yolo: yo = null, live = '' } = {}) {
   const cfg = config().brain;
   // The local-model variant is the same harness, stream and tools on another endpoint; it keeps its own Claude session
   // and usage totals (a session started against Anthropic's API is not resumed against Ollama, or the other way round).
@@ -255,13 +313,20 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   const key = viaOllama ? CLAUDE_OLLAMA : 'claude';
   const sessionKey = viaOllama ? 'claudeOllamaSessionId' : yo ? 'yoloSessionId' : quick ? 'quickSessionId' : 'claudeSessionId';
   const usageKey = viaOllama ? 'claudeOllamaUsage' : yo ? 'yoloUsage' : quick ? 'quickUsage' : 'claudeUsage';
-  const system = personaPrompt(meshSummary, projects) + (yo ? '\n\n' + yo.note : quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
+  // The clock, the mesh's live state and the project list (liveContext) head the user message, never the system prompt:
+  // the resumed JARVIS thread keeps its prompt cache. A YOLO turn is a fresh session whose prompt is the task verbatim
+  // (the sandbox page and its errors are the conversation), so there the block goes with the YOLO note instead.
+  const now = liveContext({ mesh: live, projects });
+  const system = personaPrompt(meshSummary) + (yo ? '\n\n' + yo.note + '\n\n' + now : quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
   const resumed = own ? !!own.id : !fresh && !!chat[sessionKey];
-  const args = ['-p', (own?.id ? '' : fresh ? threadContext(chat) : unseenContext(chat, key, { withSummary: !resumed })) + text, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+  const prompt = (yo ? '' : now + '\n') + (own?.id ? '' : fresh ? threadContext(chat) : unseenContext(chat, key, { withSummary: !resumed })) + text;
+  const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--append-system-prompt', system, '--permission-mode', cfg.claudePermissionMode || 'auto'];
   if (cfg.claudeAllowedTools?.length) args.push('--allowedTools', cfg.claudeAllowedTools.join(','));
   if (yo) args.push('--disallowedTools', yolo.YOLO_BLOCKED_TOOLS.join(','));
   if (yo?.agents) args.push('--agents', JSON.stringify(yo.agents));
+  // A bounded turn boots only the rigs MCP server (leanMcpConfig); the main thread keeps the user's full MCP set.
+  if (fresh) args.push('--strict-mcp-config', '--mcp-config', JSON.stringify(leanMcpConfig()));
   args.push('--add-dir', workRoot());
   const maxTurns = yo?.maxTurns || quick?.maxTurns;
   args.push(...(viaOllama ? claudeOllamaFlags({ model }) : claudeFlags({ model, effort, ...(maxTurns ? { maxTurns } : {}) })));
@@ -272,6 +337,8 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   let usage = null;
   let lastCall = null; // the usage of the session's last API call (its context), for when the result lacks iterations
   let context = null;
+  const toolNames = new Map(); // tool_use id → name, so the tool-done event can name the call it closes
+  const blocks = (m) => (Array.isArray(m?.content) ? m.content : []);
   const res = await streamProcess(bin('claude'), args, {
     cwd: yo?.cwd || chat.cwd || HOME, signal, env,
     onLine: (line) => {
@@ -286,7 +353,10 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
         full += '\n\n'; emit({ type: 'delta', text: '\n\n' });
       } else if (e.type === 'assistant') {
         if (e.message?.usage && !e.parent_tool_use_id) lastCall = e.message.usage; // a subagent's call is not this session's context
-        for (const b of e.message?.content || []) if (b.type === 'tool_use') emit({ type: 'tool', name: b.name, input: truncate(JSON.stringify(b.input), 300) });
+        for (const b of blocks(e.message)) if (b.type === 'tool_use') { toolNames.set(b.id, b.name); emit({ type: 'tool', id: b.id, name: b.name, input: truncate(JSON.stringify(b.input), 300) }); }
+      } else if (e.type === 'user') {
+        // a tool's result came back: { type: 'tool-done', id, name, ok } closes the matching tool event (the UI's chips)
+        for (const b of blocks(e.message)) if (b.type === 'tool_result') emit({ type: 'tool-done', id: b.tool_use_id, name: toolNames.get(b.tool_use_id) || '', ok: !b.is_error });
       } else if (e.type === 'system' && e.subtype === 'api_retry') {
         emit({ type: 'status', text: `retrying (${e.error || e.error_status})…` });
       } else if (e.type === 'result') {
@@ -321,9 +391,9 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
 
 const runClaudeOllama = (chat, text, model, effort, emit, meshSummary, signal, projects, opts) => runClaude(chat, text, model, effort, emit, meshSummary, signal, projects, { ...opts, viaOllama: true });
 
-async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env } = {}) {
+async function runCodex(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, env, live = '' } = {}) {
   const cfg = config().brain;
-  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary, projects) + '\n\n') + unseenContext(chat, 'codex', { withSummary: !chat.codexThreadId }) + text;
+  const prompt = (chat.codexThreadId ? '' : personaPrompt(meshSummary) + '\n\n') + liveContext({ mesh: live, projects }) + '\n' + unseenContext(chat, 'codex', { withSummary: !chat.codexThreadId }) + text;
   // `codex exec resume` takes its own option set (no --sandbox: that is fixed by the original session).
   const flags = codexFlags({ model, effort });
   const args = chat.codexThreadId
@@ -362,13 +432,16 @@ async function runCodex(chat, text, model, effort, emit, meshSummary, signal, pr
   return { text: full, error, usage };
 }
 
-async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools } = {}) {
+async function runOllama(chat, text, model, effort, emit, meshSummary, signal, projects = '', { tools, live = '' } = {}) {
   const url = config().brain.ollamaUrl.replace(/\/$/, '') + '/api/chat';
-  const messages = [{ role: 'system', content: personaPrompt(meshSummary, projects) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
+  const messages = [{ role: 'system', content: personaPrompt(meshSummary) + '\n(You are running locally via Ollama without tools: if an action is needed, tell the user which machine/agent can do it, or suggest switching the brain to Claude Code or Codex.)' }];
   // After a compaction (src/compact.js) the summary stands in for the messages before its cut.
   const s = compactionSummary(chat);
   if (s) messages.push({ role: 'system', content: `Summary of the conversation before this (compacted):\n${truncate(s.text, 8000)}` });
   for (const m of chat.messages.slice(s?.upto || 0)) messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text });
+  // the turn's [now: …] block heads the latest user message, as with the other brains
+  const last = messages.at(-1);
+  if (last?.role === 'user') last.content = liveContext({ mesh: live, projects }) + '\n' + last.content;
   let full = '';
   let usage = null;
   try {
@@ -559,11 +632,38 @@ async function directTurn(text, emit, opts) {
   return { chatId: chat.id, hint: '' };
 }
 
+/** How much of the router model's prompt a request trace keeps (the span's input must stay under traces.maxField). */
+const ROUTER_PROMPT_TRACE_CHARS = 4000;
+/** The router waits this long for the workspace catalog before it goes on with the last one it had. */
+export const WORKSPACES_CAP_MS = 1500;
+let lastCatalog = [];
+let catalogRefresh = null;
+/** The last workspace catalog the router had (stale-while-revalidate, cappedWorkspaces). */
+export const cachedWorkspaces = () => lastCatalog;
+
+/**
+ * The workspace catalog for the router, capped: `fn` (server meshWorkspaces — up to 45 s per peer) is started, or an
+ * already running call shared; whatever it has resolved within `capMs` is returned, else the last known catalog, while
+ * the slow call keeps running and refreshes it for the next request. A failed call keeps the last catalog. Never throws.
+ */
+export async function cappedWorkspaces(fn, { capMs = WORKSPACES_CAP_MS } = {}) {
+  if (typeof fn !== 'function') return [];
+  if (!catalogRefresh) {
+    catalogRefresh = Promise.resolve().then(fn).then((v) => { if (Array.isArray(v)) lastCatalog = v; return lastCatalog; }, () => lastCatalog)
+      .finally(() => { catalogRefresh = null; });
+  }
+  let timer;
+  const late = Symbol('late');
+  const v = await Promise.race([catalogRefresh, new Promise((resolve) => { timer = setTimeout(() => resolve(late), capMs); })]);
+  clearTimeout(timer);
+  return v === late ? lastCatalog : v;
+}
+
 /** Pre-routing on: the router decides, RIGS files bound work, and the brain gets the decision as a hint. */
 async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
-  const threads = await ongoingThreads();
+  // Context prep in parallel, capped: the thread list (chat index) and the workspace catalog (last known after 1.5 s).
+  const [threads, catalog] = await Promise.all([ongoingThreads(), cappedWorkspaces(opts.workspaces)]);
   const projects = parseProjects(opts.projects || '');
-  const catalog = opts.workspaces ? await opts.workspaces().catch(() => []) : [];
   // The router's span hangs off the request's intake span (opts.trace); capture gets the router model's prompt + reply.
   const capture = {};
   const rspan = opts.trace ? trace.startSpan({ ...opts.trace, kind: 'router', name: 'route', input: { text, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) }, meta: { preroute: true } }) : null;
@@ -588,7 +688,8 @@ async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
       });
   rspan?.end({
     status: chat ? 'ok' : 'error',
-    input: { text, prompt: capture.prompt || null, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) },
+    // the router prompt (workspaces, projects, threads) can run long: capped so the span's input stays one readable structure
+    input: { text, prompt: capture.prompt ? truncate(capture.prompt, ROUTER_PROMPT_TRACE_CHARS) : null, threads: threads.map((t) => ({ id: t.id, title: t.title })), projects: projects.map((p) => p.id) },
     output: { route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', title: decision.title || '', reason: decision.reason || '', reply: capture.reply ?? null, work: (decision.work || []).map((w) => ({ title: w.title, goal: w.goal, node: w.node || '', workspace: w.workspace?.name || '', unresolved: !!w.unresolved })) },
     meta: { preroute: true, route: decision.route, projectId: decision.projectId || '', threadId: decision.threadId || '', chatId: chat?.id || '', via: decision.via || '', reason: decision.reason || '', model: m.model, routerMs: m.routerMs, ...(capture.tried ? { tried: capture.tried } : {}), ...(capture.error ? { modelError: capture.error } : {}) },
   });
@@ -615,7 +716,7 @@ async function preroutedTurn(text, { brain, model, effort }, emit, opts, m) {
  * hears every finished tool call, traced or not; the turn is filed in the usage ledger. `meta` adds facts to the span
  * (the fast path's lane, tier…), `lane` tags the ledger record, `runOpts` go to the runner.
  */
-async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, onToolStart, usage, sessionKey, meta = {}, lane = '', tier = '', runOpts = {} }) {
+async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, live = '', projects, signal, tctx, onTool, onToolStart, usage, sessionKey, meta = {}, lane = '', tier = '', runOpts = {} }) {
   const startedAt = Date.now();
   const ctx = trace.parseContext(tctx);
   const span = ctx ? trace.startSpan({ ...ctx, kind: 'brain-turn', name: `${resolved.brain} ${resolved.model}`.trim(), input: sent, start: startedAt,
@@ -629,7 +730,7 @@ async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, proj
   if (span) tracedTurns.set(chat.id, { provider: resolved.brain, ctx: span.ctx });
   let out;
   try {
-    out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects, { ...runOpts, tools, env: span ? { RIGS_TRACE: trace.formatContext(span.ctx) } : {} });
+    out = await runner(chat, sent, resolved.model, resolved.effort, emit, meshSummary, signal, projects, { ...runOpts, live, tools, env: span ? { RIGS_TRACE: trace.formatContext(span.ctx) } : {} });
   } catch (e) {
     tools?.close('error');
     span?.end({ status: 'error', output: { error: e.message } });
@@ -666,7 +767,7 @@ async function tracedRun({ chat, runner, resolved, sent, emit, meshSummary, proj
  * time) nothing has been shown: the Claude turn above answers instead, and the result says why (fallback). One after
  * the other, never both at once. With it off this is exactly the Claude turn.
  */
-export async function quickTurn(id, text, q, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
+export async function quickTurn(id, text, q, emit, { meshSummary = '', live = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const local = localResponder(q, config().quick, { self: config().name, text });
@@ -681,22 +782,34 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
   const ran = [];
   let filed = false;
   const sent = hint ? `${hint}\n${text}` : text;
-  // One bounded turn: its own abort (the timeout) on top of Sir's stop.
-  const bounded = async (runner, meta, runOpts, timeoutMs, ledgerTier = '') => {
+  // One bounded turn: its own abort (the timeout, and for a Claude turn the stall watchdog) on top of Sir's stop.
+  const bounded = async (runner, meta, runOpts, timeoutMs, ledgerTier = '', stallMs = 0) => {
     const ac = new AbortController();
     let timedOut = false;
+    let stalled = '';
     const stop = () => ac.abort();
     signal?.addEventListener('abort', stop, { once: true });
     const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
+    // The watchdog (quick.quickStall): no delta / tool / tool-done for stallMs past the cold-start grace → abort and escalate.
+    const startedAt = Date.now();
+    let lastEventAt = 0;
+    let watchdog = null;
+    const watch = () => {
+      const s = quickStall({ now: Date.now(), startedAt, lastEventAt, stallMs });
+      if (s.stalled) { stalled = s.reason; ac.abort(); return; }
+      if (s.checkInMs > 0) watchdog = setTimeout(watch, s.checkInMs);
+    };
+    if (stallMs > 0) watch();
+    const progress = (e) => { if (e && QUICK_PROGRESS_EVENTS.includes(e.type)) lastEventAt = Date.now(); return gate.emit(e); };
     try {
-      const out = await tracedRun({ chat, runner, resolved, sent, emit: gate.emit, meshSummary, projects, signal: ac.signal, tctx, usage: null, sessionKey: 'quickSessionId', lane: 'quick', tier: ledgerTier, meta,
+      const out = await tracedRun({ chat, runner, resolved, sent, emit: progress, meshSummary, live, projects, signal: ac.signal, tctx, usage: null, sessionKey: 'quickSessionId', lane: 'quick', tier: ledgerTier, meta,
         onToolStart: (c) => ran.push(`${c.name}${c.input ? ' ' + truncate(typeof c.input === 'string' ? c.input : JSON.stringify(c.input), 120) : ''}`),
         onTool: (name, r) => { if (r.status === 'ok' && HANDOFF_TOOL.test(name || '')) filed = true; onTool?.(name, r); },
         runOpts });
-      return { out, timedOut, timeoutMs };
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); }
+      return { out, timedOut, stalled, timeoutMs };
+    } finally { clearTimeout(timer); clearTimeout(watchdog); signal?.removeEventListener('abort', stop); }
   };
-  const claudeTurn = () => bounded(runClaude, { lane: 'quick', tier: q.tier, why: q.why, maxTurns: q.maxTurns, timeoutMs: q.timeoutMs }, { quick: { maxTurns: q.maxTurns } }, q.timeoutMs);
+  const claudeTurn = () => bounded(runClaude, { lane: 'quick', tier: q.tier, why: q.why, maxTurns: q.maxTurns, timeoutMs: q.timeoutMs, stallMs: q.stallMs ?? 0 }, { quick: { maxTurns: q.maxTurns } }, q.timeoutMs, '', q.stallMs ?? 0);
   let fallback = '';
   let res;
   try {
@@ -721,14 +834,15 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
       }
     }
   } finally { activeTurns.delete(id); }
-  const { out, timedOut } = res;
+  const { out, timedOut, stalled } = res;
   const lanes = local.on ? { tier, model: resolved.model, ...(fallback ? { fallback } : {}) } : {};
   const userStopped = !!signal?.aborted;
   const asked = out.escalate ? { reason: out.escalate } : parseEscalation(out.text);
   const escalate = userStopped || filed ? null
     : timedOut ? `the fast path timed out after ${Math.round(res.timeoutMs / 1000)} s`
-      : asked ? asked.reason
-        : out.error ? `the fast path failed: ${truncate(out.error, 160)}` : null;
+      : stalled ? stalled // the watchdog: no progress for quick.stallMs — handed over exactly like [[ESCALATE]]
+        : asked ? asked.reason
+          : out.error ? `the fast path failed: ${truncate(out.error, 160)}` : null;
   if (escalate) {
     chat.messages.pop(); // the full brain's turn records the request itself
     await saveChat(chat);
@@ -757,7 +871,7 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', projects 
  * 'idle' (yolo.endTurn) — POST …/message resumes the session for the next turn (yoloFollowUp). The conversation is the
  * run's messages[] ('yolo-message' events).
  */
-export async function yoloTurn(id, text, y, emit, { meshSummary = '', projects = '', signal, trace: tctx = null, startedAt = Date.now(), onTool = null } = {}) {
+export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '', projects = '', signal, trace: tctx = null, startedAt = Date.now(), onTool = null } = {}) {
   const chat = await getChat(id);
   if (!chat) throw new Error('chat not found');
   const s = y?.settings || yolo.yoloSettings(config().yolo);
@@ -776,7 +890,7 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', projects =
   chat.messages.push({ role: 'user', text, ts: Date.now() });
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'yolo', runId: run.runId });
   const session = v2 ? { id: '', usage: null } : null;
-  const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: run.runId, dir: run.dir, url: run.meta.url, title: chat.title }, resolved, s, sent: task, emit, meshSummary, projects, signal, tctx, onTool, session, label: text });
+  const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: run.runId, dir: run.dir, url: run.meta.url, title: chat.title }, resolved, s, sent: task, emit, meshSummary, live, projects, signal, tctx, onTool, session, label: text });
   const reply = yoloReply(out, { timedOut, stopped, reason });
   const done = v2
     ? await yolo.endTurn(run.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200), reply })
@@ -800,7 +914,7 @@ function yoloReply(out, { timedOut, stopped, reason }) {
  * (POST …/stop, Sir's stop), listed in activeTurns by run id, the agent's steps as the run's activity. `session` = a v2
  * run's own Claude session record: resumed when it has an id, and the id it gets is stored in the run meta.
  */
-async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, projects, signal, tctx, onTool, session = null, label = '', turn = 1 }) {
+async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, live = '', projects, signal, tctx, onTool, session = null, label = '', turn = 1 }) {
   // keyed by the run: a YOLO run may share the JARVIS thread with another turn
   activeTurns.set(run.runId, { id: chat.id, title: run.title || chat.title, brain: resolved.brain, model: resolved.model, startedAt: Date.now(), text: truncate(label || sent, 120), lane: 'yolo', runId: run.runId, url: run.url, ...(session ? { turn } : {}) });
   const ac = new AbortController();
@@ -818,7 +932,7 @@ async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, 
   };
   let out;
   try {
-    out = await tracedRun({ chat, runner: runClaude, resolved, sent, emit: steps, meshSummary, projects, signal: ac.signal, tctx, onTool, usage: null,
+    out = await tracedRun({ chat, runner: runClaude, resolved, sent, emit: steps, meshSummary, live, projects, signal: ac.signal, tctx, onTool, usage: null,
       sessionKey: 'yoloSessionId', lane: 'yolo', meta: { lane: 'yolo', runId: run.runId, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, sandbox: run.dir, ...(session ? { v2: true, turn } : {}) },
       runOpts: { yolo: { maxTurns: s.maxTurns, cwd: run.dir, note, ...(session ? { session, agents: yolo.yoloAgents() } : {}) } } });
   } catch (e) { out = { text: '', error: e.message }; } finally {
@@ -840,7 +954,7 @@ async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, 
  * (an intake span 'yolo/message' with the run id) and counted in the ledger as a chat turn with lane 'yolo'. The JARVIS
  * thread is not written to: the run's messages[] is this conversation.
  */
-export async function yoloFollowUp(begun, { meshSummary = '', projects = '', signal } = {}) {
+export async function yoloFollowUp(begun, { meshSummary = '', live = '', projects = '', signal } = {}) {
   const s = yolo.yoloSettings(config().yolo);
   const meta = begun.meta;
   const resolved = quickBrain(s, await availableBrains());
@@ -850,7 +964,7 @@ export async function yoloFollowUp(begun, { meshSummary = '', projects = '', sig
   const session = { id: begun.sessionId, usage: null };
   const lastUser = [...(meta.messages || [])].reverse().find((m) => m.role === 'user');
   const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: begun.runId, dir: begun.dir, url: meta.url, title: meta.title }, resolved, s, sent: begun.prompt,
-    emit: () => {}, meshSummary, projects, signal, tctx: intake.ctx, session, label: lastUser?.text || 'feedback', turn: begun.turn });
+    emit: () => {}, meshSummary, live, projects, signal, tctx: intake.ctx, session, label: lastUser?.text || 'feedback', turn: begun.turn });
   const reply = yoloReply(out, { timedOut, stopped, reason });
   const done = await yolo.endTurn(begun.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200), reply });
   intake.end({ status: stopped ? 'stopped' : reason ? 'error' : 'ok', output: reply });
@@ -861,7 +975,7 @@ export async function yoloFollowUp(begun, { meshSummary = '', projects = '', sig
  * `usage` tags the turn in the usage ledger: { kind: 'plan', projectId, projectName } for a planning call (the
  * planner asks through a chat); plain chat turns are "chat-turn" under the chat's own project.
  */
-async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
+async function sendMessageInner(id, { text, brain, model, effort, usage }, emit, { meshSummary = '', live = '', projects = '', signal, hint = '', trace: tctx = null, onTool = null } = {}) {
   // A compaction still summarising this thread finishes first: this turn then starts from its summary.
   if (compacting.has(id)) { emit({ type: 'status', text: 'compacting the earlier conversation…' }); await compacting.get(id); }
   const chat = await getChat(id);
@@ -878,7 +992,7 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   if (turn) Object.assign(turn, { title: chat.title, brain: resolved.brain, model: resolved.model });
   const runner = resolved.brain === 'claude' ? runClaude : resolved.brain === CLAUDE_OLLAMA ? runClaudeOllama : resolved.brain === 'codex' ? runCodex : runOllama;
   const sent = hint ? `${hint}\n${text}` : text;
-  const out = await tracedRun({ chat, runner, resolved, sent, emit, meshSummary, projects, signal, tctx, onTool, usage,
+  const out = await tracedRun({ chat, runner, resolved, sent, emit, meshSummary, live, projects, signal, tctx, onTool, usage,
     sessionKey: resolved.brain === CLAUDE_OLLAMA ? 'claudeOllamaSessionId' : 'claudeSessionId', meta: resolved.brain === CLAUDE_OLLAMA ? { endpoint: claudeOllamaUrl() } : {} });
   chat.seen = chat.seen || {};
   if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });

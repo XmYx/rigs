@@ -159,6 +159,7 @@ const RAW = [
     sw('ui.notifications', 'Notifications', 'Show toasts for mesh events and agent replies.', { default: true, ...pref('rigs.notifications', { format: 'flag', on: 'true', off: 'false', dom: '#d-notify', via: 'toasts.js prefs().notifications' }) }),
     sw('ui.attnBanner', '"Agent needs you" banner', 'A banner while an agent waits for an answer or a permission.', { default: true, ...pref('rigs.attnBanner', { format: 'flag', on: 'true', off: 'false', dom: '#d-attnbanner', via: 'toasts.js prefs().attnBanner' }) }),
     sw('ui.autoOpenSessions', 'Auto-open new agent sessions', 'Agent sessions started in the background pop up as terminals.', { default: true, ...pref('rigs.autoOpenSessions', { dom: '#d-autosess', via: 'main.js store (read on each new session)' }) }),
+    sw('ui.openFiledWork', 'Open filed work', 'When a request is filed as a project, the Projects window opens on it (without taking focus).', { default: true, ...pref('rigs.openFiledWork', { via: 'main.js store (read on each route event)' }) }),
     sel('persona.speakAloud', 'Speak on this machine\'s speakers', 'auto = speak notifications aloud here when no JARVIS UI is open; never = stay silent.', ['auto', 'never'], { default: 'auto' }),
   ]],
   ['voice', 'JARVIS Voice & Hearing', '🎙', 'How JARVIS speaks and listens.', [
@@ -209,6 +210,7 @@ const RAW = [
   ['routing', 'Routing & Fast Path', '🧭', 'How a request is classified and how quick answers run.', [
     ...withGroup('Pre-routing', [
       sw('router.preroute', 'Pre-routing', 'Classify each request (answer · implement · plan · continue) before any brain sees it, and file work automatically. Off = the brain gets it as it is.', { default: true, cli: 'rigs preroute on|off' }),
+      sw('router.rulesFirst', 'Rules first', 'A clear browse request, plain question or lookup is decided by the keyword rules at once (no engine call, ≈ 0 s); only ambiguous requests reach the engine.', { default: true }),
       sel('router.engine', 'Engine', 'jev = LocalJev (about half a second) · claude = a small Claude model · rules = keywords only.', [opt('jev', 'LocalJev'), opt('claude', 'Claude (Haiku)'), opt('rules', 'Keyword rules')], { default: 'jev', cli: 'rigs preroute engine jev|claude|rules' }),
       sel('router.fallback', 'Fallback', 'Who decides when the engine is down, slow or unsure.', [opt('claude', 'Claude'), opt('rules', 'Keyword rules')], { default: 'claude' }),
       text('router.claudeModel', 'Claude router model', 'Model of the claude engine and fallback.', { choices: 'models:claude', default: 'claude-haiku-5-5' }),
@@ -231,6 +233,7 @@ const RAW = [
       sel('quick.standard.effort', 'Research and reports: effort', 'Effort for research and reports.', 'efforts:claude', { default: 'medium' }),
       num('quick.maxTurns', 'Max tool turns', 'A quick answer gets at most this many tool turns before the full brain takes over.', 1, 50, { default: 8 }),
       num('quick.timeoutMs', 'Timeout', 'Hand the request to the full brain after this long.', 5000, 600000, { unit: 'ms', default: 90000 }),
+      num('quick.stallMs', 'Stall watchdog', 'A fast turn that shows no progress (no text, no tool call) for this long is handed to the full brain at once; 0 = off.', 0, 600000, { unit: 'ms', default: 20000 }),
     ]),
   ]],
   ['responder', 'Local Responder', '🗣', 'A model on a machine\'s own Ollama answers the fast path, with read-only tools.', [
@@ -291,6 +294,7 @@ const RAW = [
       num('autonomy.answerAfterSec', 'Answer agent questions after', 'An agent\'s question gets the safe default after this long.', 0, 3600, { unit: 's', default: 90 }),
       num('autonomy.maxSelfAnswers', 'Self-answers per attempt', 'At most this many questions are answered with the safe default per attempt.', 0, 20, { default: 3 }),
       num('autonomy.retryDelaySec', 'Retry delay', 'Wait this long before a retry.', 0, 3600, { unit: 's', default: 60 }),
+      sw('autonomy.reviewSmall', 'Review small plans', 'A one-task plan of size S or M verifies itself against its acceptance criteria; on, it gets a separate review task like every other plan.', { default: false }),
     ]),
     ...withGroup('Agents RIGS starts on this machine', [
       sel('agents.claudePermissionMode', 'Claude permission mode', 'auto = work unattended; anything that still asks shows up as "needs you".', CLAUDE_MODES, { default: 'auto' }),

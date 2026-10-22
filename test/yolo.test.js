@@ -264,6 +264,55 @@ const rawGet = (base, p) => new Promise((resolve, reject) => {
   http.get({ host: u.hostname, port: u.port, path: p }, (res) => { let b = ''; res.on('data', (d) => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject);
 });
 
+test('prune: an unfinished YOLOv2 run (running or idle, live or only on disk) is never deleted; finished runs are, and stop watching', async () => {
+  const root = path.join(TMP, 'runs-prune');
+  fs.mkdirSync(root, { recursive: true });
+  // Runs from before a restart (meta on disk, not live here): a finished v1, an idle v2 (revivable), an interrupted v2, a failed v1.
+  const mk = (sec, meta) => {
+    const id = Y.newRunId(new Date(Date.UTC(2020, 0, 1, 0, 0, sec)));
+    fs.mkdirSync(path.join(root, id));
+    fs.writeFileSync(path.join(root, id, 'index.html'), '<html>');
+    fs.writeFileSync(path.join(root, `${id}.json`), JSON.stringify({ runId: id, ...meta }));
+    return id;
+  };
+  const oldDone = mk(1, { status: 'done' });
+  const oldIdleV2 = mk(2, { status: 'idle', v2: true, sessionId: 's-old' });
+  const oldRunningV2 = mk(3, { status: 'running', v2: true, sessionId: 's-old2' });
+  const oldFailed = mk(4, { status: 'failed' });
+  // Live runs in this daemon: a finished v1, an idle v2 (its window is open, Sir may still send feedback), a running v2.
+  const finished = await Y.createRun({ text: 'yolo a', root, keep: 1000 });
+  assert.ok(Y._isWatching(finished.runId), 'a running run watches its sandbox');
+  await Y.finishRun(finished.runId, { ok: true, summary: 'done' });
+  assert.equal(Y._isWatching(finished.runId), false, 'finished: the recursive watcher is closed');
+  const idle = await Y.createRun({ text: 'yolo b', root, keep: 1000, v2: true });
+  Y.setSession(idle.runId, 'sess-b');
+  await Y.endTurn(idle.runId, { ok: true, summary: 'first turn', reply: 'Here, sir.' });
+  assert.equal((await Y.getRun(idle.runId, root)).status, 'idle');
+  assert.ok(Y._isWatching(idle.runId), 'an idle v2 run keeps watching: the next turn writes here');
+  const running = await Y.createRun({ text: 'yolo c', root, keep: 1000, v2: true });
+  const removed = await Y._prune(root, 0);
+  assert.deepEqual(removed.sort(), [oldDone, oldFailed, finished.runId].sort(), 'only finished runs go, however old');
+  for (const id of [oldIdleV2, oldRunningV2, idle.runId, running.runId]) {
+    assert.ok(fs.existsSync(path.join(root, id)) && fs.existsSync(path.join(root, `${id}.json`)), `${id} kept`);
+  }
+  for (const id of removed) assert.ok(!fs.existsSync(path.join(root, id)) && !fs.existsSync(path.join(root, `${id}.json`)), `${id} removed`);
+  assert.equal(await Y.getRun(finished.runId, root), null, 'a pruned run is forgotten');
+  // Kept as an app: nothing writes to the sandbox until a follow-up turn, so the watcher closes; beginTurn opens it again.
+  await Y.markKept(idle.runId, { id: 'kept-b', node: 'test-node', path: '/apps/kept-b/' }, root);
+  assert.equal(Y._isWatching(idle.runId), false, 'kept: not watching');
+  const begun = await Y.beginTurn(idle.runId, { text: 'make it blue' }, { root });
+  assert.equal(begun.turn, 2);
+  assert.ok(Y._isWatching(idle.runId), 'a new turn watches again');
+  await Y.endTurn(idle.runId, { ok: true, summary: 'blue now' });
+  // createRun's own prune (keep - 1) honours the same rule: 3 unfinished + 2 on disk stay with keep 1.
+  const another = await Y.createRun({ text: 'yolo d', root, keep: 1 });
+  for (const id of [oldIdleV2, oldRunningV2, idle.runId, running.runId, another.runId]) assert.ok(fs.existsSync(path.join(root, id)), `${id} still there`);
+  await Y.finishRun(another.runId, { ok: true });
+  await Y.finishRun(running.runId, { ok: false, summary: 'x' });
+  Y._resetRuns();
+  assert.equal(Y._isWatching(idle.runId), false, '_resetRuns closes every watcher');
+});
+
 test('createRun: the placeholder page and yolo-start exist before anything else runs; writes become debounced updates', async () => {
   const root = path.join(TMP, 'runs-a');
   const seen = [];

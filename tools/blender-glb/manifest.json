@@ -1,0 +1,29 @@
+{
+  "id": "blender-glb",
+  "name": "Build a 3D object headless in Blender and export a .glb",
+  "description": "Run Blender in the background (-b --python) on this machine to build a 3D object from your own bpy script or one of the presets (cube, sphere, chair, table, mug), export it as a .glb (bpy.ops.export_scene.gltf, GLB) into the shared folder's files/3d, and render a 512x512 turntable still next to it. Finds Blender in the usual places (BLENDER env, /Applications, PATH, /usr/bin, /opt/blender*, ~/Downloads/blender-*, Program Files). Use it for any 3D object a request asks for; show the result with ui_open view model.",
+  "tags": ["3d", "blender", "glb", "gltf", "mesh", "model", "render", "bpy", "object"],
+  "language": "node",
+  "entry": "main.mjs",
+  "inputs": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": { "type": "string", "description": "file name of the result (a-z, 0-9, - _), e.g. coffee-mug → coffee-mug.glb + coffee-mug.png" },
+      "preset": { "type": "string", "enum": ["cube", "sphere", "chair", "table", "mug"], "description": "a built-in object; ignored when script is given" },
+      "script": { "type": "string", "description": "your own bpy code that builds the scene (runs after the default scene is cleared; everything left in the scene is exported)" },
+      "out": { "type": "string", "description": "where the .glb goes; default <shared folder>/files/3d/<name>.glb (the PNG goes next to it)" },
+      "render": { "type": "boolean", "description": "also render a 512x512 turntable still (Workbench, headless-safe); default true" },
+      "blender": { "type": "string", "description": "path of the Blender executable when it is not in a usual place (or set BLENDER)" },
+      "dryRun": { "type": "boolean", "description": "show the resolved Blender path, output paths and the generated Python without running Blender" }
+    }
+  },
+  "outputs": "{ ok, glb, png, node, triangles, objects, blender, version } or { ok: false, error, log }",
+  "safety": "mutating",
+  "version": "1.0.0",
+  "timeoutSec": 600,
+  "smoke": { "args": { "preset": "cube", "name": "smoke-cube", "dryRun": true }, "expect": { "ok": true, "dryRun": true } },
+  "created": "2026-10-22T12:00:00Z",
+  "updated": "2026-10-22T12:00:00Z",
+  "origin": { "project": "request-to-result", "task": "D6" }
+}

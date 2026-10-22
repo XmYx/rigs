@@ -31,6 +31,8 @@ export function settings(p) {
     answerAfterMs: num(a.answerAfterSec, 90, 0, 3600) * 1000,
     maxAnswers: num(a.maxSelfAnswers, 3, 0, 20),
     retryDelayMs: num(a.retryDelaySec, 60, 0, 3600) * 1000,
+    // true = a one-task plan of size S or M still gets its own review task (today's behaviour); default: it verifies itself.
+    reviewSmall: a.reviewSmall === true,
   };
 }
 

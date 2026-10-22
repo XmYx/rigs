@@ -25,6 +25,7 @@ test('viewerFor: picks the viewer by kind and extension', () => {
   for (const n of ['a.mp4', 'a.mov', 'a.webm', 'a.mkv', 'a.m4v']) assert.equal(k(n), 'video', n);
   for (const n of ['a.mp3', 'a.m4a', 'a.wav', 'a.flac', 'a.ogg', 'a.opus']) assert.equal(k(n), 'audio', n);
   assert.equal(k('a.pdf'), 'pdf');
+  for (const n of ['a.glb', 'a.gltf', 'a.OBJ']) assert.equal(k(n), 'model', n);
   assert.equal(k('README.md'), 'markdown');
   for (const n of ['a.js', 'a.py', 'a.json', 'a.yml', 'a.txt', 'a.css', 'a.sh']) assert.equal(k(n), 'text', n);
   assert.equal(k('Makefile'), 'text', 'no extension = text');
