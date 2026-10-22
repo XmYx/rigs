@@ -1240,3 +1240,11 @@ test('prune never removes a run keptAs points to; a finished never-kept run reop
   assert.equal(status, 200);
   assert.match(sent, /<body>hi<\/body>/);
 });
+
+test('isYoloHistoryRequest: asking for the list is not a YOLO run', () => {
+  for (const t of ['show my yolo history', 'open my past yolo runs', 'yolo history', 'Show me the yolo sessions please', 'jarvis, list my yolo runs']) {
+    assert.equal(Y.isYoloHistoryRequest(t), true, t);
+    assert.equal(Y.isYoloRequest(t), false, `${t} must not start a run`);
+  }
+  for (const t of ['yolo a p5 sketch', 'yolo history chart of stocks', 'show my files']) assert.equal(Y.isYoloHistoryRequest(t), false, t);
+});

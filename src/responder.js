@@ -21,7 +21,7 @@ const TOOL_USE = {
   mesh_processes: "processes on one machine (needs the machine's name)",
   usage_report: 'tokens, time or money spent',
   trace_list: "Sir's recent requests and what happened to them",
-  ui_open: 'opens the JARVIS file browser on a machine at a folder or file (path, a place like downloads or home, or a project name); use it whenever Sir asks to open, show or browse a folder or file',
+  ui_open: 'opens the JARVIS file browser on a machine at a folder or file (path, a place like downloads or home, or a project name); use it whenever Sir asks to open, show or browse a folder or file; view "yolo" opens the list of past YOLO runs',
 };
 
 /**

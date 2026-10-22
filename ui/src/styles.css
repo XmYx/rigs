@@ -1976,6 +1976,41 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 .desktop.phone .dt-uploads { left: 8px; right: 8px; width: auto; bottom: var(--dt-bottom, 260px); }
 .desktop.phone .dt-hint { display: none; }
 
+/* YOLO history (ui/src/yolo.js openYoloHistory): one list of every machine's past runs; a greyed row is a machine that does not answer. */
+.win.yolo-hist-win .win-body { padding: 0; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
+.yolo-hist-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.yolo-hist-find { flex: 1 1 120px; min-width: 0; font: 12px var(--mono); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--text, inherit); }
+.yolo-hist-machine { flex: 0 1 140px; min-width: 0; font: 12px var(--mono); padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--text, inherit); }
+.yolo-hist-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 4px 0; list-style: none; }
+.yolo-hist-row { display: flex; align-items: center; gap: 6px; padding: 0 8px 0 0; border-bottom: 1px solid var(--line); }
+.yolo-hist-row.is-open { background: rgba(var(--accent-rgb), .07); }
+.yolo-hist-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.yolo-hist-main:hover:not(:disabled), .yolo-hist-main:focus-visible { background: rgba(var(--accent-rgb), .1); outline: none; }
+.yolo-hist-main:focus-visible { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .6); }
+.yolo-hist-main:disabled { cursor: not-allowed; }
+.yolo-hist-row.offline { opacity: .5; filter: grayscale(1); }
+.yolo-hist-icon { flex: none; width: 1.8em; text-align: center; font-size: 20px; line-height: 1; }
+.yolo-hist-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.yolo-hist-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.yolo-hist-sub { color: var(--muted); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yolo-hist-tags { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; font: 11px var(--mono); }
+.yolo-hist-tags b { font-weight: 600; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.yolo-hist-status.live, .yolo-hist-status.done { color: #4ade80; border-color: rgba(74, 222, 128, .4); }
+.yolo-hist-status.idle { color: #60a5fa; border-color: rgba(96, 165, 250, .4); }
+.yolo-hist-status.failed { color: #f87171; border-color: rgba(248, 113, 113, .4); }
+.yolo-hist-kept { color: var(--accent); border-color: rgba(var(--accent-rgb), .5) !important; }
+.yolo-hist-row .yolo-hist-app { flex: none; }
+.yolo-hist-empty { padding: 18px 12px; list-style: none; }
+.yolo-hist-note { padding: 6px 10px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+@container (max-width: 460px) {
+  .yolo-hist-main { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: center; }
+  .yolo-hist-icon { grid-row: 1 / span 2; }
+  .yolo-hist-tags { grid-column: 2; justify-content: flex-start; }
+  .yolo-hist-row { flex-wrap: wrap; padding: 0 8px 6px 0; }
+  .yolo-hist-row .yolo-hist-app { margin-left: calc(1.8em + 20px); min-height: 36px; }
+}
+.yolo-hist-bar .yolo-btn { flex: 0 0 auto; }
+@media (max-width: 640px) { .yolo-hist-find, .yolo-hist-machine { min-height: 40px; } }
 /* YOLO window (ui/src/yolo.js): status strip on top, the run's page below. Window chrome, docking and the phone sheet are the wm.js ones. */
 .win.yolo-win .win-body { padding: 0; }
 .yolo-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: rgba(var(--accent-rgb), .04); font: 12px var(--mono); }

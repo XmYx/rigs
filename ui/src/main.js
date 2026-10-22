@@ -29,7 +29,8 @@ import { createDesktops, openLargeView } from './desktops.js';
 import { routeChip } from './preroute-format.js';
 import { replyLabel } from './local-responder-model.js';
 import { createTraces, onTraceSpan, openTrace } from './trace-panel.js';
-import { onYoloEvent } from './yolo.js';
+import { onYoloEvent, openYoloHistory } from './yolo.js';
+import { isHistoryAsk } from './yolo-model.js';
 import { exhibitAnim, exhibitsEnabled, initExhibits, onExhibitEvent, onExhibitSpan, openExhibits, setExhibitAnim, setExhibitsEnabled } from './exhibits.js';
 import { initStarnet, onStarnetConfig, setStarnetEnabled, starnetEnabled, starnetFit, starnetFocus, starnetUpdate } from './starnet/index.js';
 import { openFiles } from './files.js';
@@ -745,6 +746,8 @@ async function onUiOpen(m) {
       const app = appById(a.app, a.nodeId) || appById(a.app, a.nodeName) || appById(a.app) || (await refreshApps(), appById(a.app, a.nodeId) || appById(a.app));
       if (!app) { toast(`${a.name || a.app} is not on the mesh right now.`, 'info'); return; }
       openApp(app, { route: a.path });
+    } else if (a.view === 'yolo') {
+      openYoloHistory();
     } else if (a.view === 'url') {
       openContentWindow({ url: a.url, title: a.title, icon: '🌐', focus: true });
     } else if (a.view === 'project') {
@@ -1129,6 +1132,7 @@ async function intent(text) {
     const n = findMachine(m[1]);
     if (n) { desktopTo(n); say(`Connecting to ${n.name}'s desktop.`); return true; }
   }
+  if (isHistoryAsk(t)) { openYoloHistory(); say('Your YOLO history.'); return true; } // asked for the list, not a run: never routed as work
   const browse = isBrowseAsk(t); // a folder or file: JARVIS opens it in the file browser (ui_open), not a pin or graph node
   if (!browse && (m = t.match(/^(?:open|show|go to)\s+(?:the\s+)?(.+?)(?:\s+project)?$/i))) {
     const q = m[1].toLowerCase().replace(/[?.!]$/, '').trim();

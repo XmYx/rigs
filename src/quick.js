@@ -294,6 +294,7 @@ export function quickNote({ model = '', maxTurns = DEFAULT_QUICK.maxTurns } = {}
     `This turn runs on JARVIS's fast path (${model || 'a smaller model'}, at most ${maxTurns} tool turns): answer the question, do the quick lookup, search or tool call, summary or short report yourself, briefly, in character.`,
     `Substantial work (writing or changing code, building, long multi-step jobs) is still filed with jarvis_task as usual.`,
     `Opening or showing a folder or file ("open my Downloads", "show me the files in …", "show it in Files") is one ui_open call: it opens the JARVIS file browser there. Never Finder, \`open\`, xdg-open, mesh_control or a text listing instead; don't search the disk first when Sir named the place.`,
+    `Showing the list of past YOLO runs ("show my yolo history", "open my past yolo runs") is one ui_open call with view "yolo": it opens the history window. It is not a YOLO run and not work.`,
     'To find a named folder or file, use what you already know (the project record, the thread, mesh_workspaces), or mesh_list_dir / `find <likely parent> -maxdepth 3`; never `find ~` or a whole-disk search.',
     `If answering well needs the full JARVIS brain (deep reasoning, a long investigation, many steps), do not start it: reply with only ${ESCALATE_MARKER} followed by one short reason, and nothing else. The full brain then takes the request over.`,
   ].join('\n');

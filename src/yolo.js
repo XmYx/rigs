@@ -172,7 +172,12 @@ const MODE = /\b(?:in|on|with|via|using)[\s-]+yolo[\s-]*mode\b|^yolo[\s-]*mode\b
 const VISION = /^[\s-]*(?:v?\d|nas\b|world\b|models?\b|detect|object|weights|segment|pose|ultralytics|darknet|network|architecture|algorithm)/i;
 // Talking about the mode itself: switching it, its settings, what it is.
 const ABOUT = /\b(?:turn|switch|set|flip)(?:\s+\w+)?\s+(?:on|off)\s+(?:the\s+)?yolo\b|\b(?:turn|switch|set|flip)\s+(?:the\s+)?yolo(?:[\s-]*mode)?\s+(?:on|off)\b|\b(?:enable|disable|toggle|activate|deactivate)\s+(?:the\s+)?yolo\b|\byolo(?:[\s-]*mode)?\s+(?:on|off|status|settings?|config)\s*[.!?]?$|^(?:rigs|jarvis)\s+yolo\s+(?:on|off|status|list)\b/i;
+// Asking for the list of past runs ("show my yolo history", "yolo history"): opens the history window, builds nothing.
+const HISTORY_ASK = /^(?:(?:hey|hi|ok|okay|so)\b[\s,]*)?(?:(?:jarvis|rigs)\b[\s,:;.-]*)?(?:(?:please|can you|could you|would you|let'?s)\s+)*(?:(?:show|open|list|browse|see|view|bring up|pull up|display)\s+(?:me\s+)?(?:all\s+)?(?:(?:my|the|our|all|your)\s+)*(?:(?:past|previous|old|earlier|recent)\s+)?yolo\s*(?:mode\s+)?(?:history|runs|sessions|list)|yolo\s+(?:history|runs|sessions|list))(?:\s+(?:please|window|panel|list))?\s*[.!?]*$/i;
 const ABOUT_QUESTION = /^(?:what|why|how|who|when|where|which|is|are|does|do|did|was|were|has|have)\b[^.!:\n]*\byolo\b/i;
+
+/** "show my yolo history", "open my past yolo runs", "yolo history": the list of past runs, not a run and not work. Pure. */
+export const isYoloHistoryRequest = (text) => HISTORY_ASK.test(String(text ?? '').trim());
 
 /**
  * Does the request carry a YOLO mode marker? The word yolo as a marker — "yolo …" leading it, "… yolo it", "in yolo
@@ -182,7 +187,7 @@ const ABOUT_QUESTION = /^(?:what|why|how|who|when|where|which|is|are|does|do|did
 export function isYoloRequest(text) {
   const t = String(text ?? '').trim();
   if (!t || !/\byolo\b/i.test(t) || t.length > 4000) return false;
-  if (ABOUT.test(t)) return false;
+  if (ABOUT.test(t) || HISTORY_ASK.test(t)) return false;
   const m = t.match(LEAD);
   const lead = !!m && !VISION.test(t.slice(m[0].length));
   const it = IT.test(t);

@@ -54,7 +54,7 @@ test('validateOpen: files is the default view; unknown views and malformed value
   }
   assert.throws(() => U.validateOpen(null), /object/);
   assert.throws(() => U.validateOpen([]), /object/);
-  assert.deepEqual(U.UI_VIEWS, ['files', 'app', 'url', 'project', 'trace', 'model', 'tool']);
+  assert.deepEqual(U.UI_VIEWS, ['files', 'app', 'url', 'project', 'trace', 'model', 'tool', 'yolo']);
 });
 
 test('validateOpen: every view checks its own fields (app id, http(s) or /api url, project and trace ids, a tool name, a file path)', () => {

@@ -3,6 +3,7 @@ import { openWindow } from './wm.js';
 import { openAppStore } from './appstore.js';
 import { isAppRemoved } from './layout-actions.js';
 import { tagCtx } from './ctx-tag.js';
+import { openYoloHistory } from './yolo.js'; // only called from the button: apps.js and yolo.js import each other
 
 // App Cloud: web apps hosted anywhere on the mesh, opened in floating windows through the daemon's
 // proxy (/api/nodes/<node>/apps/<id>/). The catalog refreshes on its own: on 'apps'/'mesh' events
@@ -73,7 +74,8 @@ export function openApps() {
   if (launcher) { launcher.raise(); refreshApps(); return launcher; }
   launcher = openWindow({ title: 'Apps', icon: '▦', width: 560, height: 380, onClose: () => { launcher = null; ensurePoll(); } });
   launcher.grid = h('div', { class: 'apps-grid' });
-  launcher.body.append(h('div', { class: 'apps-bar' }, h('button', { class: 'btn primary', onclick: () => openAppStore() }, '🛍 App Store')), launcher.grid);
+  launcher.body.append(h('div', { class: 'apps-bar' }, h('button', { class: 'btn primary', onclick: () => openAppStore() }, '🛍 App Store'),
+    h('button', { class: 'btn', title: 'Every past YOLO run on the mesh, kept as an app or not', onclick: () => openYoloHistory() }, '⚡ YOLO history')), launcher.grid);
   ensurePoll();
   renderLauncher();
   refreshApps();

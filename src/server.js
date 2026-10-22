@@ -672,6 +672,7 @@ export async function startServer() {
       return m;
     };
     const extra = { ...(args.title ? { title: args.title } : {}) };
+    if (args.view === 'yolo') return uiOpen.uiOpenPush({ view: 'yolo', ...extra, trace: traceId });
     if (args.view === 'url') return uiOpen.uiOpenPush({ view: 'url', url: args.url, ...extra, trace: traceId });
     if (args.view === 'trace') return uiOpen.uiOpenPush({ view: 'trace', traceId: args.trace, ...extra, trace: traceId }); // traceId = the one to open; trace = the request's, for delivery
     if (args.view === 'project') {
