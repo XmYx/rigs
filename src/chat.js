@@ -890,7 +890,7 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '',
   chat.messages.push({ role: 'user', text, ts: Date.now() });
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'yolo', runId: run.runId });
   const session = v2 ? { id: '', usage: null } : null;
-  const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: run.runId, dir: run.dir, url: run.meta.url, title: chat.title }, resolved, s, sent: task, emit, meshSummary, live, projects, signal, tctx, onTool, session, label: text });
+  const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: run.runId, dir: run.dir, url: run.meta.url, title: chat.title, shown: !!y?.show }, resolved, s, sent: task, emit, meshSummary, live, projects, signal, tctx, onTool, session, label: text });
   const reply = yoloReply(out, { timedOut, stopped, reason }, { shown: !!y?.show, url: run.meta.url, dir: run.dir });
   const done = v2
     ? await yolo.endTurn(run.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200), reply })
@@ -905,13 +905,14 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '',
 
 /** The spoken line of a YOLO turn: the agent's own, or what happened to it. */
 function yoloReply(out, { timedOut, stopped, reason }, where = null) {
-  const said = yoloSpoken(out, { timedOut, stopped, reason });
-  return where && !where.shown ? `${said}\n\n${yolo.yoloWhere(where)}` : said;
+  const quiet = !!where && !where.shown;
+  const said = yoloSpoken(out, { timedOut, stopped, reason }, quiet ? 'page' : 'window');
+  return quiet ? `${said}\n\n${yolo.yoloWhere(where)}` : said;
 }
 
-function yoloSpoken(out, { timedOut, stopped, reason }) {
-  return String(out.text || '').trim() || (stopped ? 'Stopped, sir. The window shows how far it got.'
-    : reason ? `The YOLO run ${timedOut ? 'ran out of time' : 'hit a snag'}, sir. The window shows how far it got.` : 'Done, sir.');
+function yoloSpoken(out, { timedOut, stopped, reason }, surface = 'window') {
+  return String(out.text || '').trim() || (stopped ? `Stopped, sir. The ${surface} shows how far it got.`
+    : reason ? `The YOLO run ${timedOut ? 'ran out of time' : 'hit a snag'}, sir. The ${surface} shows how far it got.` : 'Done, sir.');
 }
 
 /**
@@ -929,7 +930,7 @@ async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, 
   const timer = setTimeout(() => { timedOut = true; ac.abort(); }, s.timeoutMs);
   yolo.attachAbort(run.runId, ac);
   const base = `http://127.0.0.1:${config().port}/api/local/yolo/${run.runId}/`;
-  const note = yolo.yoloPrompt({ dir: run.dir, base, model: resolved.model, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, v2: !!session });
+  const note = yolo.yoloPrompt({ dir: run.dir, base, model: resolved.model, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, v2: !!session, shown: run.shown !== false });
   const steps = (e) => {
     if (e?.type === 'tool') yolo.setActivity(run.runId, `${e.name}${e.input ? ' ' + truncate(String(e.input), 100) : ''}`);
     if (session?.id) yolo.setSession(run.runId, session.id);
