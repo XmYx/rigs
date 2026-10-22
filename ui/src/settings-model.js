@@ -258,7 +258,7 @@ const RAW = [
     sel('yolo.effort', 'Effort', 'Effort for a YOLO run.', 'efforts:claude', { default: 'low' }),
     num('yolo.maxTurns', 'Max turns', 'Agentic turns per run.', 1, 100, { default: 20 }),
     num('yolo.timeoutMs', 'Timeout', 'Stop a run after this long.', 10000, 1800000, { unit: 'ms', default: 180000 }),
-    num('yolo.keep', 'Runs kept', 'Older runs are deleted past this many.', 1, 1000, { default: 50 }),
+    num('yolo.keep', 'Runs kept', 'Finished runs stay in the shared YOLO history up to this many; older ones are deleted (never one kept as an app or still open).', 1, 1000, { default: 200 }),
     sw('yolo.v2', 'YOLOv2 (multi-turn)', 'New runs stay open after the first turn: send feedback from the window and the same agent session keeps building, with web-research and quick-builder subagents. Off = one turn per run, as before.', { default: false, cli: 'rigs yolo v2 on|off' }),
   ]],
   ['projects', 'Projects & Dispatch', '📋', 'How projects are planned, routed to machines and run.', [

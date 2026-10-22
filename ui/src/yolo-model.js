@@ -283,3 +283,123 @@ export function convoToggle(hidden, count = 0) {
 /** A follow-up the server accepted (the …/message answer) before its yolo-message arrives: the run is live again on that turn. */
 export const turnStarted = (state, turn, at = Date.now()) => (state.status === 'live' ? state
   : { ...state, status: 'live', turn: Math.max(state.turn, Number(turn) || state.turn + 1), ok: null, summary: '', startedAt: at, endedAt: 0, activity: 'Working on your feedback…' });
+
+// ── The shared history (GET /api/local/yolo/history: one list of every machine's past runs) ──────────────────────────
+// Rows come from src/yolo.js historyRow: { node, runId, title, task, status, createdAt, finishedAt, v2, turn, icon, keptAs,
+// url, available }. Everything here is pure: row building, sort, filter, and "open it or focus the window it already has".
+
+export const HISTORY_URL = '/api/local/yolo/history?limit=200';
+
+/** The server's run status → what the list shows: { key, label } (key is the row's CSS class). */
+export function historyStatus(status) {
+  switch (status) {
+    case 'running': return { key: 'live', label: 'running' };
+    case 'idle': return { key: 'idle', label: 'idle' };
+    case 'done': return { key: 'done', label: 'done' };
+    case 'stopped': return { key: 'failed', label: 'stopped' };
+    case 'interrupted': return { key: 'failed', label: 'interrupted' };
+    case 'failed': return { key: 'failed', label: 'failed' };
+    default: return { key: 'unknown', label: String(status || 'unknown') };
+  }
+}
+
+/** "just now", "5m ago", "3h ago", "2d ago", "4mo ago", "2y ago". */
+export function ageText(at, now = Date.now()) {
+  const t = Number(at) || 0;
+  if (!t) return '';
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const hr = Math.round(s / 3600);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.round(s / 86400);
+  if (d < 60) return `${d}d ago`;
+  if (d < 730) return `${Math.round(d / 30)}mo ago`;
+  return `${Math.round(d / 365)}y ago`;
+}
+
+/** The identity of a run on the mesh. */
+export const historyKey = (r) => `${r.node}/${r.runId}`;
+
+/** The icon to draw in a list row: the agent's emoji, else ⚡ (an SVG icon needs the run's sandbox, so the list stays text). */
+export const rowIcon = (icon) => (icon?.emoji ? String(icon.emoji).trim() : '') || DEFAULT_ICON;
+
+/**
+ * The history answer → the rows to draw, newest first. `openIds` = the runIds with a window open; `now` is for the age.
+ * Row: { key, runId, node, icon, title, age, at, finishedAt, status: {key, label}, kept: {id, name, node}|null, available, open, v2, url,
+ * search } — `search` is the lowercase text the filter looks in. Rows without a runId are dropped; a duplicate (node, runId)
+ * keeps its first (the newest answer).
+ */
+export function buildRows(history, { openIds = [], now = Date.now() } = {}) {
+  const open = new Set(openIds);
+  const seen = new Set();
+  const rows = [];
+  for (const r of Array.isArray(history?.runs) ? history.runs : []) {
+    if (!r || typeof r.runId !== 'string' || !r.runId || !r.node) continue;
+    const key = historyKey(r);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const title = String(r.title || r.task || '').replace(/\s+/g, ' ').trim() || 'YOLO';
+    const at = Number(r.createdAt) || 0;
+    const kept = r.keptAs?.id ? { id: r.keptAs.id, name: r.keptAs.name || r.keptAs.id, node: r.keptAs.node || r.node } : null;
+    rows.push({
+      key, runId: r.runId, node: r.node, icon: rowIcon(r.icon), title, age: ageText(at, now), at, finishedAt: Number(r.finishedAt) || 0, status: historyStatus(r.status), kept,
+      available: r.available !== false, open: open.has(r.runId), v2: !!r.v2, turn: Number(r.turn) || 1,
+      url: r.url || `/api/nodes/${encodeURIComponent(r.node)}/yolo/${encodeURIComponent(r.runId)}/`,
+      search: `${title} ${r.task || ''} ${r.node} ${kept?.name || ''}`.toLowerCase(),
+    });
+  }
+  return sortRows(rows);
+}
+
+/** Newest first; available before cached on a tie so a live machine's copy is the one in front. */
+export const sortRows = (rows) => [...rows].sort((a, b) => b.at - a.at || Number(b.available) - Number(a.available) || a.key.localeCompare(b.key));
+
+/** Rows matching the text (every word, anywhere in title / task / machine / app name) and the machine ('' = all). */
+export function filterRows(rows, { text = '', node = '' } = {}) {
+  const words = String(text).toLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter((r) => (!node || r.node === node) && words.every((w) => r.search.includes(w)));
+}
+
+/** The machines in the list, for the filter's menu: [{ node, count, available }] by name. */
+export function machinesOf(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const m = by.get(r.node) || { node: r.node, count: 0, available: false };
+    m.count += 1;
+    m.available = m.available || r.available;
+    by.set(r.node, m);
+  }
+  return [...by.values()].sort((a, b) => a.node.localeCompare(b.node));
+}
+
+/** The line under the list: how many are shown, and which machines answered from the cache only. */
+export function historySummary(shown, total, history) {
+  const cached = Object.entries(history?.nodes || {}).filter(([, n]) => n && n.ok === false).map(([name]) => name).sort();
+  const count = shown === total ? `${total} run${total === 1 ? '' : 's'}` : `${shown} of ${total} runs`;
+  return cached.length ? `${count} · ${cached.join(', ')} not reachable — shown from the last answer, greyed out` : count;
+}
+
+/** What a click on a row does: nothing for a greyed (unreachable) row, focus for a run whose window is open, else open. */
+export function rowAction(row, openIds = []) {
+  if (!row?.available) return 'none';
+  return (openIds instanceof Set ? openIds.has(row.runId) : openIds.includes(row.runId)) ? 'focus' : 'open';
+}
+
+/**
+ * The window state for a past run, before its meta arrives (GET …/meta then adds the conversation and the end, withMeta):
+ * the row's status decides what the strip and the composer show. A run that is still running opens live.
+ */
+export function stateFromRow(row) {
+  const s = startRun({ runId: row.runId, title: row.title, node: row.node, url: row.url, at: row.at, keptAs: row.kept, v2: row.v2 });
+  const st = row.status?.key;
+  const ended = row.finishedAt || row.at;
+  if (st === 'idle') return { ...s, status: 'idle', ok: true, turn: row.turn, endedAt: ended, activity: 'Ready for your feedback' };
+  if (st === 'done') return { ...s, status: 'done', ok: true, turn: row.turn, endedAt: ended, activity: 'Done' };
+  if (st === 'failed' || st === 'unknown') return { ...s, status: 'failed', ok: false, turn: row.turn, endedAt: ended, activity: row.status.label === 'unknown' ? 'Stopped' : `Run ${row.status.label}` };
+  return { ...s, turn: row.turn };
+}
+
+/** "show my yolo history", "open yolo history", "my past yolo runs": the JARVIS box opens the list itself, no brain, never work. */
+export const isHistoryAsk = (text) => /^(?:(?:please|can you|could you)\s+)*(?:(?:show|open|list|browse|see|view)\s+(?:me\s+)?(?:all\s+)?(?:(?:my|the|our|all)\s+)*(?:(?:past|previous|old|earlier|recent)\s+)?yolo\s*(?:history|runs|sessions)|yolo\s+(?:history|runs|sessions))(?:\s+(?:please|window|panel|list))?\s*[.!?]*$/i.test(String(text || '').trim());

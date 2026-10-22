@@ -281,3 +281,108 @@ test('the window wires the conversation, composer, feedback, icon and toggle', (
   assert.ok(read('ui/src/wm.js').includes('setIcon'), 'wm.js lets a window change its icon (title bar + dock)');
   assert.ok(read('ui/src/styles.css').includes('.yolo-convo'), 'styles');
 });
+
+// ── The shared history list ──────────────────────────────────────────────────────────────────────────────────────────
+const NOW = Date.UTC(2026, 9, 22, 12, 0, 0);
+const hrow = (o) => ({ node: 'macbookpro', runId: 'y-1', title: 'old sketch', task: 'an old sketch', status: 'done', createdAt: NOW - 3 * 3600e3, finishedAt: NOW - 3 * 3600e3 + 9000, v2: false, turn: 1, icon: null, keptAs: null, url: '/api/nodes/macbookpro/yolo/y-1/', available: true, ...o });
+const answer = { runs: [
+  hrow({ runId: 'y-a', title: 'Orbiting planets', icon: { emoji: '🪐' }, createdAt: NOW - 10e3 }),
+  hrow({ runId: 'y-b', title: 'Kept chart', node: 'magix-system', status: 'done', keptAs: { id: 'cpu-chart', node: 'magix-system', name: 'CPU chart' }, createdAt: NOW - 2 * 86400e3 }),
+  hrow({ runId: 'y-c', title: '', task: 'a failed thing', node: 'linux', status: 'failed', available: false, createdAt: NOW - 9 * 86400e3 }),
+  hrow({ runId: 'y-d', title: 'Idle v2', v2: true, turn: 3, status: 'idle', createdAt: NOW - 5 * 60e3 }),
+  hrow({ runId: 'y-a', title: 'duplicate of a' }), // same (node, runId): dropped
+  { node: 'x', title: 'no run id' },
+], nodes: { macbookpro: { ok: true, count: 3 }, 'magix-system': { ok: true, count: 1 } } };
+
+test('ageText reads like a chat timestamp', () => {
+  const a = (ms) => M.ageText(NOW - ms, NOW);
+  assert.deepEqual([a(5e3), a(5 * 60e3), a(3 * 3600e3), a(2 * 86400e3), a(90 * 86400e3), a(800 * 86400e3)], ['just now', '5m ago', '3h ago', '2d ago', '3mo ago', '2y ago']);
+  assert.equal(M.ageText(0, NOW), '');
+});
+
+test('buildRows: icon, title, machine, age, status, kept badge, offline rows; newest first, deduped', () => {
+  const rows = M.buildRows(answer, { now: NOW });
+  assert.deepEqual(rows.map((r) => r.runId), ['y-a', 'y-d', 'y-b', 'y-c'].sort((x, y) => rows.findIndex((r) => r.runId === x) - rows.findIndex((r) => r.runId === y)));
+  assert.deepEqual(rows.map((r) => r.runId), ['y-a', 'y-d', 'y-b', 'y-c'], 'newest first; the duplicate and the row without a runId are gone');
+  const [a, d, b, c] = rows;
+  assert.deepEqual([a.icon, a.title, a.node, a.age, a.status.label, a.kept, a.available], ['🪐', 'Orbiting planets', 'macbookpro', 'just now', 'done', null, true]);
+  assert.equal(b.icon, '⚡', 'no icon → ⚡');
+  assert.deepEqual([b.kept.name, b.kept.node, b.age], ['CPU chart', 'magix-system', '2d ago']);
+  assert.deepEqual([d.status.key, d.status.label, d.turn, d.v2], ['idle', 'idle', 3, true]);
+  assert.deepEqual([c.title, c.available, c.status.key], ['a failed thing', false, 'failed'], 'a missing title falls back to the task; an unreachable machine marks the row');
+  assert.deepEqual(M.buildRows(null), []);
+  assert.deepEqual(M.buildRows({ runs: 'x' }), []);
+});
+
+test('historyStatus maps the server statuses', () => {
+  assert.deepEqual(['running', 'idle', 'done', 'failed', 'stopped', 'interrupted', 'weird', undefined].map((s) => M.historyStatus(s).key), ['live', 'idle', 'done', 'failed', 'failed', 'failed', 'unknown', 'unknown']);
+  assert.equal(M.historyStatus('interrupted').label, 'interrupted');
+});
+
+test('filterRows: every word in title, task, machine or app name; machine menu', () => {
+  const rows = M.buildRows(answer, { now: NOW });
+  assert.deepEqual(M.filterRows(rows, { text: 'planets' }).map((r) => r.runId), ['y-a']);
+  assert.deepEqual(M.filterRows(rows, { text: 'CPU magix' }).map((r) => r.runId), ['y-b'], 'matches the kept app name and the machine, any case');
+  assert.deepEqual(M.filterRows(rows, { text: 'failed thing' }).map((r) => r.runId), ['y-c'], 'matches the task');
+  assert.deepEqual(M.filterRows(rows, { node: 'linux' }).map((r) => r.runId), ['y-c']);
+  assert.deepEqual(M.filterRows(rows, { text: 'planets', node: 'linux' }), []);
+  assert.equal(M.filterRows(rows, {}).length, 4);
+  assert.deepEqual(M.machinesOf(rows), [{ node: 'linux', count: 1, available: false }, { node: 'macbookpro', count: 2, available: true }, { node: 'magix-system', count: 1, available: true }]);
+});
+
+test('sortRows is newest first and puts the live machine copy ahead on a tie', () => {
+  const rows = M.sortRows([{ key: 'a/1', at: 5, available: false }, { key: 'b/1', at: 5, available: true }, { key: 'c/1', at: 9, available: false }]);
+  assert.deepEqual(rows.map((r) => r.key), ['c/1', 'b/1', 'a/1']);
+});
+
+test('rowAction: greyed rows do nothing, an open run is focused, others open; dedupe against open windows', () => {
+  const rows = M.buildRows(answer, { now: NOW, openIds: ['y-d'] });
+  const by = Object.fromEntries(rows.map((r) => [r.runId, r]));
+  assert.equal(M.rowAction(by['y-c'], []), 'none');
+  assert.equal(M.rowAction(by['y-a'], []), 'open');
+  assert.equal(M.rowAction(by['y-d'], ['y-d']), 'focus');
+  assert.equal(M.rowAction(by['y-d'], new Set(['y-d'])), 'focus');
+  assert.equal(by['y-d'].open, true, 'the row knows its window is open');
+  assert.equal(by['y-a'].open, false);
+  assert.equal(M.rowAction(null, []), 'none');
+});
+
+test('stateFromRow: a past run opens as done / idle / failed, never live, with the kept app and the proxied url', () => {
+  const rows = Object.fromEntries(M.buildRows(answer, { now: NOW }).map((r) => [r.runId, r]));
+  const done = M.stateFromRow(rows['y-b']);
+  assert.deepEqual([done.status, done.ok, done.url, done.node, done.keptAs.id, done.title], ['done', true, '/api/nodes/macbookpro/yolo/y-1/', 'magix-system', 'cpu-chart', 'Kept chart']);
+  assert.equal(M.keepButton(done).kept, true, 'a kept run offers the app');
+  assert.equal(M.keepButton(M.stateFromRow(rows['y-a'])).label, '★ Keep as app', 'a never-kept finished run offers Keep as app');
+  const idle = M.stateFromRow(rows['y-d']);
+  assert.deepEqual([idle.status, idle.turn, idle.v2, M.composerState(idle).disabled], ['idle', 3, true, false], 'an idle v2 run keeps its feedback box');
+  assert.equal(M.stateFromRow(rows['y-c']).status, 'failed');
+  assert.equal(M.composerState(M.stateFromRow(rows['y-a'])).shown, false, 'a v1 run has no conversation');
+  // the conversation comes from the run's meta
+  const msgs = [{ role: 'user', text: 'a ball', turn: 1, at: 1 }, { role: 'assistant', text: 'Made one.', turn: 1, at: 2 }];
+  const withChat = M.withMeta(idle, { runId: 'y-d', v2: true, status: 'idle', turn: 3, messages: msgs });
+  assert.deepEqual([withChat.messages.length, withChat.status], [2, 'idle']);
+  assert.deepEqual(M.stateFromRow({ ...rows['y-a'], status: M.historyStatus('running') }).status, 'live', 'a run still running opens live');
+});
+
+test('historySummary names the machines that only answered from the cache', () => {
+  assert.equal(M.historySummary(4, 4, answer), '4 runs');
+  assert.equal(M.historySummary(1, 4, {}), '1 of 4 runs');
+  assert.equal(M.historySummary(1, 1, { nodes: { linux: { ok: false, count: 2 }, a: { ok: true } } }), '1 run · linux not reachable — shown from the last answer, greyed out');
+});
+
+test('isHistoryAsk: the list, not a run', () => {
+  for (const t of ['show my yolo history', 'Open yolo history', 'yolo history', 'show me my past yolo runs', 'list the yolo sessions please']) assert.ok(M.isHistoryAsk(t), t);
+  for (const t of ['yolo a p5 sketch', 'yolo history chart of stocks', 'turn on yolo mode', 'show my files']) assert.ok(!M.isHistoryAsk(t), t);
+});
+
+test('the history panel is wired to the Apps list, ui_open and the JARVIS box; it never opens by itself', () => {
+  const ui = read('ui/src/yolo.js');
+  for (const needle of ['openYoloHistory', 'HISTORY_URL', 'buildRows(', 'rowAction(', 'stateFromRow(', 'disabled: !row.available']) assert.ok(ui.includes(needle), needle);
+  assert.ok(read('ui/src/apps.js').includes('openYoloHistory()'), 'the Apps list has a YOLO history button');
+  const main = read('ui/src/main.js');
+  assert.ok(main.includes("a.view === 'yolo'") && main.includes('isHistoryAsk(t)'), 'a ui-open push and the typed command open it');
+  const calls = [...main.matchAll(/openYoloHistory\(\)/g)].length;
+  assert.equal(calls, 2, 'only those two call sites (push, typed command): no auto-open on a yolo event or on load');
+  assert.ok(!/onYoloEvent[^]{0,400}openYoloHistory/.test(ui.slice(0, ui.indexOf('// ── YOLO history'))), 'a yolo-* event never opens the list');
+  assert.ok(read('ui/src/styles.css').includes('.yolo-hist-row.offline'), 'greyed rows are styled');
+});

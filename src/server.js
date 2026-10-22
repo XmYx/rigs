@@ -672,6 +672,7 @@ export async function startServer() {
       return m;
     };
     const extra = { ...(args.title ? { title: args.title } : {}) };
+    if (args.view === 'yolo') return uiOpen.uiOpenPush({ view: 'yolo', ...extra, trace: traceId });
     if (args.view === 'url') return uiOpen.uiOpenPush({ view: 'url', url: args.url, ...extra, trace: traceId });
     if (args.view === 'trace') return uiOpen.uiOpenPush({ view: 'trace', traceId: args.trace, ...extra, trace: traceId }); // traceId = the one to open; trace = the request's, for delivery
     if (args.view === 'project') {
@@ -1146,6 +1147,12 @@ export async function startServer() {
     // (path-confined, served as an opaque-origin sandbox), live-reload events, the page's runtime errors, stop, and a
     // YOLOv2 run's follow-up messages (POST yolo/<runId>/message; refused from Origin: null by opaqueOriginRefused).
     if (sub === 'yolo' && method === 'GET') return { settings: yolo.yoloSettings(config().yolo), runs: await yolo.listRuns({ limit: Number(q.get('limit')) || 50 }) };
+    if (sub === 'yolo/history' && method === 'GET') {
+      // Mesh-wide history (src/yolo.js meshHistory): this machine's runs + every rigs peer's, offline ones from the cache.
+      const limit = Math.max(1, Math.min(500, Number(q.get('limit')) || 100));
+      const peers = discovery.list().filter((n) => !n.self && n.rigs).map((n) => ({ name: n.name, online: !!n.online, fetch: async (l) => (await peerJson(n, `yolo?limit=${l}`, { timeout: 4000 })).runs }));
+      return yolo.meshHistory({ selfNode: config().name, limit, peers });
+    }
     if (sub === 'yolo/config' && method === 'GET') return yolo.yoloSettings(config().yolo);
     if (sub === 'yolo/config' && method === 'POST') {
       let next;

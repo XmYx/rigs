@@ -2,11 +2,11 @@
 // WebSocket push to the UI that made the request (else every open UI on the mesh). Views (UI_VIEWS): the file browser
 // ("files", the default), an App Cloud app window ("app"), a page in a sandboxed window ("url"), the Projects window on
 // a project ("project"), the trace explorer ("trace"), the 3D viewer for a .glb/.gltf/.obj ("model") and a file in one
-// built-in tool ("tool"). A new view = a name in UI_VIEWS, its argument rules in validateOpen, and a case in the UI's
+// built-in tool ("tool"), the YOLO history list ("yolo"). A new view = a name in UI_VIEWS, its argument rules in validateOpen, and a case in the UI's
 // ui-open-model.js. The parts here are pure (tested in test/ui-open.test.js); server.js wires them to the mesh.
 import { matchMachine } from './workspaces.js';
 
-export const UI_VIEWS = ['files', 'app', 'url', 'project', 'trace', 'model', 'tool'];
+export const UI_VIEWS = ['files', 'app', 'url', 'project', 'trace', 'model', 'tool', 'yolo'];
 /** The built-in file tools `view: 'tool'` can name (ui/src/file-tools.js): csv grid, json tree, pdf, image, text, rendered html, 3D model. */
 export const FILE_TOOLS = ['text', 'image', 'pdf', 'csv', 'json', 'html', 'model'];
 /** What `view: 'url'` may show: an http(s) page, or a same-origin API path (an app's route, a raw file, a report). */
@@ -65,6 +65,7 @@ export function validateOpen(a = {}) {
   if (title) out.title = title;
   switch (view) {
     case 'files': return out;
+    case 'yolo': return out; // the YOLO history window: one list of past runs from every machine (no arguments)
     case 'app': {
       const app = String(a.app ?? '').trim();
       if (!app) throw bad('view "app" needs app: the App Cloud app id (see mesh_apps)');

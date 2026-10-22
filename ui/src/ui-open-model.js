@@ -3,7 +3,7 @@
 import { mediaKind } from './media-player-model.js';
 import { toolFor } from './file-tools-model.js';
 
-export const VIEWS = ['files', 'app', 'url', 'project', 'trace', 'model', 'tool'];
+export const VIEWS = ['files', 'app', 'url', 'project', 'trace', 'model', 'tool', 'yolo'];
 
 const baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || String(p || '');
 
@@ -17,7 +17,7 @@ export const AUTO_TOOLS = ['model', 'pdf', 'csv', 'json'];
  * file the push named (it is the selected file, not a fallback): the media player opens it instead of the file
  * browser; `tool` = the tool a selected .glb/.gltf/.obj (3D viewer), .pdf, .csv or .json opens in as well.
  * app → { view, app, name, nodeId, nodeName, path }; url → { view, url, title }; project → { view, project, nodeId };
- * trace → { view, trace }; model → { view, nodeId, nodeName, path, title }; tool → { view, nodeId, nodeName, path, tool, title }.
+ * trace → { view, trace }; yolo → { view }; model → { view, nodeId, nodeName, path, title }; tool → { view, nodeId, nodeName, path, tool, title }.
  */
 export function uiOpenAction(m, { machines = [] } = {}) {
   if (!m || m.type !== 'ui-open' || !VIEWS.includes(m.view)) return null;
@@ -45,6 +45,7 @@ export function uiOpenAction(m, { machines = [] } = {}) {
       if (!m.app) return null;
       return { id, view: 'app', app: String(m.app), name: String(m.name || m.app), nodeId, nodeName, path: String(m.path || ''), title };
     }
+    case 'yolo': return { id, view: 'yolo' }; // the YOLO history list (ui/src/yolo.js)
     case 'url': {
       if (!m.url) return null;
       return { id, view: 'url', url: String(m.url), title: title || String(m.url) };

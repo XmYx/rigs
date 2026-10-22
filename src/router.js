@@ -7,7 +7,7 @@ import { claudeFlags } from './models.js';
 import { catalogLines, matchFlow, resolve as resolveWorkspace } from './workspaces.js';
 import { bin } from './tools.js';
 import { HOME, augmentedPath, run } from './util.js';
-import { isYoloRequest, resolveYolo } from './yolo.js';
+import { isYoloHistoryRequest, isYoloRequest, resolveYolo } from './yolo.js';
 
 export { isYoloRequest };
 // 'yolo' (src/yolo.js): a YOLO marker ("yolo …", "… yolo it", "in yolo mode") or jarvis/send `yolo: true` — decided by
@@ -144,6 +144,7 @@ export function confidentRules(text, threads = []) {
   const t = String(text || '').trim();
   if (!t) return null;
   if (isBrowseRequest(t)) return { route: 'answer', reason: 'opens a folder or file in the file browser (rules)' };
+  if (isYoloHistoryRequest(t)) return { route: 'answer', reason: 'opens the YOLO history list (ui_open view yolo), not work (rules)' };
   if (t.length >= CONFIDENT_MAX_CHARS || isImperative(t) || COMPOUND.test(t)) return null;
   const question = isClearQuestion(t);
   const lookup = !question && LOOKUP.test(t.replace(OPENERS, '')) && !PATHISH.test(t);
@@ -197,6 +198,7 @@ export function heuristicRoute(text, threads = []) {
     return { route: 'continue', threadId: best.th.id, title: best.th.title, reason: 'shares its subject with an ongoing thread' };
   }
   if (isBrowseRequest(t)) return { route: 'answer', reason: 'opens a folder or file in the file browser' };
+  if (isYoloHistoryRequest(t)) return { route: 'answer', reason: 'opens the YOLO history list' };
   if (newGoal || /\b(plan|roadmap|break (it )?down|end[- ]to[- ]end|from scratch|architecture|design (the|a|an)|several|multi[- ]?(step|part)|phases?|feature)\b/i.test(t) || t.length > 600) {
     return { route: 'plan', reason: 'a goal with several parts' };
   }
@@ -474,8 +476,8 @@ export function withWork(d, text, { catalog = [], selfNode = '', yolo, yoloSetti
   if (d.route === 'yolo') d.route = 'answer'; // a model named yolo for a request that isn't one (or said yolo: false)
   d = Object.assign(d, guardRoute(d, text));
   // Opening a folder or file is a one-step ui_open call: never filed as work, whatever the model said.
-  if ((d.route === 'implement' || d.route === 'plan') && isBrowseRequest(text)) {
-    Object.assign(d, { route: 'answer', reason: 'opens a folder or file in the file browser (ui_open), not work', work: undefined, guarded: true });
+  if ((d.route === 'implement' || d.route === 'plan') && (isBrowseRequest(text) || isYoloHistoryRequest(text))) {
+    Object.assign(d, { route: 'answer', reason: 'opens a folder, file or the YOLO history (ui_open), not work', work: undefined, guarded: true });
     delete d.work;
     return d;
   }

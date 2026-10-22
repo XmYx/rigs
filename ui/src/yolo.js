@@ -1,8 +1,8 @@
-import { api, h } from './api.js';
+import { api, h, toast } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
 import { isPhone } from './mobile.js';
-import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepIconField, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
+import { CONVO_KEY, HISTORY_URL, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, buildRows, filterRows, historySummary, machinesOf, rowAction, stateFromRow, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepIconField, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
 
 // YOLO windows: "yolo a bouncing ball in p5" opens a floating window the moment the daemon pushes yolo-start (before the
 // agent writes anything), shows the run's sandbox page in an iframe through /api/nodes/<node>/yolo/<runId>/ (so a run
@@ -251,7 +251,7 @@ function render(r) {
   if (c.shown) renderMessages(r);
 }
 
-function openRun(state) {
+function openRun(state, { focus = false } = {}) {
   const r = { state, phase: '', keepForm: null, doneWaiters: [], sending: false, msgSig: '', iconKey: '', shot: '', errAfter: 0 };
   r.convoHidden = hiddenNow(r);
   r.frame = h('iframe', { class: 'app-frame yolo-frame', title: state.title, src: state.url, allow: 'fullscreen; clipboard-write', sandbox: 'allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock' });
@@ -263,7 +263,7 @@ function openRun(state) {
   const btn = (text, title, fn, extra = {}) => h('button', { class: 'btn yolo-btn', title, 'aria-label': title, onclick: fn, ...extra }, text);
   r.stopBtn = btn('■ Stop', 'Stop the agent', () => stop(r));
   r.win = openWindow({
-    title: windowTitle(state), icon: iconView(state).text, width: 960, height: 680, className: 'yolo-win', focus: false,
+    title: windowTitle(state), icon: iconView(state).text, width: 960, height: 680, className: 'yolo-win', focus,
     onClose: () => { clearInterval(r.timer); runs.delete(state.runId); },
   });
   r.keepBtn = btn('★ Keep as app', 'Keep this page as an App Cloud app', () => onKeep(r), { class: 'btn yolo-btn yolo-keep-btn' });
@@ -300,6 +300,96 @@ function openRun(state) {
   // so a JARVIS on another machine would never see the turn end: while one runs, its meta is read too.
   r.win.interval(() => { if (r.state.status === 'live') { pollErrors(r); if (r.state.v2 && r.state.turn > 1) loadMeta(r); } }, 2500);
   render(r);
+  if (state.status !== 'live') finish(r); // a past run reopened: no clock, no Stop
   loadMeta(r);
   return r;
+}
+
+// ── YOLO history ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// One window (key yolo-history) with every machine's past runs (GET /api/local/yolo/history, src/yolo.js meshHistory), kept
+// or not. A click opens the run in the normal YOLO window: its page in the iframe, the v2 conversation from its meta and the
+// feedback box for an idle run; a run whose window is open is focused, not opened twice. Greyed rows are on a machine that
+// does not answer (the list came from the cache): not clickable. It opens only on request — the Apps list button, the
+// JARVIS box ("show my yolo history") or a ui_open view "yolo" — and never by itself.
+
+let historyWin = null;
+
+/** Open (or focus) the window of a past run. Returns it, or null when the row cannot be opened (its machine does not answer). */
+export function openHistoryRun(row) {
+  const act = rowAction(row, openYoloRuns());
+  if (act === 'none') return null;
+  if (act === 'focus') { const r = runs.get(row.runId); r.win.raise(); return r; }
+  const r = openRun(stateFromRow(row), { focus: true });
+  runs.set(row.runId, r);
+  return r;
+}
+
+function openKeptOf(row) {
+  const a = keptApp(row.kept, appsCatalog());
+  if (a) openApp(a);
+}
+
+/** Tools: the YOLO history list. Raises the window when it is already open. */
+export function openYoloHistory() {
+  if (historyWin && !historyWin.closed) { historyWin.raise(); loadHistory(); return historyWin; }
+  const w = openWindow({ title: 'YOLO history', icon: '⚡', width: 620, height: 560, className: 'yolo-hist-win', key: 'yolo-history' });
+  historyWin = w;
+  w.closed = false;
+  w.onCleanup(() => { w.closed = true; if (historyWin === w) historyWin = null; });
+  w.data = null;
+  w.find = h('input', { class: 'yolo-hist-find', type: 'search', placeholder: 'Filter runs', 'aria-label': 'Filter the history by text', autocomplete: 'off', oninput: () => drawHistory(w) });
+  w.machine = h('select', { class: 'yolo-hist-machine', 'aria-label': 'Filter the history by machine', onchange: () => drawHistory(w) }, h('option', { value: '' }, 'All machines'));
+  w.list = h('ul', { class: 'yolo-hist-list', role: 'list' });
+  w.note = h('div', { class: 'yolo-hist-note muted small', role: 'status', 'aria-live': 'polite' }, 'Loading…');
+  w.body.append(
+    h('div', { class: 'yolo-hist-bar' }, w.find, w.machine,
+      h('button', { class: 'btn yolo-btn', type: 'button', title: 'Reload the list from every machine', 'aria-label': 'Reload the list', onclick: () => loadHistory() }, '↻')),
+    w.list, w.note);
+  w.interval(() => loadHistory(), 30000);
+  loadHistory();
+  return w;
+}
+
+async function loadHistory() {
+  const w = historyWin;
+  if (!w || w.closed) return;
+  try {
+    w.data = await api(HISTORY_URL);
+    drawHistory(w);
+  } catch (e) {
+    if (!w.data) w.note.textContent = `Could not load the history: ${e.message}`;
+  }
+}
+
+function drawHistory(w) {
+  if (!w || w.closed || !w.data) return;
+  const all = buildRows(w.data, { openIds: openYoloRuns() });
+  const machines = machinesOf(all);
+  const picked = w.machine.value;
+  w.machine.replaceChildren(h('option', { value: '' }, 'All machines'), ...machines.map((m) => h('option', { value: m.node }, `${m.node} (${m.count})`)));
+  w.machine.value = machines.some((m) => m.node === picked) ? picked : '';
+  const rows = filterRows(all, { text: w.find.value, node: w.machine.value });
+  w.list.replaceChildren(...(rows.length ? rows.map(historyItem) : [h('li', { class: 'yolo-hist-empty muted' }, all.length ? 'No run matches the filter.' : 'No YOLO runs yet. Say “yolo a …” and it shows up here.')]));
+  w.note.textContent = historySummary(rows.length, all.length, w.data);
+}
+
+function historyItem(row) {
+  const go = () => {
+    const r = openHistoryRun(row);
+    if (!r && !row.available) toast(`${row.node} does not answer right now; this run is shown from its last known state.`, 'info');
+    else if (r) { const w = historyWin; if (w && !w.closed) drawHistory(w); }
+  };
+  const main = h('button', {
+    class: 'yolo-hist-main', type: 'button', onclick: go, disabled: !row.available,
+    title: row.available ? (row.open ? 'Focus its window' : 'Open this run') : `${row.node} does not answer right now`,
+  },
+    h('span', { class: 'yolo-hist-icon', 'aria-hidden': 'true' }, row.icon),
+    h('span', { class: 'yolo-hist-text' },
+      h('span', { class: 'yolo-hist-title' }, row.title),
+      h('span', { class: 'yolo-hist-sub' }, `${row.node} · ${row.age}${row.v2 && row.turn > 1 ? ` · ${row.turn} turns` : ''}`)),
+    h('span', { class: 'yolo-hist-tags' },
+      h('b', { class: `yolo-hist-status ${row.status.key}` }, row.status.label),
+      row.kept ? h('b', { class: 'yolo-hist-kept', title: `Kept as ${row.kept.name}` }, '★ kept as app') : ''));
+  return h('li', { class: `yolo-hist-row${row.available ? '' : ' offline'}${row.open ? ' is-open' : ''}`, 'data-run': row.runId },
+    main, row.kept ? h('button', { class: 'btn yolo-btn yolo-hist-app', type: 'button', disabled: !row.available, title: `Open ${row.kept.name}`, 'aria-label': `Open app ${row.kept.name}`, onclick: () => openKeptOf(row) }, 'Open app') : '');
 }

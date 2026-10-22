@@ -269,7 +269,7 @@ const commands = {
   async yolo() {
     const [sub = 'status'] = argv;
     const fail = (m) => { console.error(m || 'RIGS daemon is not running (rigs start).'); process.exit(1); };
-    if (!['on', 'off', 'status', 'list', 'keep', 'v2'].includes(sub)) fail('usage: rigs yolo [on|off|status|list|v2 on|off|keep <runId> [--name …]]');
+    if (!['on', 'off', 'status', 'list', 'history', 'keep', 'v2'].includes(sub)) fail('usage: rigs yolo [on|off|status|list|history [--limit n]|v2 on|off|keep <runId> [--name …]]');
     if (sub === 'v2' && argv[1] !== undefined && !['on', 'off'].includes(argv[1])) fail('usage: rigs yolo v2 on|off');
     if (sub === 'keep') {
       const runId = argv[1];
@@ -279,6 +279,18 @@ const commands = {
       const r = await daemonFetch(`/api/local/yolo/${encodeURIComponent(runId)}/keep`, { method: 'POST', body: JSON.stringify(b), timeout: 120000 }).catch((e) => ({ error: e.message }));
       if (!r?.ok) fail(r?.error || 'keep failed');
       console.log(`${r.already ? 'already kept' : 'kept'} as ${r.app.name} (${r.keptAs.id}) · ${r.keptAs.path}${r.keptAs.dir ? ` · ${r.keptAs.dir}` : ''}${r.health ? ` · ${r.health}` : ''}`);
+      return;
+    }
+    if (sub === 'history') {
+      const li = argv.indexOf('--limit');
+      const limit = li >= 0 ? Number(argv[li + 1]) : 0;
+      if (li >= 0 && !(limit > 0)) fail('usage: rigs yolo history [--limit n]');
+      const r = await daemonFetch(`/api/local/yolo/history${limit ? `?limit=${limit}` : ''}`, { timeout: 30000 }).catch((e) => ({ error: e.message }));
+      if (!Array.isArray(r?.runs)) fail(r?.error);
+      const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+      if (!r.runs.length) console.log('no YOLO runs on the mesh yet');
+      for (const x of r.runs) console.log(`${String(x.node).padEnd(16)} ${String(x.title || x.runId).slice(0, 48).padEnd(48)} ${ago(x.createdAt).padStart(8)}  ${String(x.status).padEnd(11)} ${x.keptAs ? `kept as ${x.keptAs.id}` : '-'}${x.available ? '' : '  (offline)'}`);
+      for (const [n, v] of Object.entries(r.nodes || {})) if (!v.ok) console.error(`  ${n}: ${v.error || 'unreachable'}${v.cachedAt ? ` — showing ${v.count} cached run(s) from ${ago(v.cachedAt)}` : ''}`);
       return;
     }
     if (sub === 'list') {
@@ -672,6 +684,7 @@ const commands = {
   rigs quick [on|off|status]  quick-task fast path: answers on Haiku (simple) / Sonnet (search, report) instead of the full brain
   rigs quick local [on|off|status|warm|model <m>|node <machine>]  the local responder: a local Ollama model answers the fast path (read-only tools)
   rigs yolo [on|off|status|list]  YOLO mode: "yolo …" requests build a page live in a sandbox window (no project, review, commit or merge)
+  rigs yolo history [--limit n]   every YOLO run on the mesh (node · title · age · status · kept), offline machines from cache
   rigs yolo v2 on|off             YOLOv2: runs stay open for feedback turns in the same window, with research/builder subagents
   rigs yolo keep <runId> [--name …]  publish a finished YOLO run as an App Cloud app (copied to <shared>/apps/<id>/)
   rigs connectors slack status|channels|history|search|post  Slack connector (post needs --confirm)
