@@ -439,7 +439,7 @@ test('a YOLO request end to end: route yolo, placeholder before the model, live 
     if (e.type === 'yolo-update' && !midRun) midRun = [...chat.activeTurns.values()].find((t) => t.runId === e.runId) || null;
   }, { router: noRouter, onWork: noWork, send: noSend, sendQuick: noSend, trace: intake.ctx });
   intake.end({ status: 'ok' });
-  assert.equal(out.text, 'A bouncing ball is on screen, sir.');
+  assert.ok(out.text.startsWith('A bouncing ball is on screen, sir.') && /did not open a window/.test(out.text), 'a quiet run: the spoken line plus where it is');
   const types = events.map((e) => e.type);
   const runId = events.find((e) => e.type === 'yolo-start').runId;
   assert.ok(types.indexOf('route') < types.indexOf('yolo-start') && types.indexOf('yolo-start') < types.indexOf('start'), `order: ${types.join(' ')}`);
@@ -569,7 +569,7 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     assert.ok(start, `a yolo-start in the stream:\n${JSON.stringify(events)}\n${log}`);
     assert.ok(firstUrlAt - t0 < 3000, `the window URL arrived ${firstUrlAt - t0} ms after the request`);
     assert.equal(start.url, `/api/nodes/test-node/yolo/${start.runId}/`);
-    assert.equal(events.find((e) => e.type === 'done')?.text, 'A bouncing ball is on screen, sir.');
+    assert.match(events.find((e) => e.type === 'done')?.text, /^A bouncing ball is on screen, sir\.\n\n.*did not open a window/s);
     await sleep(100);
     assert.deepEqual([...new Set(pushed.filter((e) => e.runId === start.runId).map((e) => e.type))], ['yolo-start', 'yolo-update', 'yolo-done'], 'pushed to the UI socket');
     // listed, served (locally and through the node path), errors the agent read back while it worked
@@ -1098,7 +1098,7 @@ test('YOLOv2 end to end: --agents at the start, the session resumed in the same 
   try {
     const out = await chat.jarvisSend('yolo a bouncing ball in p5', {}, () => {}, { router: noRouter, onWork: noWork, send: noSend, sendQuick: noSend });
     const runId = out.runId;
-    assert.equal(out.text, 'A bouncing ball is on screen, sir.');
+    assert.ok(out.text.startsWith('A bouncing ball is on screen, sir.') && /did not open a window/.test(out.text));
     let meta = await Y.getRun(runId);
     assert.deepEqual([meta.v2, meta.status, meta.ok, meta.turn, meta.sessionId], [true, 'idle', true, 1, 'yolo-sess'], 'idle, not done; the session kept');
     assert.deepEqual(meta.messages.map((m) => m.role), ['user', 'assistant']);

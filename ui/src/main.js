@@ -1248,7 +1248,7 @@ async function ask(text, { spoken = false } = {}) {
     // Every request is routed on the server: a new conversation, or the ongoing thread it belongs to
     await stream(`${node(b.nodeId)}/jarvis/send`, { text, brain: b.brain, model: b.model, effort: b.effort }, (e) => {
       if (e.type === 'trace') claimTrace(e.traceId);
-      if (e.type?.startsWith('yolo-')) onYoloEvent(e);
+      if (e.type?.startsWith('yolo-')) onYoloEvent(e, 'stream');
       if (e.type === 'route') {
         chatRef = { nodeId: b.nodeId, chatId: e.chatId };
         store.set('chat', chatRef);

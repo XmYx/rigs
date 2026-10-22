@@ -16,8 +16,11 @@
 // Events — pushed on the UI WebSocket (/ws) of the machine that runs the request AND written into that request's
 // jarvis/send NDJSON stream (so a relayed request reaches the UI that sent it). Every event carries `runId`; the same
 // event may arrive on both paths, dedupe by (type, runId, step):
-//   { type: 'yolo-start',  runId, title, task, node, url, localUrl, v2?, at }
-//       before the model process starts; `url` = '/api/nodes/<node>/yolo/<runId>/' works from any machine's UI,
+//   { type: 'yolo-start',  runId, title, task, node, url, localUrl, v2?, show?, target?, at }
+//       before the model process starts; `show: true, target: 'requester'` only when the request explicitly asked to see
+//       it in JARVIS (isYoloShowRequest) — then the UI that SENT the request (the jarvis/send stream copy) opens the
+//       window; without `show` no UI opens one on its own (the reply names the run's URL and folder instead), and the
+//       /ws copy never opens a window on another screen; `url` = '/api/nodes/<node>/yolo/<runId>/' works from any machine's UI,
 //       `localUrl` = '/api/local/yolo/<runId>/' on the machine that runs it. Open a window with an iframe on `url`.
 //   { type: 'yolo-update', runId, file, files, step, activity, at }
 //       a debounced (YOLO_DEBOUNCE_MS) batch of sandbox writes: `file` the last one, `files` all of them, `step` 1, 2, …
@@ -103,7 +106,10 @@ export const YOLO_BLOCKED_TOOLS = [
   'mcp__rigs__jarvis_task', 'mcp__rigs__project_create', 'mcp__rigs__project_dispatch', 'mcp__rigs__project_task_update',
   'mcp__rigs__project_resume', 'mcp__rigs__project_stop', 'mcp__rigs__project_feedback', 'mcp__rigs__rigs_propose',
   'mcp__rigs__rigs_dev_start', 'mcp__rigs__rigs_merge_resolved', 'mcp__rigs__tool_promote', 'mcp__rigs__mesh_update',
-  'mcp__rigs__mesh_start_agent', 'Bash(git:*)', 'Bash(rigs propose:*)', 'Bash(rigs dev:*)',
+  'mcp__rigs__mesh_start_agent',
+  // A run surfaces in JARVIS only when Sir asked (isYoloShowRequest → the requesting UI opens the window): the agent itself
+  // never opens a window, publishes an app or pushes a notice to every screen.
+  'mcp__rigs__ui_open', 'mcp__rigs__mesh_app_register', 'mcp__rigs__mesh_app_start', 'mcp__rigs__mesh_notify', 'Bash(git:*)', 'Bash(rigs propose:*)', 'Bash(rigs dev:*)',
 ];
 
 const bool = (v, d) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1' ? true : v === false || v === 'false' || v === 'off' || v === 0 || v === '0' ? false : d);
@@ -194,6 +200,35 @@ export function yoloTask(text) {
   return t.replace(/\s+/g, ' ').replace(/^[\s:,;.!—–-]+|[\s,;:—–-]+$/g, '').trim();
 }
 
+// A coordinated "show it": "… and show it in JARVIS", ", open it here", ". Pop it up", "then bring it up on screen".
+const SHOW_VERB = String.raw`(?:show|open|display|pop|bring|put|launch|surface)`;
+const SHOW_OBJ = String.raw`(?:it|me|this|that|them|the\s+(?:result|app|page|sketch|chart|demo|thing|output|window|run)|up)`;
+const SHOW_CLAUSE = new RegExp(String.raw`(?:^|[,;:—–.!?]\s*|\b(?:and|then|also|plus|&)\s+(?:then\s+)?|\bplease\s+)(?:just\s+)?${SHOW_VERB}\s+${SHOW_OBJ}\b(?:\s+(?:up|open))?(?=\s*(?:$|[,;.!?—–]|\b(?:in|on|here|there|inside|for|right|now|to|at)\b|\band\b))`, 'i');
+// "in a window", "pop-up" as the asked outcome.
+const SHOW_WINDOW = /\b(?:open|show|pop)\b[^.!?\n]{0,24}\bin\s+(?:a\s+)?(?:jarvis|window)\b|\b(?:in|inside)\s+jarvis\s*[.!?]?$/i;
+const SHOW_NOT = /\b(?:don'?t|do\s+not|dont|never|without|no\s+need\s+to|not\s+to|stop)\s+(?:\w+\s+){0,2}(?:show|open|pop|display|bring|surface)|\bno\s+(?:pop-?ups?|windows?)\b|\b(?:silently|quietly|in\s+the\s+background)\b/i;
+
+/**
+ * Did the request explicitly ask to see the result in JARVIS — "yolo a clock and show it in JARVIS", "yolo it, open it
+ * here", "… then pop it up"? A yolo run otherwise stays quiet (no window, no focus change, no app entry): the reply says
+ * where it lives. Only an imperative aimed at the result counts ("show it", "open it here", "show me"), never a
+ * description of the page ("a chart that shows my CPU", "an app that opens a file") or a refusal ("don't open it"). Pure.
+ */
+export function isYoloShowRequest(text) {
+  const t = String(text ?? '').trim();
+  if (!t || t.length > 4000) return false;
+  if (SHOW_NOT.test(t)) return false;
+  return SHOW_CLAUSE.test(t) || SHOW_WINDOW.test(t);
+}
+
+/**
+ * The line that keeps a quiet run's result reachable without a pop-up: the run's page (`url` works from any machine's
+ * JARVIS) and its sandbox folder. Pure.
+ */
+export function yoloWhere({ url = '', dir = '' } = {}) {
+  return `It did not open a window. The page is at ${url}${dir ? ` (folder ${dir})` : ''} — ask me to show it in JARVIS and it opens here.`;
+}
+
 /** A short window title for the run: the task's first words. Pure. */
 export function yoloTitle(task) {
   const words = String(task || '').replace(/[`*_#>[\]]/g, '').split(/\s+/).filter(Boolean);
@@ -206,14 +241,15 @@ export function yoloTitle(task) {
  * { on: false, reason }. A per-request `yolo` beats the text: false never runs it, true always does (even with the mode
  * switched off in config). Without one, a YOLO marker in the text runs it while config.yolo.enabled is on. Pure.
  */
-export function resolveYolo({ text = '', override, settings } = {}) {
+export function resolveYolo({ text = '', override, settings, show } = {}) {
   const s = yoloSettings(settings);
   const o = yoloOverride(override);
   if (o === false) return { on: false, reason: 'yolo: false on this request' };
-  if (o === true) return { on: true, via: 'request', reason: 'yolo: true on this request', task: yoloTask(text) || String(text || '').trim(), settings: s };
+  const showIt = show === true || show === 'true' ? true : show === false || show === 'false' ? false : isYoloShowRequest(text); // a per-request `show` beats the text
+  if (o === true) return { on: true, via: 'request', reason: 'yolo: true on this request', task: yoloTask(text) || String(text || '').trim(), settings: s, show: showIt };
   if (!isYoloRequest(text)) return { on: false, reason: 'no YOLO marker' };
   if (!s.enabled) return { on: false, reason: 'config.yolo.enabled is false' };
-  return { on: true, via: 'keyword', reason: 'a YOLO marker in the request', task: yoloTask(text), settings: s };
+  return { on: true, via: 'keyword', reason: 'a YOLO marker in the request', task: yoloTask(text), settings: s, show: showIt };
 }
 
 // ── The sandbox ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -597,7 +633,7 @@ const UNFINISHED = new Set(['running', 'idle']);
  * Start a run: create RIGS_HOME/yolo/<runId>/, write the placeholder index.html, start watching, and emit 'yolo-start'
  * — all before any model runs. → { runId, dir, meta, startEvent }.
  */
-export async function createRun({ text = '', task = '', title = '', node = '', chatId = '', traceId = '', startedAt = Date.now(), keep = DEFAULT_YOLO.keep, v2 = false, root = yoloRoot() } = {}) {
+export async function createRun({ text = '', task = '', title = '', node = '', chatId = '', traceId = '', startedAt = Date.now(), keep = DEFAULT_YOLO.keep, v2 = false, show = false, root = yoloRoot() } = {}) {
   await fsp.mkdir(root, { recursive: true });
   await prune(root, keep - 1).catch(() => {});
   const runId = newRunId();
@@ -611,10 +647,11 @@ export async function createRun({ text = '', task = '', title = '', node = '', c
     url: `/api/nodes/${encodeURIComponent(node || 'self')}/yolo/${runId}/`, localUrl: `/api/local/yolo/${runId}/`,
     // YOLOv2: a conversation — the Claude session resumed by each follow-up turn, the turn number, its messages
     ...(v2 ? { v2: true, sessionId: '', turn: 1, turnErrSeq: 0, messages: [] } : {}),
+    ...(show ? { show: true } : {}),
   };
   const r = liveRun(root, meta);
   await writeMeta(r);
-  const startEvent = emitEvent(r, { type: 'yolo-start', title: t, task: meta.task, node, url: meta.url, localUrl: meta.localUrl, ...(v2 ? { v2: true } : {}) });
+  const startEvent = emitEvent(r, { type: 'yolo-start', title: t, task: meta.task, node, url: meta.url, localUrl: meta.localUrl, ...(v2 ? { v2: true } : {}), ...(show ? { show: true, target: 'requester' } : {}) });
   return { runId, dir, meta: publicMeta(r), startEvent };
 }
 

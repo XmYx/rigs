@@ -902,7 +902,7 @@ export async function startServer() {
       if (relay) res.write(JSON.stringify({ type: 'status', text: `The main brain on ${relay} is unreachable — answering on ${config().name}.` }) + '\n');
       const seen = intakeWatcher();
       try {
-        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo });
+        await chat.jarvisSend(String(b.text || ''), b, (e) => { seen.see(e); res.write(JSON.stringify(e) + '\n'); }, { meshSummary: meshSummary(), live: meshLive(), projects: await projectsSummary(), signal: ac.signal, workspaces: meshWorkspaces, onWork: fileWork, trace: intake.ctx, preroute: b.preroute, quick: b.quick, yolo: b.yolo, show: b.show });
       } catch (e) {
         seen.see({ type: 'error', message: e.message });
         res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n');

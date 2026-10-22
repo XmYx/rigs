@@ -539,7 +539,7 @@ export async function jarvisSend(text, { brain, model, effort } = {}, emit, opts
   let out;
   let failed = false;
   try {
-    const y = yolo.resolveYolo({ text, override: opts.yolo, settings: config().yolo });
+    const y = yolo.resolveYolo({ text, override: opts.yolo, settings: config().yolo, show: opts.show });
     if (y.on) {
       Object.assign(m, { route: 'yolo', via: y.via, lane: 'yolo' });
       m.chatId = await yoloRoute(text, y, emit, opts, m);
@@ -883,7 +883,7 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '',
   }
   const task = y?.task || text;
   const v2 = !!s.v2;
-  const run = await yolo.createRun({ text, task, node: config().name, chatId: id, traceId: tctx?.traceId || '', startedAt, keep: s.keep, v2 });
+  const run = await yolo.createRun({ text, task, node: config().name, chatId: id, traceId: tctx?.traceId || '', startedAt, keep: s.keep, v2, show: !!y?.show });
   emit(run.startEvent);
   const off = yolo.onRun(run.runId, (e) => emit(e));
   if (v2) yolo.addMessage(run.runId, { role: 'user', text: task });
@@ -891,7 +891,7 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '',
   emit({ type: 'start', brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'yolo', runId: run.runId });
   const session = v2 ? { id: '', usage: null } : null;
   const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: run.runId, dir: run.dir, url: run.meta.url, title: chat.title }, resolved, s, sent: task, emit, meshSummary, live, projects, signal, tctx, onTool, session, label: text });
-  const reply = yoloReply(out, { timedOut, stopped, reason });
+  const reply = yoloReply(out, { timedOut, stopped, reason }, { shown: !!y?.show, url: run.meta.url, dir: run.dir });
   const done = v2
     ? await yolo.endTurn(run.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200), reply })
     : await yolo.finishRun(run.runId, { ok: !reason, summary: reason || truncate(reply.split('\n')[0], 200) });
@@ -904,7 +904,12 @@ export async function yoloTurn(id, text, y, emit, { meshSummary = '', live = '',
 }
 
 /** The spoken line of a YOLO turn: the agent's own, or what happened to it. */
-function yoloReply(out, { timedOut, stopped, reason }) {
+function yoloReply(out, { timedOut, stopped, reason }, where = null) {
+  const said = yoloSpoken(out, { timedOut, stopped, reason });
+  return where && !where.shown ? `${said}\n\n${yolo.yoloWhere(where)}` : said;
+}
+
+function yoloSpoken(out, { timedOut, stopped, reason }) {
   return String(out.text || '').trim() || (stopped ? 'Stopped, sir. The window shows how far it got.'
     : reason ? `The YOLO run ${timedOut ? 'ran out of time' : 'hit a snag'}, sir. The window shows how far it got.` : 'Done, sir.');
 }

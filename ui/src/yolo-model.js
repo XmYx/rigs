@@ -18,6 +18,13 @@ export const eventKey = (m) => {
   return `${m.type}|${m.runId}|${m.step ?? ''}|${extra}`;
 };
 
+/**
+ * Does this yolo-start open a window on THIS screen? Only when the request asked to see it (`show`) and the event
+ * reached us on the request's own jarvis/send stream (origin 'stream'): the /ws copy goes to every JARVIS on the mesh
+ * and must never open anything on a screen that did not ask. A run without `show` stays quiet (the reply names its URL).
+ */
+export const opensWindow = (m, origin = 'ws') => !!m && m.type === 'yolo-start' && m.show === true && origin === 'stream';
+
 /** A run's initial state from its yolo-start. `url` already goes through the node proxy (works from any machine's UI). */
 export function startRun(m) {
   return {

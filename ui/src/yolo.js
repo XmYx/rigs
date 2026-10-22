@@ -2,9 +2,9 @@ import { api, h } from './api.js';
 import { appsCatalog, openApp, refreshApps } from './apps.js';
 import { openWindow } from './wm.js';
 import { isPhone } from './mobile.js';
-import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepIconField, keepUrl, keptApp, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
+import { CONVO_KEY, SCREENSHOT_MAX, STATUS_LABEL, applyEvent, canSendBody, composerState, convoHidden, convoToggle, elapsed, errorCount, errorsUrl, eventKey, iconView, isYoloEvent, keepBody, keepButton, keepIconField, keepUrl, keptApp, opensWindow, messageBody, messageUrl, metaUrl, readHiddenMap, startRun, stopUrl, turnStarted, windowTitle, withConvoHidden, withKept, withMeta } from './yolo-model.js';
 
-// YOLO windows: "yolo a bouncing ball in p5" opens a floating window the moment the daemon pushes yolo-start (before the
+// YOLO windows: "yolo a bouncing ball in p5, and show it in JARVIS" opens a floating window (only on the screen that asked, and only when it said so — a plain yolo run stays quiet) the moment the daemon pushes yolo-start (before the
 // agent writes anything), shows the run's sandbox page in an iframe through /api/nodes/<node>/yolo/<runId>/ (so a run
 // on another machine looks the same), reloads it on every yolo-update and settles a slim status strip on yolo-done.
 // Events (src/yolo.js has the contract) arrive on /ws and in the jarvis/send stream: onYoloEvent takes both and dedupes.
@@ -22,8 +22,11 @@ const runs = new Map(); // runId → { state, win, frame, ... }
 const seen = new Set();
 
 /** Feed a yolo-* event from either path. Anything else is ignored. */
-export function onYoloEvent(m) {
+export function onYoloEvent(m, origin = 'ws') {
   if (!isYoloEvent(m)) return;
+  // Only the screen that asked ("… and show it in JARVIS") gets the window: not seen-marked, so a /ws copy that arrives
+  // first does not swallow the stream copy that opens it.
+  if (!runs.has(m.runId) && m.type === 'yolo-start' && !opensWindow(m, origin)) return;
   const k = eventKey(m);
   if (seen.has(k)) return;
   seen.add(k);
