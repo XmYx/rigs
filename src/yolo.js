@@ -38,6 +38,15 @@
 //
 // Endpoints (all under /api/local/, peers through /api/nodes/<node>/…):
 //   GET  yolo                         → { settings, runs: [meta…] } newest first
+//   GET  yolo/history[?limit=]        → { runs: [{ node, runId, title, task, status, createdAt, finishedAt, v2, turn, icon, keptAs,
+//                                       url: '/api/nodes/<node>/yolo/<runId>/', available }], nodes: { <node>: { ok, count,
+//                                       error?, cachedAt? } } } the shared history: this machine's runs plus every rigs
+//                                       peer's (GET yolo, 4 s timeout each), newest first, deduped by (node, runId). A peer
+//                                       that is offline or slow is answered from the cache of its last answer
+//                                       (RIGS_HOME/yolo-history-cache.json): its runs stay listed with available: false.
+//                                       Finished runs are kept up to config.yolo.keep (200) — never an unfinished one or one
+//                                       with keptAs — and reopen after a daemon restart: …/<runId>/ and …/meta read the
+//                                       sandbox and meta from disk (meta.messages included; a stale 'running' reads 'interrupted').
 //   GET  yolo/config · POST yolo/config {enabled, provider, model, effort, maxTurns, timeoutMs, keep, v2} → settings
 //   GET  yolo/<runId>                 → 308 to yolo/<runId>/ (relative URLs need the slash)
 //   GET  yolo/<runId>/<path>          → the sandbox file ('' or a folder = index.html); path-confined, dot-files never
@@ -90,7 +99,7 @@ import { RIGS_HOME } from './config.js';
 import { PROVIDERS } from './models.js';
 
 export const YOLO_PROVIDERS = ['claude'];
-const DEFAULT_YOLO = { enabled: true, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50, v2: false };
+const DEFAULT_YOLO = { enabled: true, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 200, v2: false };
 /** Sandbox writes within this window become one 'yolo-update'. */
 export const YOLO_DEBOUNCE_MS = 150;
 const MAX_ERRORS = 100; // kept per run (newest)
@@ -812,7 +821,7 @@ export async function getRun(runId, root = yoloRoot()) {
   if (!isRunId(runId)) return null;
   const r = runs.get(runId);
   if (r) return publicMeta(r);
-  try { return JSON.parse(await fsp.readFile(metaFile(root, runId), 'utf8')); } catch { return null; }
+  try { const m = JSON.parse(await fsp.readFile(metaFile(root, runId), 'utf8')); return m.status === 'running' ? { ...m, status: 'interrupted' } : m; } catch { return null; }
 }
 
 /** Runs kept on this machine, newest first. A run that was running when the daemon stopped reads as 'interrupted'. */
@@ -831,7 +840,8 @@ export async function listRuns({ limit = 50, root = yoloRoot() } = {}) {
 }
 
 /**
- * Keep the newest `keep` runs: older FINISHED ones (folder + meta) are removed. A run that is not over is never
+ * Keep the newest `keep` runs (default 200): older FINISHED ones (folder + meta) are removed, so a finished run that was
+ * never kept as an app still reopens from the shared history. A run `keptAs` points to is never removed. A run that is not over is never
  * pruned: one the agent is working on, or a YOLOv2 run idling between turns (its window is open, Sir may still send
  * feedback; on disk it is revived by the next message) — whether this daemon holds it live or only its meta is left
  * from before a restart. Exported for tests as _prune.
@@ -842,10 +852,10 @@ async function prune(root, keep) {
   const removed = [];
   for (const id of old) {
     const live = runs.get(id);
-    if (live) { if (UNFINISHED.has(live.meta.status)) continue; } else {
+    if (live) { if (UNFINISHED.has(live.meta.status) || live.meta.keptAs) continue; } else {
       let meta = null;
       try { meta = JSON.parse(await fsp.readFile(metaFile(root, id), 'utf8')); } catch {}
-      if (meta?.v2 && UNFINISHED.has(meta.status)) continue;
+      if (meta?.keptAs || (meta?.v2 && UNFINISHED.has(meta.status))) continue;
     }
     await fsp.rm(path.join(root, id), { recursive: true, force: true });
     await fsp.rm(metaFile(root, id), { force: true });
@@ -856,6 +866,75 @@ async function prune(root, keep) {
   return removed;
 }
 export const _prune = prune;
+
+// ── Shared history ──────────────────────────────────────────────────────────────────────────────────────────────────
+/** One history row from a run's meta (this machine's or a peer's GET yolo). Pure. */
+export function historyRow(node, m) {
+  return {
+    node, runId: m.runId, title: m.title || '', task: m.task || '', status: m.status || 'unknown', createdAt: m.createdAt || m.startedAt || 0,
+    finishedAt: m.endedAt || null, v2: !!m.v2, turn: m.turn || 1, icon: m.icon || null, keptAs: m.keptAs || null,
+    url: `/api/nodes/${encodeURIComponent(node)}/yolo/${m.runId}/`,
+  };
+}
+
+/**
+ * Merge the runs of every machine into one list, newest first. `sources` = [{ node, runs, ok, error?, cachedAt? }]:
+ * ok = the machine answered now (its runs are `available: true`), else `runs` is the cached last answer (`available:
+ * false`, nodes[node].cachedAt says when). Deduped by (node, runId), the first source wins. Pure; tested.
+ * → { runs, nodes: { <node>: { ok, count, error?, cachedAt? } } }
+ */
+export function mergeHistory(sources = [], { limit = 100 } = {}) {
+  const seen = new Set();
+  const rows = [];
+  const nodes = {};
+  for (const s of sources) {
+    let count = 0;
+    for (const m of Array.isArray(s.runs) ? s.runs : []) {
+      if (!m || !isRunId(m.runId)) continue;
+      const key = `${s.node}\u0000${m.runId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ ...historyRow(s.node, m), available: !!s.ok });
+      count += 1;
+    }
+    nodes[s.node] = { ok: !!s.ok, count, ...(s.error ? { error: String(s.error) } : {}), ...(!s.ok && s.cachedAt ? { cachedAt: s.cachedAt } : {}) };
+  }
+  rows.sort((a, b) => (b.createdAt - a.createdAt) || (a.runId < b.runId ? 1 : -1));
+  return { runs: rows.slice(0, Math.max(1, Number(limit) || 100)), nodes };
+}
+
+const historyCacheFile = (home = RIGS_HOME) => path.join(home, 'yolo-history-cache.json');
+/** The peers' last answers: { <node>: { at, runs: [meta…] } } ({} if none). Lives beside, not inside, the sandbox root. */
+export function readHistoryCache(home = RIGS_HOME) {
+  try { const c = JSON.parse(fs.readFileSync(historyCacheFile(home), 'utf8')); return c && typeof c === 'object' && !Array.isArray(c) ? c : {}; } catch { return {}; }
+}
+export function writeHistoryCache(node, runs, { home = RIGS_HOME, at = Date.now() } = {}) {
+  const c = readHistoryCache(home);
+  c[node] = { at, runs: runs.slice(0, 200).map((m) => ({ runId: m.runId, title: m.title, task: m.task, status: m.status, createdAt: m.createdAt, endedAt: m.endedAt, v2: m.v2, turn: m.turn, icon: m.icon, keptAs: m.keptAs })) };
+  try { fs.mkdirSync(home, { recursive: true }); const f = historyCacheFile(home); fs.writeFileSync(f + '.tmp', JSON.stringify(c)); fs.renameSync(f + '.tmp', f); } catch {}
+}
+
+/**
+ * The mesh-wide history: this machine's runs plus each peer's. `peers` = [{ name, online, fetch: async (limit) → runs }].
+ * A peer that is offline or fails (or is slower than `timeoutMs`) is answered from its cache. Never throws.
+ */
+export async function meshHistory({ selfNode, limit = 100, peers = [], timeoutMs = 4000, root = yoloRoot(), home = RIGS_HOME } = {}) {
+  const local = await listRuns({ limit: 1000, root });
+  const cache = readHistoryCache(home);
+  const timed = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs).unref())]);
+  const got = await Promise.all(peers.map(async (p) => {
+    const cached = cache[p.name];
+    const fromCache = (error) => ({ node: p.name, ok: false, runs: cached?.runs || [], cachedAt: cached?.at, error });
+    if (!p.online) return fromCache('offline');
+    try {
+      const runs = await timed(p.fetch(Math.max(limit, 100)));
+      if (!Array.isArray(runs)) throw new Error('unexpected answer');
+      writeHistoryCache(p.name, runs, { home });
+      return { node: p.name, ok: true, runs };
+    } catch (e) { return fromCache(e.message); }
+  }));
+  return mergeHistory([{ node: selfNode, ok: true, runs: local }, ...got], { limit });
+}
 
 const ERROR_TYPES = ['error', 'rejection', 'console', 'resource', 'log'];
 const cut = (v, n) => String(v ?? '').slice(0, n);

@@ -369,7 +369,7 @@ A model on a machine's own Ollama answers the fast path, with read-only tools.
 | **Effort** `yolo.effort` | select: ‹efforts:claude› | global | `yolo.effort` → `POST /api/local/yolo/config` | default `"low"` |
 | **Max turns** `yolo.maxTurns` | number 1–100 | global | `yolo.maxTurns` → `POST /api/local/yolo/config` | default `20` |
 | **Timeout** `yolo.timeoutMs` | number 10000–1800000 ms | global | `yolo.timeoutMs` → `POST /api/local/yolo/config` | default `180000` |
-| **Runs kept** `yolo.keep` | number 1–1000 | global | `yolo.keep` → `POST /api/local/yolo/config` | default `50` |
+| **Runs kept** `yolo.keep` | number 1–1000 | global | `yolo.keep` → `POST /api/local/yolo/config` | default `200` |
 | **YOLOv2 (multi-turn)** `yolo.v2` | switch | global | `yolo.v2` → `POST /api/local/yolo/config` | default `false` · `rigs yolo v2 on\|off` |
 
 ### 📋 Projects & Dispatch

@@ -176,11 +176,11 @@ test('router: yolo: false on the request beats the text (today\'s routing), and 
 
 test('yoloSettings / applyYoloPatch: defaults, validation, a fixed sandbox root', () => {
   const d = Y.yoloSettings();
-  assert.deepEqual([d.enabled, d.provider, d.model, d.effort, d.maxTurns, d.timeoutMs, d.keep], [true, 'claude', 'claude-sonnet-5-5', 'low', 20, 180000, 50]);
+  assert.deepEqual([d.enabled, d.provider, d.model, d.effort, d.maxTurns, d.timeoutMs, d.keep], [true, 'claude', 'claude-sonnet-5-5', 'low', 20, 180000, 200]);
   assert.equal(d.root, path.join(HOME, 'yolo'));
   const s = Y.yoloSettings({ enabled: 'off', provider: 'codex', effort: 'turbo', maxTurns: 999, timeoutMs: 5, model: '  ' });
   assert.deepEqual([s.enabled, s.provider, s.effort, s.maxTurns, s.timeoutMs, s.model], [false, 'claude', 'low', 100, 10000, 'claude-sonnet-5-5']);
-  assert.deepEqual(Y.applyYoloPatch({}, { enabled: false }), { enabled: false, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50, v2: false });
+  assert.deepEqual(Y.applyYoloPatch({}, { enabled: false }), { enabled: false, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 200, v2: false });
   assert.equal(Y.applyYoloPatch({ enabled: false }, { model: 'claude-haiku-5-5', effort: 'medium' }).effort, 'medium');
   for (const [b, re] of [[{ enabled: 'maybe' }, /enabled/], [{ provider: 'ollama' }, /provider/], [{ effort: 'turbo' }, /effort/], [{ model: '' }, /model/], [{ maxTurns: 'lots' }, /maxTurns/], [{ root: '/tmp' }, /fixed/], [[], /expected/]]) {
     assert.throws(() => Y.applyYoloPatch({}, b), re);
@@ -604,7 +604,7 @@ test('daemon: jarvis/send {yolo: true} → window URL at once, updates on /ws, t
     const badKeep = await fetch(`${BASE}${start.localUrl}keep`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'Not Valid!' }) });
     assert.equal(badKeep.status, 400, 'an invalid explicit id');
     assert.equal((await nullPost('/api/nodes/test-node/jarvis/send', { text: 'implement something' })).status, 403);
-    assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).keep, 50, 'config unchanged');
+    assert.equal((await (await fetch(BASE + '/api/local/yolo/config')).json()).keep, 200, 'config unchanged');
     const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { origin: 'null' } });
     assert.match(await new Promise((r) => { sock.on('open', () => r('open')); sock.on('error', (e) => r(e.message)); }), /403/);
     const [agent] = fakeRuns();
@@ -1172,4 +1172,71 @@ test('keepRun on a v1 run with a suggested icon.svg: the kept app records iconSv
   const r = await K.keepRun(run.runId, {}, { root, deps });
   assert.deepEqual([r.keptAs.icon, r.keptAs.iconSvg, calls.register[0].icon], ['⚡', 'icon.svg', '⚡']);
   assert.ok(fs.existsSync(path.join(r.keptAs.dir, 'icon.svg')), 'the svg is in the kept folder');
+});
+
+test('mergeHistory: newest first, deduped by (node, runId), offline sources marked available: false', () => {
+  const id = (sec) => Y.newRunId(new Date(Date.UTC(2021, 0, 1, 0, 0, sec)));
+  const [a, b, c] = [id(1), id(2), id(3)];
+  const r = Y.mergeHistory([
+    { node: 'here', ok: true, runs: [{ runId: b, title: 'B', createdAt: 2000, status: 'done', endedAt: 2500 }, { runId: b, title: 'dup' }, { runId: 'junk' }] },
+    { node: 'peer', ok: true, runs: [{ runId: c, title: 'C', createdAt: 3000, status: 'idle', v2: true, keptAs: { id: 'k' } }, { runId: b, title: 'same id other node', createdAt: 1500, status: 'done' }] },
+    { node: 'gone', ok: false, error: 'offline', cachedAt: 99, runs: [{ runId: a, title: 'A', createdAt: 1000, status: 'done' }] },
+    { node: 'slow', ok: false, error: 'no answer', runs: [] },
+  ]);
+  assert.deepEqual(r.runs.map((x) => [x.node, x.title, x.available]), [['peer', 'C', true], ['here', 'B', true], ['peer', 'same id other node', true], ['gone', 'A', false]]);
+  assert.equal(r.runs[0].url, `/api/nodes/peer/yolo/${c}/`);
+  assert.equal(r.runs[1].finishedAt, 2500);
+  assert.deepEqual(r.runs[0].keptAs, { id: 'k' });
+  assert.deepEqual(r.nodes, { here: { ok: true, count: 1 }, peer: { ok: true, count: 2 }, gone: { ok: false, count: 1, error: 'offline', cachedAt: 99 }, slow: { ok: false, count: 0, error: 'no answer' } });
+  assert.equal(Y.mergeHistory([{ node: 'here', ok: true, runs: r.runs.map((x) => ({ ...x })) }], { limit: 2 }).runs.length, 2);
+});
+
+test('meshHistory: a slow or offline peer comes from its cache, never stalls; a fresh answer refreshes the cache', async () => {
+  const home = fs.mkdtempSync(path.join(TMP, 'hist-'));
+  const root = path.join(home, 'yolo');
+  const mine = await Y.createRun({ text: 'yolo mine', root, keep: 1000 });
+  await Y.finishRun(mine.runId, { ok: true });
+  const peerRun = { runId: Y.newRunId(new Date(Date.UTC(2021, 0, 1))), title: 'P', createdAt: 5, status: 'done' };
+  const peers = (over = {}) => [{ name: 'p1', online: true, fetch: async () => [peerRun], ...over }];
+  let r = await Y.meshHistory({ selfNode: 'me', peers: peers(), root, home });
+  assert.deepEqual(r.runs.map((x) => [x.node, x.available]), [['me', true], ['p1', true]]);
+  assert.equal(Y.readHistoryCache(home).p1.runs[0].runId, peerRun.runId);
+  const t0 = Date.now();
+  r = await Y.meshHistory({ selfNode: 'me', peers: peers({ fetch: () => new Promise(() => {}) }), timeoutMs: 100, root, home });
+  assert.ok(Date.now() - t0 < 2000, 'a hung peer is cut off');
+  assert.deepEqual(r.runs.map((x) => [x.node, x.available]), [['me', true], ['p1', false]]);
+  assert.equal(r.nodes.p1.ok, false);
+  assert.ok(r.nodes.p1.cachedAt);
+  r = await Y.meshHistory({ selfNode: 'me', peers: peers({ online: false }), root, home });
+  assert.equal(r.nodes.p1.error, 'offline');
+  r = await Y.meshHistory({ selfNode: 'me', peers: peers({ online: false, name: 'never-seen' }), root, home });
+  assert.deepEqual(r.nodes['never-seen'], { ok: false, count: 0, error: 'offline' });
+});
+
+test('prune never removes a run keptAs points to; a finished never-kept run reopens from disk (page + meta + messages)', async () => {
+  const root = path.join(TMP, 'prune-kept');
+  const mk = (sec, meta) => {
+    const id = Y.newRunId(new Date(Date.UTC(2019, 0, 1, 0, 0, sec)));
+    fs.mkdirSync(path.join(root, id), { recursive: true });
+    fs.writeFileSync(path.join(root, id, 'index.html'), '<html><body>hi</body></html>');
+    fs.writeFileSync(path.join(root, `${id}.json`), JSON.stringify({ runId: id, ...meta }));
+    return id;
+  };
+  const kept = mk(1, { status: 'done', keptAs: { id: 'a', node: 'n', path: '/p/' } });
+  const plain = mk(2, { status: 'done', v2: true, messages: [{ role: 'user', text: 'hi', turn: 1 }, { role: 'assistant', text: 'there', turn: 1 }] });
+  const stale = mk(3, { status: 'running', v2: true, sessionId: 's' });
+  const removed = await Y._prune(root, 0);
+  assert.deepEqual(removed, [plain], 'kept and unfinished stay');
+  assert.ok(fs.existsSync(path.join(root, kept)));
+  // A run a restart left behind: the page and meta come from disk.
+  const again = mk(4, { status: 'done', v2: true, messages: [{ role: 'user', text: 'hi', turn: 1 }] });
+  Y._resetRuns();
+  const meta = await Y.handle({ method: 'GET' }, null, again, 'meta', { root });
+  assert.equal(meta.messages[0].text, 'hi');
+  assert.equal((await Y.handle({ method: 'GET' }, null, stale, 'meta', { root })).status, 'interrupted');
+  let status = 0; let sent = '';
+  const res = { writeHead: (s) => { status = s; }, end: (b) => { sent += b || ''; }, write: (b) => { sent += b; }, setHeader() {} };
+  await Y.handle({ method: 'GET' }, res, again, '', { root });
+  assert.equal(status, 200);
+  assert.match(sent, /<body>hi<\/body>/);
 });

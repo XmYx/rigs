@@ -99,7 +99,7 @@ export function defaults() {
     // bounded turn on this model that builds a page in RIGS_HOME/yolo/<runId>/ while a JARVIS window shows it live — no
     // project, review, commit or merge. enabled: false ignores the marker (a request's yolo: true still runs). keep = runs kept.
     // v2 = YOLOv2: the run stays open for follow-up turns (POST yolo/<runId>/message) and gets web-research/quick-builder subagents.
-    yolo: { enabled: true, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 50, v2: false },
+    yolo: { enabled: true, provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low', maxTurns: 20, timeoutMs: 180000, keep: 200, v2: false },
     // Request traces (src/trace.js): one span tree per request in traces/<day>.jsonl. days = retention; maxField = the cap
     // (characters) on each span's input / output / meta before it is cut and marked; enabled: false records nothing.
     traces: { enabled: true, days: 14, maxField: 8000 },
