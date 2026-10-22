@@ -16,8 +16,11 @@
 // Events — pushed on the UI WebSocket (/ws) of the machine that runs the request AND written into that request's
 // jarvis/send NDJSON stream (so a relayed request reaches the UI that sent it). Every event carries `runId`; the same
 // event may arrive on both paths, dedupe by (type, runId, step):
-//   { type: 'yolo-start',  runId, title, task, node, url, localUrl, v2?, at }
-//       before the model process starts; `url` = '/api/nodes/<node>/yolo/<runId>/' works from any machine's UI,
+//   { type: 'yolo-start',  runId, title, task, node, url, localUrl, v2?, show?, target?, at }
+//       before the model process starts; `show: true, target: 'requester'` only when the request explicitly asked to see
+//       it in JARVIS (isYoloShowRequest) — then the UI that SENT the request (the jarvis/send stream copy) opens the
+//       window; without `show` no UI opens one on its own (the reply names the run's URL and folder instead), and the
+//       /ws copy never opens a window on another screen; `url` = '/api/nodes/<node>/yolo/<runId>/' works from any machine's UI,
 //       `localUrl` = '/api/local/yolo/<runId>/' on the machine that runs it. Open a window with an iframe on `url`.
 //   { type: 'yolo-update', runId, file, files, step, activity, at }
 //       a debounced (YOLO_DEBOUNCE_MS) batch of sandbox writes: `file` the last one, `files` all of them, `step` 1, 2, …
@@ -112,7 +115,10 @@ export const YOLO_BLOCKED_TOOLS = [
   'mcp__rigs__jarvis_task', 'mcp__rigs__project_create', 'mcp__rigs__project_dispatch', 'mcp__rigs__project_task_update',
   'mcp__rigs__project_resume', 'mcp__rigs__project_stop', 'mcp__rigs__project_feedback', 'mcp__rigs__rigs_propose',
   'mcp__rigs__rigs_dev_start', 'mcp__rigs__rigs_merge_resolved', 'mcp__rigs__tool_promote', 'mcp__rigs__mesh_update',
-  'mcp__rigs__mesh_start_agent', 'Bash(git:*)', 'Bash(rigs propose:*)', 'Bash(rigs dev:*)',
+  'mcp__rigs__mesh_start_agent',
+  // A run surfaces in JARVIS only when Sir asked (isYoloShowRequest → the requesting UI opens the window): the agent itself
+  // never opens a window, publishes an app or pushes a notice to every screen.
+  'mcp__rigs__ui_open', 'mcp__rigs__mesh_app_register', 'mcp__rigs__mesh_app_start', 'mcp__rigs__mesh_notify', 'Bash(git:*)', 'Bash(rigs propose:*)', 'Bash(rigs dev:*)',
 ];
 
 const bool = (v, d) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1' ? true : v === false || v === 'false' || v === 'off' || v === 0 || v === '0' ? false : d);
@@ -208,6 +214,37 @@ export function yoloTask(text) {
   return t.replace(/\s+/g, ' ').replace(/^[\s:,;.!—–-]+|[\s,;:—–-]+$/g, '').trim();
 }
 
+// A coordinated "show it": "… and show it in JARVIS", ", open it here", ". Pop it up", "then bring it up on screen".
+const SHOW_VERB = String.raw`(?:show|open|display|pop|bring|put|launch|surface)`;
+const SHOW_OBJ = String.raw`(?:it|me|this|that|them|the\s+(?:result|app|page|sketch|chart|demo|thing|output|window|run)|up)`;
+const SHOW_CLAUSE = new RegExp(String.raw`(?:^|[,;:—–.!?]\s*|\b(?:and|then|also|plus|&)\s+(?:then\s+)?|\bplease\s+)(?:just\s+)?${SHOW_VERB}\s+${SHOW_OBJ}\b(?:\s+(?:up|open))?(?=\s*(?:$|[,;.!?—–]|\b(?:in|on|here|there|inside|for|right|now|to|at)\b|\band\b))`, 'i');
+// "in a window", "pop-up" as the asked outcome.
+const SHOW_WINDOW = /\b(?:open|show|pop)\b[^.!?\n]{0,24}\bin\s+(?:a\s+)?(?:jarvis|window)\b|\b(?:in|inside)\s+jarvis\s*[.!?]?$/i;
+// A refusal aimed at showing, not a word in the page's description ("start and stop buttons and show it", "a clock
+// without seconds, show it", "stars moving in the background — show it" all still ask to see it).
+const SHOW_NOT = /\b(?:don'?t|do\s+not|dont|never|no\s+need\s+to|not\s+to)\s+(?:\w+\s+){0,2}(?:show|open|pop|display|bring|surface)|\b(?:without|stop)\s+(?:showing|opening|popping|displaying|surfacing|bringing|a\s+(?:pop-?up|window))\b|\bno\s+(?:pop-?ups?|window)\b|\b(?:silently|quietly)\s*(?:$|[,;.!?—–]|\b(?:and|then|please|show|open)\b)|^\s*(?:silently|quietly)\b|\b(?:yolo|run|build|make|do)\s+(?:it\s+)?(?:\w+\s+){0,2}?in\s+the\s+background\s*(?:$|[,;.!?—–]|\band\b)/i;
+
+/**
+ * Did the request explicitly ask to see the result in JARVIS — "yolo a clock and show it in JARVIS", "yolo it, open it
+ * here", "… then pop it up"? A yolo run otherwise stays quiet (no window, no focus change, no app entry): the reply says
+ * where it lives. Only an imperative aimed at the result counts ("show it", "open it here", "show me"), never a
+ * description of the page ("a chart that shows my CPU", "an app that opens a file") or a refusal ("don't open it"). Pure.
+ */
+export function isYoloShowRequest(text) {
+  const t = String(text ?? '').trim();
+  if (!t || t.length > 4000) return false;
+  if (SHOW_NOT.test(t)) return false;
+  return SHOW_CLAUSE.test(t) || SHOW_WINDOW.test(t);
+}
+
+/**
+ * The line that keeps a quiet run's result reachable without a pop-up: the run's page (`url` works from any machine's
+ * JARVIS) and its sandbox folder. Pure.
+ */
+export function yoloWhere({ url = '', dir = '' } = {}) {
+  return `It did not open a window. The page is at ${url}${dir ? ` (folder ${dir})` : ''} — ask me to show it in JARVIS and it opens here.`;
+}
+
 /** A short window title for the run: the task's first words. Pure. */
 export function yoloTitle(task) {
   const words = String(task || '').replace(/[`*_#>[\]]/g, '').split(/\s+/).filter(Boolean);
@@ -220,14 +257,15 @@ export function yoloTitle(task) {
  * { on: false, reason }. A per-request `yolo` beats the text: false never runs it, true always does (even with the mode
  * switched off in config). Without one, a YOLO marker in the text runs it while config.yolo.enabled is on. Pure.
  */
-export function resolveYolo({ text = '', override, settings } = {}) {
+export function resolveYolo({ text = '', override, settings, show } = {}) {
   const s = yoloSettings(settings);
   const o = yoloOverride(override);
   if (o === false) return { on: false, reason: 'yolo: false on this request' };
-  if (o === true) return { on: true, via: 'request', reason: 'yolo: true on this request', task: yoloTask(text) || String(text || '').trim(), settings: s };
+  const showIt = show === true || show === 'true' ? true : show === false || show === 'false' ? false : isYoloShowRequest(text); // a per-request `show` beats the text
+  if (o === true) return { on: true, via: 'request', reason: 'yolo: true on this request', task: yoloTask(text) || String(text || '').trim(), settings: s, show: showIt };
   if (!isYoloRequest(text)) return { on: false, reason: 'no YOLO marker' };
   if (!s.enabled) return { on: false, reason: 'config.yolo.enabled is false' };
-  return { on: true, via: 'keyword', reason: 'a YOLO marker in the request', task: yoloTask(text), settings: s };
+  return { on: true, via: 'keyword', reason: 'a YOLO marker in the request', task: yoloTask(text), settings: s, show: showIt };
 }
 
 // ── The sandbox ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -337,25 +375,28 @@ export const CLIENT_JS = `(function () {
 
 /**
  * The YOLO system-prompt paragraph (after the persona). `v2`: the run is a conversation (follow-up turns resume this
- * session) and the main agent has the YOLO_AGENTS subagents to delegate research and boilerplate to. Pure.
+ * session) and the main agent has the YOLO_AGENTS subagents to delegate research and boilerplate to. `shown`: Sir asked to
+ * see it (isYoloShowRequest), so a window shows the page; false = a quiet run, nothing is on screen. Pure.
  */
-export function yoloPrompt({ dir = '', base = '', model = '', maxTurns = DEFAULT_YOLO.maxTurns, timeoutMs = DEFAULT_YOLO.timeoutMs, v2 = false } = {}) {
+export function yoloPrompt({ dir = '', base = '', model = '', maxTurns = DEFAULT_YOLO.maxTurns, timeoutMs = DEFAULT_YOLO.timeoutMs, v2 = false, shown = true } = {}) {
   return [
     '# YOLO mode',
     `This turn is a YOLO run (${model || 'a fast model'}, at most ${maxTurns} tool turns and ${Math.round(timeoutMs / 1000)} s${v2 ? ' per turn' : ''}): Sir wants to SEE the result while it is built, about as fast as a text reply. There is no project, task, review, commit or merge — this overrides the filing rules above: do the work yourself, right here.`,
-    `Your working folder (the current directory) is this run's sandbox: ${dir}. JARVIS already shows ${dir}/index.html in a live window and reloads it every time a file in the sandbox changes.`,
+    `Your working folder (the current directory) is this run's sandbox: ${dir}. ${shown
+      ? `JARVIS already shows ${dir}/index.html in a live window and reloads it every time a file in the sandbox changes.`
+      : `Sir did not ask to see it: no window is open, and JARVIS shows ${dir}/index.html only when he asks for it later.`}`,
     '1. First step: write index.html with a visible first frame (a title and something drawn) at once, before any research or polish. Then improve it in small steps; every save is shown live.',
     '2. Plain HTML/CSS/JS files in the sandbox, loaded by relative path (./sketch.js, data.json); external scripts only from well-known CDNs (cdn.jsdelivr.net, cdnjs.cloudflare.com, unpkg.com) — p5, three, d3, chart.js. No build step, no npm install.',
     '3. Data and helpers: run Python (python3) or internal tools (the rigs MCP read tools, the `rigs` CLI, curl to the local RIGS API) through Bash and write their results as JSON or PNG into the sandbox; the page loads them by relative path (fetch("data.json")).',
     `4. After every change, read the page's runtime errors: curl -s ${base}errors  — window errors, unhandled rejections, console.error and failed loads, newest last (add ?after=<seq> for only new ones). Fix what you find; an empty list after the page reloaded means it runs clean.`,
     '5. The page runs sandboxed in an opaque origin: no cookies or localStorage it depends on, no calls to the JARVIS API from the page.',
-    '6. Stay in the sandbox: never run git, never edit RIGS source or other projects, never call jarvis_task, project_*, rigs_propose or rigs_dev_start, never start other agents. Read Sir\'s files only when the request needs their data.',
+    '6. Stay in the sandbox: never run git, never edit RIGS source or other projects, never call jarvis_task, project_*, rigs_propose or rigs_dev_start, never start other agents. Never open a window, publish an app or send a notice yourself (no ui_open, mesh_app_*, mesh_notify, `rigs notify` or curl to the RIGS API for it): what Sir sees is his call. Read Sir\'s files only when the request needs their data.',
     `7. You may suggest this app's icon at any time: write ${ICON_JSON} {"emoji": "🪐"} (one emoji or up to ${ICON_TEXT_MAX} characters) and/or {"svg": "${ICON_SVG}"} (a small SVG file in the sandbox, no scripts), or just ${ICON_SVG}. JARVIS shows it on the window and uses it when Sir keeps the run as an app.`,
     ...(v2 ? [
       `8. Subagents (the Task tool): ${Object.entries(YOLO_AGENTS).map(([k, a]) => `${k} — ${a.description}`).join(' · ')}. Write the first frame yourself first; then hand research and boilerplate to them (in parallel when independent) while you keep improving the page. Never wait on a subagent before the first frame.`,
-      '9. This run is a conversation: after this turn the window stays open, Sir tests the page and sends feedback, and it reaches you as the next turn of this same session together with the page errors reported since. End every turn with a page that works.',
+      `9. This run is a conversation: after this turn ${shown ? 'the window stays open, Sir tests the page' : 'the run stays open, Sir may open the page later'} and sends feedback, and it reaches you as the next turn of this same session together with the page errors reported since. End every turn with a page that works.`,
     ] : []),
-    `${v2 ? '10. Finish every turn' : '8. Finish'} with ONE short spoken line saying what is on screen now — no "---" written part, no markdown, no paths.`,
+    `${v2 ? '10. Finish every turn' : '8. Finish'} with ONE short spoken line saying what ${shown ? 'is on screen now' : 'the page shows (it is not on screen)'} — no "---" written part, no markdown, no paths.`,
   ].join('\n');
 }
 
@@ -611,7 +652,7 @@ const UNFINISHED = new Set(['running', 'idle']);
  * Start a run: create RIGS_HOME/yolo/<runId>/, write the placeholder index.html, start watching, and emit 'yolo-start'
  * — all before any model runs. → { runId, dir, meta, startEvent }.
  */
-export async function createRun({ text = '', task = '', title = '', node = '', chatId = '', traceId = '', startedAt = Date.now(), keep = DEFAULT_YOLO.keep, v2 = false, root = yoloRoot() } = {}) {
+export async function createRun({ text = '', task = '', title = '', node = '', chatId = '', traceId = '', startedAt = Date.now(), keep = DEFAULT_YOLO.keep, v2 = false, show = false, root = yoloRoot() } = {}) {
   await fsp.mkdir(root, { recursive: true });
   await prune(root, keep - 1).catch(() => {});
   const runId = newRunId();
@@ -625,10 +666,11 @@ export async function createRun({ text = '', task = '', title = '', node = '', c
     url: `/api/nodes/${encodeURIComponent(node || 'self')}/yolo/${runId}/`, localUrl: `/api/local/yolo/${runId}/`,
     // YOLOv2: a conversation — the Claude session resumed by each follow-up turn, the turn number, its messages
     ...(v2 ? { v2: true, sessionId: '', turn: 1, turnErrSeq: 0, messages: [] } : {}),
+    ...(show ? { show: true } : {}),
   };
   const r = liveRun(root, meta);
   await writeMeta(r);
-  const startEvent = emitEvent(r, { type: 'yolo-start', title: t, task: meta.task, node, url: meta.url, localUrl: meta.localUrl, ...(v2 ? { v2: true } : {}) });
+  const startEvent = emitEvent(r, { type: 'yolo-start', title: t, task: meta.task, node, url: meta.url, localUrl: meta.localUrl, ...(v2 ? { v2: true } : {}), ...(show ? { show: true, target: 'requester' } : {}) });
   return { runId, dir, meta: publicMeta(r), startEvent };
 }
 
