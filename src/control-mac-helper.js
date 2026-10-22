@@ -29,7 +29,25 @@ export function helperLabel(home, defaultHome = path.join(os.homedir(), '.rigs')
 /** Pure: the name System Settings lists the app under. */
 export const helperName = (label) => (label === BUNDLE_ID ? 'RIGS Control' : 'RIGS Control (dev)');
 
-export function helperPaths(home = RIGS_HOME, { launchAgents = path.join(os.homedir(), 'Library/LaunchAgents'), defaultHome } = {}) {
+/** The user's real LaunchAgents folder: anything written here is loaded by launchd at every login. */
+export const realLaunchAgents = () => path.join(os.homedir(), 'Library/LaunchAgents');
+
+/**
+ * Pure: may installing the helper for `home` write a real LaunchAgent and call launchctl? Only for the real home,
+ * outside a test run. A dev or scratch home (tests, check scripts, `rigs serve` on a temp RIGS_HOME) needs
+ * RIGS_DEV_HELPER=1, so throwaway runs never leave jobs behind in ~/Library/LaunchAgents. A caller that injects its
+ * own LaunchAgents folder (the tests, with a fake launchctl) is not touching launchd and is always allowed.
+ * Returns null when allowed, else the reason.
+ */
+export function launchAgentRefusal({ home, launchAgents = realLaunchAgents(), defaultHome = path.join(os.homedir(), '.rigs'), env = process.env } = {}) {
+  if (path.resolve(launchAgents) !== path.resolve(realLaunchAgents())) return null;
+  if (env.NODE_TEST_CONTEXT) return 'a test run never installs a real LaunchAgent';
+  if (path.resolve(home) === path.resolve(defaultHome)) return null;
+  if (env.RIGS_DEV_HELPER === '1') return null;
+  return `RIGS_HOME ${home} is not the real home (${defaultHome}); a dev helper needs RIGS_DEV_HELPER=1`;
+}
+
+export function helperPaths(home = RIGS_HOME, { launchAgents = realLaunchAgents(), defaultHome } = {}) {
   const label = helperLabel(home, defaultHome);
   const app = path.join(home, 'bin', APP_NAME);
   return {
@@ -129,7 +147,11 @@ const launchctl = (runner, ...args) => runner('launchctl', args, { timeout: 1500
  * so any TCC entry under its bundle id (an older build's) no longer applies: `regrant` is recorded and the grant
  * flow resets that bundle id's entries first.
  */
-export async function installMacHelper({ home = RIGS_HOME, runner = run, launchAgents, defaultHome, uid = process.getuid?.(), ready, wait = 8000 } = {}) {
+export async function installMacHelper({ home = RIGS_HOME, runner = run, launchAgents, defaultHome, uid = process.getuid?.(), ready, wait = 8000, env = process.env } = {}) {
+  const refused = launchAgentRefusal({ home, launchAgents, defaultHome, env });
+  if (refused) {
+    throw new ControlError('unsupported', `Not installing RIGS Control: ${refused}`, { kind: 'command', text: 'Run RIGS from ~/.rigs, or set RIGS_DEV_HELPER=1 to install a separate "RIGS Control (dev)" helper for this home (remove it later with `rigs control helper remove`).' });
+  }
   const p = helperPaths(home, { launchAgents, defaultHome });
   const want = wantedHash(p);
   const had = builtHash(p);

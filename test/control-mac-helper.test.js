@@ -129,6 +129,36 @@ test('installMacHelper: no swiftc gives the xcode-select fix', async () => {
     (e) => e.code === 'unsupported' && /xcode-select --install/.test(e.fix.text));
 });
 
+test('launchAgentRefusal: only the real home, outside tests, may write a real LaunchAgent; injected folders always may', () => {
+  const real = H.realLaunchAgents(), defaultHome = '/Users/x/.rigs';
+  assert.equal(H.launchAgentRefusal({ home: defaultHome, defaultHome, env: {} }), null);
+  assert.equal(H.launchAgentRefusal({ home: defaultHome + '/', defaultHome, launchAgents: real, env: {} }), null);
+  assert.match(H.launchAgentRefusal({ home: '/tmp/rigs-graph-abc', defaultHome, env: {} }), /RIGS_DEV_HELPER=1/);
+  assert.equal(H.launchAgentRefusal({ home: '/tmp/rigs-graph-abc', defaultHome, env: { RIGS_DEV_HELPER: '1' } }), null);
+  assert.match(H.launchAgentRefusal({ home: defaultHome, defaultHome, env: { NODE_TEST_CONTEXT: 'child-v8' } }), /test run/);
+  assert.match(H.launchAgentRefusal({ home: '/tmp/x', defaultHome, env: { NODE_TEST_CONTEXT: 'child', RIGS_DEV_HELPER: '1' } }), /test run/);
+  assert.equal(H.launchAgentRefusal({ home: '/tmp/x', defaultHome, launchAgents: '/tmp/agents', env: { NODE_TEST_CONTEXT: 'child' } }), null);
+});
+
+test('installMacHelper: a scratch RIGS_HOME or a test run never builds, writes ~/Library/LaunchAgents or calls launchctl', async () => {
+  // Defaults, as `rigs serve`, the grant flow and `rigs control helper install` call it: the leak this guards against.
+  const home = fs.mkdtempSync(path.join(root, 'h-'));
+  const { label, plist } = H.helperPaths(home);
+  assert.equal(path.dirname(plist), H.realLaunchAgents());
+  for (const env of [{}, { NODE_TEST_CONTEXT: 'child-v8', RIGS_DEV_HELPER: '1' }, process.env]) {
+    const f = fakeRunner();
+    await assert.rejects(H.installMacHelper({ home, runner: f.runner, uid: 501, ready: async () => ({}), env }),
+      (e) => e.code === 'unsupported' && /RIGS_DEV_HELPER=1/.test(e.fix.text));
+    assert.deepEqual(f.calls, [], 'no build, no launchctl');
+  }
+  // The real home under a test run is refused too: a test must never replace the real dev.rigs.control job.
+  const f = fakeRunner();
+  await assert.rejects(H.installMacHelper({ home, defaultHome: home, runner: f.runner, uid: 501, ready: async () => ({}), env: { NODE_TEST_CONTEXT: 'child' } }), /test run/);
+  assert.deepEqual(f.calls, []);
+  assert.equal(fs.existsSync(plist), false, `${label} must not be written to the real LaunchAgents`);
+  assert.equal(fs.existsSync(path.join(home, 'bin')), false, 'nothing built for the scratch home');
+});
+
 test('decideMacHelper: the helper\'s own grants, each missing one with its System Settings pane', () => {
   const none = A.decideMacHelper({ running: true, grants: { screen: false, ax: false, post: false }, app: '/h/bin/RIGS Control.app' });
   assert.equal(none.screenCapture.fix.url, A.MAC_PANES.screenCapture);
