@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { guardBrief, gitDenyRules } from './autonomy.js';
+import * as accounts from './claude-accounts.js';
 import { config, RIGS_HOME } from './config.js';
 import { dashboardSection } from './dashboards.js';
+import { resolvePath } from './files.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
 import * as hubs from './hubs.js';
 import { AGENT_REF, GONE, agentsDir as openrigAgentsDir, memberFor, memberYaml, modelTag, slug, specYaml } from './hubs.js';
@@ -13,7 +15,7 @@ import { devRoot } from './merge.js';
 import { createPty, shellWrap } from './pty.js';
 import { bin } from './tools.js';
 import { startRun } from './trace.js';
-import { APP_DIR, HOME, expandHome, isWin, run, sleep } from './util.js';
+import { APP_DIR, HOME, isWin, run, sleep } from './util.js';
 
 /**
  * Runs ONE planned task on THIS machine. Called by the project's owner node through the mesh.
@@ -54,7 +56,7 @@ export function enrichBrief(prompt, task = {}) {
 }
 
 async function prepareWorkdir(workdir, gitUrl) {
-  const dir = path.resolve(expandHome(workdir || '~'));
+  const dir = resolvePath(workdir || '~'); // '@shared/projects/<slug>' → this machine's shared folder
   if (gitUrl && !fs.existsSync(path.join(dir, '.git'))) {
     await fsp.mkdir(path.dirname(dir), { recursive: true });
     const r = await run(bin('git') || 'git', ['clone', gitUrl, dir], { timeout: 600000 });
@@ -200,17 +202,21 @@ async function startOpenRig({ project, task, dir, brief, policy, source }) {
 
 async function startDirect({ project, task, dir, pointer, devWorktree }) {
   const a = task.assign;
-  const line = directLine(a, pointer, { devWorktree });
+  // A Claude agent runs as the account with the most room left (src/claude-accounts.js); OpenRig seats use the daemon's login.
+  const acct = a.provider === 'claude' ? await accounts.chooseAccount().catch(() => null) : null;
+  const env = accounts.accountEnv(acct);
+  const line = (env.CLAUDE_CONFIG_DIR && !isWin ? `CLAUDE_CONFIG_DIR=${q(env.CLAUDE_CONFIG_DIR)} ` : '') + directLine(a, pointer, { devWorktree });
   const name = sessionName(project, task);
+  const account = acct && acct.id !== accounts.DEFAULT_ID ? { account: acct.id } : {};
   const t = bin('tmux');
   if (t && !isWin) {
     const sh = shellWrap(line);
     const r = await run(t, ['new-session', '-d', '-s', name, '-c', dir, '-x', '200', '-y', '50', sh.cmd, ...sh.args], { timeout: 10000 });
     if (r.code !== 0) throw new Error(r.stderr.trim() || 'tmux new-session failed');
-    return { mode: 'direct', cwd: dir, session: { kind: 'tmux', id: name } };
+    return { mode: 'direct', cwd: dir, session: { kind: 'tmux', id: name }, ...account };
   }
   const p = createPty({ ...shellWrap(line), cwd: dir, title: `${task.id} · ${task.title}`.slice(0, 60), kind: a.provider, meta: { agent: a.provider, project: project.id, task: task.id } });
-  return { mode: 'direct', cwd: dir, session: { kind: 'pty', id: p.id } };
+  return { mode: 'direct', cwd: dir, session: { kind: 'pty', id: p.id }, ...account };
 }
 
 /**

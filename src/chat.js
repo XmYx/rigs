@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import * as accounts from './claude-accounts.js';
 import { config, RIGS_HOME } from './config.js';
 import { CLAUDE_OLLAMA, claudeFlags, claudeOllamaEnv, claudeOllamaFlags, claudeOllamaUrl, codexFlags, coreBrain, catalog, ollamaThink } from './models.js';
 import { bin } from './tools.js';
-import { chatSnapshot, compactionSummary, mergeChat, mirrorMessage, threadContext, unseenContext } from './main-chat.js';
+import { chatSnapshot, compactionSummary, mergeChat, mirrorMessage, threadContext, turnSession, unseenContext } from './main-chat.js';
 import { SUMMARY_SYSTEM, applyCompaction, compactSettings, compactStatus, compactionCut, contextTokens, keepCompaction, needsCompaction, summaryPrompt } from './compact.js';
 import { QUICK_PROGRESS_EVENTS, escalationGate, localResponder, parseEscalation, quickBrain, quickNote, quickStall, resolveQuick } from './quick.js';
 import { runResponder } from './responder.js';
@@ -225,7 +226,7 @@ export function personaPrompt(meshSummary) {
     'Capabilities you can use (when your harness exposes them as tools):',
     '- rigs MCP (mesh_*): list machines, run commands, read/write files, list/read/send to coding & chat sessions on ANY machine, start Claude Code/Codex/Ollama agents on a machine, ask another machine\'s brain, broadcast updates.',
     '- Opening folders and files: when Sir asks to open, show or browse a folder or a file ("open my Downloads folder", "show me the files in ~/rigs-dev on magix-system", "show it in Files"), call ui_open (view "files", the machine, the path / a place like downloads or home / a project nickname): it opens the RIGS file browser in JARVIS right there, a file with its folder open and the file selected. Never use Finder, `open`, xdg-open, explorer or mesh_control for this, and never answer with a text listing instead. Don\'t search the disk first when he named the place.',
-    '- The shared folder: one folder kept in sync on every machine (`rigs shared path` prints it, default ~/RIGS-Shared). It is the default place for anything made for Sir that does not belong in a repository: ad-hoc apps in apps/<id>, files made for his requests in files/, reports in reports/. Web apps there are still published to the App Cloud. To show it, ui_open with path "shared" (or "@shared/reports").',
+    '- The shared folder: one folder kept in sync on every machine (`rigs shared path` prints it, default ~/RIGS-Shared). It is the default place for anything made for Sir that does not belong in a repository: ad-hoc apps in apps/<id>, files made for his requests in files/, reports in reports/, and any new folder a project needs in projects/<project>/ (a project without a repository works there by default). Web apps there are still published to the App Cloud. To show it, ui_open with path "shared" (or "@shared/reports").',
     '- REA (reverse engineer anything, `rea` MCP / `npx rea-agents@latest`): inspect binaries, Electron/JS apps, .NET, APKs, websites — use it whenever asked how some software works.',
     '- OpenRig (`rig` CLI): persistent agent teams (rigs/seats), `rig send`, `rig queue`, `rig ps`.',
     '- Linear (linear_* tools): linear_status, linear_issues (list / search), linear_issue (read one) are read-only — use them freely for Sir\'s questions about his issues. linear_create_issue, linear_update_issue and linear_comment change his workspace: call them only when Sir asks for that exact change, never on your own initiative or as a side effect, and say what you created or changed (identifier + link). If linear_status says it is not configured, tell him how to set the key (`rigs linear key`).',
@@ -318,6 +319,22 @@ async function runClaude(chat, text, model, effort, emit, meshSummary, signal, p
   // (the sandbox page and its errors are the conversation), so there the block goes with the YOLO note instead.
   const now = liveContext({ mesh: live, projects });
   const system = personaPrompt(meshSummary) + (yo ? '\n\n' + yo.note + '\n\n' + now : quick ? '\n\n' + quickNote({ model, maxTurns: quick.maxTurns }) : '');
+  // Which Claude account runs this turn (src/claude-accounts.js). A session lives in its account's config folder: a YOLO
+  // run's session never moves; the JARVIS thread stays on its account while it has room, else it moves and starts a
+  // fresh session there from its summary.
+  if (!viaOllama) {
+    const pinned = own?.id ? own.account : !fresh && chat[sessionKey] ? chat.claudeAccount || accounts.DEFAULT_ID : '';
+    let acct = await accounts.chooseAccount({ prefer: pinned }).catch(() => null);
+    if (own?.id && pinned) acct = accounts.accounts().find((a) => a.id === pinned) || acct;
+    const id = acct?.id || accounts.DEFAULT_ID;
+    if (!fresh && chat[sessionKey] && pinned && pinned !== id) {
+      log(`[claude] JARVIS thread moves from account ${pinned} to ${id}: a fresh session from the summary`);
+      chat[sessionKey] = null;
+    }
+    if (!fresh) chat.claudeAccount = id;
+    if (own) own.account = id;
+    env = { ...env, ...accounts.accountEnv(acct) };
+  }
   const resumed = own ? !!own.id : !fresh && !!chat[sessionKey];
   const prompt = (yo ? '' : now + '\n') + (own?.id ? '' : fresh ? threadContext(chat) : unseenContext(chat, key, { withSummary: !resumed })) + text;
   const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
@@ -849,7 +866,7 @@ export async function quickTurn(id, text, q, emit, { meshSummary = '', live = ''
     return { escalate, ran: true, tools: ran, usage: out.usage, ...lanes };
   }
   gate.flush();
-  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', ...(tier === 'local' ? { tier } : {}), ts: Date.now() });
+  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, lane: 'quick', ...(tier === 'local' ? { tier } : { session: turnSession(chat, resolved.brain, 'quick') || undefined }), ts: Date.now() });
   await saveChat(chat);
   if (out.error) emit({ type: 'error', message: out.error });
   emit({ type: 'done', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, chatId: chat.id, title: chat.title, lane: 'quick', tier });
@@ -933,7 +950,7 @@ async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, 
   const note = yolo.yoloPrompt({ dir: run.dir, base, model: resolved.model, maxTurns: s.maxTurns, timeoutMs: s.timeoutMs, v2: !!session, shown: run.shown !== false });
   const steps = (e) => {
     if (e?.type === 'tool') yolo.setActivity(run.runId, `${e.name}${e.input ? ' ' + truncate(String(e.input), 100) : ''}`);
-    if (session?.id) yolo.setSession(run.runId, session.id);
+    if (session?.id) yolo.setSession(run.runId, session.id, session.account);
     emit(e);
   };
   let out;
@@ -946,7 +963,7 @@ async function yoloAgentTurn({ chat, run, resolved, s, sent, emit, meshSummary, 
     signal?.removeEventListener('abort', stop);
     activeTurns.delete(run.runId);
   }
-  if (session?.id) yolo.setSession(run.runId, session.id);
+  if (session?.id) yolo.setSession(run.runId, session.id, session.account);
   const stopped = !timedOut && ac.signal.aborted;
   const reason = timedOut ? `ran past ${Math.round(s.timeoutMs / 1000)} s` : stopped ? 'stopped' : out.error ? truncate(out.error, 200) : '';
   return { out, timedOut, stopped, reason };
@@ -967,7 +984,7 @@ export async function yoloFollowUp(begun, { meshSummary = '', live = '', project
   if (!resolved) return yolo.endTurn(begun.runId, { ok: false, summary: `YOLO mode needs Claude Code on ${config().name}, and it is not available here.` });
   const chat = (meta.chatId && await getChat(meta.chatId)) || { id: meta.chatId || `yolo-${begun.runId}`, title: meta.title, messages: [] };
   const intake = trace.startSpan({ kind: 'intake', name: 'yolo/message', input: begun.prompt, meta: { lane: 'yolo', runId: begun.runId, turn: begun.turn, ...(meta.traceId ? { firstTraceId: meta.traceId } : {}) } });
-  const session = { id: begun.sessionId, usage: null };
+  const session = { id: begun.sessionId, account: meta.sessionAccount || '', usage: null };
   const lastUser = [...(meta.messages || [])].reverse().find((m) => m.role === 'user');
   const { out, timedOut, stopped, reason } = await yoloAgentTurn({ chat, run: { runId: begun.runId, dir: begun.dir, url: meta.url, title: meta.title }, resolved, s, sent: begun.prompt,
     emit: () => {}, meshSummary, live, projects, signal, tctx: intake.ctx, session, label: lastUser?.text || 'feedback', turn: begun.turn });
@@ -1001,7 +1018,7 @@ async function sendMessageInner(id, { text, brain, model, effort, usage }, emit,
   const out = await tracedRun({ chat, runner, resolved, sent, emit, meshSummary, live, projects, signal, tctx, onTool, usage,
     sessionKey: resolved.brain === CLAUDE_OLLAMA ? 'claudeOllamaSessionId' : 'claudeSessionId', meta: resolved.brain === CLAUDE_OLLAMA ? { endpoint: claudeOllamaUrl() } : {} });
   chat.seen = chat.seen || {};
-  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, ts: Date.now() });
+  if (out.text) chat.messages.push({ role: 'assistant', text: out.text, brain: resolved.brain, model: resolved.model, effort: resolved.effort, session: turnSession(chat, resolved.brain) || undefined, ts: Date.now() });
   chat.seen[resolved.brain] = chat.messages.length;
   await saveChat(chat);
   if (out.error) emit({ type: 'error', message: out.error });

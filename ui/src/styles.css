@@ -290,6 +290,9 @@ h4, .sec-h { margin: 0 0 8px; font: 600 10px/1 var(--mono); letter-spacing: .14e
 /* One bounded row (not the implicit auto one, which grows to the content and gets clipped by .win) so the list and the detail each scroll inside the window. */
 .proj-split { grid-template-columns: minmax(260px, .55fr) 1.6fr; grid-template-rows: minmax(0, 1fr); }
 .proj-list { overflow-y: auto; min-width: 0; }
+.proj-filters { gap: 6px; flex-wrap: wrap; }
+.proj-filters .proj-search { flex: 1; min-width: 0; }
+.proj-filters select.mini { flex: 1 1 30%; min-width: 0; }
 .proj-detail { overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
 .proj-back { display: none; align-self: flex-start; margin-bottom: 4px; }
 .proj-head { border-bottom: 1px solid var(--line); }
@@ -2602,3 +2605,5 @@ html.adock-rl #ask-panel, html.adock-rr #ask-panel { width: min(520px, calc(100v
 }
 .as-note { position: absolute; right: 8px; top: 8px; max-width: 60%; padding: 4px 10px; border-radius: 6px; background: rgba(60, 40, 0, .85); color: #ffd98a; font-size: 12px; pointer-events: none; }
 .as-note[hidden] { display: none; }
+.msg-link { cursor: pointer; }
+.msg-link:hover { outline: 1px solid var(--line, rgba(127,127,127,.3)); border-radius: 6px; }

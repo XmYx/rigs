@@ -6,6 +6,7 @@ import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { dashboardsFor, knownApps, openDashboards } from './dashboards.js';
+import { FILES_RULE, cacheCopies, filesBrief, mergeFiles } from './file-cache.js';
 import { PROVIDERS, claudeFlags, coreBrain } from './models.js';
 import { briefSection, matchTools, planNote, projectAdhocNote, ADHOC_RULE } from './toolbox.js';
 import { bin } from './tools.js';
@@ -597,9 +598,11 @@ ${t.needs?.tool ? `## Tool for this task\nThis machine provides **${t.needs.tool
 - Before reporting done: \`npm test\` passes (and \`npm run build\` when ui/ changed), and your work is committed.
 
 ` : ''}${autonomyBrief(p)}
-${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}${briefSection(toolHints(tools, t))}## How to work
+${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}${briefSection(toolHints(tools, t))}${filesBrief(p.files, { taskId: t.id })}## How to work
 - Stay inside your task. If you need something from another machine, use the rigs MCP tools (mesh_*).
-- Output that belongs in no repository goes in the shared folder, which RIGS keeps in sync on every machine (\`rigs shared path\` prints it, default ~/RIGS-Shared): an ad-hoc app in apps/<id>/, a file made for Sir's request in files/, a report in reports/. A web app there is still published to the App Cloud (mesh_app_register); name the shared path in your summary.
+- A new folder this project needs (outside its repository) is created in the shared folder, under projects/${p.slug}/ (\`@shared/projects/${p.slug}\`), never in the home folder or a temp folder, so every machine and the next task see it.
+- Other output that belongs in no repository goes in the shared folder, which RIGS keeps in sync on every machine (\`rigs shared path\` prints it, default ~/RIGS-Shared): an ad-hoc app in apps/<id>/, a file made for Sir's request in files/, a report in reports/. A web app there is still published to the App Cloud (mesh_app_register); name the shared path in your summary.
+${FILES_RULE}
 - To understand existing software, binaries or apps, use REA (the \`rea\` MCP / \`npx -y rea-agents@latest\`).
 - Nobody is watching this session: never stop to ask a question or wait for a reply. Decide sensibly, note the assumption in your summary.
 - Never end your turn while waiting on a background job (a build, a test run, a capture): wait for it, read its result, carry on.
@@ -611,7 +614,7 @@ ${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [
 
 ## When you finish or get stuck
 Call the rigs MCP tool \`project_task_update\` with
-\`{"owner": "${p.owner}", "project": "${p.id}", "task": "${t.id}", "status": "done" | "blocked" | "failed", "summary": "<what you did, where the result is, the verification evidence — or what failed / what you need>"}\`.
+\`{"owner": "${p.owner}", "project": "${p.id}", "task": "${t.id}", "status": "done" | "blocked" | "failed", "summary": "<what you did, where the result is, the verification evidence — or what failed / what you need>", "files": [{"path": "<new file>", "reason": "<why>"}]}\`.
 This report is the only way RIGS knows you finished: the next tasks start from it, and Sir hears the result.
 ${'If you are an OpenRig seat, also close your queue item.'}
 `;
@@ -716,6 +719,15 @@ export async function dispatchReady(id, ctx, { only, now = Date.now() } = {}) {
   return startClaimed(id, ctx, claim, { only, now });
 }
 
+/**
+ * Where a task works when the project has no folder on that machine. A git project clones into ~/rigs-work (the
+ * shared folder never syncs .git); everything else gets one folder in the shared storage, synced to every machine, so
+ * a project's files are in one place whichever machine runs the next task. Pure.
+ */
+export function defaultWorkdir(p) {
+  return p.gitUrl ? `~/rigs-work/${p.slug}` : `@shared/projects/${p.slug}`;
+}
+
 /** The second half of dispatchReady: start the claimed tasks on their machines and record each result. */
 export async function startClaimed(id, ctx, claim, { only, now = Date.now() } = {}) {
   // The registry's tools that fit each task go into its brief (cached catalog, empty when the mesh is slow).
@@ -723,7 +735,7 @@ export async function startClaimed(id, ctx, claim, { only, now = Date.now() } = 
   const started = [];
   for (const t0 of claim.ts) {
     const p0 = claim.p;
-    const workdir = t0.assign.node === p0.repo.node && p0.repo.path ? p0.repo.path : `~/rigs-work/${p0.slug}`;
+    const workdir = t0.assign.node === p0.repo.node && p0.repo.path ? p0.repo.path : defaultWorkdir(p0);
     let r = null;
     let err = null;
     // The start is a "dispatch" span of the request trace; the run's own span (written by the machine that runs it)
@@ -1001,12 +1013,19 @@ export async function updateTask(id, taskId, change, ctx) {
   return p;
 }
 
-async function applyUpdate(id, taskId, { status, summary, assign }, ctx) {
+async function applyUpdate(id, taskId, { status, summary, assign, files }, ctx) {
   const p = await getProject(id);
   if (!p) throw new Error('project not found');
   const t = p.tasks.find((x) => x.id === taskId);
   if (!t) throw new Error('task not found');
   if (assign) { t.assign = { ...t.assign, ...assign, locked: true }; t.reason = 'set by hand'; }
+  if (files?.length) {
+    // New files are kept, explained or not (src/file-cache.js); an unexplained one gets a cached copy for later tasks.
+    const m = mergeFiles(p.files, files, { task: t.id, node: t.assign?.node || '' });
+    p.files = m.files;
+    if (m.added.length || m.explained.length) event(p, `${t.id} files: ${m.added.length} new${m.added.some((f) => f.cached) ? ` (${m.added.filter((f) => f.cached).length} cached without a reason)` : ''}${m.explained.length ? `, ${m.explained.length} explained` : ''}`);
+    if (ctx?.call) await cacheCopies(p.id, m.added, ctx.call);
+  }
   const A = autonomy.settings(p);
   // Sir paused it: a late report is recorded, but nothing is retried, answered or started.
   const live = A.enabled && ctx && p.status !== 'paused';

@@ -2,6 +2,11 @@ import { ago, api, h, node, toast } from './api.js';
 import { openTerminal } from './terminal-lazy.js';
 import { openWindow } from './wm.js';
 import { tagCtx } from './ctx-tag.js';
+import { SORTS, STATUS_FILTERS, machinesOf, normalizeView, viewProjects } from './projects-model.js';
+
+const VIEW_KEY = 'rigs.projects.view';
+const loadView = () => { try { return normalizeView({ ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'), q: '' }); } catch { return normalizeView({}); } };
+const saveView = (v) => { try { localStorage.setItem(VIEW_KEY, JSON.stringify({ status: v.status, machine: v.machine, sort: v.sort })); } catch {} };
 
 const KINDS = ['plan', 'architecture', 'code', 'test', 'review', 'research', 'docs', 'text', 'reverse-engineer', 'media', 'private'];
 const STATUS_CLASS = { todo: '', starting: 'warn', running: 'run', review: 'warn', done: 'ok', blocked: 'bad', failed: 'bad' };
@@ -31,10 +36,29 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
     renderList();
   }
 
+  // Toolbar (search, filters, sort) is built once so typing keeps focus; only the rows re-render.
+  const view = loadView();
+  const search = h('input', { class: 'path-input proj-search', type: 'search', placeholder: 'Search projects, goals, tasks…', 'aria-label': 'Search projects' });
+  const statusSel = h('select', { class: 'mini', 'aria-label': 'Filter by status' }, ...STATUS_FILTERS.map(([v, l]) => h('option', { value: v, selected: v === view.status }, l)));
+  const machineSel = h('select', { class: 'mini', 'aria-label': 'Filter by machine' });
+  const sortSel = h('select', { class: 'mini', 'aria-label': 'Sort projects' }, ...SORTS.map(([v, l]) => h('option', { value: v, selected: v === view.sort }, l)));
+  const onView = () => { Object.assign(view, { q: search.value, status: statusSel.value, machine: machineSel.value, sort: sortSel.value }); saveView(view); renderList(); };
+  search.addEventListener('input', onView);
+  for (const el of [statusSel, machineSel, sortSel]) el.onchange = onView;
+  const rows = h('div', { class: 'proj-rows' });
+  left.append(
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn primary', onclick: newProject }, '＋ New project'), h('button', { class: 'tb', title: 'Refresh', onclick: loadList }, '↻')),
+    h('div', { class: 'toolbar proj-filters' }, search),
+    h('div', { class: 'toolbar proj-filters' }, statusSel, machineSel, sortSel),
+    rows);
+
   function renderList() {
-    left.replaceChildren(
-      h('div', { class: 'toolbar' }, h('button', { class: 'btn primary', onclick: newProject }, '＋ New project'), h('button', { class: 'tb', onclick: loadList }, '↻')),
-      ...list.map((p) => {
+    const ms = machinesOf(list);
+    if (view.machine && !ms.includes(view.machine)) ms.push(view.machine);
+    machineSel.replaceChildren(h('option', { value: '' }, 'All machines'), ...ms.map((m) => h('option', { value: m, selected: m === view.machine }, m)));
+    const shown = viewProjects(list, view);
+    rows.replaceChildren(
+      ...shown.map((p) => {
         const done = p.tasks.filter((t) => t.status === 'done').length;
         const el = h('div', { class: 'sess-row' + (current?.project.id === p.id ? ' sel' : '') },
           h('span', { class: 'sk' }, '📋'),
@@ -43,7 +67,8 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
         el.onclick = () => open(p.ownerId, p.id);
         return tagCtx(el, 'project', p.id, { id: p.id, name: p.name, status: p.status, ownerId: p.ownerId, refresh: loadList, open: () => open(p.ownerId, p.id) });
       }),
-      ...(list.length ? [] : [h('div', { class: 'muted pad' }, 'No projects yet. Describe a goal and the core brain will break it down and route every task to the right model and machine.')]));
+      ...(list.length ? (shown.length ? [] : [h('div', { class: 'muted pad' }, `No project matches. ${list.length} hidden by the search or filters.`)])
+        : [h('div', { class: 'muted pad' }, 'No projects yet. Describe a goal and the core brain will break it down and route every task to the right model and machine.')]));
   }
 
   async function open(owner, id) {

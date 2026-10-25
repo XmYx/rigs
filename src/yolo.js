@@ -692,10 +692,11 @@ export function addMessage(runId, { role = 'user', text = '', ...extra } = {}) {
 }
 
 /** The Claude session a YOLOv2 run resumes on its next turn (kept in the meta). */
-export function setSession(runId, sessionId) {
+export function setSession(runId, sessionId, account = '') {
   const r = runs.get(runId);
   if (!r?.meta.v2 || !sessionId || r.meta.sessionId === sessionId) return;
   r.meta.sessionId = String(sessionId);
+  if (account) r.meta.sessionAccount = String(account); // the Claude account whose folder holds it (src/claude-accounts.js)
   writeMeta(r);
 }
 

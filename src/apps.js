@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CONFIG_FILE, config } from './config.js';
+import * as janitor from './janitor.js';
 
 /**
  * App registry: web apps hosted on a node and shared with the mesh (the "App Cloud").
@@ -144,6 +145,7 @@ export function validateApp(raw, node = config().name) {
     app: {
       id, name: String(raw.name || id), icon: String(raw.icon || ''), node, target, healthPath, launch, launchHere: launchFor(launch), rewrite,
       ...(description ? { description } : {}), ...(tags.length ? { tags } : {}), ...(startupGraceMs ? { startupGraceMs } : {}), ...(opensFor ? { opensFor } : {}),
+      ...(raw.keepAlive === true ? { keepAlive: true } : {}), // the process janitor (src/janitor.js) never stops it
     },
     errors: [],
   };
@@ -598,6 +600,7 @@ async function launch(app, { platform, deps }) {
     const run = deps.run || (await import('./util.js')).run;
     const r = await run('systemctl', ['--user', 'start', recipe.systemd], { timeout: 30000 });
     if (r.code !== 0) throw Object.assign(new Error(`systemctl --user start ${recipe.systemd} failed: ${(r.stderr || r.stdout).trim()}`), { status: 502 });
+    (deps.track || janitor.track)({ id: app.id, name: app.name, unit: recipe.systemd });
   } else {
     const util = await import('./util.js');
     const { RIGS_HOME } = await import('./config.js');
@@ -615,5 +618,6 @@ async function launch(app, { platform, deps }) {
     } finally { fs.closeSync(fd); }
     child.on?.('error', () => {});
     child.unref?.();
+    if (child.pid) (deps.track || janitor.track)({ id: app.id, name: app.name, pid: child.pid });
   }
 }

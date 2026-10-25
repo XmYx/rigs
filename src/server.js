@@ -68,6 +68,8 @@ import * as uiOpen from './ui-open.js';
 import * as appCatalog from './app-catalog.js';
 import * as yolo from './yolo.js';
 import * as yoloKeep from './yolo-keep.js';
+import * as janitor from './janitor.js';
+import * as claudeAccounts from './claude-accounts.js';
 
 const UI_DIR = path.join(APP_DIR, 'ui');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.map': 'application/json' };
@@ -1305,7 +1307,7 @@ export async function startServer() {
         if (!t) throw new HttpError(404, 'task not found');
         for (const k of ['title', 'description', 'kind', 'size', 'deps', 'needs']) if (b[k] !== undefined) t[k] = b[k];
         await planner.saveProject(pr);
-        return planner.updateTask(mm[1], mm[2], { status: b.status, summary: b.summary, assign: b.assign }, plannerCtx);
+        return planner.updateTask(mm[1], mm[2], { status: b.status, summary: b.summary, assign: b.assign, files: b.files }, plannerCtx);
       }
     }
     if (sub === 'work/start' && method === 'POST') {
@@ -1350,6 +1352,18 @@ export async function startServer() {
     }
 
     // remote command execution (used by the mesh MCP tools)
+    if (sub === 'claude-accounts' && method === 'GET') return claudeAccounts.status({ force: q.get('force') === '1' });
+    if (sub === 'claude-accounts' && method === 'POST') {
+      const b = await body();
+      try {
+        if (b.add) return claudeAccounts.addAccount(b.add);
+        if (b.remove) return claudeAccounts.removeAccount(String(b.remove));
+        if (b.mode) return claudeAccounts.setMode(String(b.mode));
+      } catch (e) { throw new HttpError(e.status || 500, e.message); }
+      throw new HttpError(400, 'expected { add: { id, label?, dir? } } | { remove: id } | { mode: id | "auto" }');
+    }
+    if (sub === 'janitor' && method === 'GET') return { settings: janitor.settings(), tracked: janitor.list() };
+    if (sub === 'janitor/sweep' && method === 'POST') return { stopped: await janitor.sweep({ keep: (id) => !!appsReg.loadApps().apps.find((a) => a.id === id)?.keepAlive }) };
     if (sub === 'processes' && method === 'GET') return processes.list({ filter: q.get('filter') || '', sort: q.get('sort') || 'cpu', limit: Number(q.get('limit')) || 80 });
     if (sub === 'processes/kill' && method === 'POST') return processes.kill(await body());
     if (sub === 'exec' && method === 'POST') {
@@ -1874,6 +1888,8 @@ export async function startServer() {
   appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
   appstore.onJobEvent((job) => broadcast({ type: 'appstore', node: config().name, job }));
   appsReg.startHealthChecks({ intervalMs: 5000 });
+  // Process janitor: apps RIGS launched and nobody used for config.janitor.idleMinutes are stopped (src/janitor.js).
+  janitor.startJanitor({ keep: (id) => !!appsReg.loadApps().apps.find((a) => a.id === id)?.keepAlive, onStopped: () => appsReg.checkAll().catch(() => {}) });
 
   // Usage ledger: a finished task run's tokens are read from its transcript on the machine it ran on.
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));
