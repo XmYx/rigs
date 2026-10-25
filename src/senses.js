@@ -42,7 +42,11 @@ export async function appBase(ref) {
 /** Speech → text. `audio` is the raw recording (webm/ogg/mp4/wav). Returns { text, language, duration }. */
 export async function stt(audio, { contentType = 'application/octet-stream', lang } = {}) {
   const base = await appBase(config().persona?.hearingApp || 'jarvis-voice');
-  if (!base) throw Object.assign(new Error('no speech recognition on the mesh (the jarvis-voice app is down)'), { status: 503 });
+  if (!base) {
+    // Started on demand (src/tts.js wakeApp): the next recording finds it up.
+    const woke = (await import('./tts.js')).wakeApp(config().persona?.hearingApp || 'jarvis-voice');
+    throw Object.assign(new Error(woke ? 'speech recognition is starting (the jarvis-voice app was down) — try again in a moment' : 'no speech recognition on the mesh (the jarvis-voice app is down)'), { status: 503 });
+  }
   const r = await fetch(`${base}/stt${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`, { method: 'POST', headers: { 'content-type': contentType }, body: audio, signal: AbortSignal.timeout(60000) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j.error || `speech recognition: HTTP ${r.status}`), { status: 502 });

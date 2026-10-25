@@ -63,6 +63,21 @@ function toolReuseRows(u) {
       h('div', { class: 'wk-rmeta' }, `listed ${t.listed} · named ${t.hinted}${t.failed ? ` · ${t.failed} failed` : ''}`)))];
 }
 
+/** Claude accounts of this machine (src/claude-accounts.js): 5-hour / weekly use each, which one the next run uses, and the mode. */
+function accountRows(acc, onMode) {
+  if (!acc?.accounts?.length) return [];
+  const pct = (w) => (w ? Math.round(w.pct) + '%' : '—');
+  const mode = h('select', { class: 'mini', 'aria-label': 'Which Claude account new runs use', onchange: (e) => onMode(e.target.value) },
+    h('option', { value: 'auto', selected: acc.mode === 'auto' }, 'auto — most room'), ...acc.accounts.map((a) => h('option', { value: a.id, selected: acc.mode === a.id }, a.label || a.id)));
+  return [h('div', { class: 'wk-section' }, 'Claude accounts'),
+    h('div', { class: 'wk-row us-row' }, h('div', { class: 'wk-rtitle' }, 'New runs', mode), h('div', { class: 'wk-rmeta' }, `next → ${acc.next} · ${acc.why}`)),
+    ...acc.accounts.map((a) => h('div', { class: 'wk-row us-row', title: a.limits?.error ? `Not readable: ${a.limits.error}. Log in with: ${a.login}` : a.dir || '~/.claude' },
+      h('div', { class: 'wk-rtitle' }, `${a.id === acc.next ? '● ' : ''}${a.label || a.id}`, h('b', {}, `5h ${pct(a.limits?.session)} · wk ${pct(a.limits?.week)}`)),
+      h('div', { class: 'wk-bar thin' }, h('i', { style: { width: Math.min(100, Math.round(a.limits?.week?.pct || 0)) + '%' } })),
+      a.limits?.error ? h('div', { class: 'wk-rmeta' }, `not logged in? ${a.login}`) : null)),
+    acc.accounts.length < 2 ? h('div', { class: 'muted small' }, 'Add another login with `rigs claude add <name>` to spread runs across accounts.') : null];
+}
+
 /** Mount the Tokens & time panel into `el`. opts.routerNode() = the machine whose pre-routing mode to show. Returns { refresh, setActive }. */
 export function createUsage(el, opts = {}) {
   const meta = h('span', { class: 'wk-meta' }, '');
@@ -75,6 +90,7 @@ export function createUsage(el, opts = {}) {
   let timer = null;
   let last = null;
   let pre = null;
+  let acc = null;
 
   function drawChips() {
     chips.replaceChildren(...RANGES.map(([v, l]) => h('button', { class: 'tb' + (v === range ? ' on' : ''), 'aria-pressed': String(v === range), onclick: () => { range = v; try { localStorage.setItem('rigs.usage.range', v); } catch {} drawChips(); refresh(); } }, l)));
@@ -87,6 +103,7 @@ export function createUsage(el, opts = {}) {
     const nodes = [h('div', { class: 'us-stats' }, stat('tokens', fmt(t.totalTokens)), stat('time', dur(t.durationMs)), stat('cost', usd(t.costUsd) || '—'), stat('done', `${t.done || 0}/${t.count || 0}`))];
     if (t.estimated) nodes.push(h('div', { class: 'muted small' }, `${t.estimated} of ${t.count} runs are estimates (backfilled, no harness counts).`));
     if (r.errors?.length) nodes.push(h('div', { class: 'muted small' }, `No answer from ${r.errors.map((e) => e.node).join(', ')}.`));
+    nodes.push(...accountRows(acc, setMode));
     nodes.push(...prerouteNodes(preroute));
     nodes.push(...sectionRows('By model', r.groups?.model, (g) => MODEL(g.label)));
     nodes.push(...sectionRows('By project', r.groups?.project, (g) => g.label, 6));
@@ -105,10 +122,15 @@ export function createUsage(el, opts = {}) {
     const qs = new URLSearchParams({ groupBy: 'model,project,task', limit: '12' });
     if (range) qs.set('since', range);
     const ps = new URLSearchParams({ since: range || '2020-01-01' }); // "All" = since before RIGS existed (the stats default to 30 days)
-    const [u, st, rt] = await Promise.allSettled([api('/api/usage?' + qs), api('/api/preroute/stats?' + ps), api(`${node(opts.routerNode?.() || 'self')}/router`)]);
+    const [u, st, rt, ac] = await Promise.allSettled([api('/api/usage?' + qs), api('/api/preroute/stats?' + ps), api(`${node(opts.routerNode?.() || 'self')}/router`), api('/api/local/claude-accounts')]);
+    acc = ac.value || acc;
     pre = { stats: st.value || null, router: rt.value || null, error: st.reason?.message || rt.reason?.message || '' };
     if (u.status === 'fulfilled') { last = u.value; render(last); }
     else if (!last) body.replaceChildren(h('div', { class: 'muted small pad' }, u.reason.message));
+  }
+  async function setMode(mode) {
+    try { await api('/api/local/claude-accounts', { method: 'POST', body: { mode } }); } catch {}
+    refresh();
   }
   function setActive(on) {
     clearInterval(timer);

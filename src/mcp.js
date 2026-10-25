@@ -342,11 +342,16 @@ export const TOOLS = [
   },
   {
     name: 'project_task_update', description: 'Report progress on a RIGS project task you were assigned: status done | blocked | failed (or running), with a summary of what you did / where the result is / what you need. Your task brief names the owner machine, project id and task id. A "blocked" report is answered automatically with the safe default (Sir pre-approved non-destructive work) and the task keeps running; "failed" is retried with a stronger model.',
-    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, task: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'blocked', 'failed'] }, summary: { type: 'string' } }, required: ['owner', 'project', 'task', 'status'] },
+    inputSchema: { type: 'object', properties: { owner: { type: 'string' }, project: { type: 'string' }, task: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'blocked', 'failed'] }, summary: { type: 'string' }, files: { type: 'array', description: 'new files you created: [{ path, reason }]; a file without a reason is still kept (cached) so nobody recreates it', items: { type: 'object', properties: { path: { type: 'string' }, reason: { type: 'string' } }, required: ['path'] } } }, required: ['owner', 'project', 'task', 'status'] },
     run: async (a) => {
-      const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/tasks/${encodeURIComponent(a.task)}`, { method: 'POST', body: { status: a.status, summary: a.summary || '' }, timeout: 120000 });
+      const p = await api(`/api/nodes/${n(a.owner)}/projects/${encodeURIComponent(a.project)}/tasks/${encodeURIComponent(a.task)}`, { method: 'POST', body: { status: a.status, summary: a.summary || '', ...(a.files?.length ? { files: a.files } : {}) }, timeout: 120000 });
       return { ok: true, project: p.status, next: p.tasks.filter((t) => t.status === 'running').map((t) => `${t.id} on ${t.assign?.node}`) };
     },
+  },
+  {
+    name: 'claude_accounts', description: "The Claude accounts of a machine (several logins, each its own CLAUDE_CONFIG_DIR) with each one's 5-hour and weekly usage, the mode (auto = every new Claude run goes to the account with the most room; or a fixed id) and which account the next run uses. Read-only unless `mode` is given (only when Sir asks). Adding an account needs Sir to log in: `rigs claude add <id>` on that machine.",
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'machine (default: this one)' }, mode: { type: 'string', description: '"auto" or an account id — set only when Sir asks' } } },
+    run: async (a) => api(`/api/nodes/${n(a.node || 'self')}/claude-accounts`, a.mode ? { method: 'POST', body: { mode: a.mode }, timeout: 120000 } : { timeout: 120000 }),
   },
   {
     name: 'jarvis_task', description: "File one of Sir's instructions as work and cast an agent for it right away. project: an existing project id (see project_list / the list in your prompt), \"rigs\" for RIGS · JARVIS itself and anything on the go (the default), or give newProject {name, goal, repoNode?, repoPath?, gitUrl?} to start a new one. instruction: Sir's full request plus any context the agent needs. RIGS routes it to the best machine + model + effort and starts it (an OpenRig seat when available); it shows on the Work dashboard. Returns where it runs.",

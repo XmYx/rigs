@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import * as accounts from './claude-accounts.js';
 import { agentModes, claudeFlags, codexFlags } from './models.js';
 import { bin } from './tools.js';
 import * as openrig from './openrig.js';
@@ -87,9 +88,13 @@ async function claudeMeta(f) {
   return meta;
 }
 
+// Every Claude account's projects folder (src/claude-accounts.js): ~/.claude/projects first, then each extra account's.
+const claudeRoots = () => [CLAUDE_DIR, ...accounts.projectDirs().filter((d) => path.resolve(d) !== path.resolve(CLAUDE_DIR))];
+
 async function claudeSessions() {
-  let dirs = [];
-  try { dirs = (await fsp.readdir(CLAUDE_DIR)).map((d) => path.join(CLAUDE_DIR, d)); } catch { return []; }
+  const dirs = [];
+  for (const root of claudeRoots()) { try { dirs.push(...(await fsp.readdir(root)).map((d) => path.join(root, d))); } catch { /* no such account folder */ } }
+  if (!dirs.length) return [];
   const files = await newestFiles(dirs, LIMIT);
   return Promise.all(files.map(async (f) => {
     const m = await claudeMeta(f);
@@ -133,11 +138,13 @@ async function claudeTranscript(id, max = 400) {
 
 async function findClaudeFile(id) {
   if (!/^[\w-]+$/.test(id)) return null;
-  let dirs = [];
-  try { dirs = await fsp.readdir(CLAUDE_DIR); } catch { return null; }
-  for (const d of dirs) {
-    const f = path.join(CLAUDE_DIR, d, id + '.jsonl');
-    if (fs.existsSync(f)) return f;
+  for (const root of claudeRoots()) {
+    let dirs = [];
+    try { dirs = await fsp.readdir(root); } catch { continue; }
+    for (const d of dirs) {
+      const f = path.join(root, d, id + '.jsonl');
+      if (fs.existsSync(f)) return f;
+    }
   }
   return null;
 }
@@ -355,14 +362,15 @@ async function resumeWith(kind, id, text) {
   const tool = bin(kind);
   if (!tool) throw new Error(`${kind} is not installed on this machine`);
   let cwd;
-  if (kind === 'claude') { const f = await findClaudeFile(id); if (!f) throw new Error('session not found'); cwd = (await claudeMeta({ file: f, mtime: 0, size: (await fsp.stat(f)).size })).cwd; }
+  let acctEnv = {};
+  if (kind === 'claude') { const f = await findClaudeFile(id); if (!f) throw new Error('session not found'); cwd = (await claudeMeta({ file: f, mtime: 0, size: (await fsp.stat(f)).size })).cwd; acctEnv = accounts.accountEnv(accounts.accountOfFile(f)); }
   else cwd = (await codexSessions()).find((x) => x.id === id)?.cwd;
   if (cwd && !fs.existsSync(cwd)) cwd = undefined;
   const modes = agentModes();
   const args = kind === 'claude'
     ? ['-p', text, '--resume', id, '--permission-mode', modes.claude.permissionMode]
     : ['exec', 'resume', '--skip-git-repo-check', id, text];
-  const env = { ...process.env, PATH: augmentedPath() };
+  const env = { ...process.env, PATH: augmentedPath(), ...acctEnv };
   for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
   const child = spawnCmd(tool, args, { cwd: cwd || HOME, env, stdio: ['ignore', 'ignore', 'pipe'] });
   let err = '';
@@ -385,8 +393,10 @@ export async function attach(kind, id, { cwd, cols, rows } = {}) {
   let title;
   if (kind === 'tmux' || kind === 'rig') { line = `tmux attach -t ${q(id)}`; title = `tmux · ${id}`; }
   else if (kind === 'claude') {
-    if (!dir) { const f = await findClaudeFile(id); if (f) dir = (await claudeMeta({ file: f, mtime: 0, size: (await fsp.stat(f)).size })).cwd; }
-    line = `claude --resume ${q(id)}`; title = 'claude · resume';
+    const f = await findClaudeFile(id);
+    if (!dir && f) dir = (await claudeMeta({ file: f, mtime: 0, size: (await fsp.stat(f)).size })).cwd;
+    const acc = f ? accounts.accountEnv(accounts.accountOfFile(f)).CLAUDE_CONFIG_DIR : '';
+    line = `${acc && !isWin ? `CLAUDE_CONFIG_DIR=${q(acc)} ` : ''}claude --resume ${q(id)}`; title = 'claude · resume';
   } else if (kind === 'codex') {
     if (!dir) dir = (await codexSessions()).find((s) => s.id === id)?.cwd;
     line = `codex resume ${q(id)}`; title = 'codex · resume';

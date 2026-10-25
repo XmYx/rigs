@@ -274,10 +274,9 @@ How JARVIS speaks and listens.
 | In this browser › **Speak replies aloud** `ui.speak` | switch | browser | localStorage `rigs.muted` | default `true` |
 | In this browser › **Voice** `ui.voice` | select: ‹voices› | browser | localStorage `rigs.voice` | default `""` |
 | In this browser › **Hearing** `ui.stt` | select: Automatic · Mesh Whisper (server) · Browser speech recognition | browser | localStorage `rigs.stt` | default `""` · after reload |
-| Speech on this machine › **Speech engine** `persona.tts.engine` | select: auto · neural · piper · local | machine | `persona.tts.engine` → `POST /api/local/config` | default `"auto"` |
+| Speech on this machine › **Speech engine** `persona.tts.engine` | select: auto · neural · local | machine | `persona.tts.engine` → `POST /api/local/config` | default `"auto"` |
 | Speech on this machine › **Neural voice (Kokoro)** `persona.neural` | switch | machine | `persona.neural` → `POST /api/local/config` | default `true` |
 | Speech on this machine › **Neural voice app** `persona.voiceApp` | text | machine | `persona.voiceApp` → `POST /api/local/config` | default `"jarvis-voice"` |
-| Speech on this machine › **Piper voice URL** `persona.tts.piperUrl` | text | machine | `persona.tts.piperUrl` → `POST /api/local/config` | default `"http://127.0.0.1:8210"` |
 | Speech on this machine › **Trim silence** `persona.tts.trim` | switch | machine | `persona.tts.trim` → `POST /api/local/config` | default `true` |
 | Speech on this machine › **System voice** `persona.voice` | text | machine | `persona.voice` → `POST /api/local/config` | default `""` |
 | Hearing and senses on this machine › **Hearing app** `persona.hearingApp` | text | machine | `persona.hearingApp` → `POST /api/local/config` | default `"jarvis-voice"` |
@@ -381,6 +380,7 @@ How projects are planned, routed to machines and run.
 | Routing policy (whole mesh) › **Routing rules** `routing.rules` | action | global | `routing.rules` | read-only |
 | Routing policy (whole mesh) › **Planner suggestions** `routing.plannerPicks` | select: Machines only · Machines, provider and model · Ignore its suggestions | global | `routing.plannerPicks` → `POST /api/local/config` | default `"machine"` |
 | Routing policy (whole mesh) › **Default dispatch** `routing.dispatch` | select: Auto (OpenRig when available) · OpenRig · Direct agent sessions | global | `routing.dispatch` → `POST /api/local/config` | default `"auto"` |
+| Routing policy (whole mesh) › **Coordinate plans (test mode)** `routing.coordinate` | switch | global | `routing.coordinate` → `POST /api/local/config` | default `false` |
 | Routing policy (whole mesh) › **Tasks per machine** `routing.maxTasksPerMachine` | number 1–32 | global | `routing.maxTasksPerMachine` → `POST /api/local/config` | default `4` |
 | Routing policy (whole mesh) › **Providers switched off** `routing.avoid` | list: claude · codex · ollama | global | `routing.avoid` → `POST /api/local/config` | default `[]` |
 | Pinned projects and hubs › **Pinned projects** `pinnedProjects` | action | machine | `pinnedProjects` | read-only |
@@ -524,6 +524,9 @@ Apps this machine shares with the mesh, and where installed apps live.
 | **App Cloud apps** `apps` | action | machine | `apps` | read-only |
 | **Machine tools** `capabilities` | action | machine | `capabilities` | read-only |
 | **App Store…** `action.appStore` | action | browser | opens `appstore` |  |
+| **Stop unused services** `janitor.enabled` | switch | machine | `janitor.enabled` → `POST /api/local/config` | default `true` |
+| **Stop after** `janitor.idleMinutes` | number 1–10080 min | machine | `janitor.idleMinutes` → `POST /api/local/config` | default `30` |
+| **Check every** `janitor.intervalSec` | number 10–3600 s | machine | `janitor.intervalSec` → `POST /api/local/config` | default `60` · after restart |
 | **Installed apps folder** `appstore.appsDir` | text | machine | `appstore.appsDir` → `POST /api/local/config` | default `""` · env `RIGS_APPS_DIR` |
 | **GPU Overseer clients file** `appstore.gpuOverseerClients` | text | machine | `appstore.gpuOverseerClients` → `POST /api/local/config` | default `""` · env `RIGS_GPU_OVERSEER_CLIENTS` |
 
@@ -598,6 +601,7 @@ Features that are still being tried out.
 | localStorage `rigs.appstream.debug` | Developer switch: set to 1 to log the viewer's protocol messages to the browser console. |
 | localStorage `rigs.finder` | The file browser's view (icons, list, columns), sort and sidebar/preview widths, set in the window itself (finder-model.js): remembered window state. |
 | localStorage `rigs.media` | The media player's volume, mute and speed, set with its own controls: remembered player state. |
+| localStorage `rigs.projects.view` | Status filter, machine filter and sort of the Projects list: remembered window state. |
 | localStorage `rigs.usage.range` | Time range of the Tokens & time panel: remembered panel state. |
 | localStorage `rigs.traces.*` | Request traces panel and explorer view state (range, view, lane, size, even, limit). |
 | localStorage `rigs.exhibits.*` | Exhibit window view state (cards or document). |

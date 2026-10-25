@@ -5,10 +5,9 @@
 // JARVIS's one voice is Kokoro: when an App Cloud app "jarvis-voice" (persona.voiceApp, "id" or "node/id") is up
 // anywhere on the mesh, speech is rendered there — reached through this daemon's own app proxy, so every machine gets
 // the same voice — and comes back with a viseme timeline (x-visemes) that the JARVIS face lip-syncs to.
-// persona.neural = false opts out. persona.tts = { engine: 'auto'|'neural'|'piper'|'local', piperUrl, trim } selects the
-// engine (tts-plan.js): 'auto' = Kokoro, then the resident CPU piper voice (applets/piper-voice, default
-// http://127.0.0.1:8210), then this machine's own engine. The engines after the first only stand in when it is down:
-// a failing engine falls through to the next one without an error, so speech never goes silent.
+// persona.neural = false opts out. persona.tts = { engine: 'auto'|'neural'|'local', trim } selects the engine
+// (tts-plan.js): 'auto' = Kokoro, then this machine's own engine, which only stands in when Kokoro is down: a failing
+// engine falls through to the next one without an error, so speech never goes silent.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -67,6 +66,27 @@ export async function neuralBase() {
 }
 
 let neuralDownUntil = 0;
+
+/**
+ * The voice app is started on demand, never at boot: when the server voice is asked to speak (a UI on a server voice,
+ * or this machine's speakers) and the app is down, its launch recipe runs on its machine (app-start) while this
+ * sentence falls back to the machine's own engine. A UI on a browser voice never calls synthesize, so it never wakes
+ * the app; the process janitor (src/janitor.js) stops it again once nobody has used it for a while. Fire-and-forget,
+ * at most once a minute per app.
+ */
+const wokeAt = new Map();
+export function wakeApp(ref, { fetchImpl = fetch, now = Date.now() } = {}) {
+  const [node, id] = String(ref).includes('/') ? String(ref).split('/', 2) : [null, String(ref)];
+  if (now - (wokeAt.get(ref) || 0) < 60000) return false;
+  const local = (!node || appsReg.isSelfRef(node)) && appsReg.localApps().apps.find((a) => a.id === id);
+  const hit = local ? { node: config().name, ...local } : appsReg.meshCatalogApps().find((a) => a.id === id && (!node || a.node.toLowerCase() === node.toLowerCase()));
+  if (!hit || hit.health?.status !== 'down' || appsReg.isStarting(id)) return false;
+  wokeAt.set(ref, now);
+  fetchImpl(`http://127.0.0.1:${config().port}/api/nodes/${encodeURIComponent(hit.node)}/app-start/${encodeURIComponent(id)}`, { method: 'POST', signal: AbortSignal.timeout(30000) })
+    .then(() => console.info(`[tts] started ${id} on ${hit.node} on demand`)).catch(() => {});
+  return true;
+}
+const wakeVoice = () => { const p = config().persona || {}; if (p.neural !== false && ttsCfg().engine !== 'local') wakeApp(String(p.voiceApp || VOICE_APP)); };
 
 async function neuralSynth(base, text, voice) {
   const v = String(voice || '').startsWith('neural:') ? voice.slice(7) : undefined;
@@ -164,15 +184,6 @@ async function renderWav(e, text, voice, inFile, outFile) {
 }
 
 const ttsCfg = () => config().persona?.tts || {};
-const piperBase = () => String(ttsCfg().piperUrl || 'http://127.0.0.1:8210').replace(/\/$/, '');
-let piperDownUntil = 0;
-
-async function piperSynth(text) {
-  const r = await fetch(piperBase() + '/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(15000) });
-  if (r.status === 204) return null;
-  if (!r.ok) throw new Error(`piper voice: HTTP ${r.status}`);
-  return { audio: Buffer.from(await r.arrayBuffer()), visemes: '', engine: 'piper' };
-}
 
 function trimmed(r) {
   if (!r || ttsCfg().trim === false) return r;
@@ -197,7 +208,8 @@ export async function synthesize(text, voice) {
   if (!t) return null;
   const named = !wantsDefaultVoice(voice);
   const base = named ? null : await neuralBase();
-  const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { piper: !named && Date.now() >= piperDownUntil, local: !!engine() } });
+  if (!named && !base) wakeVoice();
+  const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { local: !!engine() } });
   const local = async () => {
     const e = engine();
     if (!e) throw new Error('no text-to-speech engine on this machine (install espeak-ng or piper)');
@@ -210,9 +222,6 @@ export async function synthesize(text, voice) {
   };
   const r = await runChain(order.length ? order : ['local'], {
     neural: async () => neuralRunner(base, t, voice),
-    piper: async () => {
-      try { const p = await piperSynth(t); piperDownUntil = 0; return trimmed(p); } catch (e) { piperDownUntil = Date.now() + 30000; throw e; }
-    },
     local,
   }, logFail);
   return r;
@@ -226,7 +235,7 @@ function player() {
 }
 
 async function speakNow(text, voice) {
-  // The engines that are served as WAV (Kokoro, then resident piper) come first when a WAV player exists. The text is
+  // The engine that is served as WAV (Kokoro) comes first when a WAV player exists. The text is
   // rendered once, by the first engine that works, and that clip is played once; if none works, this machine's own
   // engine speaks instead. Exactly one voice produces sound for one call: a failed or discarded render never plays.
   const p = player();
@@ -234,7 +243,8 @@ async function speakNow(text, voice) {
     const t = speakable(text);
     if (!t) return { ok: true, spoken: false };
     const base = await neuralBase();
-    const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { piper: Date.now() >= piperDownUntil, local: !!engine() } });
+    if (!base) wakeVoice();
+    const order = engineOrder({ voice, choice: ttsCfg().engine, neural: !!base && Date.now() >= neuralDownUntil, up: { local: !!engine() } });
     const wav = order.slice(0, order.includes('local') ? order.indexOf('local') : order.length);
     let r = null;
     let rendered = false; // an engine answered (even "nothing to say"): the machine's own engine must not say it again
@@ -242,7 +252,6 @@ async function speakNow(text, voice) {
       try {
         r = await runChain(wav, {
           neural: async () => neuralRunner(base, t, voice),
-          piper: async () => { try { const x = trimmed(await piperSynth(t)); piperDownUntil = 0; return x; } catch (e) { piperDownUntil = Date.now() + 30000; throw e; } },
         }, logFail);
         rendered = true;
       } catch { /* every WAV engine failed: the machine's own engine speaks below */ }
@@ -292,9 +301,5 @@ export async function info() {
   const local = e ? await voices() : [];
   const neural = ttsCfg().engine === 'local' ? null : await neuralBase().catch(() => null);
   if (neural) return { engine: 'neural', voice: 'neural', neural: true, voices: [{ name: 'neural', lang: 'en', label: "JARVIS's own voice (Kokoro)" }, ...local] };
-  if (!e && ttsCfg().engine !== 'local' && Date.now() >= piperDownUntil) {
-    // No engine of its own on this machine, but the resident piper voice can still speak for the UI.
-    try { const r = await fetch(piperBase() + '/healthz', { signal: AbortSignal.timeout(1500) }); if (r.ok) return { engine: 'piper', voice: '', voices: [] }; } catch { /* not running */ }
-  }
   return { engine: e, voice: e ? await pickVoice() : '', voices: local };
 }

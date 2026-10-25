@@ -38,11 +38,12 @@ export function parseUsage(r) {
 
 let plan = { at: 0, data: null, error: null, pending: null };
 
-function runGetUsage() {
+/** Claude Code's get_usage for the account in `env` (CLAUDE_CONFIG_DIR, src/claude-accounts.js; none = ~/.claude). */
+export function runGetUsage({ env: extra = {} } = {}) {
   return new Promise((resolve, reject) => {
     const claude = bin('claude');
     if (!claude) return reject(new Error('Claude Code is not installed here'));
-    const env = { ...process.env, PATH: augmentedPath() };
+    const env = { ...process.env, PATH: augmentedPath(), ...extra };
     for (const k of Object.keys(env)) if (k.startsWith('CLAUDECODE') || k === 'CLAUDE_CODE_ENTRYPOINT') delete env[k];
     const child = spawnCmd(claude, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { cwd: HOME, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';

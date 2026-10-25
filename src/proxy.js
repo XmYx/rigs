@@ -4,6 +4,7 @@ import { pipeline as pipelineCb, Transform } from 'node:stream';
 import zlib from 'node:zlib';
 import { WebSocket, WebSocketServer } from 'ws';
 import { config } from './config.js';
+import * as janitor from './janitor.js';
 
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host']);
 
@@ -406,6 +407,7 @@ function appIdentityHeaders(h, ctx, upstreamPath) {
 
 /** Forward one HTTP request to an app on this node. `route` from appRoute(); `search` keeps the query. */
 export function proxyApp(req, res, app, route, search = '') {
+  janitor.touch(app.id); // in use: the process janitor leaves it running
   const view = publicView(req, route);
   const upstreamPath = route.rest || '/';
   const ctx = appCtx(app, view, upstreamPath, search);
@@ -512,6 +514,8 @@ function pipeUpgrade(req, socket, head, target, headers, mapRawHeaders, label) {
 /** WebSocket upgrade to an app on this node. */
 export function proxyAppWs(req, socket, head, app, route, search = '') {
   if (app.rewrite?.websocket === false) return rejectUpgrade(socket, 404, `app ${app.id} does not accept WebSockets through the proxy`);
+  const release = janitor.hold(app.id); // an open socket keeps the app in use until it closes
+  socket.once('close', release);
   const view = publicView(req, route);
   const upstreamPath = route.rest || '/';
   const ctx = appCtx(app, view, upstreamPath, search);

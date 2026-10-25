@@ -30,6 +30,9 @@ export function defaults() {
     // for ad-hoc apps (apps/<id>), files made for Sir (files/) and reports (reports/). path '' = ~/RIGS-Shared
     // (a throwaway node with its own RIGS_HOME: <RIGS_HOME>/RIGS-Shared). A new path applies after a restart.
     shared: { enabled: true, path: '', intervalSec: 60, maxFileMb: 256, ignore: [] },
+    // Process janitor (src/janitor.js): services RIGS launched (App Cloud apps) and nobody used for idleMinutes are
+    // stopped on every machine; an app declared with "keepAlive": true never is.
+    janitor: { enabled: true, idleMinutes: 30, intervalSec: 60 },
     brain: {
       // The "core brain": JARVIS's voice and the project planner. provider: auto | claude | codex | ollama.
       core: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
@@ -126,6 +129,9 @@ export function defaults() {
       // Bumped whenever the default rules change; stored rules follow unless you customized them.
       rulesVersion: RULES_VERSION,
       customized: false,
+      // Plan coordination (src/coordinate.js): tasks list the files they edit; same-file work is merged or serialized and
+      // tests go to one testing agent before anything starts. Off by default; a project can set its own `coordinate`.
+      coordinate: false,
       rules: [
         { kind: 'plan', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'architecture', provider: 'claude', model: 'claude-opus-5-5', effort: 'xhigh' },

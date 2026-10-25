@@ -1,12 +1,12 @@
 // Pure parts of speech output: which engines to try and in what order, running that chain with silent
 // fallback, and trimming the silence a neural voice puts around every clip (Kokoro: ~280 ms lead, 0.5-0.9 s
 // tail), which is more than the synthesis itself and delays first audio. JARVIS has one voice, Kokoro (the
-// jarvis-voice app); resident piper and the machine's own engine only stand in when Kokoro is down, so speech never
+// jarvis-voice app); the machine's own engine only stands in when Kokoro is down, so speech never
 // goes silent. No I/O here, so it is unit-tested.
 
-/** persona.tts.engine: 'auto' (Kokoro, then resident piper, then the machine's own) | 'neural' | 'piper' | 'local'. */
-export const ENGINE_CHOICES = ['auto', 'neural', 'piper', 'local'];
-const DEFAULT_ORDER = ['neural', 'piper', 'local'];
+/** persona.tts.engine: 'auto' (Kokoro, then the machine's own) | 'neural' | 'local'. The resident piper voice is gone: 'piper' reads as 'auto'. */
+export const ENGINE_CHOICES = ['auto', 'neural', 'local'];
+const DEFAULT_ORDER = ['neural', 'local'];
 
 /** A voice request that names no particular voice: '' and 'neural' / 'neural:x' (Kokoro, optionally with its voice id x). */
 export const wantsDefaultVoice = (voice) => !voice || voice === 'neural' || String(voice).startsWith('neural:');

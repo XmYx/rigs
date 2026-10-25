@@ -1,6 +1,7 @@
 import { bannerVisible, closedTexts, prefs } from './toasts.js';
 import { CAPS, capMap, createSweeper } from './cleanup.js';
 import { compactedLabel, transcriptRows } from './compact-model.js';
+import { mainSession, messageSession, shownMessage } from './conversation-model.js';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { ago, api, fmtBytes, h, node, stream, toast, wsUrl } from './api.js';
@@ -1448,6 +1449,22 @@ async function sendToSession(text) {
   } catch (e) { toast(e.message, 'error', 9000); showSubtitle(e.message, 'error'); }
 }
 
+// Clicking the main chat (subtitle, dock target, orb) opens the agent session behind it: the one that wrote the message
+// on screen (a work thread's, the fast path's) or else the JARVIS thread's own Claude session, in the Sessions window
+// (transcript + Attach / Resume). Without a resumable session (plain Ollama, local responder) the Conversation window.
+async function openChatSession(msg = null) {
+  if (chatTarget) { const m = machineById(chatTarget.nodeId); if (m) sessionsWindow('', { node: m, s: chatTarget }); return; }
+  if (!chatRef) { toast('No conversation yet — ask me something.'); return; }
+  const m = machineById(chatRef.nodeId);
+  try {
+    let c = await api(`${node(chatRef.nodeId)}/chats/${chatRef.chatId}`);
+    let ref = messageSession(c, msg || shownMessage(c));
+    if (ref?.chatId) { c = await api(`${node(chatRef.nodeId)}/chats/${ref.chatId}`); ref = mainSession(c); }
+    if (m && ref?.id) { sessionsWindow('', { node: m, s: { kind: ref.kind, id: ref.id, title: c.title || 'JARVIS', agent: ref.kind } }); return; }
+  } catch {}
+  conversationWindow();
+}
+
 let convWin = null; // the one Conversation window: clicking the subtitle again raises and reloads it
 async function conversationWindow() {
   if (chatTarget) { const m = machineById(chatTarget.nodeId); if (m) sessionsWindow('', { node: m, s: chatTarget }); return; }
@@ -1457,7 +1474,7 @@ async function conversationWindow() {
   else {
     w = convWin = openWindow({ title: 'Conversation', icon: '◆', width: 640, height: 520 });
     w.onCleanup(() => { if (convWin === w) convWin = null; });
-    w.body.append(h('div', { class: 'toolbar' }, h('button', { class: 'tb', onclick: () => { chatRef = null; store.set('chat', null); w.close(); toast('New conversation'); } }, '＋ New conversation')), h('div', { class: 'transcript' }));
+    w.body.append(h('div', { class: 'toolbar' }, h('button', { class: 'tb', onclick: () => { chatRef = null; store.set('chat', null); w.close(); toast('New conversation'); } }, '＋ New conversation'), h('button', { class: 'tb', title: 'Open the JARVIS thread\'s own Claude session (transcript, attach, resume)', onclick: () => openChatSession({}) }, '✳ Main session')), h('div', { class: 'transcript' }));
   }
   const list = w.body.querySelector('.transcript');
   try {
@@ -1466,7 +1483,7 @@ async function conversationWindow() {
     // a divider where the brain's context was compacted (src/compact.js): the messages above are kept, JARVIS goes on from their summary
     const divider = (k) => { const l = compactedLabel(k); return h('div', { class: 'compact-divider', title: l.title, role: 'separator' }, h('span', {}, l.text)); };
     list.replaceChildren(...(older ? [h('div', { class: 'muted small pad' }, `${older} earlier messages not shown`)] : []), ...transcriptRows(c.messages, c.compactions, older).map(({ kind, m: x, c: k }) => kind === 'compacted' ? divider(k)
-      : h('div', { class: `msg r-${x.role}` }, h('div', { class: 'mr' }, `${x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`}${x.mirror ? ` · ${x.route || 'work'} thread` : ''}`), h('div', { class: 'mt' }, x.text))));
+      : h('div', { class: `msg r-${x.role}${x.role === 'assistant' ? ' msg-link' : ''}`, title: x.role === 'assistant' ? 'Open the session that wrote this' : undefined, onclick: x.role === 'assistant' ? (ev) => { if (!getSelection()?.toString()) openChatSession(x); } : undefined }, h('div', { class: 'mr' }, `${x.role === 'user' ? 'you' : `${x.brain}${x.model ? ' · ' + x.model : ''}${x.tier === 'local' ? ' · local' : ''}`}${x.mirror ? ` · ${x.route || 'work'} thread` : ''}`), h('div', { class: 'mt' }, x.text))));
     list.scrollTop = list.scrollHeight;
   } catch (e) { list.replaceChildren(h('div', { class: 'muted pad' }, e.message)); }
 }
@@ -1593,7 +1610,7 @@ function wire() {
   $('#btn-traces').onclick = () => togglePanel('traces');
   $('#btn-graphify').onclick = () => togglePanel('graphify');
   $('#btn-mission').onclick = () => toggleMissionControl();
-  $('#dock-target').onclick = conversationWindow;
+  $('#dock-target').onclick = () => openChatSession();
   $('#dock-detach').onclick = detachChat;
   renderDock();
   if (chatTarget) { targetPoll = setInterval(() => pollTarget(), 2500); pollTarget(true); }
@@ -1618,12 +1635,12 @@ function wire() {
   $('#btn-mute').textContent = voice.muted ? '🔇' : '🔊';
   $('#btn-mute').setAttribute('aria-pressed', String(voice.muted));
   $('#btn-mute').setAttribute('aria-label', 'Mute voice output');
-  $('#subtitle').onclick = conversationWindow;
+  $('#subtitle').onclick = () => openChatSession();
   $('#brain-badge').onclick = () => toggleBrainMenu();
   $('#back').onclick = clearSelection;
   $('#fit').onclick = clearSelection;
   $('#refresh').onclick = async () => { await api('/api/mesh/refresh', { method: 'POST' }).catch(() => {}); refresh(); };
-  $('#orb').onclick = () => voice.pushToTalk() || conversationWindow();
+  $('#orb').onclick = () => voice.pushToTalk() || openChatSession();
   const repel = $('#repel');
   const len = $('#linklen');
   repel.value = store.get('repel', 120);

@@ -517,6 +517,30 @@ const commands = {
     for (const p of r.peers) console.log(`  ${String(p.node).padEnd(18)} ${String(p.state).padEnd(11)} ${ago(p.lastSync)}${p.pulled || p.trashed || p.conflicts ? ` · pulled ${p.pulled || 0}, trashed ${p.trashed || 0}, conflicts ${p.conflicts || 0}` : ''}${p.error ? ` · ${p.error}` : ''}`);
     if (!r.peers.length) console.log('  no other RIGS node seen yet');
   },
+  async claude() {
+    // rigs claude [status] | add <id> [label] | remove <id> | use <id|auto> — several Claude accounts on this machine,
+    // the next run goes to the one with the most 5-hour / weekly room (src/claude-accounts.js).
+    const sub = argv[0] || 'status';
+    const fail = (m) => { console.error(m); process.exit(1); };
+    const call = (body) => daemonFetch('/api/local/claude-accounts' + (body ? '' : '?force=1'), body ? { method: 'POST', body: JSON.stringify(body), timeout: 120000 } : { timeout: 120000 })
+      .catch((e) => fail(`RIGS daemon is not running (rigs start): ${e.message}`));
+    if (sub === 'add') {
+      if (!argv[1]) fail('usage: rigs claude add <id> [label]');
+      const r = await call({ add: { id: argv[1], label: argv.slice(2).join(' ') } });
+      if (r?.error) fail(r.error);
+      console.log(`account ${r.id} → ${r.dir}
+log it in once (opens Claude Code, then /login):
+  ${r.login}`);
+      return;
+    }
+    if (sub === 'remove') { if (!argv[1]) fail('usage: rigs claude remove <id>'); console.log(JSON.stringify(await call({ remove: argv[1] }))); return; }
+    if (sub === 'use') { if (!argv[1]) fail('usage: rigs claude use <id|auto>'); const r = await call({ mode: argv[1] }); if (r?.error) fail(r.error); console.log(`mode ${r.mode}`); return; }
+    if (sub !== 'status') fail('usage: rigs claude [status|add <id> [label]|remove <id>|use <id|auto>]');
+    const r = await call();
+    const pct = (w) => (w ? `${Math.round(w.pct)}%` : '—');
+    console.log(`mode ${r.mode} · next run → ${r.next} (${r.why}) · thresholds 5h ${r.limits.session}% week ${r.limits.week}%`);
+    for (const a of r.accounts) console.log(`  ${a.id === r.next ? '*' : ' '} ${String(a.id).padEnd(14)} 5h ${pct(a.limits?.session).padEnd(5)} week ${pct(a.limits?.week).padEnd(5)} ${a.limits?.error ? `(${a.limits.error} — log in: ${a.login})` : a.label}`);
+  },
   async update() {
     const all = argv.includes('--all');
     const r = await daemonFetch(all ? '/api/mesh/update' : '/api/local/update', { method: 'POST', body: '{}', timeout: 20 * 60 * 1000 });

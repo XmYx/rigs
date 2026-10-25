@@ -155,3 +155,17 @@ export function mergeChat(disk, loaded, mine) {
   }
   return mine;
 }
+
+/**
+ * The agent session behind a JARVIS turn, recorded on its reply so clicking the message opens that session: the
+ * thread's own Claude (or Claude-via-Ollama) session, the fast path's fresh Claude session, or the Codex thread.
+ * Null for brains without a resumable session (plain Ollama, the local responder). Pure.
+ */
+export function turnSession(chat, brain, lane = '') {
+  if (!chat) return null;
+  const id = lane === 'quick' ? (brain === 'claude' ? chat.quickSessionId : null)
+    : brain === 'claude' ? chat.claudeSessionId
+      : brain === 'claude-ollama' ? chat.claudeOllamaSessionId
+        : brain === 'codex' ? chat.codexThreadId : null;
+  return id ? { kind: brain === 'codex' ? 'codex' : 'claude', id } : null;
+}
