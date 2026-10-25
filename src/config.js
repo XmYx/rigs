@@ -129,6 +129,9 @@ export function defaults() {
       // Bumped whenever the default rules change; stored rules follow unless you customized them.
       rulesVersion: RULES_VERSION,
       customized: false,
+      // Plan coordination (src/coordinate.js): tasks list the files they edit; same-file work is merged or serialized and
+      // tests go to one testing agent before anything starts. Off by default; a project can set its own `coordinate`.
+      coordinate: false,
       rules: [
         { kind: 'plan', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
         { kind: 'architecture', provider: 'claude', model: 'claude-opus-5-5', effort: 'xhigh' },

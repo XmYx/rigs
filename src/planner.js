@@ -6,6 +6,7 @@ import * as autonomy from './autonomy.js';
 import * as chat from './chat.js';
 import { config, RIGS_HOME } from './config.js';
 import { dashboardsFor, knownApps, openDashboards } from './dashboards.js';
+import { PLAN_FIELDS_NOTE, coordinateTasks, normalizeFiles, ownershipBrief } from './coordinate.js';
 import { FILES_RULE, cacheCopies, filesBrief, mergeFiles } from './file-cache.js';
 import { PROVIDERS, claudeFlags, coreBrain } from './models.js';
 import { briefSection, matchTools, planNote, projectAdhocNote, ADHOC_RULE } from './toolbox.js';
@@ -60,7 +61,7 @@ export async function deleteProject(id) {
   return true;
 }
 
-export async function createProject({ name, goal, repoNode, repoPath, gitUrl, dispatch, policy, planner } = {}) {
+export async function createProject({ name, goal, repoNode, repoPath, gitUrl, dispatch, policy, planner, coordinate } = {}) {
   if (!goal?.trim()) throw new Error('a project needs a goal');
   const id = crypto.randomBytes(5).toString('hex');
   const p = {
@@ -68,6 +69,7 @@ export async function createProject({ name, goal, repoNode, repoPath, gitUrl, di
     repo: { node: repoNode || config().name, path: repoPath || '' }, gitUrl: gitUrl || '',
     dispatch: dispatch || config().routing.dispatch || 'auto', policy: policy || config().agents?.rigPolicy || 'builtin:auto',
     planner: planner || coreBrain(), status: 'draft', tasks: [], log: [], createdAt: Date.now(), updatedAt: Date.now(),
+    ...(typeof coordinate === 'boolean' ? { coordinate } : {}), // plan coordination for this project (else the mesh setting)
   };
   return saveProject(p);
 }
@@ -131,6 +133,9 @@ export function workspaceBrief(p) {
   ].filter(Boolean).join('\n');
 }
 
+/** Plan coordination (src/coordinate.js): the project's own choice, else config.routing.coordinate (off by default). */
+export const coordinateOn = (p) => (typeof p.coordinate === 'boolean' ? p.coordinate : config().routing?.coordinate === true);
+
 export function planningPrompt(p, snapshot, guide = '', tools = []) {
   const rules = config().routing.rules.map((r) => `${r.kind}${r.size ? '/' + r.size : ''}${r.tool ? ' [needs ' + r.tool + ']' : ''} → ${r.provider} ${r.model || '(default)'} effort=${r.effort || 'default'}`).join('; ');
   return `You are the planning brain of RIGS, a mesh of the user's workstations with coding agents on each.
@@ -167,7 +172,7 @@ Rules:
 - OpenRig vocabulary: an "OpenRig project" is an OpenRig project workspace — SPEC.md (intent), project.yaml (install:
   intent/context/skills/worlds), missions/ — plus the rig spec of the team (pods, seats, runtimes, models, edges) that
   works on it. Agents can read \`rig context get reference/project-workspace.md\` and \`reference/rig-spec.md\`.
-${planNote(matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 }))}
+${coordinateOn(p) ? PLAN_FIELDS_NOTE + '\n' : ''}${planNote(matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 }))}
 - kind is one of: ${KINDS.join(', ')}. Use "review" for an independent check of another task's output (list it in deps).
   Use "reverse-engineer" when existing software/binaries must be understood (agents have REA for that).
   Use "text" for simple writing/transformation, "docs" for documentation, "media" for image/video/audio generation
@@ -181,7 +186,7 @@ ${planNote(matchTools(tools, `${p.goal} ${p.request || ''}`, { limit: 5 }))}
 - suggest is optional: a machine name and/or provider you think fits better than the policy, with a short why.
 
 Reply with ONLY a JSON object, no prose, no code fence:
-{"summary":"one sentence","tasks":[{"id":"t1","title":"...","description":"what to do, inputs, definition of done","kind":"code","size":"M","acceptance":["..."],"verify":"...","deps":[],"needs":{"platform":"any","gpu":false,"tool":""},"suggest":{"machine":"","provider":"","why":""}}]}`;
+{"summary":"one sentence","tasks":[{"id":"t1","title":"...","description":"what to do, inputs, definition of done","kind":"code","size":"M","acceptance":["..."],"verify":"...","deps":[],${coordinateOn(p) ? '"files":["src/x.js"],"tests":"",' : ''}"needs":{"platform":"any","gpu":false,"tool":""},"suggest":{"machine":"","provider":"","why":""}}]}`;
 }
 
 function extractJson(text) {
@@ -204,6 +209,7 @@ function normalizeTasks(raw) {
     suggest: t.suggest || {},
     acceptance: (Array.isArray(t.acceptance) ? t.acceptance : t.acceptance ? [t.acceptance] : []).map((x) => truncate(String(x), 300)).slice(0, 8),
     verify: truncate(String(t.verify || ''), 600),
+    ...(t.files ? { files: normalizeFiles(t.files) } : {}), ...(t.tests ? { tests: truncate(String(t.tests), 400) } : {}),
     status: 'todo', assign: null, reason: '', run: null, summary: '',
   }));
   const ids = new Set(tasks.map((t) => t.id));
@@ -386,7 +392,15 @@ export async function planProject(id, ctx, { brain } = {}) {
   if (out.error && !out.text) { ps?.end({ status: 'error', output: out.error }); p.status = 'draft'; event(p, 'planning failed: ' + out.error); await saveProject(p); throw new Error(out.error); }
   let parsed;
   try { parsed = extractJson(out.text); } catch (e) { ps?.end({ status: 'error', output: out.text, meta: { error: e.message } }); p.status = 'draft'; event(p, 'planning failed: ' + e.message); await saveProject(p); throw new Error(`${e.message}: ${truncate(out.text, 300)}`); }
-  p.tasks = ensureFinalReview(normalizeTasks(parsed), p.goal, { reviewSmall: autonomy.settings(p).reviewSmall });
+  let tasks = normalizeTasks(parsed);
+  if (coordinateOn(p)) {
+    // Revise the proposals before anything starts: merge same-file work, one testing agent, serialize overlaps.
+    const c = coordinateTasks(tasks);
+    tasks = c.tasks;
+    p.coordination = { at: Date.now(), notes: c.notes };
+    event(p, c.notes.length ? `coordinated the plan: ${c.notes.join('; ')}` : 'coordinated the plan: no overlapping files');
+  } else delete p.coordination;
+  p.tasks = ensureFinalReview(tasks, p.goal, { reviewSmall: autonomy.settings(p).reviewSmall });
   p.summary = parsed.summary || '';
   routeProject(p, snapshot);
   p.status = 'planned';
@@ -598,7 +612,7 @@ ${t.needs?.tool ? `## Tool for this task\nThis machine provides **${t.needs.tool
 - Before reporting done: \`npm test\` passes (and \`npm run build\` when ui/ changed), and your work is committed.
 
 ` : ''}${autonomyBrief(p)}
-${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}${briefSection(toolHints(tools, t))}${filesBrief(p.files, { taskId: t.id })}## How to work
+${t.acceptance?.length ? `## Acceptance criteria\n${t.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n\n` : ''}${t.verify ? `## Verify with\n${t.verify}\n\n` : ''}${t.attempts ? `## Previous attempt ${t.attempts} did not finish\n${t.lastFailure || 'It ended without a report.'}\n${(t.history || []).length > 1 ? `Earlier: ${t.history.slice(0, -1).map((h) => `attempt ${h.attempt} (${[h.model, h.effort].filter(Boolean).join(' ')}): ${truncate(h.why, 160)}`).join('; ')}\n` : ''}This is attempt ${t.attempts + 1}${t.escalate ? `, escalated to ${[t.assign.model, t.assign.effort].filter(Boolean).join(' ')}` : ''}. Pick up from what it left (check the folder and git state) instead of starting over.\n\n` : ''}${briefSection(toolHints(tools, t))}${filesBrief(p.files, { taskId: t.id })}${p.coordination ? ownershipBrief(p.tasks, t) : ''}## How to work
 - Stay inside your task. If you need something from another machine, use the rigs MCP tools (mesh_*).
 - A new folder this project needs (outside its repository) is created in the shared folder, under projects/${p.slug}/ (\`@shared/projects/${p.slug}\`), never in the home folder or a temp folder, so every machine and the next task see it.
 - Other output that belongs in no repository goes in the shared folder, which RIGS keeps in sync on every machine (\`rigs shared path\` prints it, default ~/RIGS-Shared): an ad-hoc app in apps/<id>/, a file made for Sir's request in files/, a report in reports/. A web app there is still published to the App Cloud (mesh_app_register); name the shared path in your summary.

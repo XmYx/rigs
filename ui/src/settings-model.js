@@ -265,6 +265,7 @@ const RAW = [
       action('routing.rules', 'Routing rules', 'Which provider, model and effort each task kind gets (first match wins). Edited in the routing rules editor.', { open: 'mesh.routing' }, { readOnly: true }),
       sel('routing.plannerPicks', 'Planner suggestions', 'What the planning brain may override.', [opt('machine', 'Machines only'), opt('all', 'Machines, provider and model'), opt('none', 'Ignore its suggestions')], { default: 'machine' }),
       sel('routing.dispatch', 'Default dispatch', 'How tasks are started on a machine.', [opt('auto', 'Auto (OpenRig when available)'), opt('openrig', 'OpenRig'), opt('direct', 'Direct agent sessions')], { default: 'auto' }),
+      sw('routing.coordinate', 'Coordinate plans (test mode)', 'Before a plan starts, tasks that edit the same files are merged or run one after the other, and the tests several tasks would write go to one testing agent: fewer merge conflicts, one full test run. A project can override it when it is created.', { default: false }),
       num('routing.maxTasksPerMachine', 'Tasks per machine', 'At most this many tasks run on one machine at a time.', 1, 32, { default: 4 }),
       list('routing.avoid', 'Providers switched off', 'The planner never suggests them and no task is placed there.', { values: ['claude', 'codex', 'ollama'], default: [] }),
     ]),

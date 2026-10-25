@@ -94,6 +94,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
     const repoPath = h('input', { class: 'path-input', placeholder: 'Repository path on that machine (optional)' });
     const gitUrl = h('input', { class: 'path-input', placeholder: 'Git URL — lets other machines work on the code too (optional)' });
     const dispatch = h('select', { class: 'mini' }, ...[['auto', 'auto (OpenRig when available)'], ['openrig', 'OpenRig seats + queue'], ['direct', 'direct agent sessions']].map(([v, l]) => h('option', { value: v }, l)));
+    const coord = h('select', { class: 'mini' }, ...[['', 'mesh setting (System Preferences)'], ['on', 'on — merge same-file work, one testing agent'], ['off', 'off']].map(([v, l]) => h('option', { value: v }, l)));
     const policy = h('select', { class: 'mini' }, ...['builtin:auto', 'builtin:standard', 'builtin:open', 'builtin:locked', 'floor', 'builtin:yolo'].map((v) => h('option', { value: v }, v)));
     const cb = coreBrain();
     right.replaceChildren(h('div', { class: 'pad settings' },
@@ -103,6 +104,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
       h('div', { class: 'grid2' }, h('label', {}, 'Repository machine', repoNode), h('label', {}, 'Dispatch', dispatch)),
       h('label', {}, 'Repository path', repoPath), h('label', {}, 'Git URL', gitUrl),
       h('label', {}, 'Agent permission policy (OpenRig)', policy),
+      h('label', {}, 'Coordinate the plan before it starts', coord),
       h('div', { class: 'muted small' }, `Planner: ${cb ? `${cb.brain} ${cb.model || ''} ${cb.effort ? '· ' + cb.effort : ''} on ${cb.nodeName}` : 'core brain'} — change it from the brain badge under the orb.`),
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: () => create(true) }, '✦ Create & plan'),
@@ -112,7 +114,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
       const self = snapshot().find((e) => e.node.self)?.node;
       const b = coreBrain();
       try {
-        const p = await api(`${node(self.id)}/projects`, { method: 'POST', body: { name: name.value, goal: goal.value, repoNode: repoNode.value, repoPath: repoPath.value, gitUrl: gitUrl.value, dispatch: dispatch.value, policy: policy.value, planner: b ? { provider: b.brain, model: b.model, effort: b.effort, node: b.nodeName } : undefined } });
+        const p = await api(`${node(self.id)}/projects`, { method: 'POST', body: { name: name.value, goal: goal.value, repoNode: repoNode.value, repoPath: repoPath.value, gitUrl: gitUrl.value, dispatch: dispatch.value, policy: policy.value, ...(coord.value ? { coordinate: coord.value === 'on' } : {}), planner: b ? { provider: b.brain, model: b.model, effort: b.effort, node: b.nodeName } : undefined } });
         current = { owner: self.id, project: p };
         await loadList();
         renderDetail();
@@ -172,7 +174,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
     return tagCtx(h('div', { class: 'task-row' },
       h('div', { class: 'tr-main' },
         h('span', { class: 'tid' }, t.id),
-        h('div', { class: 'tr-title' }, h('b', {}, t.title), t.deps.length ? h('span', { class: 'muted small' }, ` ← ${t.deps.join(', ')}`) : null, t.needs?.tool ? h('span', { class: 'chip' }, t.needs.tool) : null),
+        h('div', { class: 'tr-title' }, h('b', {}, t.title), t.deps.length ? h('span', { class: 'muted small' }, ` ← ${t.deps.join(', ')}`) : null, t.needs?.tool ? h('span', { class: 'chip' }, t.needs.tool) : null, t.files?.length ? h('span', { class: 'muted small', title: t.files.join('\n') }, ` · ${t.files.length} file${t.files.length === 1 ? '' : 's'}`) : null),
         h('span', { class: `chip st-${STATUS_CLASS[t.status] || ''}` }, t.status)),
       h('div', { class: 'tr-assign' }, kindSel, sizeSel, h('span', { class: 'arrow' }, '→'), machineSel, provSel, modelIn, dl, effSel,
         sessBtn,
@@ -213,6 +215,7 @@ export function openProjects({ snapshot, voice, coreBrain, onFocus, onAttached, 
         h('div', { class: 'muted small' }, `owner ${p.owner} · repo ${p.repo.path ? `${p.repo.node}:${p.repo.path}` : '—'}${p.gitUrl ? ' · ' + p.gitUrl : ''} · dispatch ${p.dispatch} · ${p.policy}`),
         h('div', { class: 'proj-goal' }, p.goal),
         p.summary ? h('div', { class: 'muted small' }, p.summary) : null,
+        p.coordination?.notes?.length ? h('details', { class: 'muted small' }, h('summary', {}, `Coordinated: ${p.coordination.notes.length} change${p.coordination.notes.length === 1 ? '' : 's'} to the plan`), ...p.coordination.notes.map((n) => h('div', {}, '· ' + n))) : null,
         h('div', { class: 'actions' },
           h('button', { class: 'btn', onclick: runPlan, disabled: p.status === 'running', title: 'Plans with the brain selected under the orb' }, `✦ ${p.tasks.length ? 'Re-plan' : 'Plan'} with ${(() => { const cb = coreBrain(); return cb ? `${cb.model || cb.brain}${cb.effort ? ' · ' + cb.effort : ''}` : 'core brain'; })()}`),
           h('button', { class: 'btn', onclick: () => act('route', { unlock: true }, 'Re-routed with the current policy and machine load'), disabled: !p.tasks.length }, '⇄ Re-route'),

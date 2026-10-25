@@ -380,6 +380,7 @@ How projects are planned, routed to machines and run.
 | Routing policy (whole mesh) › **Routing rules** `routing.rules` | action | global | `routing.rules` | read-only |
 | Routing policy (whole mesh) › **Planner suggestions** `routing.plannerPicks` | select: Machines only · Machines, provider and model · Ignore its suggestions | global | `routing.plannerPicks` → `POST /api/local/config` | default `"machine"` |
 | Routing policy (whole mesh) › **Default dispatch** `routing.dispatch` | select: Auto (OpenRig when available) · OpenRig · Direct agent sessions | global | `routing.dispatch` → `POST /api/local/config` | default `"auto"` |
+| Routing policy (whole mesh) › **Coordinate plans (test mode)** `routing.coordinate` | switch | global | `routing.coordinate` → `POST /api/local/config` | default `false` |
 | Routing policy (whole mesh) › **Tasks per machine** `routing.maxTasksPerMachine` | number 1–32 | global | `routing.maxTasksPerMachine` → `POST /api/local/config` | default `4` |
 | Routing policy (whole mesh) › **Providers switched off** `routing.avoid` | list: claude · codex · ollama | global | `routing.avoid` → `POST /api/local/config` | default `[]` |
 | Pinned projects and hubs › **Pinned projects** `pinnedProjects` | action | machine | `pinnedProjects` | read-only |
