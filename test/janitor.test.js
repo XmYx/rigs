@@ -7,6 +7,8 @@ import { test } from 'node:test';
 
 process.env.RIGS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-janitor-'));
 const J = await import('../src/janitor.js');
+const A = await import('../src/apps.js');
+const { saveConfig, loadConfig } = await import('../src/config.js');
 const MIN = 60000;
 
 test('idleVictims: idle past the limit, not held, not kept', () => {
@@ -48,4 +50,30 @@ test('settings default on, 30 min, clamp silly values', () => {
   assert.deepEqual(J.settings({}), { enabled: true, idleMinutes: 30, intervalSec: 60 });
   assert.equal(J.settings({ janitor: { enabled: false } }).enabled, false);
   assert.equal(J.settings({ janitor: { idleMinutes: 0, intervalSec: 1 } }).intervalSec, 10);
+});
+
+test('jarvis-voice is resident: the janitor never selects it, however long it was idle — registered keepAlive or not', async () => {
+  const cfg = loadConfig();
+  cfg.persona = { ...cfg.persona, neural: true, voiceApp: undefined, hearingApp: undefined };
+  const longIdle = { id: 'jarvis-voice', unit: 'jarvis-voice.service', lastUsed: 0, holds: 0 };
+  const other = { id: 'comfy', pid: 4242, lastUsed: 0, holds: 0 };
+  for (const apps of [
+    [{ id: 'jarvis-voice', port: 8197, keepAlive: true, launch: { systemd: 'jarvis-voice.service' } }, { id: 'comfy', port: 8188 }],
+    [{ id: 'jarvis-voice', port: 8197, launch: { systemd: 'jarvis-voice.service' } }, { id: 'comfy', port: 8188 }], // flag lost by a re-registration
+    [{ id: 'comfy', port: 8188 }], // not even registered
+  ]) {
+    cfg.apps = apps;
+    saveConfig(cfg);
+    A.resetAppsState();
+    assert.deepEqual(J.idleVictims([longIdle, other], { now: 1e12, idleMinutes: 30, keep: (id) => A.isKeepAlive(id) }).map((e) => e.id), ['comfy']);
+  }
+  // and a real sweep keeps its unit running (no systemctl stop) while the idle neighbour is stopped
+  J.resetJanitor();
+  J.track({ id: 'jarvis-voice', unit: 'jarvis-voice.service' }, 1);
+  J.track({ id: 'comfy', pid: 4242 }, 1);
+  const ran = [];
+  const deps = { kill: () => {}, alive: () => false, sleep: async () => {}, run: async (...a) => { ran.push(a.flat().join(' ')); return { code: 0 }; } };
+  assert.deepEqual(await J.sweep({ now: 1e12, keep: (id) => A.isKeepAlive(id), deps }), ['comfy']);
+  assert.deepEqual(ran, []);
+  assert.deepEqual(J.list().map((e) => e.id), ['jarvis-voice']);
 });

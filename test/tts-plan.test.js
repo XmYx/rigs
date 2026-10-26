@@ -13,6 +13,13 @@ test('engineOrder: auto prefers Kokoro (neural), then the machine engine; unreac
   assert.deepEqual(engineOrder({ choice: 'piper' }), ['neural', 'local']);
 });
 
+test('engineOrder: while the resident Kokoro is down or starting the machine engine speaks; once it is up Kokoro is first again', () => {
+  // neuralBase() is null while the app is down/starting -> neural: false; the sentence is never silent and never waits on it
+  assert.deepEqual(engineOrder({ neural: false, up: { local: true } }), ['local']);
+  assert.deepEqual(engineOrder({ neural: true, up: { local: true } }), ['neural', 'local']);
+  assert.deepEqual(engineOrder({ choice: 'local', neural: true }), ['local', 'neural']);
+});
+
 test('engineOrder: the chosen engine goes first, the rest remain as fallback; named local voices stay local', () => {
   assert.deepEqual(engineOrder({ choice: 'neural' }), ['neural', 'local']);
   assert.deepEqual(engineOrder({ choice: 'local' }), ['local', 'neural']);

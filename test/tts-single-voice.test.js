@@ -1,6 +1,7 @@
 // One voice: JARVIS speaks with Kokoro (the jarvis-voice app) when it is up, and one call produces exactly one synthesis
 // and at most one playback, whatever fails along the way. The machine's own engine only stands in for a Kokoro that is
-// down (the resident piper voice is gone). The tests run in order: the failing-Kokoro cases come last because a failure parks Kokoro for 30 s.
+// down or starting (the resident piper voice is gone); the voice app itself is resident: the daemon revives it when its health says
+// down (reviveVoice / startVoiceKeeper). The tests run in order: the failing-Kokoro cases come last because a failure parks Kokoro for 30 s.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -117,4 +118,59 @@ test('wakeApp starts a down voice app on demand (once a minute), never an app th
   assert.equal(tts.wakeApp('jarvis-voice', { fetchImpl, now: 1e12 + 1000 }), false); // not again within a minute
   assert.equal(tts.wakeApp('nope', { fetchImpl, now: 2e12 }), false);
   assert.equal(urls.length, 1);
+});
+
+// ---------------------------------------------------------------- resident voice: revived without a synthesize call
+async function downVoice(persona = {}, app = {}) {
+  const probe = await fakeVoice();
+  const port = probe.port;
+  await close(probe); // nothing listens there now: the app is down
+  const c = loadConfig();
+  c.apps = [{ id: 'jarvis-voice', port, healthPath: '/', keepAlive: true, launch: { command: 'true' }, ...app }];
+  c.persona = { ...c.persona, neural: true, voiceApp: undefined, tts: { trim: false }, ...persona };
+  saveConfig(c);
+  apps.resetAppsState();
+  await apps.checkAll();
+}
+const recorder = () => { const urls = []; return { urls, fetchImpl: async (u) => { urls.push(u); return { ok: true }; } }; };
+
+test('reviveVoice: a down jarvis-voice app on this machine is started without any synthesize call, once a minute', async () => {
+  await downVoice();
+  assert.equal(apps.localApps().apps[0].health.status, 'down');
+  const { urls, fetchImpl } = recorder();
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.1e12 }), true);
+  assert.match(urls[0], /\/api\/nodes\/mac\/app-start\/jarvis-voice$/);
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.1e12 + 1000 }), false); // the wakeApp guard: not again within a minute
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.1e12 + 61000 }), true); // still down a minute later: tried again
+  assert.equal(urls.length, 2);
+});
+
+test('reviveVoice: not when neural voice is off or the engine is "local", not for an app on another machine, not while it is up or unregistered', async () => {
+  const { urls, fetchImpl } = recorder();
+  await downVoice({ neural: false });
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.2e12 }), false);
+  await downVoice({ tts: { engine: 'local' } });
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.2e12 }), false);
+  await downVoice({ voiceApp: 'elsewhere/jarvis-voice' }); // that machine's own daemon revives it
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.2e12 }), false);
+  await downVoice({ voiceApp: 'mac/jarvis-voice' }); // this machine, named explicitly
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.2e12 }), true);
+  const kokoro = await fakeVoice();
+  wire({ kokoro }); // up
+  await apps.checkAll();
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.3e12 }), false);
+  wire({ kokoro: null }); // no jarvis-voice app declared here at all
+  assert.equal(tts.reviveVoice({ fetchImpl, now: 1.4e12 }), false);
+  assert.equal(urls.length, 1);
+  await close(kokoro);
+});
+
+test('startVoiceKeeper: the daemon starts a down voice app by itself (timer and apps health changes), and stopVoiceKeeper ends it', async () => {
+  await downVoice();
+  const { urls, fetchImpl } = recorder();
+  tts.startVoiceKeeper({ intervalMs: 20, fetchImpl });
+  await new Promise((ok) => setTimeout(ok, 150));
+  assert.equal(urls.length, 1, 'started once; the minute guard holds back the later ticks');
+  assert.match(urls[0], /app-start\/jarvis-voice$/);
+  tts.stopVoiceKeeper();
 });
