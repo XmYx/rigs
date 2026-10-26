@@ -15,6 +15,7 @@ import * as janitor from './janitor.js';
  *     "launch": { "systemd": "szuf.service" }  // or { "command": "…" }; used to start the app (see LAUNCH below)
  *     "description": "what it does, for whom",  // optional, ≤ 500 chars; tool_list / GET /api/tools search it
  *     "tags": ["cars", "dashboard"],      // optional short words (a-z, 0-9, . + - _), searched and filterable (tool_list tag)
+ *     "keepAlive": true,                  // optional: resident — the process janitor never stops it, and a launch also enables the systemd unit (starts at boot)
  *     "startupGraceMs": 300000,           // optional, 5 000–900 000: how long startApp waits for /healthz after launching (default 180 000)
  *     "opensFor": { "workspace": "body_matching_implementation", "keywords": ["train", "epoch"], "path": "/training" },
  *                                         // optional: the planner opens this app (at path) in Sir's UI when a task starts whose
@@ -149,6 +150,26 @@ export function validateApp(raw, node = config().name) {
     },
     errors: [],
   };
+}
+
+/** The App Cloud app that is JARVIS's voice and ears (Kokoro text-to-speech + lipsync, Whisper speech-to-text). */
+export const VOICE_APP = 'jarvis-voice';
+
+/** App ids (lower case, no node part) JARVIS's persona relies on: the voice app (unless persona.neural is off) and the hearing app. */
+export function voiceAppIds(persona = config().persona) {
+  const p = persona || {};
+  const id = (ref) => String(ref).split('/').pop().toLowerCase();
+  return [...(p.neural === false ? [] : [id(p.voiceApp || VOICE_APP)]), id(p.hearingApp || VOICE_APP)];
+}
+
+/**
+ * Is this app resident? One declared `"keepAlive": true`, or the one JARVIS speaks and listens through (a registration
+ * written without the flag must not make the voice stoppable). The janitor never stops a resident app and a launch
+ * enables its systemd unit so it also comes up at boot.
+ */
+export function isKeepAlive(id, { apps = loadApps().apps, persona } = {}) {
+  const key = String(id || '').toLowerCase();
+  return !!apps.find((a) => a.id === key)?.keepAlive || voiceAppIds(persona).includes(key);
 }
 
 export const LAUNCH_OS = Object.freeze(['linux', 'darwin', 'windows']);
@@ -598,7 +619,9 @@ async function launch(app, { platform, deps }) {
 
   if (recipe.systemd) {
     const run = deps.run || (await import('./util.js')).run;
-    const r = await run('systemctl', ['--user', 'start', recipe.systemd], { timeout: 30000 });
+    // A resident app's unit is also enabled, so it starts at boot and not only when the daemon notices it is down.
+    let r = isKeepAlive(app.id) ? await run('systemctl', ['--user', 'enable', '--now', recipe.systemd], { timeout: 30000 }) : null;
+    if (!r || r.code !== 0) r = await run('systemctl', ['--user', 'start', recipe.systemd], { timeout: 30000 });
     if (r.code !== 0) throw Object.assign(new Error(`systemctl --user start ${recipe.systemd} failed: ${(r.stderr || r.stdout).trim()}`), { status: 502 });
     (deps.track || janitor.track)({ id: app.id, name: app.name, unit: recipe.systemd });
   } else {

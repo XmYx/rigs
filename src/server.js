@@ -1363,7 +1363,7 @@ export async function startServer() {
       throw new HttpError(400, 'expected { add: { id, label?, dir? } } | { remove: id } | { mode: id | "auto" }');
     }
     if (sub === 'janitor' && method === 'GET') return { settings: janitor.settings(), tracked: janitor.list() };
-    if (sub === 'janitor/sweep' && method === 'POST') return { stopped: await janitor.sweep({ keep: (id) => !!appsReg.loadApps().apps.find((a) => a.id === id)?.keepAlive }) };
+    if (sub === 'janitor/sweep' && method === 'POST') return { stopped: await janitor.sweep({ keep: (id) => appsReg.isKeepAlive(id) }) };
     if (sub === 'processes' && method === 'GET') return processes.list({ filter: q.get('filter') || '', sort: q.get('sort') || 'cpu', limit: Number(q.get('limit')) || 80 });
     if (sub === 'processes/kill' && method === 'POST') return processes.kill(await body());
     if (sub === 'exec' && method === 'POST') {
@@ -1888,8 +1888,10 @@ export async function startServer() {
   appsReg.onAppsChange(() => broadcast({ type: 'apps', node: config().name }));
   appstore.onJobEvent((job) => broadcast({ type: 'appstore', node: config().name, job }));
   appsReg.startHealthChecks({ intervalMs: 5000 });
+  // JARVIS's voice is resident: this daemon starts the jarvis-voice app again whenever its health says down (src/tts.js).
+  tts.startVoiceKeeper();
   // Process janitor: apps RIGS launched and nobody used for config.janitor.idleMinutes are stopped (src/janitor.js).
-  janitor.startJanitor({ keep: (id) => !!appsReg.loadApps().apps.find((a) => a.id === id)?.keepAlive, onStopped: () => appsReg.checkAll().catch(() => {}) });
+  janitor.startJanitor({ keep: (id) => appsReg.isKeepAlive(id), onStopped: () => appsReg.checkAll().catch(() => {}) });
 
   // Usage ledger: a finished task run's tokens are read from its transcript on the machine it ran on.
   usage.setSlicer((node, q) => callNode(node, 'usage/slice', { method: 'POST', body: q, timeout: 120000 }));

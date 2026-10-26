@@ -44,7 +44,7 @@ export function engine() {
 }
 
 // ---------------------------------------------------------------- neural voice (App Cloud)
-const VOICE_APP = 'jarvis-voice';
+const VOICE_APP = appsReg.VOICE_APP;
 let catalogAt = 0;
 
 /** Base URL of the neural voice app (direct when it runs here, else through this daemon's proxy), or null. */
@@ -68,11 +68,12 @@ export async function neuralBase() {
 let neuralDownUntil = 0;
 
 /**
- * The voice app is started on demand, never at boot: when the server voice is asked to speak (a UI on a server voice,
- * or this machine's speakers) and the app is down, its launch recipe runs on its machine (app-start) while this
- * sentence falls back to the machine's own engine. A UI on a browser voice never calls synthesize, so it never wakes
- * the app; the process janitor (src/janitor.js) stops it again once nobody has used it for a while. Fire-and-forget,
- * at most once a minute per app.
+ * The voice app is resident: it is registered keepAlive (the process janitor never stops it) with its systemd unit
+ * enabled (it starts at boot), and the daemon on its machine starts it again whenever its health says down
+ * (startVoiceKeeper → reviveVoice), not only when somebody asks for speech. wakeApp is the one guarded start behind
+ * all of it — also used when the server voice is asked to speak (synthesize) or a recording arrives (senses.js) while
+ * the app is down: its launch recipe runs on its machine (app-start) while that sentence falls back to the machine's
+ * own engine. Fire-and-forget, at most once a minute per app, never while a start is in flight.
  */
 const wokeAt = new Map();
 export function wakeApp(ref, { fetchImpl = fetch, now = Date.now() } = {}) {
@@ -83,10 +84,35 @@ export function wakeApp(ref, { fetchImpl = fetch, now = Date.now() } = {}) {
   if (!hit || hit.health?.status !== 'down' || appsReg.isStarting(id)) return false;
   wokeAt.set(ref, now);
   fetchImpl(`http://127.0.0.1:${config().port}/api/nodes/${encodeURIComponent(hit.node)}/app-start/${encodeURIComponent(id)}`, { method: 'POST', signal: AbortSignal.timeout(30000) })
-    .then(() => console.info(`[tts] started ${id} on ${hit.node} on demand`)).catch(() => {});
+    .then(() => console.info(`[tts] started ${id} on ${hit.node}`)).catch(() => {});
   return true;
 }
 const wakeVoice = () => { const p = config().persona || {}; if (p.neural !== false && ttsCfg().engine !== 'local') wakeApp(String(p.voiceApp || VOICE_APP)); };
+
+/**
+ * Start the voice app when it is down and declared on this machine — every daemon watches only its own apps, so the
+ * mesh does not start it twice. Off with persona.neural = false or persona.tts.engine = 'local'. Same guards as wakeApp.
+ */
+export function reviveVoice(opts) {
+  const p = config().persona || {};
+  if (p.neural === false || ttsCfg().engine === 'local') return false;
+  const ref = String(p.voiceApp || VOICE_APP);
+  const [node, id] = ref.includes('/') ? ref.split('/', 2) : [null, ref];
+  if (node && !appsReg.isSelfRef(node)) return false;
+  if (!appsReg.localApps().apps.some((a) => a.id === id)) return false;
+  return wakeApp(ref, opts);
+}
+
+let keeper = null;
+let keeperOff = null;
+/** The daemon keeps JARVIS's voice up: on every health change of this machine's apps, and every `intervalMs` while it stays down. */
+export function startVoiceKeeper({ intervalMs = 30000, ...opts } = {}) {
+  stopVoiceKeeper();
+  keeperOff = appsReg.onAppsChange(() => { reviveVoice(opts); });
+  keeper = setInterval(() => { reviveVoice(opts); }, intervalMs);
+  keeper.unref?.();
+}
+export function stopVoiceKeeper() { clearInterval(keeper); keeper = null; keeperOff?.(); keeperOff = null; }
 
 async function neuralSynth(base, text, voice) {
   const v = String(voice || '').startsWith('neural:') ? voice.slice(7) : undefined;

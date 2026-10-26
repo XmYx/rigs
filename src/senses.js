@@ -43,7 +43,7 @@ export async function appBase(ref) {
 export async function stt(audio, { contentType = 'application/octet-stream', lang } = {}) {
   const base = await appBase(config().persona?.hearingApp || 'jarvis-voice');
   if (!base) {
-    // Started on demand (src/tts.js wakeApp): the next recording finds it up.
+    // The voice app is resident (src/tts.js keeps it up); this covers the gap while it starts: the next recording finds it up.
     const woke = (await import('./tts.js')).wakeApp(config().persona?.hearingApp || 'jarvis-voice');
     throw Object.assign(new Error(woke ? 'speech recognition is starting (the jarvis-voice app was down) — try again in a moment' : 'no speech recognition on the mesh (the jarvis-voice app is down)'), { status: 503 });
   }

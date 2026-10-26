@@ -194,6 +194,44 @@ test('startApp: already up is a no-op; systemd unit is started and awaited; no r
   await assert.rejects(A.startApp('nope', { deps }), /unknown app/);
 });
 
+test('startApp: a resident systemd app (keepAlive, or JARVIS\'s voice) is enabled with --now so it starts at boot; a failed enable falls back to start', async () => {
+  const cfg = loadConfig();
+  cfg.persona = { ...cfg.persona, neural: true, voiceApp: undefined, hearingApp: undefined };
+  cfg.apps = [
+    { id: 'resident', port: 9, keepAlive: true, launch: { systemd: 'resident.service' } },
+    { id: 'jarvis-voice', port: 9, launch: { systemd: 'jarvis-voice.service' } }, // no flag: persona.voiceApp makes it resident anyway
+    { id: 'plain', port: 9, launch: { systemd: 'plain.service' } },
+  ];
+  saveConfig(cfg);
+  A.resetAppsState();
+  assert.equal(A.isKeepAlive('resident'), true);
+  assert.equal(A.isKeepAlive('Jarvis-Voice'), true);
+  assert.equal(A.isKeepAlive('plain'), false);
+  assert.equal(A.isKeepAlive('jarvis-voice', { persona: { neural: false, hearingApp: 'other/ears' } }), false, 'no neural voice and a different hearing app: nothing makes it resident');
+  assert.equal(A.isKeepAlive('ears', { apps: [], persona: { hearingApp: 'other/ears' } }), true);
+  const calls = [];
+  let enableFails = false;
+  const deps = {
+    probe: async () => (calls.length ? { ok: true, latencyMs: 1 } : { ok: false, error: 'ECONNREFUSED' }),
+    run: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return { code: enableFails && args[1] === 'enable' ? 1 : 0, stdout: '', stderr: '' }; },
+    sleep: () => new Promise((ok) => setTimeout(ok, 5)),
+    track: () => {},
+    platform: 'linux',
+  };
+  await A.startApp('resident', { deps, pollMs: 5, waitMs: 2000 });
+  assert.deepEqual(calls, ['systemctl --user enable --now resident.service']);
+  calls.length = 0;
+  await A.startApp('jarvis-voice', { deps, pollMs: 5, waitMs: 2000 });
+  assert.deepEqual(calls, ['systemctl --user enable --now jarvis-voice.service']);
+  calls.length = 0;
+  await A.startApp('plain', { deps, pollMs: 5, waitMs: 2000 });
+  assert.deepEqual(calls, ['systemctl --user start plain.service']);
+  calls.length = 0;
+  enableFails = true;
+  await A.startApp('resident', { deps, pollMs: 5, waitMs: 2000 });
+  assert.deepEqual(calls, ['systemctl --user enable --now resident.service', 'systemctl --user start resident.service']);
+});
+
 test('startApp: command recipe spawns detached and times out if the app never answers', async () => {
   const cfg = loadConfig();
   cfg.apps = [{ id: 'cmd', port: 9, launch: { command: 'python3 -m http.server 9' } }];
