@@ -15,6 +15,7 @@ and t5 (publish). If you change a route, a field or a file location, change it h
 | `apps/home-security/server.js` | t1 stub → t2 | HTTP server: `createServer()` export, routing, mesh fan-out, process lifecycle |
 | `apps/home-security/discovery.js` | t2 | Webcam enumeration per OS, ONVIF WS-Discovery, LAN port probe, subnet selection |
 | `apps/home-security/ingest.js` | t2 | One supervised ffmpeg per enabled camera → segments, motion frames, snapshot |
+| `apps/home-security/camera-helper.js`, `macos/` | t2 | macOS only: builds/launches `RIGS Camera.app` (the app bundle that holds the camera permission; ffmpeg runs inside it), authorization status, the "Grant camera access" action |
 | `apps/home-security/motion.js` | t3 | Pure frame-diff scoring + event state machine |
 | `apps/home-security/recorder.js` | t3 | Segment indexing, events (pre/post-roll windows, thumbnails, clips), timeline queries |
 | `apps/home-security/retention.js` | t3 | Victim selection (pure) + deletion confined to the data dir |
@@ -89,11 +90,26 @@ request path. Results go to `cameras.json`. A rediscovered camera updates `lastS
 
 The device-list parsers are pure functions over ffmpeg's stderr text, with captured fixtures in the tests. Known
 gotchas that t2 must handle and report:
-- **macOS camera permission (TCC).** An ffmpeg spawned by a background process can be denied silently. The ffmpeg
-  exits with "not authorized" or produces no frames (seen on macbookpro: ffmpeg just waits forever). A macOS webcam
-  run that stalls before its first segment is therefore reported as TCC. The camera's `status` is then `error` with
-  `error: "camera permission denied — allow it in System Settings › Privacy & Security › Camera"`, never a
-  crash loop.
+- **macOS camera permission (TCC) — the RIGS Camera helper.** macOS shows the camera Allow prompt, and lists an app
+  under Privacy & Security › Camera, only for an app bundle with `NSCameraUsageDescription`. A bare `node` with an
+  `ffmpeg` child is neither, so it never gets the prompt and ffmpeg just waits for frames forever (seen on
+  macbookpro). On macOS every webcam therefore runs as a child of **`~/.rigs/bin/RIGS Camera.app`**
+  (`apps/home-security/macos/`: `RigsCamera.swift`, `Info.plist`, `build.sh`; module `camera-helper.js`), bundle id
+  `dev.rigs.camera` (a scratch `RIGS_HOME` gets `dev.rigs.camera.<hash8>`, so it never touches the real grant). The app
+  builds it with `swiftc` + an ad-hoc `codesign` the first time it needs it, and only again when the sources change
+  (an ad-hoc signature pins the grant to the build, so a rebuild resets this app's camera entry and needs a new Allow).
+  The helper is started through LaunchServices (`open -W -n -g -j -a … --args run --dir D --cwd C --parent PID -- ffmpeg …`),
+  which makes it its own responsible process; it asks for camera access if undecided (the Allow prompt), then runs
+  ffmpeg with stderr in `D/ffmpeg.log`, `D/pid.json` `{helper, child}`, `D/auth.json` `{status, at}` and `D/exit.json`
+  `{code, signal}`. ffmpeg is not our direct child there, so its motion frames go to a unix socket
+  (`-f rawvideo unix:<data>/run/m-<hash>.sock`, `-nostdin`) and a stop is `SIGTERM` to the helper (ffmpeg gets `SIGINT`).
+  Without Xcode's command line tools (no `swiftc`) the camera falls back to the bare ffmpeg and says so.
+  The camera's `status` is **`needs-permission`** (never `error`, never a restart loop) with
+  `error: "waiting for camera permission — click Allow on the Mac, or enable “RIGS Camera” in System Settings › Privacy & Security › Camera"`
+  while the prompt is up, a "switch it on in System Settings" text when it is denied (re-checked every 15 s), and a
+  Screen Time/MDM text when restricted. `GET api/camera-access` returns `{ supported, status: authorized | notDetermined | denied | restricted | helper-unavailable | unsupported, message, helper, node }`;
+  `POST api/camera-access/grant` raises the prompt (`status: "prompting"`) or, when denied, opens System Settings › Camera
+  (`openedSettings`). The UI offers it as "Grant camera access" in Settings and on the camera tile.
 - Linux v4l2 devices are exclusive. A device busy in another app is reported as `error: "device busy"` and retried
   with backoff.
 
@@ -161,8 +177,8 @@ pre-roll is always on disk when motion starts. `mode: "off"` runs no ffmpeg at a
 
 **Supervision**: the restart backoff is 2 s → ×2 → 60 s max, reset after 5 min healthy. A stall (no new segment for
 `3×segmentSeconds + 10 s`) kills and restarts the process. A camera's runtime `status` is one of `idle` (disabled),
-`starting`, `recording`, `error` (with redacted `error` text and `retryAt`), `needs-credentials`, `needs-setup` or
-`unavailable` (not seen in the last scan). Shutdown (SIGTERM/SIGINT, and the HTTP server closing) writes `q` to each
+`starting`, `recording`, `error` (with redacted `error` text and `retryAt`), `needs-credentials`, `needs-setup`,
+`needs-permission` (macOS camera access not granted yet, §2) or `unavailable` (not seen in the last scan). Shutdown (SIGTERM/SIGINT, and the HTTP server closing) writes `q` to each
 ffmpeg's stdin, then kills after 5 s. ffmpeg pids are written to `run/ffmpeg.json`. At startup, any recorded pid that
 is still alive and is an ffmpeg is killed, so a crash leaves no orphans.
 
@@ -370,6 +386,8 @@ listed. Merged responses add `nodes: [{ node, base, online, version?, error? }]`
 | GET | `healthz` | t1/t2 | — | `200 { ok: true, app: "home-security", version, node, ffmpeg: { found, path, version }, storage: { dataDir, usedBytes, freeBytes, maxBytes }, cameras: { total, enabled, recording, failing } }`. Always 200 while the server is up; problems are fields, not a 5xx. |
 | GET | `api/status` | t2 | — | healthz body + `workers: [{ camera, status, pid, since, restarts, error }]`, `discovery: <api/discovery>` |
 | GET | `api/mesh` | t2 | — | `{ self, nodes: [{ node, base, online, version, error? }] }` |
+| GET | `api/camera-access` | t2 | — | `{ supported, status, message, helper: { bundleId, name, app, problem }, node }`; macOS camera authorization of the RIGS Camera helper (§2). `supported: false` off macOS. |
+| POST | `api/camera-access/grant` | t2 | — | `{ ok, status, message, openedSettings? }`: undecided → raises the Allow prompt (`status: "prompting"`); denied → opens System Settings › Camera. |
 | GET | `api/cameras` | t2 | `?scope=mesh\|local` | `{ nodes, cameras: [Camera] }` |
 | POST | `api/cameras` | t2 | `{ name, url, username?, password?, transcode? }` | `201 Camera` (manual). `400` for a bad scheme or URL. |
 | GET | `api/cameras/:id` | t2 | — | `Camera` |
