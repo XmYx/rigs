@@ -134,7 +134,7 @@ const procs = [];
 let appServer;
 let appPort;
 let releaseSse = () => {};
-const [B_PORT, A_PORT, DEAD_PORT] = await freePorts(3);
+const [B_PORT, A_PORT, DEAD_PORT, COLD_PORT] = await freePorts(4);
 // A non-loopback, non-tailnet address lets us prove the app-node daemon authorizes the relayed hop itself.
 const LAN = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal && !/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(i.address))?.address;
 const B_HOST = LAN || '127.0.0.1';
@@ -195,12 +195,19 @@ async function waitFor(fn, what, proc) {
   throw new Error(`${what} never became ready\n${proc?.log || ''}`);
 }
 
+// A stopped app that RIGS can start: its launch command listens on COLD_PORT only after COLD_BOOT_MS, like an app that is slow to come up.
+const COLD_BOOT_MS = 1500;
+const COLD_SCRIPT = path.join(os.tmpdir(), `rigs-cold-app-${process.pid}.cjs`);
+const COLD_STARTS = COLD_SCRIPT + '.starts'; // one line per launch of the app
+fs.writeFileSync(COLD_SCRIPT, `require('node:fs').appendFileSync(${JSON.stringify(COLD_STARTS)}, 'start\\n'); setTimeout(() => require('node:http').createServer((q, r) => { r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ ok: true, url: q.url })); }).listen(${COLD_PORT}, '127.0.0.1'), ${COLD_BOOT_MS});`);
+
 before(async () => {
   appServer = fakeApp();
   await new Promise((r) => appServer.listen(0, '127.0.0.1', r));
   appPort = appServer.address().port;
   const b = daemon('app-node', B_PORT, { RIGS_BIND: LAN ? `127.0.0.1,${LAN}` : '127.0.0.1' }, {
-    apps: [{ id: 'demo', name: 'Demo', port: appPort }, { id: 'dead', name: 'Dead', port: DEAD_PORT }, { id: 'nows', port: appPort, rewrite: { websocket: false } }],
+    apps: [{ id: 'demo', name: 'Demo', port: appPort }, { id: 'dead', name: 'Dead', port: DEAD_PORT }, { id: 'nows', port: appPort, rewrite: { websocket: false } },
+      { id: 'cold', name: 'Cold', port: COLD_PORT, healthPath: '/healthz', startupGraceMs: 20000, launch: { command: `"${process.execPath}" "${COLD_SCRIPT}"` } }],
   });
   await waitFor(async () => (await fetch(B + '/api/self')).ok, 'app-node', b);
   const a = daemon('front', A_PORT, { RIGS_PEERS: `http://${B_HOST}:${B_PORT}` });
@@ -214,7 +221,24 @@ before(async () => {
 after(() => {
   for (const p of procs) p.kill();
   appServer?.close();
+  fs.rmSync(COLD_SCRIPT, { force: true });
+  fs.rmSync(COLD_STARTS, { force: true });
   for (const h of homes) fs.rmSync(h, { recursive: true, force: true });
+});
+
+test('cold app: the FIRST request to a stopped app starts it and is answered (no 502 + retry), locally and through a relay', async () => {
+  // Before the fix the proxy forwarded at once: ECONNREFUSED → 502 "not responding", and only the second ask (after
+  // something else had started the app) worked. Now the request waits for the launch recipe and the app's /healthz.
+  const t0 = Date.now();
+  const first = await fetch(`${B}/api/nodes/self/apps/cold/hello?x=1`);
+  const took = Date.now() - t0;
+  assert.equal(first.status, 200, `first request: ${first.status}`);
+  assert.deepEqual(await first.json(), { ok: true, url: '/hello?x=1' });
+  assert.ok(took >= COLD_BOOT_MS - 200, `it waited for the app to boot (${took} ms)`);
+  // it stays up: the next request, through the front daemon (relay), is forwarded and does not launch the app again
+  // (counted, not timed: the relay hop's own speed depends on the machine)
+  assert.equal((await fetch(`${A}/api/nodes/app-node/apps/cold/again`)).status, 200, 'through the front daemon (relay)');
+  assert.equal(fs.readFileSync(COLD_STARTS, 'utf8').trim().split('\n').length, 1, 'launched once');
 });
 
 test('routing: bare prefix redirects to the slash, unknown app 404, unknown node 404, app down 502 (JSON)', async () => {

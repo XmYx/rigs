@@ -218,6 +218,9 @@ test('waiting for Allow is not a stall: the no-frames watchdog does not kill the
   const r = rig('prompt-long', 'notDetermined');
   r.worker.start();
   await waitFor(() => r.worker.status === 'needs-permission', 10000, 'needs-permission');
+  // The status comes from the worker's 300 ms poll (auth.json); the helper pid from its 200 ms pump (pid.json). On a loaded
+  // machine the poll can win, and pid is still null: alive(null) is false, which read as "killed" (merge steward, Linux).
+  await waitFor(() => r.worker.pid, 5000, 'helper pid');
   const pid = r.worker.pid;
   await sleep(14000); // the watchdog fires after 3 × 1 s segment + 10 s = 13 s without a segment
   assert.equal(r.worker.status, 'needs-permission');
