@@ -198,7 +198,8 @@ async function waitFor(fn, what, proc) {
 // A stopped app that RIGS can start: its launch command listens on COLD_PORT only after COLD_BOOT_MS, like an app that is slow to come up.
 const COLD_BOOT_MS = 1500;
 const COLD_SCRIPT = path.join(os.tmpdir(), `rigs-cold-app-${process.pid}.cjs`);
-fs.writeFileSync(COLD_SCRIPT, `setTimeout(() => require('node:http').createServer((q, r) => { r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ ok: true, url: q.url })); }).listen(${COLD_PORT}, '127.0.0.1'), ${COLD_BOOT_MS});`);
+const COLD_STARTS = COLD_SCRIPT + '.starts'; // one line per launch of the app
+fs.writeFileSync(COLD_SCRIPT, `require('node:fs').appendFileSync(${JSON.stringify(COLD_STARTS)}, 'start\\n'); setTimeout(() => require('node:http').createServer((q, r) => { r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ ok: true, url: q.url })); }).listen(${COLD_PORT}, '127.0.0.1'), ${COLD_BOOT_MS});`);
 
 before(async () => {
   appServer = fakeApp();
@@ -221,6 +222,7 @@ after(() => {
   for (const p of procs) p.kill();
   appServer?.close();
   fs.rmSync(COLD_SCRIPT, { force: true });
+  fs.rmSync(COLD_STARTS, { force: true });
   for (const h of homes) fs.rmSync(h, { recursive: true, force: true });
 });
 
@@ -233,10 +235,10 @@ test('cold app: the FIRST request to a stopped app starts it and is answered (no
   assert.equal(first.status, 200, `first request: ${first.status}`);
   assert.deepEqual(await first.json(), { ok: true, url: '/hello?x=1' });
   assert.ok(took >= COLD_BOOT_MS - 200, `it waited for the app to boot (${took} ms)`);
-  // stays up: the next requests are answered at once (no start, no wait)
-  const t1 = Date.now();
+  // it stays up: the next request, through the front daemon (relay), is forwarded and does not launch the app again
+  // (counted, not timed: the relay hop's own speed depends on the machine)
   assert.equal((await fetch(`${A}/api/nodes/app-node/apps/cold/again`)).status, 200, 'through the front daemon (relay)');
-  assert.ok(Date.now() - t1 < 1000);
+  assert.equal(fs.readFileSync(COLD_STARTS, 'utf8').trim().split('\n').length, 1, 'launched once');
 });
 
 test('routing: bare prefix redirects to the slash, unknown app 404, unknown node 404, app down 502 (JSON)', async () => {
