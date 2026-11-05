@@ -1606,6 +1606,12 @@ export async function startServer() {
     return { app: r.app };
   }
 
+  /** A request for a local app that is not up starts it and waits (bounded) for its health check; throws 503/502/504 when it cannot. */
+  async function startIfDown(app) {
+    const e = await appsReg.ensureUp(app);
+    if (!e.up) throw new HttpError(e.pending ? 503 : e.status || 502, e.error);
+  }
+
   async function appHttp(req, res, url, route) {
     if (route.rest === undefined) {
       // Relative URLs in the app only resolve inside the prefix with a trailing slash.
@@ -1614,8 +1620,9 @@ export async function startServer() {
       return;
     }
     const t = await appTarget(route);
-    if (t.peer) relayApp(t.peer, req, res, route, url.search);
-    else proxyApp(req, res, t.app, route, url.search);
+    if (t.peer) { relayApp(t.peer, req, res, route, url.search); return; }
+    await startIfDown(t.app); // a stopped app is started and awaited here: the first request must not need a retry
+    proxyApp(req, res, t.app, route, url.search);
   }
 
   async function handler(req, res) {
@@ -1714,7 +1721,7 @@ export async function startServer() {
       try {
         const t = await appTarget(route);
         if (t.peer) relayAppWs(t.peer, req, socket, head, route, url.search);
-        else proxyAppWs(req, socket, head, t.app, route, url.search);
+        else { await startIfDown(t.app); proxyAppWs(req, socket, head, t.app, route, url.search); }
       } catch (e) { rejectUpgrade(socket, e.status || 500, e.message); }
       return;
     }

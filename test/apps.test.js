@@ -517,3 +517,21 @@ test('health checks back off per app: a dead app is probed at 5, 10, 20, 40, 60 
   await A.checkAll({ ...opts, fetchImpl: async () => ({ status: 200 }) });
   assert.deepEqual([A.backoffFor('dead'), A.backoffFor('fine')], [5000, 5000]);
 });
+
+test('ensureUp: an up app is forwarded at once; a stopped one is started and awaited; slow → pending; no recipe → forward; failure → error', async () => {
+  const { ensureUp, APP_STATUS } = await import('../src/apps.js');
+  const calls = [];
+  const start = (r) => async (id, o) => { calls.push([id, o.pendingAfterMs]); if (r instanceof Error) throw r; return r; };
+  assert.deepEqual(await ensureUp({ id: 'a', health: { status: APP_STATUS.UP } }, { start: start({}) }), { up: true });
+  assert.equal(calls.length, 0, 'an up app is not started or probed again');
+  for (const status of [APP_STATUS.DOWN, APP_STATUS.UNKNOWN, undefined]) {
+    const r = await ensureUp({ id: 'a', name: 'A', health: status && { status } }, { waitMs: 1234, start: start({ started: true, health: {} }) });
+    assert.equal(r.up, true, String(status));
+  }
+  assert.deepEqual(calls.at(-1), ['a', 1234], 'awaited up to waitMs');
+  const slow = await ensureUp({ id: 'a', name: 'A' }, { start: start({ started: true, pending: true }) });
+  assert.equal(slow.up, false); assert.equal(slow.pending, true); assert.match(slow.error, /starting up/);
+  assert.deepEqual(await ensureUp({ id: 'a' }, { start: start(Object.assign(new Error('no recipe'), { status: 409 })) }), { up: true });
+  assert.deepEqual(await ensureUp({ id: 'a' }, { start: start(Object.assign(new Error('never answered'), { status: 504 })) }), { up: false, error: 'never answered', status: 504 });
+  assert.equal((await ensureUp({ id: 'a' }, { start: start(Object.assign(new Error('boom'), { status: 502 })) })).status, 502);
+});

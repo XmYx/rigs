@@ -567,6 +567,31 @@ export async function startAppAsync(id, { waitMs, pollMs = 1000, deps = {} } = {
   return { started: true, pending: true, health: health.get(key) || UNKNOWN_HEALTH };
 }
 
+/** How long a proxied request (JARVIS asking an app something) waits for a stopped app to come up before answering "starting". */
+export const PROXY_START_WAIT_MS = 30000;
+
+/**
+ * Make sure a local app answers before a request is forwarded to it: the first ask of an app that was stopped (the process
+ * janitor, a crash, a reboot, a cold daemon) must not fail with ECONNREFUSED and succeed only on the retry. An app whose
+ * last probe was up is forwarded at once (no added latency); otherwise it is started (startApp: one start per app, shared
+ * with the UI's app-start and the resident keeper) and awaited up to `waitMs`.
+ *  → { up: true }           forward now (up, or no launch recipe to start it with: the 502 stays the honest answer)
+ *  → { up: false, pending } still coming up after waitMs (its start goes on in the background): answer 503 "starting"
+ *  → { up: false, error, status } it could not be started
+ * `start` is injectable for tests.
+ */
+export async function ensureUp(app, { waitMs = PROXY_START_WAIT_MS, start = startApp } = {}) {
+  if (app?.health?.status === APP_STATUS.UP) return { up: true };
+  try {
+    const r = await start(app.id, { pendingAfterMs: waitMs });
+    if (r?.pending) return { up: false, pending: true, error: `${app.name || app.id} is starting up; try again in a few seconds` };
+    return { up: true, started: !!r?.started };
+  } catch (e) {
+    if (e.status === 409) return { up: true }; // no launch recipe for this OS: nothing to start, forward and let the proxy report it
+    return { up: false, error: e.message, status: e.status === 504 ? 504 : 502 };
+  }
+}
+
 /** Is a start of this app in flight (launched, not yet up)? */
 export function isStarting(id) { return starting.has(String(id || '').toLowerCase()); }
 

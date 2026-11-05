@@ -134,7 +134,7 @@ export const TOOLS = [
     run: (a) => api(`/api/mesh/workspaces?${new URLSearchParams({ ...(a.query ? { q: a.query } : {}), ...(a.machine ? { machine: a.machine } : {}), ...(a.rescan ? { force: '1' } : {}) })}`, { timeout: 90000 }),
   },
   {
-    name: 'mesh_apps', description: 'List the web apps hosted across the mesh (App Cloud): id, name, node, health (up/down/unknown, latency), and the proxy path JARVIS opens them at. Optional node filter.',
+    name: 'mesh_apps', description: 'List the web apps hosted across the mesh (App Cloud): id, name, node, health (up/down/unknown, latency), and the proxy path JARVIS opens them at. Optional node filter. An app reported down is not unreachable: the first request to its proxy path starts it (its launch recipe) and waits for it to answer, so just make the request instead of telling Sir it cannot be reached.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'only apps hosted on this machine' } } },
     run: async (a) => {
       const { apps, errors } = await api('/api/apps', { timeout: 30000 });
