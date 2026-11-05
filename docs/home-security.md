@@ -245,6 +245,18 @@ CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);   -- schema version
 At startup, `.incoming/` leftovers whose segments never made it into the index are indexed if complete or deleted, and
 index rows whose file is missing are dropped. This reconciliation keeps the index and the disk in step after a crash.
 
+### Module wiring (t2 ↔ t3)
+
+`store.js`: `await openStore(dataDir)` → index + `getSettings()/patchSettings()`; standalone `loadSettings`, `loadCameras`,
+`saveCameras`, `loadSecrets`, `saveSecrets` (0600), `writeJsonAtomic`, `DEFAULT_SETTINGS`.
+`recorder.js`: `await createRecorder({ dataDir, store?, getCamera?, node?, emit?(type, data), log? })` →
+`{ onSegment({ camera, startMs, durMs, path, bytes }), onFrame({ camera, frame, width, height, t }), stopCamera(camera),
+liveSegments(camera, n), segmentPath(camera, startMs), handle(req, res, url, ctx) → bool, runRetention(), storage(), trim(),
+close() }`. ingest moves finished segments into place and calls `onSegment`; `handle` serves every t3 route in §8 and
+takes `ctx = { self: { node, base }, fanout?(pathWithQuery) → [{ node, base, online, version?, error?, body }],
+onSettingsChanged?(next, prev) }` (no `fanout` = local only). `emit` carries the SSE `motion` and `event`
+(`{ type: 'opened'|'closed', event }`) messages. The recorder runs its own retention timer and the motion-mode ring trimmer.
+
 ## 6. Retention (t3)
 
 Runs every `retention.intervalMinutes` (default 5), after every closed event, and on `POST api/storage/retention/run`.
@@ -363,7 +375,7 @@ listed. Merged responses add `nodes: [{ node, base, online, version?, error? }]`
 | GET | `api/cameras/:id/live.mjpeg` | t2 | — | `multipart/x-mixed-replace` stream |
 | GET | `api/timeline` | t3 | `?from&to[&scope]` (max 7 days) | `{ nodes, cameras: [{ camera, node, base, spans: [{ from, to }], events: [{ id, start, end, peak }] }] }`. Spans are merged; a gap is any hole > 1.5 × the segment length. |
 | GET | `api/timeline/at` | t3 | `?t[&scope]` | `{ t, nodes, cameras: [{ camera, node, base, segment: { url, start, dur } \| null, offsetMs, gap: bool, nextStart \| null }] }`. `url` is relative to `base`. |
-| GET | `api/cameras/:id/vod.m3u8` | t3 | `?from&to` (max 6 h) | HLS VOD playlist: `#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-PROGRAM-DATE-TIME` on every segment, `#EXT-X-DISCONTINUITY` at gaps, relative `seg/…` URIs |
+| GET | `api/cameras/:id/vod.m3u8` | t3 | `?from&to` (max 6 h) | HLS VOD playlist: `#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-PROGRAM-DATE-TIME` on every segment, `#EXT-X-DISCONTINUITY` before every segment after the first (segments are cut with `-reset_timestamps 1`, so PTS restarts at each one; gaps are covered too), relative `seg/…` URIs |
 | GET | `api/events` | t3 | `?camera&node&from&to&reviewed&locked&limit(≤200, default 50)&before[&scope]` | `{ nodes, events: [Event], next: <before cursor> \| null }`, newest first |
 | GET | `api/events/:id` | t3 | — | `Event` |
 | GET | `api/events/:id/thumb.jpg` | t3 | — | `image/jpeg` |
