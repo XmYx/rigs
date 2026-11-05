@@ -14,6 +14,7 @@ import {
   CAMERA_ID_RE, CameraRegistry, enumerateWebcams, fileStore, localSubnets, onvifCamera, onvifDiscover, onvifStreamUri,
   portProbe, probeCamera, publicCamera, redact, validateExtraCidrs,
 } from './discovery.js';
+import { CameraHelper, MESSAGES } from './camera-helper.js';
 import { IngestManager, ffprobe, findFfmpeg, livePlaylist, segmentRelPath } from './ingest.js';
 
 export const APP_ID = 'home-security';
@@ -95,7 +96,7 @@ const FALLBACK_SETTINGS = {
  * `createApp({ background: true })` + `app.start()` (the CLI entry), so tests can use the HTTP surface without
  * touching cameras or the network.
  */
-export function createApp({ background = false, env = process.env, platform = process.platform, rigsPort = Number(env.RIGS_PORT) || 4719, fetchImpl = fetch } = {}) {
+export function createApp({ background = false, env = process.env, platform = process.platform, rigsPort = Number(env.RIGS_PORT) || 4719, fetchImpl = fetch, cameraHelper } = {}) {
   const dir = dataDir(env);
   const app = { dir, recorder: null, store: null, started: false, sse: new Set() };
   let settingsCache = structuredClone(FALLBACK_SETTINGS);
@@ -103,8 +104,12 @@ export function createApp({ background = false, env = process.env, platform = pr
 
   const ffmpeg = findFfmpeg(settingsCache, env);
   const registry = new CameraRegistry(fileStore(dir));
-  const manager = new IngestManager({ dataDir: dir, registry, settings, ffmpeg, platform });
-  app.registry = registry; app.manager = manager; app.ffmpeg = ffmpeg;
+  // macOS: webcams run inside RIGS Camera.app so macOS can ask for camera access (camera-helper.js). `cameraHelper` is for tests.
+  const helper = cameraHelper === undefined
+    ? (platform === 'darwin' ? new CameraHelper({ home: env.RIGS_HOME || path.join(os.homedir(), '.rigs'), platform }) : null)
+    : cameraHelper;
+  const manager = new IngestManager({ dataDir: dir, registry, settings, ffmpeg, platform, helper });
+  app.registry = registry; app.manager = manager; app.ffmpeg = ffmpeg; app.helper = helper;
 
   // ── self + peers via the local daemon ──
   let selfName = null; let selfAt = 0;
@@ -277,8 +282,33 @@ export function createApp({ background = false, env = process.env, platform = pr
   manager.on('frame', (f) => { try { app.recorder?.onFrame(f); } catch (e) { console.error(`home-security: motion: ${e.message}`); } });
   manager.on('status', (s) => {
     broadcast('camera', s);
-    if (s.status === 'idle' || s.status === 'error') try { app.recorder?.stopCamera?.(s.camera); } catch { /* ignore */ }
+    if (s.status === 'idle' || s.status === 'error' || s.status === 'needs-permission') try { app.recorder?.stopCamera?.(s.camera); } catch { /* ignore */ }
   });
+
+  // ── camera permission (macOS) ──
+  const accessJobs = path.join(dir, 'run', 'camera-access');
+  async function cameraAccess() {
+    if (!helper?.supported) return { supported: false, status: 'unsupported', message: 'Camera permission is only managed on macOS.', node: await self() };
+    const built = await helper.ensureBuilt();
+    if (!built.ok) return { supported: true, status: 'helper-unavailable', helper: helper.describe(), message: MESSAGES.noHelper(built.reason), node: await self() };
+    const status = await helper.authStatus(accessJobs);
+    return { supported: true, status, helper: helper.describe(), message: MESSAGES[status] || null, node: await self() };
+  }
+  /** "Grant camera access": show the Allow prompt, or open System Settings when macOS will not ask again. */
+  async function grantCameraAccess() {
+    const st = await cameraAccess();
+    if (!st.supported || st.status === 'helper-unavailable') return { ok: false, ...st };
+    if (st.status === 'authorized') { manager.kickPermission(); return { ok: true, ...st }; }
+    if (st.status === 'denied' || st.status === 'restricted') {
+      return { ok: false, ...st, openedSettings: st.status === 'denied' ? await helper.openSettings() : false };
+    }
+    if (!app.grantPending) { // the prompt waits for the person; answer or not, re-check the cameras that were waiting
+      app.grantPending = helper.request(accessJobs).then((s) => { manager.kickPermission(); broadcast('camera-access', { status: s }); return s; })
+        .catch(() => null).finally(() => { app.grantPending = null; });
+    }
+    return { ok: true, ...st, status: 'prompting', message: `Click Allow in the “${helper.paths.name}” dialog on ${st.node}` };
+  }
+  app.cameraAccess = cameraAccess; app.grantCameraAccess = grantCameraAccess;
 
   // ── storage numbers for healthz ──
   function storageNumbers() {
@@ -418,6 +448,8 @@ export function createApp({ background = false, env = process.env, platform = pr
         const handled = await cameraRoute(req, res, url, cm[1], cm[2]);
         if (handled !== false) return;
       }
+      if (p === '/api/camera-access' && m === 'GET') return sendJson(res, 200, await cameraAccess());
+      if (p === '/api/camera-access/grant' && m === 'POST') return sendJson(res, 200, await grantCameraAccess());
       if (p === '/api/discovery' && m === 'GET') return sendJson(res, 200, disc);
       if (p === '/api/discovery/scan' && m === 'POST') {
         const body = await readBody(req);

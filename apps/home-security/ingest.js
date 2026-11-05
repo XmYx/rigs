@@ -6,6 +6,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DENIED_EXIT, MESSAGES, motionSocketPath } from './camera-helper.js';
 import { redact } from './discovery.js';
 
 // ── ffmpeg lookup ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -128,11 +129,14 @@ export function classifyError(stderr, { platform = process.platform, kind } = {}
   return redact(last.replace(/^\s*\[[^\]]*\]\s*/, '')).slice(0, 300);
 }
 
-/** A run that produced no video. On macOS a webcam that never delivers a first frame is almost always TCC: the camera
- *  permission is silently withheld from a process started in the background (ffmpeg then just waits). */
-export function stallReason({ gotSegment, platform, kind }) {
-  if (!gotSegment && platform === 'darwin' && kind === 'webcam') {
-    return 'camera permission denied — allow it in System Settings › Privacy & Security › Camera (no frames from the camera)';
+/** A run that produced no video. On macOS a webcam that never delivers a first frame without the RIGS Camera helper is
+ *  almost always TCC: the camera permission is silently withheld from a bare background process (ffmpeg then just
+ *  waits). With the helper the permission is known, so a stall is the camera itself; `helperProblem` says why the
+ *  helper could not be used. */
+export function stallReason({ gotSegment, platform, kind, viaHelper = false, helperProblem = null }) {
+  if (!gotSegment && platform === 'darwin' && kind === 'webcam' && !viaHelper) {
+    return helperProblem ? MESSAGES.noHelper(helperProblem)
+      : 'camera permission denied — allow it in System Settings › Privacy & Security › Camera (no frames from the camera)';
   }
   return gotSegment ? 'stalled: the camera stopped sending video' : 'stalled: no video from the camera';
 }
@@ -162,6 +166,7 @@ export function buildFfmpegArgs(o) {
   const input = { width: 1280, height: 720, fps: 15, ...(camera.input || {}) };
   const src = camera.source || {};
   const a = ['-hide_banner', '-nostats', '-loglevel', 'info', '-y'];
+  if (o.nostdin) a.push('-nostdin'); // run inside the macOS camera helper: no terminal input, stop by signal
 
   if (camera.kind === 'test') {
     a.push('-re', '-f', 'lavfi', '-i', `${src.lavfi || 'testsrc2'}=size=${input.width}x${input.height}:rate=${input.fps}`);
@@ -195,7 +200,7 @@ export function buildFfmpegArgs(o) {
   }
   a.push('-an', '-f', 'segment', '-segment_time', String(seg), '-segment_format', 'mpegts', '-reset_timestamps', '1',
     '-segment_list', 'list.csv', '-segment_list_type', 'csv', 'seg-%06d.ts');
-  a.push('-map', '[mot]', '-f', 'rawvideo', 'pipe:1');
+  a.push('-map', '[mot]', '-f', 'rawvideo', o.motionOut || 'pipe:1'); // 'unix:<socket>' when ffmpeg is not our direct child
   a.push('-map', '[snap]', '-q:v', '5', '-f', 'image2', '-update', '1', '-atomic_writing', '1', o.snapshotPath);
   return a;
 }
@@ -234,6 +239,7 @@ export class CameraWorker extends EventEmitter {
     this.id = id; this.ctx = ctx;
     this.status = 'starting'; this.error = null; this.retryAt = null; this.pid = null; this.since = Date.now();
     this.restarts = 0; this.backoff = 0; this.stopping = false; this.relaxInput = false; this.copy = null;
+    this.viaHelper = false; this.helperProblem = null; this.childPid = null;
     this.timers = new Set();
   }
 
@@ -260,7 +266,7 @@ export class CameraWorker extends EventEmitter {
     if (!inputUrl && camera.kind !== 'webcam' && camera.kind !== 'test') {
       this.setStatus(camera.kind === 'onvif' ? 'needs-credentials' : 'needs-setup'); return;
     }
-    this.setStatus('starting');
+    if (this.status !== 'needs-permission') this.setStatus('starting'); // a permission re-check keeps its status until the helper answers
     if (this.copy === null) {
       if (camera.transcode === 'copy') this.copy = true;
       else if (camera.transcode === 'h264' || !inputUrl || !/^rtsps?:/i.test(inputUrl)) this.copy = false;
@@ -280,12 +286,34 @@ export class CameraWorker extends EventEmitter {
 
     const settings = this.ctx.settings();
     const encoder = this.ctx.platform === 'darwin' && settings.ffmpeg?.hwaccel !== 'none' && ffmpeg.encoders.has('h264_videotoolbox') ? 'h264_videotoolbox' : 'libx264';
+    // macOS webcams run inside RIGS Camera.app (camera-helper.js): only an app bundle gets the camera Allow prompt
+    const helper = this.ctx.helper;
+    let viaHelper = false;
+    this.helperProblem = null;
+    if (helper?.handles(camera)) {
+      const built = await helper.ensureBuilt();
+      if (this.stopping) return;
+      if (built.ok) viaHelper = true; else this.helperProblem = built.reason || 'unavailable';
+    }
+    this.viaHelper = viaHelper;
+    const motionSock = viaHelper ? motionSocketPath(dataDir, this.id) : null;
     const args = buildFfmpegArgs({ camera, settings, platform: this.ctx.platform, inputUrl, copy: this.copy, encoder,
-      relaxInput: this.relaxInput, snapshotPath: path.join(liveDir, 'latest.jpg') });
+      relaxInput: this.relaxInput, snapshotPath: path.join(liveDir, 'latest.jpg'),
+      ...(viaHelper ? { nostdin: true, motionOut: `unix:${motionSock}` } : {}) });
     const segSeconds = settings.recording?.segmentSeconds || 2;
 
-    const child = spawn(ffmpeg.path, args, { cwd: incoming, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    this.child = child; this.pid = child.pid || null;
+    let child;
+    if (viaHelper) {
+      try {
+        child = await helper.launchRun({ jobDir: path.join(dataDir, 'run', `cam-${this.id}`), cwd: incoming, cmd: [ffmpeg.path, ...args], motionSock });
+      } catch (e) { return this.failed(`camera helper failed to start: ${e.message}`, 0); }
+      if (this.stopping) { child.kill('SIGKILL'); return; }
+      child.on('error', () => {});
+      child.on('pids', (p) => { this.pid = p.helper || null; this.childPid = p.child || null; this.emit('spawn', this.pid); });
+    } else {
+      child = spawn(ffmpeg.path, args, { cwd: incoming, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    }
+    this.child = child; this.pid = child.pid || null; this.childPid = null;
     const startedAt = Date.now();
     this.emit('spawn', this.pid);
     let stderrTail = ''; let banner = ''; let dims = null; let frameBuf = Buffer.alloc(0);
@@ -321,12 +349,27 @@ export class CameraWorker extends EventEmitter {
     child.stdin.on('error', () => {});
 
     const listPath = path.join(incoming, 'list.csv');
+    const checkStall = () => {
+      // inside the macOS camera helper: until the person answers the Allow prompt there is nothing to wait out
+      const auth = viaHelper ? child.auth() : null;
+      if (auth && auth.status !== 'authorized' && !gotSegment) {
+        lastProgress = Date.now() + 10000;
+        if (this.status !== 'needs-permission') this.setStatus('needs-permission', MESSAGES[auth.status] || MESSAGES.notDetermined);
+        return;
+      }
+      if (auth?.status === 'authorized' && this.status === 'needs-permission') this.setStatus('starting');
+      if (Date.now() - lastProgress > (3 * segSeconds + 10) * 1000) {
+        stderrTail += `\nstalled: no new segment for ${3 * segSeconds + 10} s`;
+        this.stalled = true;
+        child.kill('SIGKILL');
+      }
+    };
     const poll = setInterval(() => {
       let fd;
       try {
         const st = fs.statSync(listPath);
         if (st.size < listOffset) { listOffset = 0; listRest = ''; }
-        if (st.size === listOffset) return;
+        if (st.size === listOffset) { checkStall(); return; }
         fd = fs.openSync(listPath, 'r');
         const buf = Buffer.alloc(st.size - listOffset);
         fs.readSync(fd, buf, 0, buf.length, listOffset);
@@ -354,24 +397,30 @@ export class CameraWorker extends EventEmitter {
           this.emit('segment', segInfo);
         }
       } catch { /* list not there yet */ } finally { if (fd !== undefined) fs.closeSync(fd); }
-      if (Date.now() - lastProgress > (3 * segSeconds + 10) * 1000) {
-        stderrTail += `\nstalled: no new segment for ${3 * segSeconds + 10} s`;
-        this.stalled = true;
-        child.kill('SIGKILL');
-      }
+      checkStall();
     }, 300);
 
     child.on('error', (e) => { stderrTail += `\n${e.message}`; });
     child.on('exit', (code, sig) => {
       clearInterval(poll);
-      this.child = null; this.pid = null;
+      this.child = null; this.pid = null; this.childPid = null;
       this.emit('exit', { code, sig });
       log(`--- exit code ${code} signal ${sig}\n`);
       if (this.stopping) { this.setStatus('idle'); this.emit('stopped'); return; }
       const ran = Date.now() - startedAt;
-      let reason = this.stalled ? stallReason({ gotSegment, platform: this.ctx.platform, kind: camera.kind })
+      // the helper ended because macOS says no: wait for the person instead of restarting in a loop
+      if (viaHelper && child.exitInfo?.code === DENIED_EXIT) {
+        this.stalled = false;
+        return this.needsPermission(MESSAGES[child.exitInfo.reason] || MESSAGES.denied);
+      }
+      const wasStalled = this.stalled;
+      let reason = wasStalled ? stallReason({ gotSegment, platform: this.ctx.platform, kind: camera.kind, viaHelper, helperProblem: this.helperProblem })
         : classifyError(stderrTail, { platform: this.ctx.platform, kind: camera.kind });
       this.stalled = false;
+      // macOS webcam without the helper that never produced a frame: permission is being withheld, not a camera fault
+      if (wasStalled && !gotSegment && !viaHelper && camera.kind === 'webcam' && this.ctx.platform === 'darwin') {
+        return this.needsPermission(reason, 30000);
+      }
       if (reason.startsWith('camera does not support') && !this.relaxInput && camera.kind === 'webcam') {
         this.relaxInput = true; // retry with the device's own default size/rate
         reason += '; retrying with the camera defaults';
@@ -379,6 +428,21 @@ export class CameraWorker extends EventEmitter {
       if (/encoder/i.test(reason) && camera.kind !== 'webcam') this.copy = null;
       this.failed(reason, ran);
     });
+  }
+
+  /** No camera access (yet): a steady, plainly worded state with a slow re-check, not the error/backoff loop. */
+  needsPermission(reason, delayMs = 15000) {
+    this.setStatus('needs-permission', reason, Date.now() + delayMs);
+    this.later(() => this.start(), delayMs);
+  }
+
+  /** The person just answered (or changed) the permission: re-check at once if we are only waiting to re-check. */
+  retryPermissionNow() {
+    if (this.stopping || this.child || this.status !== 'needs-permission') return false;
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+    this.start().catch((e) => this.failed(e.message, 0));
+    return true;
   }
 
   failed(reason, ranMs) {
@@ -424,7 +488,8 @@ export class IngestManager extends EventEmitter {
   /** Kill ffmpeg children a crashed previous run left behind. */
   killOrphans() {
     let pids = [];
-    try { pids = JSON.parse(fs.readFileSync(this.pidFile, 'utf8')).map((p) => p.pid ?? p).filter(Number.isInteger); } catch { return 0; }
+    // entries are { camera, pid, child? }: with the macOS camera helper `pid` is the helper and `child` its ffmpeg
+    try { pids = JSON.parse(fs.readFileSync(this.pidFile, 'utf8')).flatMap((p) => [p.pid ?? p, p.child]).filter(Number.isInteger); } catch { return 0; }
     let killed = 0;
     for (const pid of pids) {
       try {
@@ -432,7 +497,7 @@ export class IngestManager extends EventEmitter {
         const name = process.platform === 'win32'
           ? execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH'], { encoding: 'utf8', windowsHide: true })
           : execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' });
-        if (/ffmpeg/i.test(name)) { process.kill(pid, 'SIGKILL'); killed++; }
+        if (/ffmpeg|rigs-camera/i.test(name)) { process.kill(pid, 'SIGKILL'); killed++; }
       } catch { /* not running */ }
     }
     this.writePids();
@@ -442,7 +507,7 @@ export class IngestManager extends EventEmitter {
   writePids() {
     try {
       fs.mkdirSync(path.dirname(this.pidFile), { recursive: true });
-      const list = [...this.workers.values()].filter((w) => w.pid).map((w) => ({ camera: w.id, pid: w.pid }));
+      const list = [...this.workers.values()].filter((w) => w.pid).map((w) => ({ camera: w.id, pid: w.pid, ...(w.childPid ? { child: w.childPid } : {}) }));
       fs.writeFileSync(this.pidFile, JSON.stringify(list));
     } catch { /* best effort */ }
   }
@@ -465,7 +530,7 @@ export class IngestManager extends EventEmitter {
 
   startWorker(id) {
     const w = new CameraWorker(id, {
-      dataDir: this.dataDir, ffmpeg: this.ffmpeg, platform: this.platform, ring: this.ring(id),
+      dataDir: this.dataDir, ffmpeg: this.ffmpeg, platform: this.platform, ring: this.ring(id), helper: this.helper || null,
       settings: () => this.settings(), camera: () => this.registry.get(id), inputUrl: () => this.registry.sourceUrl(id),
     });
     this.workers.set(id, w);
@@ -490,6 +555,13 @@ export class IngestManager extends EventEmitter {
   }
 
   list() { return [...this.workers.values()].map((w) => w.snapshot()); }
+
+  /** Camera permission just changed: workers that only wait to re-check do so now. → how many were kicked */
+  kickPermission() {
+    let n = 0;
+    for (const w of this.workers.values()) if (w.retryPermissionNow()) n++;
+    return n;
+  }
 
   async shutdown() {
     const all = [...this.workers.values()];

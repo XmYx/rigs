@@ -96,6 +96,7 @@ function openStreams() {
     es.addEventListener('camera', (e) => onCameraStatus(node, JSON.parse(e.data)));
     es.addEventListener('motion', (e) => onMotion(node, JSON.parse(e.data)));
     es.addEventListener('event', () => { if (state.view === 'events') loadEvents(true); if (state.view === 'timeline') loadTimeline(); });
+    es.addEventListener('camera-access', () => { if (state.view === 'settings' && settingsBase() === base) loadCameraAccess(); });
     es.addEventListener('discovery', (e) => { if (state.view === 'settings' && settingsBase() === base) renderScanStatus(JSON.parse(e.data)); });
     state.streams.set(base, es);
   }
@@ -136,8 +137,39 @@ function show(view) {
 const liveDetach = new Map(); // key → detach()
 function stopLive() { for (const d of liveDetach.values()) d(); liveDetach.clear(); $('#liveGrid').replaceChildren(); }
 
-const statusText = (c) => ({ recording: 'Live', starting: 'Starting…', idle: 'Off', error: 'Error', 'needs-credentials': 'Needs login', 'needs-setup': 'Needs setup', unavailable: 'Not found' })[c.status] || c.status;
-const statusDot = (c) => (c.status === 'recording' ? 'ok' : c.status === 'starting' ? 'warn' : c.status === 'error' || c.status === 'unavailable' ? 'bad' : '');
+const statusText = (c) => ({ recording: 'Live', starting: 'Starting…', idle: 'Off', error: 'Error', 'needs-credentials': 'Needs login', 'needs-setup': 'Needs setup', 'needs-permission': 'Needs camera permission', unavailable: 'Not found' })[c.status] || c.status;
+const statusDot = (c) => (c.status === 'recording' ? 'ok' : c.status === 'starting' || c.status === 'needs-permission' ? 'warn' : c.status === 'error' || c.status === 'unavailable' ? 'bad' : '');
+
+// macOS asks for camera access per app: the Mac's "RIGS Camera" helper holds it (camera-helper.js). base = the camera's node.
+async function grantCameraAccess(base, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('api/camera-access/grant', { base, method: 'POST', body: {} });
+    toast(r.message || (r.ok ? 'Camera access is on' : 'Could not ask for camera access'), !r.ok && r.status !== 'prompting');
+    if (state.view === 'settings') loadCameraAccess();
+  } catch (e) { toast(e.message, true); }
+  if (btn) btn.disabled = false;
+}
+
+async function loadCameraAccess() {
+  const panel = $('#camAccessPanel');
+  const base = settingsBase();
+  let r = null;
+  if (base !== null) { try { r = await api('api/camera-access', { base }); } catch { r = null; } }
+  panel.hidden = !r?.supported;
+  if (!r?.supported) return;
+  $('#camAccessStatus').textContent = r.status === 'authorized' ? `Camera access is on for “${r.helper?.name || 'RIGS Camera'}” on ${r.node}.`
+    : r.message || `Camera access: ${r.status}`;
+  $('#camAccessBtn').hidden = r.status === 'authorized';
+}
+$('#camAccessBtn').addEventListener('click', (e) => grantCameraAccess(settingsBase(), e.currentTarget));
+
+function setTileOverlay(c, tile) {
+  $('.over', tile)?.remove();
+  if (c.status === 'recording' || c.status === 'starting') return;
+  tile.append(h('div', { class: 'over' }, h('strong', {}, statusText(c)), c.error ? h('span', {}, c.error) : null,
+    c.status === 'needs-permission' ? h('button', { class: 'btn', type: 'button', onclick: (e) => { e.stopPropagation(); grantCameraAccess(c.base, e.currentTarget); } }, 'Grant camera access') : null));
+}
 
 async function renderLive() {
   try { await loadCameras(); } catch (e) { toast(`Could not load cameras: ${e.message}`, true); }
@@ -189,9 +221,8 @@ function startTileMedia(c, tile, img, video) {
   let snapTimer = null; let detachHls = () => {};
   const snapshot = () => { img.src = `${url(c.base, `api/cameras/${enc(c.id)}/snapshot.jpg`)}?t=${Date.now()}`; };
   img.onerror = () => { img.removeAttribute('src'); };
-  $('.over', tile)?.remove();
+  setTileOverlay(c, tile);
   if (c.status !== 'recording' && c.status !== 'starting') {
-    tile.append(h('div', { class: 'over' }, h('strong', {}, statusText(c)), c.error ? h('span', {}, c.error) : null));
     snapshot();
     liveDetach.set(key, () => {});
     return;
@@ -216,6 +247,7 @@ function updateTileState(c, restart) {
   $('.st', tile).textContent = statusText(c);
   $('.state .dot', tile).className = `dot ${statusDot(c)}`;
   if (restart) startTileMedia(c, tile, $('img', tile), $('video', tile));
+  else if (c.base !== null) setTileOverlay(c, tile); // e.g. recording → needs camera permission
 }
 
 $('#liveBack').addEventListener('click', () => { state.focus = null; renderLive(); });
@@ -531,8 +563,9 @@ async function enterSettings() {
   sel.value = keep;
   renderCamList();
   loadNodeSettings();
+  loadCameraAccess();
 }
-$('#stNode').addEventListener('change', () => { renderCamList(); loadNodeSettings(); });
+$('#stNode').addEventListener('change', () => { renderCamList(); loadNodeSettings(); loadCameraAccess(); });
 
 function renderCamList() {
   const node = $('#stNode').value || state.selfNode;
@@ -560,6 +593,7 @@ function camRow(c) {
       h('div', { class: 's' }, h('span', { class: `dot ${statusDot(c)}`, style: { display: 'inline-block', marginRight: '5px' } }), statusText(c), c.warning ? ` · ⚠ ${c.warning}` : '', c.seenBy?.length > 1 ? ` · seen by ${c.seenBy.join(', ')}` : ''),
       c.error ? h('div', { class: 'err' }, c.error) : null),
     h('div', { class: 'act' },
+      c.status === 'needs-permission' && base !== null ? h('button', { class: 'btn', type: 'button', onclick: (e) => grantCameraAccess(base, e.currentTarget) }, 'Grant camera access') : null,
       h('button', { class: 'btn ghost', type: 'button', onclick: () => row.classList.toggle('open'), 'aria-label': `Options for ${c.name}` }, 'Options'),
       h('label', { class: 'switch', title: 'Record this camera' }, sw, h('span'))));
   // options
