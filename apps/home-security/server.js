@@ -181,7 +181,7 @@ export function createApp({ background = false, env = process.env, platform = pr
         if (p.online && Array.isArray(p.body?.cameras)) cameras = cameras.concat(p.body.cameras.map((c) => ({ ...c, node: p.node, base: p.base })));
       }
     }
-    return { nodes, cameras: markShared(cameras) };
+    return { version: VERSION, nodes, cameras: markShared(cameras) }; // version: so a peer that fans out to us can list it in its nodes[]
   }
 
   // ── discovery ──

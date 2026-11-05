@@ -1,0 +1,17 @@
+{
+  "id": "home-security",
+  "name": "Home Security",
+  "icon": "📹",
+  "port": 8749,
+  "healthPath": "/healthz",
+  "keepAlive": true,
+  "rewrite": { "rootRelative": false },
+  "startupGraceMs": 60000,
+  "description": "Webcams on every RIGS machine and IP cameras on their LANs: live grid, motion events with pre-roll, multi-camera timeline, event library, GB/day retention.",
+  "tags": ["security", "cameras", "cctv", "motion", "video"],
+  "launch": {
+    "linux": { "systemd": "rigs-home-security.service" },
+    "darwin": { "command": "node apps/home-security/server.js", "cwd": "{{INSTALL_DIR}}", "env": { "PORT": "8749" } },
+    "windows": { "command": "node apps\\home-security\\server.js", "cwd": "{{INSTALL_DIR}}", "env": { "PORT": "8749" } }
+  }
+}
