@@ -114,6 +114,28 @@ export function startVoiceKeeper({ intervalMs = 30000, ...opts } = {}) {
 }
 export function stopVoiceKeeper() { clearInterval(keeper); keeper = null; keeperOff?.(); keeperOff = null; }
 
+/**
+ * Every OTHER resident app on this machine (registered `keepAlive: true`, e.g. home-security, which must keep recording) is
+ * started again when its health says down: macOS and Windows have no boot unit for a `command` recipe, and a crash on any
+ * OS would otherwise last until somebody opens the app. The voice app keeps its own keeper (reviveVoice) and is skipped.
+ * Returns the ids woken. Same guards as wakeApp (once a minute per app, never while a start is in flight).
+ */
+export function reviveResidents(opts) {
+  const skip = new Set(appsReg.voiceAppIds());
+  return appsReg.localApps().apps.filter((a) => a.keepAlive && !skip.has(a.id) && wakeApp(a.id, opts)).map((a) => a.id);
+}
+
+let residentKeeper = null;
+let residentOff = null;
+/** The daemon keeps resident apps up: on every health change of this machine's apps, and every `intervalMs` while one stays down. */
+export function startResidentKeeper({ intervalMs = 30000, ...opts } = {}) {
+  stopResidentKeeper();
+  residentOff = appsReg.onAppsChange(() => { reviveResidents(opts); });
+  residentKeeper = setInterval(() => { reviveResidents(opts); }, intervalMs);
+  residentKeeper.unref?.();
+}
+export function stopResidentKeeper() { clearInterval(residentKeeper); residentKeeper = null; residentOff?.(); residentOff = null; }
+
 async function neuralSynth(base, text, voice) {
   const v = String(voice || '').startsWith('neural:') ? voice.slice(7) : undefined;
   const r = await fetch(base + '/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, voice: v }), signal: AbortSignal.timeout(20000) });

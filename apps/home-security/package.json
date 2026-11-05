@@ -1,0 +1,15 @@
+{
+  "name": "rigs-home-security",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RIGS App Cloud app: webcams and LAN IP cameras across the mesh, motion events with pre-roll, timeline, event library, retention. Contract: docs/home-security.md",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "cd ../.. && node --test --test-timeout=120000 test/home-security*.test.js"
+  }
+}

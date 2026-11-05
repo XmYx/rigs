@@ -1,0 +1,19 @@
+[Unit]
+Description=RIGS Home Security (camera recorder, App Cloud app home-security)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Template: fill in the double-brace placeholders with this machine's paths (as src/store.js installPlan does).
+# Resident: registered keepAlive, so the RIGS janitor never stops it; enabled, so it starts at boot.
+WorkingDirectory={{INSTALL_DIR}}/apps/home-security
+ExecStart={{NODE}} {{INSTALL_DIR}}/apps/home-security/server.js
+Environment=PORT={{PORT}} HOST=127.0.0.1
+Restart=always
+RestartSec=5
+# The server stops its ffmpeg children itself (q on stdin); systemd then kills whatever is left.
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

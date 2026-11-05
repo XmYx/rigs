@@ -165,6 +165,30 @@ test('reviveVoice: not when neural voice is off or the engine is "local", not fo
   await close(kokoro);
 });
 
+test('reviveResidents: a down keepAlive app (home-security) is started by the daemon, once a minute; the voice app, up apps and non-resident apps are not', async () => {
+  const dead = async () => { const p = await fakeVoice(); const port = p.port; await close(p); return port; };
+  const c = loadConfig();
+  c.apps = [
+    { id: 'home-security', port: await dead(), healthPath: '/healthz', keepAlive: true, launch: { command: 'true' } },
+    { id: 'plain-app', port: await dead(), healthPath: '/', launch: { command: 'true' } }, // down but not resident
+    { id: 'jarvis-voice', port: await dead(), healthPath: '/', keepAlive: true, launch: { command: 'true' } }, // keeps its own keeper
+  ];
+  saveConfig(c);
+  apps.resetAppsState();
+  await apps.checkAll();
+  const { urls, fetchImpl } = recorder();
+  assert.deepEqual(tts.reviveResidents({ fetchImpl, now: 1.5e12 }), ['home-security']);
+  assert.match(urls[0], /\/api\/nodes\/mac\/app-start\/home-security$/);
+  assert.deepEqual(tts.reviveResidents({ fetchImpl, now: 1.5e12 + 1000 }), [], 'the wakeApp guard: not again within a minute');
+  assert.deepEqual(tts.reviveResidents({ fetchImpl, now: 1.5e12 + 61000 }), ['home-security']);
+  assert.equal(urls.length, 2);
+  const up = await fakeVoice();
+  const c2 = loadConfig(); c2.apps[0].port = up.port; saveConfig(c2);
+  apps.resetAppsState(); await apps.checkAll();
+  assert.deepEqual(tts.reviveResidents({ fetchImpl, now: 1.6e12 }), [], 'up: left alone');
+  await close(up);
+});
+
 test('startVoiceKeeper: the daemon starts a down voice app by itself (timer and apps health changes), and stopVoiceKeeper ends it', async () => {
   await downVoice();
   const { urls, fetchImpl } = recorder();

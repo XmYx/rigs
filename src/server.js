@@ -1890,6 +1890,8 @@ export async function startServer() {
   appsReg.startHealthChecks({ intervalMs: 5000 });
   // JARVIS's voice is resident: this daemon starts the jarvis-voice app again whenever its health says down (src/tts.js).
   tts.startVoiceKeeper();
+  // Other resident apps (keepAlive: home-security records around the clock) are revived the same way.
+  tts.startResidentKeeper();
   // Process janitor: apps RIGS launched and nobody used for config.janitor.idleMinutes are stopped (src/janitor.js).
   janitor.startJanitor({ keep: (id) => appsReg.isKeepAlive(id), onStopped: () => appsReg.checkAll().catch(() => {}) });
 
